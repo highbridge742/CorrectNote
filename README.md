@@ -41,7 +41,7 @@
 
 ### exe をそのまま使う
 
-[Releases](../../releases) から `KanaMemo.exe` をダウンロードして、好きなフォルダに置いて実行するだけです。Python のインストールは不要です。語彙などのデータファイルは exe と同じフォルダに自動で作られます。
+[Releases](../../releases) から `CorrectNote.exe` をダウンロードして、好きなフォルダに置いて実行するだけです。Python のインストールは不要です。語彙などのデータファイルは exe と同じフォルダに自動で作られます。
 
 ### ソースから実行する
 
@@ -60,7 +60,7 @@ janome は必須です(無いと補正の主力の守りが働かず、精度が
 build_exe.bat
 ```
 
-をダブルクリックすると `dist\KanaMemo.exe` ができます(内部で PyInstaller を使用)。GitHub Actions でも `v` で始まるタグを push すると自動でビルドされ、Release に exe が添付されます。
+をダブルクリックすると `dist\CorrectNote.exe` ができます(内部で PyInstaller を使用)。GitHub Actions でも `v` で始まるタグを push すると自動でビルドされ、Release に exe が添付されます。
 
 ## テスト
 

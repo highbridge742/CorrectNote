@@ -1,10 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-かな入力メモ帳 の PyInstaller ビルド定義。
+CorrectNote の PyInstaller ビルド定義。
 
-    py -m PyInstaller kana_memo.spec
+    py -m PyInstaller correctnote.spec
 
-で dist/KanaMemo.exe ができる（build_exe.bat 参照）。
+で dist/CorrectNote.exe ができる（build_exe.bat 参照）。
 
 要点:
 - janome の辞書は janome/sysdic/ 以下の Python モジュール
@@ -51,7 +51,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='KanaMemo',
+    name='CorrectNote',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

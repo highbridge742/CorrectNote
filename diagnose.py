@@ -69,7 +69,7 @@ TEST_CASES = [
 ]
 
 print('=' * 70)
-print('かな入力メモ帳 診断')
+print('CorrectNote 診断')
 print('=' * 70)
 
 try:

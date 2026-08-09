@@ -3,10 +3,10 @@ rem ============================================================
 rem kana memo -> exe build script
 rem
 rem Usage: double-click this file (or run in cmd)
-rem Output: dist\KanaMemo.exe
+rem Output: dist\CorrectNote.exe
 rem
 rem Python is needed only on the PC that builds.
-rem The resulting KanaMemo.exe runs on PCs without Python.
+rem The resulting CorrectNote.exe runs on PCs without Python.
 rem ============================================================
 
 cd /d "%~dp0"
@@ -33,7 +33,7 @@ if errorlevel 1 (
 
 echo.
 echo [2/3] exe をビルドしています（数分かかります）...
-%PY% -m PyInstaller kana_memo.spec --noconfirm
+%PY% -m PyInstaller correctnote.spec --noconfirm
 if errorlevel 1 (
     echo.
     echo ビルドに失敗しました。上のエラーを確認してください。
@@ -43,7 +43,7 @@ if errorlevel 1 (
 
 echo.
 echo [3/3] 完了しました。
-echo   dist\KanaMemo.exe
+echo   dist\CorrectNote.exe
 echo が出来ています。Python の無いPCへコピーして使えます。
 echo （語彙などのデータは exe と同じフォルダに自動で作られます）
 echo.

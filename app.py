@@ -15,7 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 """
-かな入力メモ帳 - オフライン誤字補正つきメモ帳
+CorrectNote - オフライン誤字補正つきメモ帳
 
 かな入力（JIS配列）での隣接キー押し間違いを、
 オンラインAIを使わずローカルの語彙学習だけで補正する。
@@ -180,7 +180,7 @@ from seed_vocabulary import load_seed
 
 # 画面に表示するアプリ名（タイトルバー・ダイアログのタイトル等）。
 # 内部の設計上の呼び名（コード中のコメントやファイル名の
-# 「かな入力メモ帳」）とは別に、ユーザーに見せる名前だけをここで変える。
+# 「CorrectNote」）とは別に、ユーザーに見せる名前だけをここで変える。
 APP_TITLE = 'CorrectNote'
 
 
@@ -648,7 +648,7 @@ class LineNumberGutter(tk.Canvas):
             self.on_toggle_bookmark(line)
 
 
-class KanaMemoApp:
+class CorrectNoteApp:
     def __init__(self, root):
         import time
         _t_start = time.monotonic()
@@ -2135,7 +2135,7 @@ class KanaMemoApp:
         except Exception:
             children = []
         for child in children:
-            KanaMemoApp._restyle_widget(child, old_to_new)
+            CorrectNoteApp._restyle_widget(child, old_to_new)
 
     # ------------------------------------------------------------
     # 簡易入力ウィンドウ（グローバルホットキーで呼び出す）
@@ -3424,7 +3424,7 @@ class KanaMemoApp:
         self._build_tab_bar()
 
         # --- 上段: ツールバーとブックマークの行を1つにまとめる ---
-        # 大見出し「かな入力メモ帳」のラベルは廃止した
+        # 大見出し「CorrectNote」のラベルは廃止した
         # （タイトルバーに既に出ているので、本文中の表示は不要という
         #   実機からの指定）。空いた分、ブックマークボタンをこの行に
         # 詰めて、開く/保存/コピー相当のボタンと高さを揃える。
@@ -6883,7 +6883,7 @@ class KanaMemoApp:
     def _push_change(stack, record):
         """選び直しの履歴に1件積む（古いものから捨てる）。"""
         stack.append(record)
-        if len(stack) > KanaMemoApp.MAX_CHANGE_HISTORY:
+        if len(stack) > CorrectNoteApp.MAX_CHANGE_HISTORY:
             del stack[0]
 
     @staticmethod
@@ -7825,7 +7825,7 @@ class KanaMemoApp:
 
 def main():
     root = tk.Tk()
-    KanaMemoApp(root)
+    CorrectNoteApp(root)
     root.mainloop()
 
 
