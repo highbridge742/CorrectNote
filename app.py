@@ -706,6 +706,9 @@ class CorrectNoteApp:
         self._quick_changes = []
         self.line_units = []       # 各行のクリックできる語の単位
         self.line_texts = []       # 各行の表示テキスト（選び直し反映後）
+        # F2 で候補を出している対象の語（括弧ボタンがこれを使う）。
+        # {'widget':..., 'row':..., 'start':..., 'end':..., 'text':...}
+        self._f2_focus_target = None
 
         self.current_file = None
         self.line_results = []
@@ -1688,6 +1691,139 @@ class CorrectNoteApp:
             self._hotkey_suspended.discard(name)
         self._apply_hotkey_state(name)
 
+    # Ctrl+Insert / Ctrl+Shift+- として扱うキー名。
+    # 名前は環境（Tk のビルド・キーボードの配列）で変わるので、
+    # 並びの束縛（<Control-Insert> など）に頼らず、
+    # 押されたキーの名前を自分で照らし合わせる。
+    _HOTKEY_KEYSYMS = {
+        'insert': ('Insert', 'KP_Insert', 'KP_0'),
+        # JIS 配列では Shift+「-」は「=」なので equal も見る
+        'minus': ('minus', 'underscore', 'equal', 'KP_Subtract'),
+    }
+
+    def _maybe_hotkey_notice_from_key(self, event=None):
+        """
+        すべての打鍵を見て、簡易入力のホットキーだったら受け皿へ回す。
+
+        <Control-Insert> のような並びの束縛は、キー名が環境で違うと
+        当たらないうえ、'all' タグは最後に評価されるので手前の束縛が
+        'break' を返すと届かない。ここでは KeyPress そのものを受け、
+        修飾キーの状態とキー名から自分で判断する（実機で
+        「メッセージが出ない」と報告・2026-08-09）。
+        """
+        if event is None:
+            return None
+        state = getattr(event, 'state', 0)
+        if not isinstance(state, int) or not (state & 0x0004):
+            return None                      # Control が押されていない
+        keysym = getattr(event, 'keysym', '') or ''
+        for name, names in self._HOTKEY_KEYSYMS.items():
+            if keysym in names:
+                return self._on_quick_hotkey_fallback(name)
+        return None
+
+    def _on_quick_hotkey_fallback(self, name):
+        """
+        アプリの中で Ctrl+Insert / Ctrl+Shift+- が押されたときの受け皿。
+
+        ホットキーは RegisterHotKey で OS に予約する方式で、
+        登録できているあいだは打鍵が OS に横取りされ、
+        アプリのキー束縛までは届かない。
+        **ここへ来たということは、登録できていない**ということ。
+
+        そこで理由を切り分けて伝える（うにさんの指定・2026-08-09）:
+          - メニューでオフにしている → 説明欄に一時的に出すだけ
+            （自分で切ったものなので、ダイアログで邪魔をしない）
+          - オンのはずなのに登録が外れている → ダイアログで知らせる
+
+        なお 'break' は返さない。Ctrl+Insert は Windows 標準の
+        コピーでもあるので、オフにしているときは本来の働き
+        （コピー）をそのまま通す。
+        """
+        # メモ欄への直接の束縛と bind_all の両方に届くので、
+        # 1回の打鍵で二度呼ばれる。ダイアログが2枚出ないよう、
+        # ごく短い間の重複は捨てる。
+        import time as _time
+        now = _time.monotonic()
+        last = getattr(self, '_hotkey_notice_at', None)
+        if last is not None and last[0] == name and now - last[1] < 0.5:
+            return None
+        self._hotkey_notice_at = (name, now)
+
+        label = HOTKEY_LABELS.get(name, name)
+        try:
+            enabled = bool(self.settings.get(f'hotkey_{name}_enabled'))
+        except Exception:
+            enabled = True
+        if not enabled:
+            msg = (f'簡易入力のショートカットキー（{label}）は'
+                   'メニューでオフになっています')
+            self._flash_editor_header(msg)
+            # 見出しは、スクロール位置によっては隠れていることがある。
+            # 下の状態表示にも出して、必ずどこかで見えるようにする。
+            try:
+                self.status.config(text=msg)
+            except Exception:
+                pass
+            return None
+
+        # オンのはずなのに届いてしまった＝登録が外れている
+        try:
+            st = self.hotkeys.status()
+            registered = name in (st.get('registered') or set())
+        except Exception:
+            registered = False
+        if registered:
+            # 登録できているのにここへ来ることは通常ない。
+            # 念のため、本来の働き（簡易入力を開く）を行う。
+            self._open_quick_capture(name)
+            return 'break'
+        messagebox.showwarning(
+            APP_TITLE,
+            f'ショートカットキー（{label}）の登録が外れています。\n'
+            'アプリを起動しなおしてください。')
+        return None
+
+    def _flash_editor_header(self, message, seconds=6):
+        """
+        メモ欄の上の説明欄に、一時的なお知らせを出す。
+
+        ダイアログを出すほどでもないが、状態を伝えたい場面で使う。
+        一定時間で元の説明文に戻る。
+        """
+        label = getattr(self, 'editor_header', None)
+        if label is None:
+            return
+        seq = getattr(self, '_header_flash_seq', 0) + 1
+        self._header_flash_seq = seq
+        self._header_flash = seq
+        try:
+            label.config(text=message, fg=ACCENT)
+        except Exception:
+            self._header_flash = None
+            return
+
+        def _restore():
+            if getattr(self, '_header_flash', None) != seq:
+                return
+            self._header_flash = None
+            try:
+                label.config(
+                    text=(self.UNIFIED_HEADER_TEXT
+                          if self._layout_is_unified()
+                          else self.EDITOR_HEADER_TEXT), fg=MUTED)
+            except Exception:
+                pass
+            try:
+                self._update_header_visibility(self.editor.yview()[0])
+            except Exception:
+                pass
+
+        try:
+            self.root.after(int(seconds * 1000), _restore)
+        except Exception:
+            pass
+
     def _on_toggle_quick_hint(self):
         """簡易入力ウィンドウの説明文を出すかどうかを切り替える。"""
         self.settings.set('show_quick_hint', self.quick_hint_var.get())
@@ -1856,19 +1992,71 @@ class CorrectNoteApp:
             self._win_drag = None
 
     def _on_window_drag(self, event=None):
+        """
+        帯のドラッグで窓を動かす。
+
+        マウスの動きは1秒に何十回も届く。届くたびに geometry() を
+        呼ぶと、窓の位置だけが先に進み、中身の描き直しが追いつかない。
+        すると前の位置の絵が残ったまま重なって、画面が壊れたように
+        見える（実機で「グラフィックボードのエラーのような見た目」と
+        報告・2026-08-09）。
+
+        そこで、届いた座標は控えるだけにして、**実際に動かすのは
+        手が空いたとき（after_idle）に1回だけ**にまとめる。動かした
+        直後に描き直しも促す。
+        """
         wd = getattr(self, '_win_drag', None)
         if not wd or event is None:
+            return
+        self._win_drag_to = (event.x_root - wd[0], event.y_root - wd[1])
+        if getattr(self, '_win_drag_pending', False):
+            return
+        self._win_drag_pending = True
+        try:
+            self.root.after_idle(self._apply_window_drag)
+        except Exception:
+            self._win_drag_pending = False
+
+    def _apply_window_drag(self):
+        self._win_drag_pending = False
+        pos = getattr(self, '_win_drag_to', None)
+        if pos is None or not getattr(self, '_win_drag', None):
             return
         try:
             if self.root.state() == 'zoomed':
                 return   # 最大化中は動かさない
-            self.root.geometry(
-                f'+{event.x_root - wd[0]}+{event.y_root - wd[1]}')
+            self.root.geometry(f'+{int(pos[0])}+{int(pos[1])}')
+            self.root.update_idletasks()
+        except Exception:
+            return
+        self._redraw_window_now()
+
+    def _redraw_window_now(self):
+        """窓全体（子まで）を、いますぐ描き直させる。"""
+        if sys.platform != 'win32':
+            return
+        try:
+            import ctypes
+            u32 = ctypes.windll.user32
+            hwnd = u32.GetParent(self.root.winfo_id()) or self.root.winfo_id()
+            RDW_INVALIDATE = 0x0001
+            RDW_ALLCHILDREN = 0x0080
+            RDW_UPDATENOW = 0x0100
+            u32.RedrawWindow(hwnd, None, None,
+                             RDW_INVALIDATE | RDW_ALLCHILDREN
+                             | RDW_UPDATENOW)
         except Exception:
             pass
 
     def _end_window_drag(self, event=None):
         self._win_drag = None
+        self._win_drag_to = None
+        # 動かし終わりに、もう一度きちんと描き直す
+        try:
+            self.root.update_idletasks()
+        except Exception:
+            pass
+        self._redraw_window_now()
 
     def _apply_titlebar_visibility(self, hide=None):
         """
@@ -2608,6 +2796,9 @@ class CorrectNoteApp:
 
         text_widget.tag_remove('suspect', '1.0', 'end')
         self._quick_units = []
+        # どの文字から作った単位なのかを控える。F2 が「古い単位で
+        # 判断してしまう」のを防ぐのに使う（_on_quick_f2 参照）。
+        self._quick_units_text = content
 
         for i, line in enumerate(lines):
             row = i + 1
@@ -3719,6 +3910,46 @@ class CorrectNoteApp:
         self.editor.bind('<F2>', self._on_f2_candidates)
         self.result_view.bind('<F2>', self._on_f2_candidates)
 
+        # 簡易入力のホットキーを、アプリ自身の中でも受ける。
+        #
+        # RegisterHotKey で登録できているあいだ、この打鍵は OS が
+        # 横取りするのでここまで届かない。**届いたということは
+        # 登録できていない**ということなので、その理由を伝える
+        # （メニューでオフなのか、登録が外れているのか）。
+        # 詳しくは _on_quick_hotkey_fallback を参照。
+        #
+        # **キー名（keysym）は環境によって存在しないものがある。**
+        # 例えば 'KP_Insert' は Linux の Tk にはあるが Windows の Tk
+        # には無く、そのまま bind すると TclError で**起動できなく
+        # なる**（実機で発生・2026-08-09）。1つずつ try で包み、
+        # 使えない名前は黙って飛ばす。
+        for name, seqs in (
+                ('insert', ('<Control-Insert>', '<Control-KP_Insert>')),
+                ('minus', ('<Control-Shift-minus>',
+                           '<Control-Shift-underscore>',
+                           '<Control-underscore>'))):
+            for seq in seqs:
+                # bind_all（'all' タグ）は最後に評価されるため、
+                # 途中の束縛が 'break' を返すと届かない。メモ欄には
+                # 直接も束縛して、確実に受けられるようにする。
+                for target in (self.root.bind_all, self.editor.bind):
+                    try:
+                        target(
+                            seq,
+                            lambda e, n=name:
+                                self._on_quick_hotkey_fallback(n),
+                            add=True)
+                    except Exception:
+                        pass
+        # 並びの束縛が当たらない環境に備えて、打鍵そのものからも見る
+        # （_maybe_hotkey_notice_from_key）。
+        for target in (self.editor.bind, self.root.bind_all):
+            try:
+                target('<KeyPress>', self._maybe_hotkey_notice_from_key,
+                       add=True)
+            except Exception:
+                pass
+
         # 「=」はメモ欄で打ったときだけモードに入る。
         # JIS配列では「=」は独立したキーではなく Shift+「-」で
         # 入力するが、そのぶん打鍵自体は素直に行われるので、
@@ -3768,6 +3999,11 @@ class CorrectNoteApp:
         # 本文より下の余白を1本指（マウス）でドラッグしたら
         # スクロールする（タッチモニター向け・実機からの要望・
         # 2026-08-09）。本文の上は通常どおり選択ドラッグ。
+        # クリックで場所を選び直したなら、括弧の外へ出す待ち構えは
+        # やめる（_arm_bracket_exit 参照）。
+        self.editor.bind(
+            '<Button-1>',
+            lambda e: setattr(self, '_bracket_exit', None), add=True)
         self.editor.bind('<Button-1>', self._on_editor_blank_press,
                          add=True)
         self.editor.bind('<B1-Motion>', self._on_editor_blank_drag,
@@ -4186,6 +4422,12 @@ class CorrectNoteApp:
             # しただけで案内文が本来のテキストに戻ってしまう。
             if label is pick_header:
                 continue
+            # 一時的なお知らせ（_flash_editor_header）も同じ理由で
+            # 上書きしない。出した直後にスクロールしただけで
+            # 消えてしまわないようにする。
+            if (label is getattr(self, 'editor_header', None)
+                    and getattr(self, '_header_flash', None)):
+                continue
             # pack_forget() で見出しラベルそのものを取り除くと、
             # その高さぶんだけ下の Text ウィジェットの表示領域が
             # 広がったり縮んだりする。すると1行目が画面に入った
@@ -4255,6 +4497,15 @@ class CorrectNoteApp:
         # メモ欄で何か入力があった時刻を控えておく。
         import time
         self._last_editor_change_at = time.monotonic()
+
+        # 本文が変わったりカーソルが動いたら、F2 で選んでいた語の
+        # 記憶は捨てる（括弧ボタンが古い場所を括らないように）。
+        if getattr(self, '_f2_focus_target', None) is not None:
+            self._clear_f2_target()
+
+        # 括った直後に変換を確定した場合、カーソルを括弧の外へ出す
+        if getattr(self, '_bracket_exit', None):
+            self._maybe_exit_bracket()
 
         # IME に入力方式（かな/ローマ字）を尋ね、補正の検査方向を
         # 自動で合わせる（Windowsのみ・1秒に1回まで）
@@ -4852,6 +5103,93 @@ class CorrectNoteApp:
             self.line_units.append(units)
             self.line_texts.append(text)
 
+    def _editor_line_units(self, row):
+        """
+        分割レイアウトで、**メモ欄（左）の1行**を語の単位に組み立てる。
+
+        self.line_units は補正後のテキスト（右の欄）の上での位置を
+        持っている。F2 の対象をメモ欄にするには、打った文字そのもの
+        の上での位置が要るので、統合レイアウトと同じ
+        build_suspect_units でその行だけ組み立て直す。
+
+        row は 1 始まり。組み立てられなければ空リストを返す。
+        """
+        i = row - 1
+        if not (0 <= i < len(self.line_results)):
+            return []
+        fn = getattr(self.store, '_tokenize_fn', None)
+        if fn is None:
+            fn = corrector.make_tokenizer(self.store)
+            self.store._tokenize_fn = fn
+        try:
+            _text, units = build_suspect_units(
+                self.line_results[i], fn, self.choices)
+        except Exception:
+            return []
+        return units
+
+    def _to_corrected_span(self, row, start, end):
+        """
+        メモ欄（元のテキスト）の範囲を、補正欄の上での範囲に読み替える。
+
+        補正で語の長さが変わると、同じ列番号でも指す場所がずれる。
+        correct_line は補正した箇所を original_spans（元の位置）と
+        spans（補正後の位置）の対で持っているので、これを使って
+        前から順に差分をたどる。
+
+        補正された語そのものを指していた場合は、対応する補正後の
+        範囲をそのまま返す。見当がつかないときは None を返す。
+        """
+        i = row - 1
+        if not (0 <= i < len(self.line_results)):
+            return None
+        res = self.line_results[i]
+        o_spans = res.get('original_spans') or []
+        c_spans = res.get('spans') or []
+        pairs = []
+        for o, c in zip(o_spans, c_spans):
+            try:
+                pairs.append(((int(o[0]), int(o[1])),
+                              (int(c[0]), int(c[1]))))
+            except Exception:
+                continue
+        pairs.sort(key=lambda p: p[0][0])
+
+        delta = 0
+        for (os_, oe), (cs, ce) in pairs:
+            if end <= os_:
+                break
+            if start >= oe:
+                # この補正はまるごと手前にある。ずれだけ引き継ぐ。
+                delta = ce - oe
+                continue
+            # 補正された箇所と重なっている。補正後の範囲を使う。
+            return cs, ce
+        limit = len(res.get('corrected', ''))
+        s2, e2 = start + delta, end + delta
+        if s2 < 0 or e2 > limit or s2 >= e2:
+            return None
+        return s2, e2
+
+    def _mirror_f2_focus_to_result(self, row, unit, bg):
+        """
+        F2 の対象語に、補正欄（右）でも色を付ける。
+
+        うにさんの指定（2026-08-09）: 分割レイアウトでは候補一覧は
+        入力欄（左）に出し、補正欄は「どの語のことか」が分かるように
+        **色だけ**付ける。
+        """
+        span = self._to_corrected_span(row, unit['start'], unit['end'])
+        if span is None:
+            return
+        try:
+            self.result_view.tag_configure('f2_focus', background=bg)
+            self.result_view.tag_add(
+                'f2_focus', f'{row}.{span[0]}', f'{row}.{span[1]}')
+            self.result_view.tag_raise('f2_focus')
+        except Exception:
+            pass
+
     # ------------------------------------------------------------
     # 画面レイアウト（左右分割 / 統合）
     # ------------------------------------------------------------
@@ -5325,7 +5663,29 @@ class CorrectNoteApp:
 
         「」『』【】“” の4種を、常にメモ欄に対して行う
         （分割・統合どちらのレイアウトでも同じ操作）。
+
+        F2 で語を選んでいる（候補一覧が開いていて、その語に色が
+        付いている）ときは、選択範囲の代わりに **その語** を括る
+        （うにさんの指定・2026-08-09）。
         """
+        f2_range = self._f2_bracket_range()
+        if f2_range is not None:
+            start, end = f2_range
+            try:
+                self._close_dropdown()
+                self._clear_f2_target()
+                self.editor.insert(end, close_ch)
+                self.editor.insert(start, open_ch)
+                self.editor.tag_remove('sel', '1.0', 'end')
+                self.editor.mark_set(
+                    'insert', f'{end}+{len(open_ch) + len(close_ch)}c')
+                self._arm_bracket_exit(close_ch)
+            except Exception:
+                return
+            self.editor.focus_set()
+            self._on_change()
+            return
+
         try:
             sel = self.editor.tag_ranges('sel')
         except Exception:
@@ -5343,6 +5703,7 @@ class CorrectNoteApp:
                 new_end = f'{end}+{len(open_ch) + len(close_ch)}c'
                 self.editor.tag_remove('sel', '1.0', 'end')
                 self.editor.mark_set('insert', new_end)
+                self._arm_bracket_exit(close_ch)
             except Exception:
                 return
         else:
@@ -5357,13 +5718,101 @@ class CorrectNoteApp:
         self.editor.focus_set()
         self._on_change()
 
+    # 括った直後に「まだ確定していない変換」が確定されると、
+    # 確定した文字が括弧の中に入り、カーソルも中に残る。
+    # そのときだけカーソルを閉じ括弧の外へ出すための待ち時間（秒）。
+    BRACKET_EXIT_SECONDS = 8
+
+    def _arm_bracket_exit(self, close_ch):
+        """
+        括った直後の「確定でカーソルが中に残る」に備える。
+
+        変換を確定する前の文字を括ると、その後の確定で IME が
+        文字を括弧の中へ入れ直し、カーソルが閉じ括弧の手前に残る。
+        うにさんの指定（2026-08-09）は「確定したら括弧の外（右）に
+        出てほしい」。確定は打鍵として届かないことがあるので、
+        **次に中身が変わったときに、カーソルが閉じ括弧の直前に
+        あれば外へ出す**という後追いで実現する。
+
+        範囲を選んで括ったとき（＝変換中の文字を括ったときを含む）
+        だけ構える。何も選ばずに括ったときは、中に書き始めたいので
+        構えない。
+        """
+        def _arm():
+            import time as _time
+            self._bracket_exit = (
+                close_ch, _time.monotonic() + self.BRACKET_EXIT_SECONDS)
+
+        # 括る処理の直後に走る _on_change に食べられないよう、
+        # ひと呼吸おいてから構える。
+        try:
+            self.root.after_idle(_arm)
+        except Exception:
+            _arm()
+
+    def _maybe_exit_bracket(self):
+        """カーソルが閉じ括弧の直前にあれば、その右へ移す。"""
+        armed = getattr(self, '_bracket_exit', None)
+        if not armed:
+            return
+        import time as _time
+        close_ch, until = armed
+        if _time.monotonic() > until:
+            self._bracket_exit = None
+            return
+        try:
+            if self.editor.get('insert', f'insert+{len(close_ch)}c') \
+                    != close_ch:
+                return
+            self.editor.mark_set('insert', f'insert+{len(close_ch)}c')
+            self.editor.see('insert')
+        except Exception:
+            return
+        self._bracket_exit = None
+
+    def _f2_bracket_range(self):
+        """
+        括弧ボタンが対象にすべき「F2 で選んでいる語」の範囲。
+
+        候補一覧が開いていて、対象がメモ欄の語のときだけ
+        (start, end) の位置文字列を返す。それ以外は None。
+        """
+        tgt = getattr(self, '_f2_focus_target', None)
+        if tgt is None:
+            return None
+        if tgt.get('widget') is not getattr(self, 'editor', None):
+            return None
+        row = tgt['row']
+        start = f'{row}.{tgt["start"]}'
+        end = f'{row}.{tgt["end"]}'
+        try:
+            # 候補を出した後に本文が変わっている場合は当てにしない
+            if self.editor.get(start, end) != tgt.get('text', ''):
+                return None
+        except Exception:
+            return None
+        return start, end
+
     def _wrap_with_parens(self):
         """
         （）ボタン。選択範囲に全角文字が1つでもあれば全角の（）、
         全角が無ければ半角の () で括る。選択が無ければ全角の（）を
         カーソル位置に差し込む（日本語のメモが基本のため）。
+
+        F2 で語を選んでいるときは、その語の中身で判断する。
         """
         text = ''
+        f2_range = self._f2_bracket_range()
+        if f2_range is not None:
+            try:
+                text = self.editor.get(*f2_range)
+            except Exception:
+                text = ''
+            if text and not has_fullwidth(text):
+                self._wrap_with_brackets('(', ')')
+            else:
+                self._wrap_with_brackets('（', '）')
+            return
         try:
             sel = self.editor.tag_ranges('sel')
             if sel:
@@ -5756,6 +6205,33 @@ class CorrectNoteApp:
                 and getattr(self, '_dropdown_owner', None) == 'quick'
                 and getattr(self, '_f2q_cycle', None)):
             return self._quick_f2_step_back()
+
+        # 解析は打鍵の 250ms 後にまとめて走らせている。引用（F1）で
+        # 差し込んだ直後など、**まだ解析が済んでいないうちに F2 を
+        # 押すと、単位が古いまま**で、差し込んだ語が無いものとして
+        # 扱われる（実機で「引用文がスルーされます」と報告・
+        # 2026-08-09）。予約が残っていれば、ここで先に済ませる。
+        # 予約の有無だけでなく、**いま欄にある文字と、単位を作った
+        # ときの文字が違う**なら作り直す（差し込みの経路によっては
+        # 予約自体が入らないため）。
+        try:
+            now_text = tw.get('1.0', 'end-1c')
+        except Exception:
+            now_text = None
+        if (getattr(self, '_quick_after_id', None)
+                or (now_text is not None
+                    and now_text != getattr(self, '_quick_units_text',
+                                            None))):
+            if getattr(self, '_quick_after_id', None):
+                try:
+                    self.root.after_cancel(self._quick_after_id)
+                except Exception:
+                    pass
+                self._quick_after_id = None
+            try:
+                self._analyze_quick()
+            except Exception:
+                pass
         try:
             pos = tw.index('insert')
             r, c = pos.split('.')
@@ -5791,22 +6267,51 @@ class CorrectNoteApp:
         return 'break'
 
     def _quick_f2_step_back(self):
-        cyc = self._f2q_cycle
+        """簡易入力の F2 連打。1つ左の語へ。"""
+        return self._quick_f2_move(-1)
+
+    def _quick_f2_move(self, delta):
+        """
+        簡易入力で、F2 の対象を前後に移す（本体の _f2_move と同じ）。
+
+        delta = -1 で左（前）、+1 で右（次）。行の端まで来たら
+        隣の行へ続けてたどる（空行は飛ばす）。
+        """
+        cyc = getattr(self, '_f2q_cycle', None)
+        if not cyc:
+            return 'break'
         row = cyc['row']
+        total = len(self._quick_units)
         i = row - 1
-        if not (0 <= i < len(self._quick_units)):
+        if not (0 <= i < total):
             return 'break'
         units = self._quick_units[i]
-        idx = cyc['idx'] - 1
-        while idx >= 0 and not _f2_word_re.search(
-                units[idx].get('text', '')):
-            idx -= 1
-        if idx < 0:
-            try:
-                self.status.config(text='行の先頭まで遡りました')
-            except Exception:
-                pass
+        idx = cyc['idx'] + delta
+
+        for _ in range(total + 1):
+            while 0 <= idx < len(units) and not _f2_word_re.search(
+                    units[idx].get('text', '')):
+                idx += delta
+            if 0 <= idx < len(units):
+                break
+            next_row = row + (1 if delta > 0 else -1)
+            j = next_row - 1
+            if not (0 <= j < total):
+                try:
+                    self.status.config(
+                        text=('最後の語まで来ました' if delta > 0
+                              else '最初の語まで遡りました'))
+                except Exception:
+                    pass
+                return 'break'
+            row, units = next_row, self._quick_units[j]
+            idx = 0 if delta > 0 else len(units) - 1
+            if not units:
+                idx = 0 if delta > 0 else -1
+        else:
             return 'break'
+
+        cyc['row'] = row
         cyc['idx'] = idx
         self._show_quick_unit_candidates(row, units[idx])
         return 'break'
@@ -6240,6 +6745,17 @@ class CorrectNoteApp:
 
     def _copy_selection(self, event=None):
         """補正欄で選択した範囲をクリップボードへコピーする。"""
+        # 補正欄には Ctrl+Insert の束縛が先にあり、ここで 'break' を
+        # 返すため bind_all（簡易入力のホットキーの受け皿）まで
+        # 届かない。補正欄に焦点があるときもお知らせが出るよう、
+        # ここから直接呼ぶ（実機で「メッセージが出ない」と報告・
+        # 2026-08-09）。
+        if event is not None and getattr(
+                event, 'keysym', '') in ('Insert', 'KP_Insert'):
+            try:
+                self._on_quick_hotkey_fallback('insert')
+            except Exception:
+                pass
         try:
             text = self.result_view.get('sel.first', 'sel.last')
         except Exception:
@@ -6337,36 +6853,18 @@ class CorrectNoteApp:
                 and getattr(self, '_dropdown_owner', None) == 'main'):
             return self._f2_step_back()
 
-        # どちらの欄を見るかを決める。
+        # F2 の対象は、レイアウトによらず **メモ欄（左の入力欄）**。
         #
-        # 分割レイアウトでは、候補一覧そのものは補正欄（右）に
-        # 対して開くが、**範囲を選んだりカーソルを置いたりするのは
-        # 入力欄（左）** である。以前は無条件に補正欄だけを見ていた
-        # ため、入力欄で範囲を選んで F2 を押しても、補正欄には
-        # 選択もカーソルも無く、何も起きなかった
-        # （実機で「F2を押しても反応しません」と報告された）。
+        # うにさんの指定（2026-08-09）: 分割レイアウトでも、色付けと
+        # 候補一覧は打った本人の文字がある入力欄に対して行う。
+        # 補正欄（右）には対応する語に色を付けるだけで、候補は出さない
+        # （_mirror_f2_focus_to_result）。
         #
-        # 選択がある欄を優先し、無ければ焦点のある欄、
-        # それも無ければ従来どおりの欄を見る。
-        candidates_w = [self.editor] if unified else [self.editor,
-                                                      self.result_view]
-        widget = None
-        for w in candidates_w:
-            try:
-                if w.tag_ranges('sel'):
-                    widget = w
-                    break
-            except Exception:
-                pass
-        if widget is None:
-            try:
-                focused = self.root.focus_get()
-            except Exception:
-                focused = None
-            if focused in candidates_w:
-                widget = focused
-        if widget is None:
-            widget = self.editor if unified else self.result_view
+        # 以前は補正欄に対して候補一覧を開いていた。補正後の文字を
+        # 選び直す形になり、入力欄で範囲を選んで F2 を押しても
+        # 補正欄には選択もカーソルも無く反応しない、という問題も
+        # 抱えていた。
+        widget = self.editor
 
         try:
             sel = widget.tag_ranges('sel')
@@ -6395,36 +6893,54 @@ class CorrectNoteApp:
                 return 'break'
             col2 = None
 
-        i = row - 1
-        units_all = self.line_units
-        if 0 <= i < len(units_all):
-            line_units = units_all[i]
-        else:
+        target_widget = widget
+
+        # 行頭（カーソルの左に文字が無い）なら、前の行の末尾の語へ。
+        # F2 は「カーソルの直前の語」を対象にするものなので、
+        # 行頭では前の行の最後の語を見に行くのが自然
+        # （うにさんの指定・2026-08-09。以前は何も起きなかった）。
+        #
+        # **この判定は、今の行の単位を調べるより前に行う。** 末尾の
+        # 空行（_pad_blank_lines）には単位が無いので、先に調べると
+        # そこで打ち切られ、前の行まで辿り着けない（実機で
+        # 「行頭で F2 をしても反応しません」と再報告・2026-08-09）。
+        if col2 is None and col1 == 0:
+            found = self._f2_last_word_before(row)
+            if found is None:
+                return 'break'
+            row, line_units, idx0 = found
+            unit = line_units[idx0]
+            self._f2_cycle = {'row': row, 'idx': idx0,
+                              'widget': target_widget, 'unified': unified,
+                              'units': line_units}
+            self._show_unit_candidates(row, unit, target_widget, unified,
+                                       line_units)
             return 'break'
 
-        # 分割レイアウトで入力欄（左）を見ていた場合、位置は
-        # 入力したそのままの文字列上のものになる。一方 line_units は
-        # 補正後のテキスト上の位置を持つため、補正で長さが変わって
-        # いると位置がずれる。選んだ文字列そのものを補正欄側から
-        # 探し直して、対応する位置に読み替える。
-        target_widget = widget
-        if not unified and widget is self.editor:
-            src_text = widget.get(f'{row}.0', f'{row}.end')
-            picked = (src_text[col1:col2] if col2 is not None
-                      else None)
-            dst_text = self.result_view.get(f'{row}.0', f'{row}.end')
-            target_widget = self.result_view
-            if picked:
-                at = dst_text.find(picked)
-                if at < 0:
-                    # 補正で表記が変わっている。位置での対応は
-                    # 諦めて、その位置にある語を使う。
-                    col1 = min(col1, max(0, len(dst_text) - 1))
-                    col2 = None
-                else:
-                    col1, col2 = at, at + len(picked)
+        i = row - 1
+        if unified:
+            units_all = self.line_units
+            if 0 <= i < len(units_all):
+                line_units = units_all[i]
             else:
-                col1 = min(col1, max(0, len(dst_text) - 1))
+                return 'break'
+        else:
+            # 分割レイアウトでは line_units が補正後の位置を持つので、
+            # メモ欄の文字の上での単位を組み立て直して使う。
+            line_units = self._editor_line_units(row)
+            if not line_units:
+                # この行に語が無い（空行など）。前の行の末尾へ。
+                found = self._f2_last_word_before(row)
+                if found is None:
+                    return 'break'
+                row, line_units, idx0 = found
+                self._f2_cycle = {'row': row, 'idx': idx0,
+                                  'widget': target_widget,
+                                  'unified': unified, 'units': line_units}
+                self._show_unit_candidates(row, line_units[idx0],
+                                           target_widget, unified,
+                                           line_units)
+                return 'break'
 
         if col2 is not None:
             line_text = target_widget.get(f'{row}.0', f'{row}.end')
@@ -6467,48 +6983,161 @@ class CorrectNoteApp:
                     idx = k
                     break
         self._f2_cycle = {'row': row, 'idx': idx,
-                          'widget': target_widget, 'unified': unified}
-        self._show_unit_candidates(row, unit, target_widget, unified)
+                          'widget': target_widget, 'unified': unified,
+                          'units': line_units}
+        self._show_unit_candidates(row, unit, target_widget, unified,
+                                   line_units)
         return 'break'
+
+    def _f2_units_for_row(self, row):
+        """
+        F2 が対象にする、その行の単位の並び。
+
+        行が無ければ None（メモ欄の外に出た合図）、
+        中身の無い行なら空リストを返す。
+
+        **メモ欄の行数と line_results の数は一致しない。**
+        メモ欄の末尾には、どの行にもカーソルを置けるように
+        空行を足してある（_pad_blank_lines）。そこは解析結果を
+        持たないが「行としては在る」ので、空リストを返して
+        飛ばせるようにする。ここで None を返すと、末尾の空行に
+        カーソルがあるとき F2 が前の行へ遡れない（実機で
+        「行頭で F2 をしても反応しません」と報告・2026-08-09）。
+        """
+        i = row - 1
+        if i < 0:
+            return None
+        try:
+            last = int(self.editor.index('end-1c').split('.')[0])
+        except Exception:
+            last = len(self.line_results)
+        if row > max(last, len(self.line_results)):
+            return None
+        if i >= len(self.line_results):
+            return []
+        if self._layout_is_unified():
+            if 0 <= i < len(self.line_units):
+                return self.line_units[i]
+            return []
+        return self._editor_line_units(row)
+
+    def _f2_last_word_before(self, row):
+        """
+        row より前の行をさかのぼって、最後の語を探す。
+
+        行頭で F2 を押したときに、前の行の末尾の語へ移るために使う
+        （うにさんの指定・2026-08-09）。
+        戻り値は (row, units, idx)。見つからなければ None。
+        """
+        r = row - 1
+        while r >= 1:
+            units = self._f2_units_for_row(r) or []
+            for k in range(len(units) - 1, -1, -1):
+                if _f2_word_re.search(units[k].get('text', '')):
+                    return r, units, k
+            r -= 1
+        return None
 
     def _f2_step_back(self):
-        """F2 連打。同じ行の1つ左の語へ遡って候補を出し直す。"""
-        cyc = self._f2_cycle
+        """F2 連打。1つ左の語へ遡って候補を出し直す。"""
+        return self._f2_move(-1)
+
+    def _f2_move(self, delta):
+        """
+        F2 で選んでいる語を、前後に move する。
+
+        delta = -1 で左（前）の語、+1 で右（次）の語。
+        行の端まで来たら、隣の行へ続けてたどる（うにさんの指定・
+        2026-08-09。行頭で止まらず、前の行の末尾の語へ移る）。
+        """
+        cyc = getattr(self, '_f2_cycle', None)
+        if not cyc or cyc.get('idx') is None:
+            return 'break'
         row = cyc['row']
-        i = row - 1
-        if not (0 <= i < len(self.line_units)) or cyc['idx'] is None:
+        units = cyc.get('units')
+        if not units:
+            units = self._f2_units_for_row(row) or []
+        idx = cyc['idx'] + delta
+
+        # 行をまたいで探す。行数ぶん見れば必ず端に着く。
+        for _ in range(len(self.line_results) + 1):
+            while 0 <= idx < len(units) and not _f2_word_re.search(
+                    units[idx].get('text', '')):
+                idx += delta
+            if 0 <= idx < len(units):
+                break
+            next_row = row + (1 if delta > 0 else -1)
+            next_units = self._f2_units_for_row(next_row)
+            if next_units is None:
+                try:
+                    self.status.config(
+                        text=('最後の語まで来ました' if delta > 0
+                              else '最初の語まで遡りました'))
+                except Exception:
+                    pass
+                return 'break'
+            row, units = next_row, next_units
+            idx = 0 if delta > 0 else len(units) - 1
+            if not units:
+                # 空行は飛ばす（idx が範囲外のまま次の行へ進む）
+                idx = 0 if delta > 0 else -1
+        else:
             return 'break'
-        units = self.line_units[i]
-        idx = cyc['idx'] - 1
-        while idx >= 0 and not _f2_word_re.search(
-                units[idx].get('text', '')):
-            idx -= 1
-        if idx < 0:
-            try:
-                self.status.config(text='行の先頭まで遡りました')
-            except Exception:
-                pass
-            return 'break'
+
+        cyc['row'] = row
         cyc['idx'] = idx
+        cyc['units'] = units
         self._show_unit_candidates(row, units[idx], cyc['widget'],
-                                   cyc['unified'])
+                                   cyc['unified'], units)
         return 'break'
 
-    def _show_unit_candidates(self, row, unit, target_widget, unified):
+    def _clear_f2_target(self):
+        """F2 で選んでいる語の記憶と色付けを捨てる。"""
+        self._f2_focus_target = None
+        for _w in (getattr(self, 'editor', None),
+                   getattr(self, 'result_view', None),
+                   getattr(self, '_quick_text', None)):
+            if _w is None:
+                continue
+            try:
+                _w.tag_remove('f2_focus', '1.0', 'end')
+            except Exception:
+                pass
+
+    def _on_dropdown_horizontal(self, delta):
+        """
+        候補一覧が開いているときの左右キー。対象の語を前後に移す。
+
+        上下キーは候補の選択に使うので、語の移動は左右に割り当てる
+        （うにさんの指定・2026-08-09）。
+        """
+        if self._dropdown is None:
+            return None
+        owner = getattr(self, '_dropdown_owner', None)
+        if owner == 'main' and getattr(self, '_f2_cycle', None):
+            return self._f2_move(delta)
+        if owner == 'quick' and getattr(self, '_f2q_cycle', None):
+            return self._quick_f2_move(delta)
+        return None
+
+    def _show_unit_candidates(self, row, unit, target_widget, unified,
+                              units=None):
         """対象の語に色を付けてから、候補一覧を開く。"""
         fake = self._fake_event_at(target_widget, row, unit)
         self._close_dropdown()
-        if unified:
-            self._open_editor_dropdown(fake, row, unit)
+        # 対象がメモ欄なら、メモ欄に対する候補一覧を開く。
+        # 分割レイアウトでも同じ（補正欄には候補を出さない）。
+        if target_widget is self.editor:
+            self._open_editor_dropdown(fake, row, unit, units)
         else:
             self._open_dropdown(fake, row, unit)
         self._dropdown_owner = 'main'
         # どの語の候補を出しているかが分かるように、対象の語に
         # 色を付ける（候補一覧が閉じるときに消す）。
         # _close_dropdown が消す側を受け持つため、開いた後に付ける。
+        bg = ('#7a5a2b' if self.settings.get('dark_mode')
+              else '#ffd9a0')
         try:
-            bg = ('#7a5a2b' if self.settings.get('dark_mode')
-                  else '#ffd9a0')
             target_widget.tag_configure('f2_focus', background=bg)
             target_widget.tag_add(
                 'f2_focus',
@@ -6516,6 +7145,16 @@ class CorrectNoteApp:
             target_widget.tag_raise('f2_focus')
         except Exception:
             pass
+        # 括弧ボタンが「いま候補を出している語」を括れるように控える
+        # （うにさんの指定・2026-08-09）。
+        self._f2_focus_target = {
+            'widget': target_widget, 'row': row,
+            'start': unit['start'], 'end': unit['end'],
+            'text': unit.get('text', ''),
+        }
+        # 分割レイアウトでは、補正欄の対応する語にも色だけ付ける
+        if not unified and target_widget is self.editor:
+            self._mirror_f2_focus_to_result(row, unit, bg)
 
     def _fake_event_at(self, widget, row, unit):
         """
@@ -6780,19 +7419,24 @@ class CorrectNoteApp:
                 push(kanji, 'homophone')
         return out
 
-    def _open_editor_dropdown(self, event, row, unit):
+    def _open_editor_dropdown(self, event, row, unit, units_in_row=None):
         """
-        統合レイアウトで、メモ欄の語に対する候補一覧を出す。
+        メモ欄の語に対する候補一覧を出す。
 
         選んだ結果はメモ欄のテキストを直接書き換える
         （簡易入力ウィンドウと同じ考え方。補正欄が無いので、
         「別ペインに表示し直す」という選択肢が無い）。
+
+        units_in_row: その行の単位の並び（前後の語を知るために使う）。
+            分割レイアウトから F2 で呼ぶ場合、self.line_units は
+            補正後の位置を持つ別物なので、呼び出し側が
+            メモ欄の上で組み立てたものを渡す。
         """
-        units_in_row = None
-        try:
-            units_in_row = self.line_units[row - 1]
-        except Exception:
-            units_in_row = None
+        if units_in_row is None:
+            try:
+                units_in_row = self.line_units[row - 1]
+            except Exception:
+                units_in_row = None
         near = self._unit_surroundings(unit, units_in_row)
 
         if unit.get('kind') == 'range' and unit.get('segments'):
@@ -7208,6 +7852,10 @@ class CorrectNoteApp:
         lb.bind('<ButtonRelease-1>', pick)
         lb.bind('<Return>', pick)
         lb.bind('<Double-Button-1>', pick)
+        # 左右キーで、候補を出している語そのものを前後に移す
+        # （うにさんの指定・2026-08-09）。
+        lb.bind('<Left>', lambda e: self._on_dropdown_horizontal(-1))
+        lb.bind('<Right>', lambda e: self._on_dropdown_horizontal(1))
 
         # 上下キーは、見出し（「－同音の語－」のような選べない項目・
         # cb が None のもの）を飛ばして移動する（実機からの指定・
@@ -7233,7 +7881,10 @@ class CorrectNoteApp:
         lb.bind('<Up>', lambda e: _move(-1))
         lb.bind('<Down>', lambda e: _move(1))
         dd.bind('<Escape>', lambda e: self._close_dropdown())
-        lb.bind('<FocusOut>', lambda e: self._close_dropdown())
+        # 焦点が外れたら閉じるが、F2 で選んでいる語の記憶は残す
+        # （括弧ボタンを押した瞬間もここを通るため。_close_dropdown 参照）
+        lb.bind('<FocusOut>',
+                lambda e: self._close_dropdown(keep_target=True))
         # 候補が開いている間でも、ドラッグした範囲をコピーできるようにする。
         # 焦点は候補一覧に移っているので、ここにも割り当てておく。
         copy_target = self._dropdown_text
@@ -7290,19 +7941,21 @@ class CorrectNoteApp:
             pass
         self._dropdown = dd
 
-    def _close_dropdown(self):
+    def _close_dropdown(self, keep_target=False):
+        """
+        候補一覧を閉じる。
+
+        keep_target=True のときは、F2 で選んでいる語の記憶
+        （_f2_focus_target と色付け）を残す。**候補一覧は焦点を
+        失うと閉じる**ので、括弧ボタンをクリックした瞬間にも
+        閉じてしまう。そこで消してしまうと、括弧が「いま選んで
+        いる語」ではなく別の場所に入る（実機で報告・2026-08-09）。
+        記憶は、本文が変わるかカーソルを動かした時点で
+        _clear_f2_target が捨てる。
+        """
         self._dropdown_owner = None
-        # F2 の対象語の色付けを消す（付けた経緯は
-        # _show_unit_candidates 参照）
-        for _w in (getattr(self, 'editor', None),
-                   getattr(self, 'result_view', None),
-                   getattr(self, '_quick_text', None)):
-            if _w is None:
-                continue
-            try:
-                _w.tag_remove('f2_focus', '1.0', 'end')
-            except Exception:
-                pass
+        if not keep_target:
+            self._clear_f2_target()
         dd = self._dropdown
         if dd is not None:
             try:
@@ -7823,7 +8476,112 @@ class CorrectNoteApp:
             self.status.config(text='補正結果をコピーしました')
 
 
+# 二重起動を防ぐための印。プロセスが終わるまで持ち続ける必要が
+# あるので、モジュールの変数として残す（関数内の変数にすると
+# 回収された時点で印が消えてしまう）。
+_single_instance_handle = None
+
+
+def _activate_running_instance():
+    """
+    既に動いている CorrectNote の窓を前に出す。見つかれば True。
+
+    窓の見分けは「タイトルが CorrectNote（または『… - CorrectNote』）」
+    かつ「窓のクラス名が Tk のもの」の両方で行う。タイトルだけだと、
+    たまたま同じ名前を含む他のアプリ（ブラウザで開いた
+    リポジトリのページ等）を掴んでしまう。
+    """
+    if sys.platform != 'win32':
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+        u32 = ctypes.windll.user32
+        found = []
+
+        def _match(hwnd):
+            if not u32.IsWindowVisible(hwnd):
+                return False
+            cls = ctypes.create_unicode_buffer(64)
+            u32.GetClassNameW(hwnd, cls, 64)
+            if not cls.value.startswith('Tk'):
+                return False
+            n = u32.GetWindowTextLengthW(hwnd)
+            if n <= 0:
+                return False
+            buf = ctypes.create_unicode_buffer(n + 1)
+            u32.GetWindowTextW(hwnd, buf, n + 1)
+            title = buf.value
+            return (title == APP_TITLE
+                    or title.endswith(' - ' + APP_TITLE))
+
+        proc_type = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND,
+                                       wintypes.LPARAM)
+
+        def _cb(hwnd, _lparam):
+            try:
+                if _match(hwnd):
+                    found.append(hwnd)
+                    return False
+            except Exception:
+                pass
+            return True
+
+        u32.EnumWindows(proc_type(_cb), 0)
+        if not found:
+            return False
+        hwnd = found[0]
+        SW_RESTORE = 9
+        if u32.IsIconic(hwnd):
+            u32.ShowWindow(hwnd, SW_RESTORE)
+        u32.SetForegroundWindow(hwnd)
+        u32.BringWindowToTop(hwnd)
+        return True
+    except Exception:
+        return False
+
+
+def _claim_single_instance():
+    """
+    このフォルダの CorrectNote を1つだけにする。
+
+    多重起動すると、同じフォルダの session.json / vocabulary.json を
+    双方が書きにいって**保存の取り合い**になる。さらにホットキーは
+    RegisterHotKey の仕様で OS が先に登録した1つにしか渡さないため、
+    「簡易入力が、いま見ているほうとは別の窓に出る」という
+    分かりにくい状態になる（実機で発生・2026-08-09）。
+
+    起動してよければ True。既に動いていれば、そちらを前に出して
+    False を返す（呼び出し側はそのまま終了する）。
+
+    印はフォルダごとに分ける。USB などに別のフォルダで持ち出した
+    ものは、データも別なので同時に動かしてよい。
+    """
+    global _single_instance_handle
+    if sys.platform != 'win32':
+        return True
+    try:
+        import ctypes
+        import zlib
+        k32 = ctypes.windll.kernel32
+        tag = '%08x' % (zlib.crc32(
+            os.path.abspath(app_dir()).lower().encode('utf-8'))
+            & 0xffffffff)
+        ERROR_ALREADY_EXISTS = 183
+        handle = k32.CreateMutexW(None, False, f'Local\\CorrectNote-{tag}')
+        if handle and k32.GetLastError() == ERROR_ALREADY_EXISTS:
+            _activate_running_instance()
+            return False
+        _single_instance_handle = handle
+        return True
+    except Exception:
+        # 判定できない環境では、起動を妨げない
+        return True
+
+
 def main():
+    if not _claim_single_instance():
+        return
     root = tk.Tk()
     CorrectNoteApp(root)
     root.mainloop()
