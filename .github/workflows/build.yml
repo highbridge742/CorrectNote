@@ -1,0 +1,80 @@
+name: Build
+
+# 動かすタイミング:
+#   - push / PR のたびに test ジョブ（軽い。Windowsの分数を使わない）
+#   - main への push、または v で始まるタグの push で
+#     Windows 上での exe ビルドも行う
+on:
+  push:
+    branches: ['main']
+    tags: ['v*']
+  pull_request:
+    branches: ['main']
+
+jobs:
+  # ------------------------------------------------------------
+  # 速いテスト（tkinter・janome 不要な部分だけを Ubuntu で検証）
+  # ------------------------------------------------------------
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: モックテストを実行
+        run: python tests_mock.py
+
+  # ------------------------------------------------------------
+  # Windows 上での exe ビルド
+  # ------------------------------------------------------------
+  build-windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 依存パッケージを導入
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller janome
+
+      - name: exe をビルド
+        run: python -m PyInstaller kana_memo.spec --noconfirm
+
+      - name: 動作確認（画面は無いので、補正エンジンだけ動かす）
+        run: python ci_smoke_test.py
+
+      - name: ビルド結果をアップロード
+        uses: actions/upload-artifact@v4
+        with:
+          name: KanaMemo-windows
+          path: dist/KanaMemo.exe
+          if-no-files-found: error
+
+  # ------------------------------------------------------------
+  # v から始まるタグを push したときだけ、GitHub Release を自動で作る
+  # ------------------------------------------------------------
+  release:
+    needs: build-windows
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: KanaMemo-windows
+          path: dist
+
+      - name: リリースを作成して exe を添付
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/KanaMemo.exe
+          generate_release_notes: true
