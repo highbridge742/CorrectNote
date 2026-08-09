@@ -46,7 +46,7 @@ jobs:
           python -m pip install pyinstaller janome
 
       - name: exe をビルド
-        run: python -m PyInstaller kana_memo.spec --noconfirm
+        run: python -m PyInstaller correctnote.spec --noconfirm
 
       - name: 動作確認（画面は無いので、補正エンジンだけ動かす）
         run: python ci_smoke_test.py
@@ -54,8 +54,8 @@ jobs:
       - name: ビルド結果をアップロード
         uses: actions/upload-artifact@v4
         with:
-          name: KanaMemo-windows
-          path: dist/KanaMemo.exe
+          name: CorrectNote-windows
+          path: dist/CorrectNote.exe
           if-no-files-found: error
 
   # ------------------------------------------------------------
@@ -70,11 +70,11 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: KanaMemo-windows
+          name: CorrectNote-windows
           path: dist
 
       - name: リリースを作成して exe を添付
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/KanaMemo.exe
+          files: dist/CorrectNote.exe
           generate_release_notes: true
