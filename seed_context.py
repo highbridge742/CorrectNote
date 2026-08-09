@@ -1,4 +1,4 @@
-# CorrectNote — かな入力誤字補正メモ帳
+# CorrectNote — 誤字補正メモ帳
 # Copyright (C) 2026 Takahashi Yuu
 #
 # This program is free software: you can redistribute it and/or modify
