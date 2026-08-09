@@ -30,6 +30,18 @@ tests_mock.py はモックの分割器を使うため、これとは別に、
 
 import sys
 
+# CI の Windows ランナーでは、標準出力が端末ではなくパイプに
+# つながるため、Python が出力の文字コードを cp1252 などの
+# 「日本語を表せない符号化」と判断することがある。その状態で
+# 日本語を print すると UnicodeEncodeError で異常終了し、
+# 補正エンジンには何の問題も無いのに CI が赤くなる。
+# ここで UTF-8 に固定しておく（他のモジュールを読み込む前に行う）。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 import corrector as C
 from vocabulary import VocabularyStore, find_known_readings_flex
 from seed_vocabulary import load_seed
