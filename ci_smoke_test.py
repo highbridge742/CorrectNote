@@ -23,6 +23,9 @@ tests_mock.py はモックの分割器を使うため、これとは別に、
 本物の janome を使った経路が壊れていないかをここで見る。
 
     python ci_smoke_test.py
+
+代表的な誤打が直ること、および正しく打てた行を
+壊さないことの両方を確認する。
 """
 
 import sys
@@ -30,6 +33,22 @@ import sys
 import corrector as C
 from vocabulary import VocabularyStore, find_known_readings_flex
 from seed_vocabulary import load_seed
+
+# (入力, 期待する補正結果, 説明)
+# 直ってほしい代表例。誤打の種類ごとに1件ずつ。
+FIX_CASES = [
+    ('もじにゆうりょく', 'もじにゅうりょく', '小書き（ゅ）の打ち忘れ'),
+    ('もじにゅうりよく', 'もじにゅうりょく', '小書き（ょ）の打ち忘れ'),
+    ('たんこ゛のつながり', 'たんごのつながり', '濁点が離れて入力された'),
+    ('md@i(4l)h', '文字入力', '日本語入力オフのままのかな打ち'),
+    ('mojinyuuryoku', '文字入力', '日本語入力オフのままのローマ字打ち'),
+]
+
+# 正しく打てているので、触ってはいけない例。
+KEEP_CASES = [
+    'もじにゅうりょく',
+    'せいかくせい',
+]
 
 print('janome を使った補正エンジンの動作確認')
 
@@ -46,15 +65,34 @@ added = load_seed(store)
 print(f'[OK] 初期語彙を投入: {added} 件')
 
 tokenize_fn = C.make_tokenizer(store)
-r = C.correct_line('もじにゅうりょく', store, tokenize_fn,
-                   find_known_readings_flex)
-print(f'補正結果: {r["corrected"]!r}')
+failed = 0
 
-if not r['corrected']:
-    print('[NG] 補正結果が空でした')
-    sys.exit(1)
-if not r['changed']:
-    print('[NG] 誤打が補正されませんでした（期待: もじにゅうりょく）')
+
+def run(text):
+    return C.correct_line(text, store, tokenize_fn, find_known_readings_flex)
+
+
+print('\n--- 直ってほしい誤打 ---')
+for text, expected, why in FIX_CASES:
+    got = run(text)['corrected']
+    if got == expected:
+        print(f'[OK] {text!r} -> {got!r}（{why}）')
+    else:
+        failed += 1
+        print(f'[NG] {text!r} -> {got!r} / 期待 {expected!r}（{why}）')
+
+print('\n--- 触ってはいけない行 ---')
+for text in KEEP_CASES:
+    got = run(text)['corrected']
+    if got == text:
+        print(f'[OK] {text!r} はそのまま')
+    else:
+        failed += 1
+        print(f'[NG] {text!r} が {got!r} に変えられた')
+
+print()
+if failed:
+    print(f'[NG] {failed} 件が期待どおりではありませんでした')
     sys.exit(1)
 
 print('[OK] 補正エンジンは正しく動作しています')
