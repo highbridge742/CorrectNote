@@ -104,6 +104,15 @@ DEFAULTS = {
     # あったため、基準を直した版（連用形は残す）で改めて一度だけ
     # 実施する。復元（vocabulary_restore.json）とあわせて app.py 参照。
     'vocab_repair_fragments_v2_done': False,
+    # 統合表示のとき、補正をメモ欄へ自動で反映するか
+    # （うにさんの指定・2026-08-10。既定はオン）。
+    # 分割表示では補正欄が別にあるので、この設定は効かない。
+    'unified_autofix': True,
+    # 同梱の説明書を exe と同じフォルダへ書き出したか。
+    # 真偽値ではなく**書き出したファイル名**を入れる。説明書の版が
+    # 上がって名前が変われば、印と一致しなくなるので新しい版が
+    # 書き出される（app.py の MANUAL_FILENAME / _extract_manual）。
+    'manual_extracted': '',
 }
 
 # 古い設定ファイルからの読み替え。
@@ -173,6 +182,12 @@ class Settings:
                     self.values[key] = value
             elif key in allowed:
                 if value in allowed[key]:
+                    self.values[key] = value
+            elif isinstance(default, str):
+                # 決められた候補を持たない文字列の設定
+                # （説明書を書き出した印など）。文字列でありさえ
+                # すれば受け入れる。
+                if isinstance(value, str):
                     self.values[key] = value
 
 

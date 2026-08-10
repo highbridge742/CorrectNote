@@ -37,6 +37,21 @@ try:
 except Exception:
     HAS_JANOME = False
 
+# janome の辞書を読む処理は、複数のスレッドから同時に走らせない。
+# ここで作る Tokenizer は morphology.py のものとは別インスタンスだが、
+# **辞書の実体（mmap で開いたファイル）は janome の中で共有されて
+# いる**ので、同じ錠前で守る必要がある。
+# 同時に読むと読み出しが崩れ、janome が sys.exit(1) を呼んで
+# アプリごと終わる（詳しい説明は morphology.py の _TOKENIZE_LOCK）。
+try:
+    from morphology import janome_lock as _janome_lock
+except Exception:
+    import threading as _threading
+    _fallback_lock = _threading.Lock()
+
+    def _janome_lock():
+        return _fallback_lock
+
 
 # 取り込む品詞
 IMPORT_POS = ('名詞', '動詞', '形容詞', '副詞')
@@ -416,7 +431,10 @@ def learn_from_text(store, text, category_hint=None):
     added = 0
     seen = set()
 
-    for token in t.tokenize(text):
+    with _janome_lock():
+        tokens = list(t.tokenize(text))
+
+    for token in tokens:
         parts = token.part_of_speech.split(',')
         pos = parts[0] if parts else ''
         sub_pos = parts[1] if len(parts) > 1 else ''
@@ -518,7 +536,8 @@ def repair_conjugated_fragments(store):
         if len(surface) < 2:
             continue
         try:
-            toks = list(t.tokenize(surface))
+            with _janome_lock():
+                toks = list(t.tokenize(surface))
         except Exception:
             continue
         if len(toks) != 1 or toks[0].surface != surface:

@@ -27,6 +27,8 @@ janome があれば正確に区切れる。無い場合も動くよう、
     pip install janome
 """
 
+import threading
+
 try:
     from janome.tokenizer import Tokenizer
     _TOKENIZER = Tokenizer()
@@ -34,6 +36,40 @@ try:
 except Exception:
     _TOKENIZER = None
     HAS_JANOME = False
+
+# janome の Tokenizer は**1つだけ**作って使い回している。
+# この1つを複数のスレッドから同時に呼んではいけない
+# （2026-08-10・「起動読み込み中にタブ移動ショートカットを入れると
+# クラッシュする」の正体）。
+#
+# 理由: janome の辞書は mmap で読む（MMapSystemDictionary）。
+# 同時に読むと読み出しが崩れることがあり、崩れたときに janome は
+#     except Exception: ... sys.exit(1)
+# を実行する（janome/dic.py の lookup。RAM 版も同じ）。
+# **sys.exit は SystemExit を投げる。SystemExit は Exception の
+# 子ではないので、こちらの try/except では捕まらず、tkinter の
+# コールバックから外へ抜けて mainloop ごと終わる**＝アプリが
+# 黙って消える。エラーも出ないので原因が分かりにくい。
+#
+# 対策は2段構え:
+#   1. この錠前で、tokenize を同時に走らせない（根本）。
+#      錠前を取るのは1行ぶんの解析の間だけなので、待たされても
+#      ごく短い。画面が固まる心配はない。
+#   2. それでも SystemExit が出たときは、簡易分割に落として
+#      アプリだけは生かす（保険）。
+_TOKENIZE_LOCK = threading.Lock()
+
+
+def janome_lock():
+    """
+    janome の辞書を読む処理を囲むための錠前（with 文で使う）。
+
+    janome_import.py のように**別の Tokenizer を作る**場所からも、
+    同じ錠前を使うこと。Tokenizer を作り直しても、辞書の実体
+    （mmap で開いたファイル）は janome の中で共有されているため、
+    別インスタンスなら安全、ということにはならない。
+    """
+    return _TOKENIZE_LOCK
 
 
 # 補正の対象にしない品詞。
@@ -256,9 +292,23 @@ def tokenize(line):
 
 
 def _tokenize_janome(line):
+    # 分割そのものは錠前の中で済ませ、結果を控えてから外で組み立てる
+    # （錠前を握っている時間を最短にするため）。
+    # tokenize() は生成器なので、**錠前の中で全部取り出す**こと。
+    # list() を外でやると、実際の読み出しが錠前の外で走ってしまう。
+    try:
+        with _TOKENIZE_LOCK:
+            raw = list(_TOKENIZER.tokenize(line))
+    except SystemExit:
+        # janome が辞書の読み出しに失敗して sys.exit(1) を呼んだ。
+        # ここで受け止めないとアプリごと終わる（上の説明を参照）。
+        return _tokenize_fallback(line)
+    except Exception:
+        return _tokenize_fallback(line)
+
     tokens = []
     pos = 0
-    for t in _TOKENIZER.tokenize(line):
+    for t in raw:
         surface = t.surface
         # janome は元の文字列の位置を返さないので、順に数えていく
         start = line.find(surface, pos)

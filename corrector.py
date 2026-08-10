@@ -2546,6 +2546,191 @@ def _is_all_auxiliary(run):
     return consumed
 
 
+def _tokens_all_known_in_span(tokens, start, end,
+                              after_kanji=False):
+    """
+    **文全体**の形態素解析で、この範囲がまるごと
+    「辞書にある語」の並びとして読めているか。
+
+    窓の判定（_looks_like_valid_japanese）は、窓の文字だけを
+    取り出して解析し直す。前後を失うため、文の中では正しく
+    切れていた並びが、断片にすると別の切り方になることがある。
+
+    実機の例（2026-08-10）:
+        「確定したのち」→ janome は 確定/し/た/のち と正しく切る。
+        ところが窓は「したのち」だけを渡され、断片としての判定は
+        先頭の1文字動詞「し」を根拠にできず不合格。結果、
+        「したまち（下町）」という**実在するが無関係な語**に
+        1文字違いで引き寄せられ、正しい文が壊れた。
+
+    そこで、**文全体を見た解析の結果**をそのまま使う。
+    その範囲が、切れ目もぴったり合ったうえで、すべて辞書が
+    読みを引けた語で埋まっているなら、それは壊れていない。
+    誤字を含む列は、文全体で見ても必ずどこかに
+    「辞書が読みを引けない断片」が出る（それが誤字の定義）。
+
+    ただし「すべて辞書が読みを引けた」だけでは足りない。
+    **壊れた列も、短い語の寄せ集めなら全部引けてしまう**
+    （学び12と同じ罠）。実際、直したい列はどれもそうなっている:
+
+        たんほの繋がり  → たん(名詞)/ほ(動詞!)/の/繋がり
+        単語のつあがり  → 単語/の/つ(助動詞!)/あがり
+        たんごのちながり → たん/ご(接頭詞!)/のち/な/がり
+        たああんごの…  → た(助動詞!)/あ(フィラー!)/あん/ご/の
+
+    共通しているのは **1文字の中身のあるトークン**（1文字の
+    動詞・接頭詞・フィラー・感動詞、並びの頭に立つ助動詞）で、
+    どれも解析が崩れた印。正しい「したのち」にはこれが無い
+    （し は直前の漢字「確定」の送り仮名なので例外扱いする）。
+
+    条件（すべて満たすときだけ True）:
+      - 範囲の両端がトークンの切れ目と一致している
+      - 隙間なく覆っている
+      - どのトークンも辞書が読みを引けている（または守る語）
+      - フィラー・感動詞が混じっていない（解析が崩れた印）
+      - 1文字のトークンは次のどれかだけ
+          * 助詞（どこでもよい）
+          * 助動詞（ただし並びの先頭は不可＝つあがりの「つ」）
+          * 動詞で、並びの先頭かつ**直前が漢字**
+            （＝その漢字の送り仮名。確定+し）
+      - 2文字以上の内容語が1つ以上ある
+        （助詞・助動詞だけの並びは、そもそも別の関門が見ている。
+          ここで「正しい」と言い切る根拠にはしない）
+
+    after_kanji: 範囲の直前の文字が漢字か。送り仮名の判定に使う。
+    """
+    if not tokens or end <= start:
+        return False
+    covered = [t for t in tokens if t[3] >= start and t[4] <= end]
+    if not covered:
+        return False
+    if covered[0][3] != start or covered[-1][4] != end:
+        return False
+    at = start
+    has_content = False
+    for surface, pos, _reading, s, e, has_reading in covered:
+        if s != at:
+            return False      # 隙間がある（＝端が語の途中）
+        at = e
+        if not has_reading and not is_protected_word(surface):
+            return False      # 辞書が読みを引けない断片がある
+        major = (pos or '').split(':')[0]
+        if major in ('フィラー', '感動詞'):
+            return False      # 解析が崩れた印
+        if len(surface) == 1:
+            if major == '助詞':
+                continue
+            if major == '助動詞' and s > start:
+                continue
+            if major == '動詞' and s == start and after_kanji:
+                continue      # 直前の漢字の送り仮名（確定＋し）
+            return False
+        if major not in ('助詞', '助動詞'):
+            has_content = True
+    return at == end and has_content
+
+
+def _span_is_known_single_word(tokens, start, end):
+    """
+    この範囲が、形態素解析で**1語**として切られ、かつ辞書に
+    載っている語か。載っているなら正しく書けているので触らない。
+    """
+    for surface, pos, reading, s, e, has_reading in tokens or ():
+        if s == start and e == end:
+            return bool(has_reading)
+    return False
+
+
+# 濁点「゛」のキーの、**すぐ隣**のキーが出すかな。
+# JIS かな配列の並びは  P(せ) @(゛) [(゜) ](む)  で、
+# 「ど」と打つつもりで と を打ってから ゛ の隣を叩くと、
+# 「とせ」「と゜」のような形になる（実機からの指摘・2026-08-10:
+# 「とせ」は「と゛」の隣接扱いとなります）。
+#
+# 隣の隣までは広げない。け・れ のようなよく使うかなまで
+# 「濁点の打ち間違いかもしれない」と見なすと、正しい文が
+# 壊れる余地が増えるため。
+_DAKUTEN_TYPO_CHARS = ('せ', '゜')
+_HANDAKUTEN_TYPO_CHARS = ('゛', 'む')
+
+# この直しを試す最短の長さ。短い並びは偶然当たりやすい。
+_DAKUTEN_TYPO_MIN_RUN = 5
+_DAKUTEN_TYPO_MIN_RESULT = 4
+
+
+def dakuten_typo_variants(run):
+    """
+    「濁点のキーの隣を押した」と読み替えた別案を並べる。
+
+    「とせらっぐ」→「どらっぐ」。1か所だけ読み替える
+    （2か所も間違えたと考えるより、他の説明のほうが確からしい）。
+
+    戻り値: [読み替えた並び, ...]
+    """
+    try:
+        from kana_layout import DAKUTEN_BASE
+    except Exception:
+        return []
+    voiced = {}
+    for v, base in DAKUTEN_BASE.items():
+        voiced.setdefault(base, v)
+    # 半濁点（ぱ行）は DAKUTEN_BASE に無いので自前で持つ
+    handaku = {'は': 'ぱ', 'ひ': 'ぴ', 'ふ': 'ぷ',
+               'へ': 'ぺ', 'ほ': 'ぽ'}
+    out = []
+    for i in range(1, len(run)):
+        prev = run[i - 1]
+        ch = run[i]
+        if ch in _DAKUTEN_TYPO_CHARS and prev in voiced:
+            out.append(run[:i - 1] + voiced[prev] + run[i + 1:])
+        elif ch in _HANDAKUTEN_TYPO_CHARS and prev in handaku:
+            out.append(run[:i - 1] + handaku[prev] + run[i + 1:])
+    return out
+
+
+def dakuten_typo_fix(run, store):
+    """
+    かなの並びが「濁点のキーの隣を押した形」なら、正しい語に直す。
+
+    **語彙にそのままある読みに一致したときだけ**直す。似ている、
+    ではなく完全一致に限るのは、この読み替えが（せ・む という
+    よく使うかなを消す）大胆な操作だから。判断はこの関数の中で
+    完結させる（判断経路を増やさない、という設計方針）。
+
+    外来語（表記がカタカナだけの語）なら、カタカナの表記を返す
+    （ドラッグ。うにさんの指定でカタカナに直す方針・項目48-r）。
+
+    戻り値: 直した文字列。直さないなら None。
+    """
+    if len(run) < _DAKUTEN_TYPO_MIN_RUN:
+        return None
+    try:
+        if store.lookup(run):
+            return None      # そのままで語彙にある＝打ち間違いではない
+    except Exception:
+        return None
+    for cand in dakuten_typo_variants(run):
+        if len(cand) < _DAKUTEN_TYPO_MIN_RESULT:
+            continue
+        try:
+            entries = [e for e in store.lookup(cand)
+                       if e.get('count', 0) >= 2]
+        except Exception:
+            entries = []
+        if not entries:
+            continue
+        try:
+            from loanword import katakana_for_hiragana
+            # ここまで来た時点で「濁点のキーの隣を押した形」として
+            # 語彙に完全一致している。根拠が揃っているので、
+            # カタカナに直す長さの下限を4文字まで下げてよい。
+            kata = katakana_for_hiragana(cand, store, min_length=4)
+        except Exception:
+            kata = None
+        return kata or cand
+    return None
+
+
 def _looks_like_valid_japanese(run, tokenize_fn):
     """
     このひらがな列は、既に正しい日本語として成立しているか。
@@ -3624,6 +3809,17 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                 and _followed_by_shout_mark(line, run_end):
             _trace('窓', f'{run!r} → 叫び声・合図なので触らない')
             continue
+        # 濁点のキーの隣を押した形（とせらっぐ → ドラッグ）。
+        # **並び全体**を読み替えるので、窓に切り分ける前に見る。
+        # 切り分けたあとでは「せらっぐ」だけが直り、頭の「と」が
+        # 余ってしまう（実機で「とどらっぐ」・2026-08-10）。
+        _dak = dakuten_typo_fix(run, store)
+        if _dak:
+            _trace('かな連続', f'{run!r} → 濁点のキーの隣を押した形'
+                               f'として {_dak!r} に直す')
+            replacements.append((run_start, run_end, _dak, 'かな入力'))
+            taken_all.append((run_start, run_end))
+            continue
         # 窓の切り出しは、形態素解析の分割から見る token_windows を
         # 第一候補にする（実機の janome の「短い断片が連続する」
         # 振る舞いに基づく。語彙の規模に左右されない）。
@@ -3667,6 +3863,17 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
             window = line[a:b]
             if is_protected_word(window) or _is_all_auxiliary(window):
                 _trace('窓', f'{window!r} → 守る語／助詞だけなので対象外')
+                continue
+            # 文全体の解析で、この範囲がすべて辞書の語として
+            # 読めているなら壊れていない（_tokens_all_known_in_span）。
+            # 窓だけを取り出して解析し直すと前後を失い、
+            # 「確定したのち」の「したのち」が「したまち」に
+            # 化けるような事故が起きる（実機・2026-08-10）。
+            if _tokens_all_known_in_span(
+                    tokens, a, b,
+                    after_kanji=(a > 0 and is_kanji(line[a - 1]))):
+                _trace('窓', f'{window!r} → 文全体の解析ですべて'
+                             f'辞書の語として読めるので触らない')
                 continue
             # 窓そのものが語彙にある読みなら、打ち間違いではない。
             # （芯の再構築には同じ関門があるが、従来の探索の側には
@@ -3902,6 +4109,94 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
             continue
         replacements.append((start, end, new_surface, category))
 
+    # ------------------------------------------------------------
+    # カタカナ語・英単語の誤字（loanword.py・2026-08-10）
+    # ------------------------------------------------------------
+    # これまでカタカナ語は原則として触らず、英単語には経路すら
+    # 無かった。うにさんの指定で、長い外来語・英単語の打ち間違いも
+    # 直すことになった。判断は loanword.py の中だけで行い、
+    # ここは「返ってきたら置き換える」だけにする（判断経路を
+    # 増やさないという設計方針）。
+    #
+    # 既に他の経路が直すと決めた範囲には手を出さない。
+    _loan_taken = [(_s, _e) for _s, _e, _n, _c in replacements]
+
+    def _loan_overlaps(a, b):
+        return any(not (b <= s0 or a >= e0) for s0, e0 in _loan_taken)
+
+    try:
+        import loanword as _LW
+    except Exception:
+        _LW = None
+    if _LW is not None:
+        # --- カタカナの並び（プセネタリウム → プラネタリウム）---
+        for k_s, k_e, k_run in _LW.find_katakana_runs(line):
+            if _loan_overlaps(k_s, k_e):
+                continue
+            # 形態素解析が「辞書にある語」だけで説明できる並びは、
+            # 正しく書けている。1語として読めた場合はもちろん、
+            # **複合語として複数の既知語に割れた場合も**触らない。
+            # これが無いと、実機のメモで
+            #   ショートカットキー → ショートカット
+            #   タブショートカット → ショートカット
+            # のように、正しい複合語が縮められた（2026-08-10）。
+            if _span_is_known_single_word(tokens, k_s, k_e):
+                continue
+            _parts = [t[0] for t in (tokens or ())
+                      if t[3] >= k_s and t[4] <= k_e]
+            if (''.join(_parts) == k_run
+                    and _LW.is_known_compound(_parts, store)):
+                continue
+            span_e = k_e
+            fixed = None
+            # 末尾に1文字紛れた形（プラネタリウ［）を先に試す。
+            # ただし、その1文字を除いた部分が既に正しい語なら
+            # 触らない（「（東京上野キャンパス）」の閉じ括弧を
+            # 消してしまった件・2026-08-10）。
+            if (k_e < len(line) and _LW.is_stray(line[k_e])
+                    and not _LW.is_known_katakana(k_run, store)):
+                fixed = _LW.fix_katakana_word(k_run + line[k_e], store)
+                if fixed:
+                    span_e = k_e + 1
+            if not fixed:
+                span_e = k_e
+                fixed = _LW.fix_katakana_word(k_run, store)
+            if fixed:
+                _trace('外来語', f'{line[k_s:span_e]!r} → {fixed!r}')
+                replacements.append((k_s, span_e, fixed, '外来語'))
+                _loan_taken.append((k_s, span_e))
+
+        # --- ひらがなで書かれた外来語（ぷらねたりうむ → カタカナ）---
+        # 「ひらがなで打たれたものはひらがなのまま」の例外。
+        # 助詞が後ろに付いた形（ぷらねたりうむに）でも拾えるよう、
+        # 末尾の助詞を1〜2文字まで剥がして試す。
+        _tail_particles = set('はがをにでともへやかねのよねなら、。')
+        for h_s, h_e, h_run in find_hiragana_runs(line, min_len=5):
+            if _loan_overlaps(h_s, h_e):
+                continue
+            for _cut in (0, 1, 2):
+                if _cut and not all(c in _tail_particles
+                                    for c in h_run[len(h_run) - _cut:]):
+                    break
+                _body = h_run[:len(h_run) - _cut] if _cut else h_run
+                kata = _LW.katakana_for_hiragana(_body, store)
+                if kata:
+                    _trace('外来語', f'{_body!r} → {kata!r}（カタカナへ）')
+                    replacements.append((h_s, h_s + len(_body), kata,
+                                         '外来語'))
+                    _loan_taken.append((h_s, h_s + len(_body)))
+                    break
+
+        # --- 英単語（Pplanetarium → Planetarium）---
+        for e_s, e_e, e_run in _LW.find_english_runs(line):
+            if _loan_overlaps(e_s, e_e):
+                continue
+            fixed = _LW.fix_english_word(e_run, store)
+            if fixed:
+                _trace('英語', f'{e_run!r} → {fixed!r}')
+                replacements.append((e_s, e_e, fixed, '英語'))
+                _loan_taken.append((e_s, e_e))
+
     if not replacements:
         if unsure_spans:
             out = dict(empty)
@@ -3933,6 +4228,19 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
         # 文字が二重になった等）。採用しない。
         if _has_new_repetition(original, new_surface):
             continue
+        # 直した先がひらがなで、その読みの表記が**カタカナのものしか
+        # 無い**外来語なら、カタカナで書く（うにさんの指定・
+        # 項目48-r「カタカナが適した単語はカタカナに補正する」）。
+        # どの経路で直した結果にも同じ扱いをしたいので、
+        # 全ての置換が必ず通るこの最終検査の場で一度だけ行う。
+        if _LW is not None and new_surface != original:
+            try:
+                _kata = _LW.katakana_for_hiragana(new_surface, store,
+                                                  min_length=4)
+            except Exception:
+                _kata = None
+            if _kata:
+                new_surface = _kata
         checked.append((start, end, new_surface, category))
     replacements = checked
     if not replacements:

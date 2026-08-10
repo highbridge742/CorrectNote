@@ -386,7 +386,7 @@ def run_decision_cases(store):
 
     # 4. 無関係な語の補正まで巻き添えにしない
     r = corrected('ぱそみん', dec2)
-    check('別の語の補正は従来どおり効く', r['corrected'], 'ぱそこん')
+    check('別の語の補正は従来どおり効く', r['corrected'], 'パソコン')
 
     # 5. 1文字の語は守れない（広い範囲を巻き添えにするため）
     dec3 = DecisionStore()
@@ -1962,7 +1962,7 @@ def run_rebuild_cases():
         check(f'擬音・伸ばし: {_t}', _fix_g(_t), _t)
     # カタカナ語をひらがなで打った誤打（ーが2つ）は引き続き直る
     check('きーぼーそ は引き続き直る（ー2つ・位置保存）',
-          _fix('きーぼーそ'), 'きーぼーど')
+          _fix('きーぼーそ'), 'キーボード')
     # 話し言葉の代名詞・疑問詞・副詞の保護
     for _t in ('わしらの縄張りに', 'どうなんだ', 'ロゴを刻んだんだ',
                'ちょっとしたメモを補正付きで書ける',
@@ -3678,6 +3678,162 @@ def report_known_issues(store):
     print('（一致以外は実機での診断が必要。diagnose.py のケースに追加済み）')
 
 
+# ============================================================
+# 項目48-r/48-s: カタカナ語・英単語・濁点キーの打ち間違い
+# ============================================================
+def test_map_column():
+    """
+    統合表示の自動反映で、カーソルの桁を読み替える（項目48-v）。
+
+    画面なしで確かめられるよう、純粋関数に切り出してある。
+    """
+    all_ok = True
+
+    def check(label, got, want):
+        nonlocal all_ok
+        ok = (got == want)
+        all_ok = all_ok and ok
+        print(f'{"OK " if ok else "NG "}{label}')
+        if not ok:
+            print(f'      得た値: {got!r}   期待: {want!r}')
+
+    # tkinter の無い環境でも動かせるよう、app.py から
+    # この関数の定義だけを取り出して読み込む（既存のテストと同じ手）。
+    _src = open('app.py', encoding='utf-8').read()
+    _start = _src.index('def map_column(')
+    _end = _src.index('\ndef ', _start + 10)
+    _ns = {}
+    exec(_src[_start:_end], _ns)
+    map_column = _ns['map_column']
+
+    # 行末に居たら、新しい行末へ
+    check('行末はそのまま行末',
+          map_column('プセネタリウム', 'プラネタリウム', 7), 7)
+    check('長さが変わっても行末は行末',
+          map_column('プネタリウム', 'プラネタリウム', 6), 7)
+    # 行頭は行頭
+    check('行頭は行頭', map_column('あいう', 'かきく', 0), 0)
+    # 直した箇所より後ろに居たら、そのぶんずれる
+    check('直した箇所の後ろはずれる',
+          map_column('プネタリウムに行く', 'プラネタリウムに行く', 8), 9)
+    # 1文字を1文字に置き換えた場合、その後ろの桁は動かない
+    check('1文字の置き換えでは桁が動かない',
+          map_column('プセネタリウム', 'プラネタリウム', 2), 2)
+    # 複数文字が1文字になった箇所の**中**に居たら、その終わりへ
+    check('直した箇所の中は、その終わりへ',
+          map_column('abcXYZdef', 'abcQdef', 5), 4)
+    # 変わっていない行は動かない
+    check('変わっていなければ動かない',
+          map_column('そのまま', 'そのまま', 2), 2)
+    # 短くなる場合
+    check('短くなっても行末は行末',
+          map_column('ププラネタリウム', 'プラネタリウム', 8), 7)
+    return all_ok
+
+
+def test_loanword_and_english():
+    """
+    うにさんの指定（2026-08-10）で追加した経路の回帰テスト。
+
+    janome の無い環境でも動くよう、語彙は自前で組み立てる
+    （loanword.py は形態素解析に頼らない）。
+    """
+    all_ok = True
+
+    def check(label, got, want):
+        nonlocal all_ok
+        ok = (got == want)
+        all_ok = all_ok and ok
+        print(f'{"OK " if ok else "NG "}{label}')
+        if not ok:
+            print(f'      得た値: {got!r}   期待: {want!r}')
+
+    import loanword as LW
+    from vocabulary import VocabularyStore
+
+    store = VocabularyStore()
+    for _ in range(5):
+        store.add('ぷらねたりうむ', 'プラネタリウム', 'その他')
+        store.add('こんびにえんす', 'コンビニエンス', 'その他')
+        store.add('どらっぐ', 'ドラッグ', 'その他')
+        store.add('しょーとかっと', 'ショートカット', 'その他')
+        store.add('きー', 'キー', 'その他')
+
+    # --- カタカナの誤字（うにさんの31例の代表）---
+    kata = [
+        ('プセネタリウム', 'プラネタリウム'),    # 隣接キー
+        ('プネラタリウム', 'プラネタリウム'),    # 順序の入れ替わり
+        ('プネタリウム', 'プラネタリウム'),      # 脱字
+        ('ププラネタリウム', 'プラネタリウム'),  # 同じキーが2度
+        ('プラニネタリウム', 'プラネタリウム'),  # 余分な1文字
+        ('コンビニエス', 'コンビニエンス'),
+    ]
+    for typed, want in kata:
+        check(f'カタカナ {typed}', LW.fix_katakana_word(typed, store), want)
+
+    # 正しい語は触らない
+    check('正しいカタカナは触らない',
+          LW.fix_katakana_word('プラネタリウム', store), None)
+    # 長音の有無だけの違いは直さない（ダイアログ／ダイアローグ）
+    store2 = VocabularyStore()
+    for _ in range(5):
+        store2.add('だいあろーぐ', 'ダイアローグ', 'その他')
+    check('長音の有無だけの違いは直さない',
+          LW.fix_katakana_word('ダイアログ', store2), None)
+    # 使っている語の複合は縮めない
+    check('複合語とみなせる並び',
+          LW.is_known_compound(['ショートカット', 'キー'], store), True)
+    check('使っていない語の並びは複合語とみなさない',
+          LW.is_known_compound(['プラモ', 'タリウム'], store), False)
+
+    # --- ひらがなで書いた外来語をカタカナに ---
+    check('ひらがなの外来語をカタカナに',
+          LW.katakana_for_hiragana('ぷらねたりうむ', store), 'プラネタリウム')
+    check('短い読みはカタカナに直さない',
+          LW.katakana_for_hiragana('どらっぐ', store), None)
+    check('根拠が揃えば4文字でもカタカナに',
+          LW.katakana_for_hiragana('どらっぐ', store, min_length=4),
+          'ドラッグ')
+
+    # --- 紛れた1文字 ---
+    check('カタカナに挟まれた1文字は並びに含める',
+          LW.find_katakana_runs('プラネ１リウム'),
+          [(0, 7, 'プラネ１リウム')])
+    check('末尾にくっついた文字は含めない',
+          LW.find_katakana_runs('（東京上野キャンパス）'),
+          [(5, 10, 'キャンパス')])
+
+    # --- 英単語 ---
+    store3 = VocabularyStore()
+    LW.relearn_english_from_texts(
+        ['I like the Planetarium. Planetarium again. Pplanetarium'], store3)
+    check('多いほうの形だけを覚える',
+          sorted(LW._english_vocabulary(store3)), ['planetarium'])
+    for typed in ('Pplanetarium', 'Palnetarium', 'Panetarium',
+                  'Ploanetarium'):
+        check(f'英単語 {typed}', LW.fix_english_word(typed, store3),
+              'Planetarium')
+    check('覚えている語は触らない',
+          LW.fix_english_word('Planetarium', store3), None)
+    check('短い語は対象外', LW.fix_english_word('Plnet', store3), None)
+
+    # --- 濁点キーの打ち間違い（とせ → ど）---
+    check('濁点キーの隣を押した形',
+          C.dakuten_typo_fix('とせらっぐ', store), 'ドラッグ')
+    check('短い並びは対象外',
+          C.dakuten_typo_fix('とせら', store), None)
+    check('語彙にそのままある並びは触らない',
+          C.dakuten_typo_fix('こんびにえんす', store), None)
+
+    # --- 記号の言い換え ---
+    from candidates import symbol_candidates, is_symbol_word
+    check('〜 は F2 の対象', is_symbol_word('〜'), True)
+    check('〜 の候補は から',
+          [c['surface'] for c in symbol_candidates('〜')], ['から'])
+    check('普通の語に記号の候補は出ない', symbol_candidates('文字'), [])
+    return all_ok
+
+
 if __name__ == '__main__':
     store = build_store()
 
@@ -3685,13 +3841,19 @@ if __name__ == '__main__':
         # --- 置換（隣接キーの押し間違い） ---
         ('もばなゅうりょく', True, 'もじにゅうりょく'),
         ('もばなゅいりょく', True, 'もじにゅうりょく'),
-        ('ぱそみん', True, 'ぱそこん'),
+
+# 2026-08-10（項目48-r）: うにさんの指定
+# 「カタカナが適した単語はカタカナに補正する」により、
+# 表記がカタカナだけの外来語は**カタカナで**書き出すようになった。
+# ぱそこん → パソコン、きーぼーど → キーボード。
+# 直す中身（どの語に届くか）は変わっていない。
+        ('ぱそみん', True, 'パソコン'),
         ('へんかく', True, 'へんかん'),
         ('けんさこ', True, 'けんさく'),
-        ('きーぼーそ', True, 'きーぼーど'),
+        ('きーぼーそ', True, 'キーボード'),
         # --- 濁点・半濁点・小書きの誤り ---
-        ('ぱぞこん', True, 'ぱそこん'),
-        ('はそこん', True, 'ぱそこん'),
+        ('ぱぞこん', True, 'パソコン'),
+        ('はそこん', True, 'パソコン'),
         ('もんたい', True, 'もんだい'),
         ('しゆうせい', True, 'しゅうせい'),
         # --- 脱字（押し忘れ） ---
@@ -3699,7 +3861,7 @@ if __name__ == '__main__':
         ('じにゅうりょく', True, 'もじにゅうりょく'),
         # --- 余分な打鍵（押しすぎ・重複） ---
         ('もじにゅううりょく', True, 'もじにゅうりょく'),
-        ('ぱそここん', True, 'ぱそこん'),
+        ('ぱそここん', True, 'パソコン'),
         ('もんじにゅうりょく', True, 'もじにゅうりょく'),
         # --- 半角モードのまま打ってしまった入力 ---
         ('md@i(4l)h', True, '文字入力'),
@@ -3735,7 +3897,7 @@ if __name__ == '__main__':
         ('もじにうりょく', True, 'もじにゅうりょく'),
         ('もじにゅうのりょく', True, 'もじにゅうりょく'),
         ('もじにゅりうょく', True, 'もじにゅうりょく'),
-        ('ぱそみんは、', True, 'ぱそこんは、'),
+        ('ぱそみんは、', True, 'パソコンは、'),
     ]
 
     keep_cases = [
@@ -3843,6 +4005,11 @@ if __name__ == '__main__':
     print()
     report_known_issues(store)
     print()
+    print()
+    ok19 = test_loanword_and_english()
+    print()
+    ok20 = test_map_column()
+    print()
     print('ALL OK:', ok1 and ok2 and ok3 and ok4 and ok5 and ok6 and ok7
           and ok8 and ok9 and ok10 and ok11 and ok12 and ok13 and ok14
-          and ok15 and ok16 and ok17 and ok18)
+          and ok15 and ok16 and ok17 and ok18 and ok19 and ok20)

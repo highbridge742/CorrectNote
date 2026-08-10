@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>CorrectNote 説明書</title>
+<style>
+  :root{
+    --bg:#f6f4ee; --panel:#ffffff; --ink:#1c2b2d; --rule:#d8d3c4;
+    --accent:#2c5f6f; --muted:#8a8577; --warn:#a8443a;
+    --suspect:#fdf6f4; --hover:#e9eff1; --found:#ffe9a8;
+    --code-bg:#f0ede4;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:"Yu Gothic UI","Yu Gothic","Hiragino Sans",sans-serif;
+    line-height:1.85; font-size:15px;
+  }
+  a { color: var(--accent); }
+
+  /* ---------- レイアウト ---------- */
+  .shell{ display:flex; max-width:1180px; margin:0 auto; }
+  nav.toc{
+    width:230px; flex:none; position:sticky; top:0; align-self:flex-start;
+    height:100vh; overflow-y:auto; padding:32px 18px 32px 0;
+    border-right:1px solid var(--rule);
+  }
+  main{ flex:1; min-width:0; padding:44px 56px 120px; }
+
+  nav.toc .brand{
+    font-family:"Yu Mincho",serif; font-size:20px; font-weight:700;
+    letter-spacing:.02em; margin:0 0 4px 4px;
+  }
+  nav.toc .brand small{
+    display:block; font-family:"Yu Gothic UI",sans-serif; font-weight:400;
+    font-size:11px; color:var(--muted); letter-spacing:.08em; margin-top:2px;
+  }
+  nav.toc ol{ list-style:none; margin:26px 0 0; padding:0; counter-reset:sec; }
+  nav.toc li{ counter-increment:sec; margin:0; }
+  nav.toc a{
+    display:block; padding:7px 4px 7px 30px; position:relative;
+    color:var(--ink); text-decoration:none; font-size:13.5px;
+    border-radius:6px; transition:background .15s;
+  }
+  nav.toc a:hover{ background:var(--hover); }
+  nav.toc a::before{
+    content: counter(sec) "."; position:absolute; left:4px; color:var(--muted);
+    font-variant-numeric:tabular-nums; font-size:12.5px;
+  }
+  nav.toc a.current{ color:var(--accent); font-weight:700; }
+
+  /* ---------- タイポグラフィ ---------- */
+  h1{
+    font-family:"Yu Mincho",serif; font-size:34px; font-weight:700;
+    margin:0 0 6px; letter-spacing:.01em;
+  }
+  .lede{ color:var(--muted); font-size:15px; margin:0 0 8px; }
+  .lede-title{ color: var(--ink); font-size: 16px; margin: 0 0 44px; }
+
+  section{ margin-top:78px; scroll-margin-top:24px; }
+  section:first-of-type{ margin-top:52px; }
+  h2{
+    font-family:"Yu Mincho",serif; font-size:23px; font-weight:700;
+    display:flex; align-items:baseline; gap:12px; margin:0 0 6px;
+    padding-bottom:14px; border-bottom:2px solid var(--ink);
+  }
+  h2 .num{
+    font-size:14px; color:var(--accent); font-weight:700;
+    font-variant-numeric:tabular-nums; letter-spacing:.02em;
+  }
+  h2 + .sec-intro{ color:var(--muted); margin:16px 0 0; font-size:14px; }
+
+  h3{
+    font-size:16px; font-weight:700; margin:36px 0 10px;
+    color:var(--ink); display:flex; align-items:center; gap:8px;
+  }
+  h3 .dot{ width:6px; height:6px; border-radius:50%; background:var(--accent); flex:none; }
+
+  p{ margin:0 0 14px; }
+  ul, ol.plain{ margin:0 0 14px; padding-left:22px; }
+  li{ margin:0 0 6px; }
+
+  /* ---------- 部品 ---------- */
+  .card{
+    background:var(--panel); border:1px solid var(--rule); border-radius:10px;
+    padding:20px 22px; margin:16px 0;
+  }
+  .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width: 760px){ .grid2{ grid-template-columns:1fr; } }
+
+  .kbd{
+    display:inline-block; padding:2px 8px; border-radius:5px;
+    background:var(--code-bg); border:1px solid var(--rule);
+    font-family:"Consolas","SFMono-Regular",monospace; font-size:12.5px;
+    color:var(--ink); white-space:nowrap;
+  }
+
+  table.keys{ width:100%; border-collapse:collapse; margin:14px 0 18px; font-size:14px; }
+  table.keys th, table.keys td{
+    text-align:left; padding:9px 12px; border-bottom:1px solid var(--rule);
+  }
+  table.keys th{
+    color:var(--muted); font-weight:600; font-size:12px;
+    letter-spacing:.04em; text-transform:uppercase;
+  }
+  table.keys td.k{ width:190px; }
+
+  .callout{
+    display:flex; gap:12px; padding:14px 16px; border-radius:8px;
+    margin:16px 0; border:1px solid var(--rule); background:var(--panel);
+  }
+  .callout .icon{ flex:none; font-size:15px; line-height:1.6; }
+  .callout.tip{ background:var(--hover); border-color:#cdd9dc; }
+  .callout.warn{ background:var(--suspect); border-color:#e9c9c3; }
+  .callout p:last-child{ margin-bottom:0; }
+  .callout b{ color:var(--ink); }
+
+  .swatch-row{ display:flex; gap:10px; flex-wrap:wrap; margin:14px 0 18px; }
+  .swatch{
+    display:flex; align-items:center; gap:8px; font-size:13px;
+    border:1px solid var(--rule); border-radius:20px; padding:5px 12px 5px 6px;
+    background:var(--panel);
+  }
+  .swatch i{ width:16px; height:16px; border-radius:50%; display:inline-block; border:1px solid rgba(0,0,0,.08); }
+
+  /* --- ミニ画面プレビュー（アプリのペインを模した装飾） --- */
+  .mock{
+    border:1px solid var(--rule); border-radius:10px; overflow:hidden;
+    margin:18px 0 22px; background:var(--panel);
+  }
+  .mock .bar{
+    display:flex; gap:10px; align-items:center; padding:9px 14px;
+    background:var(--code-bg); border-bottom:1px solid var(--rule);
+    font-size:12px; color:var(--muted);
+  }
+  .mock .bar .dots{ display:flex; gap:5px; }
+  .mock .bar .dots span{ width:8px; height:8px; border-radius:50%; background:#d8d3c4; }
+  .mock .body{ display:flex; }
+  .mock .pane{ flex:1; padding:16px 18px; font-family:"Yu Mincho",serif; font-size:14px; }
+  .mock .pane + .pane{ border-left:1px solid var(--rule); }
+  .mock .pane .ptitle{
+    font-family:"Yu Gothic UI",sans-serif; font-size:11px; color:var(--muted);
+    margin-bottom:10px; letter-spacing:.03em;
+  }
+  .mock mark.s{ background:var(--suspect); border-radius:2px; padding:0 1px; }
+  .mock mark.h{ background:var(--hover); border-radius:2px; padding:0 1px; }
+  .mock .strike{ text-decoration: line-through; color:var(--muted); }
+
+  .steps{ counter-reset:step; list-style:none; margin:16px 0; padding:0; }
+  .steps li{
+    counter-increment:step; position:relative; padding:2px 0 16px 34px; margin:0;
+  }
+  .steps li::before{
+    content:counter(step); position:absolute; left:0; top:0;
+    width:22px; height:22px; border-radius:50%; background:var(--ink); color:var(--bg);
+    font-size:12px; font-weight:700; display:flex; align-items:center; justify-content:center;
+  }
+  .steps li::after{
+    content:''; position:absolute; left:11px; top:24px; bottom:0; width:1px; background:var(--rule);
+  }
+  .steps li:last-child::after{ display:none; }
+
+  code.inline{
+    font-family:"Consolas",monospace; background:var(--code-bg); padding:1px 6px;
+    border-radius:4px; font-size:13px;
+  }
+
+  footer{ margin-top:90px; padding-top:20px; border-top:1px solid var(--rule); color:var(--muted); font-size:12.5px; }
+
+  ::selection{ background:#cfe0e6; }
+
+  @media (max-width: 900px){
+    nav.toc{ display:none; }
+    main{ padding:32px 22px 90px; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <nav class="toc" id="toc">
+    <p class="brand">CorrectNote<small>説明書</small></p>
+    <ol id="toc-list"></ol>
+  </nav>
+
+  <main>
+    <h1>CorrectNote 説明書</h1>
+    <p class="lede">キーボード入力をサポートするメモ帳アプリです。</p>
+    <p class="lede-title">通信もAIも使わず、パソコンの中だけで完結します。</p>
+
+    <!-- ============================================================ -->
+    <section id="intro">
+      <h2><span class="num">01</span>CorrectNoteとは</h2>
+      <p>
+        CorrectNoteは、効率よく文字を打つための機能を集めたメモ帳です。
+        <b>確定済みの単語をいつでも再変換</b>できるほか、
+        別のアプリの操作中でも小さな下書きスペースを呼び出してすぐにメモを取れます。
+        さらに、<b>キーの押し間違い・打ち忘れ・押しすぎ・順序の入れ替わり</b>を、
+        書いているそばから見つけて直します。
+      </p>
+      <div class="grid2">
+        <div class="card">
+          <h3><span class="dot"></span>オフラインで完結</h3>
+          <p style="margin-bottom:0">
+            インターネット通信もAIも使いません。入力した内容がパソコンの外に出ることはなく、
+            すべての判断はお使いの端末の中だけで行われます。
+          </p>
+        </div>
+        <div class="card">
+          <h3><span class="dot"></span>いつでも再変換</h3>
+          <p style="margin-bottom:0">
+            確定済みの単語も、クリックや <span class="kbd">F2</span> でいつでも候補から選び直せます。
+            変換をやり直すために、消して打ち直す必要はありません。
+          </p>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="screen">
+      <h2><span class="num">02</span>画面の見かた</h2>
+      <p class="sec-intro">CorrectNote には、書き方の異なる2つの画面レイアウトがあります。ツールバーの
+        <span class="kbd">左右に並べる</span> と <span class="kbd">1つにまとめる</span> のボタンで、いつでも切り替えられます。</p>
+
+      <h3><span class="dot"></span>左右に並べるレイアウト（既定）</h3>
+      <p>左に自分が打った文章、右にその補正結果を表示します。両者は常に見比べられる状態にあります。</p>
+      <div class="mock">
+        <div class="bar"><div class="dots"><span></span><span></span><span></span></div>CorrectNote</div>
+        <div class="body">
+          <div class="pane">
+            <div class="ptitle">メモ（入力）</div>
+            文字入力を<mark class="s">性格</mark>に反映する
+          </div>
+          <div class="pane">
+            <div class="ptitle">補正結果</div>
+            文字入力を<b>正確</b>に反映する
+          </div>
+        </div>
+      </div>
+      <ul>
+        <li><b>左（メモ欄）</b> ― 打った内容がそのまま残ります。色の付いた箇所に、補正の候補があります。</li>
+        <li><b>右（補正欄）</b> ― 自動的に直った結果を表示します。ここでは文字を打てません。単語をクリックすると、
+          別の候補に選び直せます（詳しくは「3. 再変換」）。</li>
+      </ul>
+
+      <h3><span class="dot"></span>1つにまとめるレイアウト</h3>
+      <p>
+        入力欄と補正欄をひとつにまとめ、画面を広く使えるようにしたレイアウトです。
+        確定した単語を右クリックで再変換できます。
+      </p>
+      <div class="mock">
+        <div class="bar"><div class="dots"><span></span><span></span><span></span></div>CorrectNote ― 1つにまとめる</div>
+        <div class="body">
+          <div class="pane" style="flex:1">
+            <div class="ptitle">メモ</div>
+            文字入力を<mark class="s">性格</mark>に反映する
+          </div>
+        </div>
+      </div>
+ 
+
+      <h3><span class="dot"></span>色の意味</h3>
+      <div class="swatch-row">
+        <span class="swatch"><i style="background:#fdf6f4;border-color:#e9c9c3"></i>補正の候補がある箇所</span>
+        <span class="swatch"><i style="background:#e9eff1"></i>マウスが乗っている語（選び直せる合図）</span>
+        <span class="swatch"><i style="background:#ffe9a8"></i>検索で見つかった箇所</span>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="choose">
+      <h2><span class="num">03</span>再変換 ― 候補から選び直す</h2>
+      <p class="sec-intro">確定済みの単語を、いつでも再変換できます。自動で直らなかった語や、直った語をさらに別の表記に変えたいときも、同じ操作で選び直せます。</p>
+
+      <h3><span class="dot"></span>F2 でスムーズに直す</h3>
+      <p>
+        メモ欄で <span class="kbd">F2</span> を押すと、カーソルのすぐ前の語の候補が開きます。
+        一覧を開いたまま <span class="kbd">F2</span> を押すたびに、対象がひとつ左の語へ移っていくので、
+        少し前に書いた語も手を止めずにたどって直せます。いま対象になっている語には色が付きます。
+        行の先頭まで来たら、前の行の末尾の語へ続けて遡ります。
+        簡易入力ウィンドウの中でも同じように使えます。
+      </p>
+
+      <h3><span class="dot"></span>左右キーで対象の語を選び直す</h3>
+      <p>
+        候補の一覧が開いているあいだ、<span class="kbd">←</span>
+        <span class="kbd">→</span> キーで<b>対象の語を前後に移せます</b>。
+        上下キーは候補を選ぶために使います。
+      </p>
+      <div class="callout tip">
+        <div class="icon">💡</div>
+        <div><p>候補の一覧が開いているときに括弧のボタンを押すと、
+          <b>いま選んでいる語</b>を括弧で囲みます。</p></div>
+      </div>
+
+      <h3><span class="dot"></span>範囲選択で選ぶ</h3>
+      <p>
+        <b>範囲をドラッグで選んでから</b>右クリックすると、選んだ範囲で候補を探します。
+      </p>
+
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="quick">
+      <h2><span class="num">04</span>簡易入力ウィンドウ</h2>
+      <p class="sec-intro">
+        CorrectNote を裏で開いたまま、他のアプリを使っている最中でも、ちょっとしたメモを補正付きで書ける小さな入力欄です。
+        常に手前に浮いて表示されるフロートウィンドウなので、他のアプリの前に出たまま書けます。
+      </p>
+      <ol class="steps">
+        <li><span class="kbd">Ctrl</span>+<span class="kbd">Insert</span> または
+          <span class="kbd">Ctrl</span>+<span class="kbd">Shift</span>+<span class="kbd">-</span> を押すと、
+          マウスカーソルの近くに入力欄が開きます。</li>
+        <li>入力欄の中で文章を書きます。文章の長さに応じて入力欄は自動でサイズ調整されます。</li>
+        <li>入力欄を閉じると、書いた内容が自動でコピーされ、他のアプリに貼り付けられます。
+          また、その内容はCorrectNote本体のメモ欄にも、カーソルがある位置に挿入されます。</li>
+      </ol>
+      <div class="callout tip">
+
+      <h3><span class="dot"></span>窓の中でも引用と再変換</h3>
+      <p>
+        窓の中でも <span class="kbd">F1</span> または選択なしの <span class="kbd">Ctrl</span>+<span class="kbd">C</span> で
+        引用モードに入り、本体のメモ欄にある語をクリックして拾えます（範囲をドラッグして選ぶこともできます）。
+        <span class="kbd">F2</span> での再変換・遡りも本体と同じように使えます。
+      </p>
+
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="autofix">
+      <h2><span class="num">05</span>自動補正のしくみ</h2>
+      <p class="sec-intro">「左右に並べるレイアウト」の補正欄は、次のような誤りを自動的に直します。</p>
+
+      <table class="keys">
+        <tr><th>誤りの種類</th><th>例</th></tr>
+        <tr><td>隣のキーの押し間違い</td><td></td></tr>
+        <tr><td>濁点・半濁点の付け忘れ／余分</td><td></td></tr>
+        <tr><td>「ゃ」「っ」などの小書き忘れ</td><td></td></tr>
+        <tr><td>1文字の打ち忘れ</td><td></td></tr>
+        <tr><td>キーの押しすぎ</td><td></td></tr>
+        <tr><td>打つ順番の入れ替わり</td><td></td></tr>
+        <tr><td>濁点だけが離れて入力された</td><td></td></tr>
+        <tr><td>日本語入力をオフのまま入力</td><td>md@i(4l)h → 文字入力</td></tr>
+        <tr><td>日本語入力オフのままローマ字入力</td><td>mojinyuuryoku → 文字入力</td></tr>
+        <tr><td>文頭の「?」（変換前の記号の打ち間違い）</td><td>?今日の予定 → ・今日の予定</td></tr>
+      </table>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="decision">
+      <h2><span class="num">06</span>補正の判断を伝える</h2>
+      <p class="sec-intro">
+        固有名詞や俗語、専門用語など、
+        直されたくない語がある場合は、その判断をCorrectNoteに伝えられます。
+      </p>
+      <p>左右に並べるレイアウトで、色の付いた補正結果をクリックすると、次の3つから選べます。</p>
+      <table class="keys">
+        <tr><th>選択肢</th><th>効果</th></tr>
+        <tr><td>この補正で正しい</td><td>その語を「正しく使われた実績」として記憶し、以後の判断をより確かにします。</td></tr>
+        <tr><td>この補正は不要</td><td>その置き換え（元の語→補正後の語）だけを、今後行わないようにします。</td></tr>
+        <tr><td>今後いっさい直さない</td><td>その語を含む範囲は、以後まったく補正の対象にしません。</td></tr>
+      </table>
+      <p>
+        一度伝えた判断はあとから取り消せます。メニューの
+        <span class="kbd">学習 → 補正の判断…</span> を開くと、これまでに伝えた判断の一覧が出るので、
+        誤って登録したものを個別に取り消せます。
+      </p>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="pick">
+      <h2><span class="num">07</span>単語を拾って引用する</h2>
+      <p class="sec-intro">
+        メモの中で、以前に書いた単語をもう一度使いたいときに、探して打ち直す手間を省く機能です。
+      </p>
+      <ol class="steps">
+        <li>ツールバーの <span class="kbd">クリックして引用 (F1,=)</span> ボタンを押すか、
+          メモ欄で <span class="kbd">F1</span> を押します。案内文が出て、引用モードに入ります。</li>
+        <li>メモ欄の中にある、引用したい語をクリックします。範囲をドラッグして選ぶこともできます。</li>
+        <li>選んだ語が、モードに入ったときのカーソル位置に差し込まれます。</li>
+      </ol>
+      <p>
+        <span class="kbd">=</span>（全角では<span class="kbd">Shift</span>+<span class="kbd">-</span>）
+        キーからも同じモードに入れます。まず「＝」がその場に打たれ、
+        そのまま何か他のキーを打つと引用を解除し、「＝」の文字が残ります。
+        単語を引用できたときだけ、その「＝」は消えて引用した語に置き換わります。
+      </p>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="bracket">
+      <h2><span class="num">08</span>括弧で括る</h2>
+      <p class="sec-intro">ツールバーのボタンで、文字を括弧で囲めます。</p>
+      <table class="keys">
+        <tr><th>ボタン</th><th>括弧の種類</th></tr>
+        <tr><td class="k">（）</td><td>丸括弧</td></tr>
+        <tr><td class="k">「」</td><td>かぎ括弧</td></tr>
+        <tr><td class="k">『』</td><td>二重かぎ括弧</td></tr>
+        <tr><td class="k">【】</td><td>すみ付き括弧</td></tr>
+        <tr><td class="k">“”</td><td>ダブルクォーテーション</td></tr>
+      </table>
+      <p>
+        範囲を選択してから押すと、選んだ文字の頭と末尾をその括弧で囲みます。
+        何も選んでいないときは、カーソルの位置に括弧だけが差し込まれ、
+        カーソルは開き括弧のすぐ後ろに残るので、そのまま中身を書き始められます。
+      </p>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="lineselect">
+      <h2><span class="num">09</span>行をまるごと選ぶ</h2>
+      <p class="sec-intro">左端の行番号を使うと、行の単位で手早く選べます。</p>
+      <p>
+        行番号を<b>クリック</b>すると、その行がまるごと選択されます。
+        そのまま上下に<b>ドラッグ</b>すれば、複数の行をまとめて選べます。
+        選んだあとは、コピー・削除・括弧で括るなど、通常の選択範囲と同じように扱えます。
+      </p>
+      <div class="callout tip">
+        <div class="icon">🔖</div>
+        <div><p>行番号を<b>ダブルクリック</b>すると、選択ではなくブックマークになります（詳しくは「編集の基本機能」）。</p></div>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="dragscroll">
+      <h2><span class="num">10</span>余白のドラッグでスクロール</h2>
+      <p class="sec-intro">文字の書かれていない余白を使って、画面を直接動かせます。</p>
+      <p>
+        本文の右側や下側の<b>余白を右クリックしたままドラッグ</b>すると、その動きに合わせて画面がスクロールします。
+        スクロールバーまでマウスを運ばずに、読みたい場所へ手早く移動できます。
+      </p>
+      <p>
+        本文の上で左ドラッグした場合は、これまでどおり文字の選択になります。
+        タッチ画面では、1本指でなぞってスクロールできます。
+      </p>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="edit">
+      <h2><span class="num">11</span>編集の基本機能</h2>
+
+      <h3><span class="dot"></span>タブで複数のメモを開く</h3>
+      <p>
+        ＋ボタンで新しいタブを開き、複数のメモを並行して扱えます。
+        <span class="kbd">Ctrl</span>+<span class="kbd">Tab</span> でタブを順に切り替えられます。
+      </p>
+
+      <h3><span class="dot"></span>自動保存と続きから再開</h3>
+      <p>
+        書いた内容はタブごとに自動的に控えられます。保存せずにそのままアプリを閉じても、次に開いたときにタブごと復元され、続きから再開できます。
+        ファイルとして保存した場合は、そのファイルとの結び付きも記憶されます。
+      </p>
+
+      <h3><span class="dot"></span>検索と置換</h3>
+      <p>
+        <span class="kbd">Ctrl+F</span> で検索、<span class="kbd">Ctrl+H</span> で置換のダイアログを開きます。
+        大文字・小文字の区別、単語単位の一致、正規表現、末尾まで来たら先頭に戻る折り返し検索に対応しています。
+        チェックした条件は次回の検索でも、次回アプリを起動したときも記憶されています。
+      </p>
+
+      <h3><span class="dot"></span>ブックマーク</h3>
+      <p>
+        行番号をダブルクリックすると、その行にブックマークを付けられます。
+        ツールバーの <span class="kbd">▲前のブックマーク</span> <span class="kbd">▼次のブックマーク</span> で、
+        付けた場所を順番にたどれます。長い文章の中で、あとで見返したい場所の目印として使えます。
+      </p>
+
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="learn">
+      <h2><span class="num">12</span>語彙を教える</h2>
+      <p class="sec-intro">よく使う専門語や固有名詞をあらかじめ教えておくと、最初からあなたの言葉づかいに合った補正になります。</p>
+
+      <h3><span class="dot"></span>語彙を追加する</h3>
+      <p>
+        メニューの <span class="kbd">学習 → 辞書と語彙の管理 → 語彙を追加…</span> から、
+        読みと表記を直接登録できます。よく使う専門語や固有名詞をあらかじめ教えておくのに使えます。
+      </p>
+
+      <h3><span class="dot"></span>まとまった文章から学習する</h3>
+      <p>
+        <span class="kbd">学習 → 辞書と語彙の管理 → 文章から学習…</span> で、
+        既にあるテキストファイルをまとめて読み込ませ、そこに含まれる語を一度に学習させられます。
+      </p>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="display">
+      <h2><span class="num">13</span>表示の設定</h2>
+      <h3><span class="dot"></span>ダークモード</h3>
+      <p>
+        表示メニューの <span class="kbd">ダークモード</span> で切り替えられます。
+        設定は自動的に保存され、次にアプリを開いたときも同じ状態で始まります。
+      </p>
+      <h3><span class="dot"></span>ホットキーの個別設定</h3>
+      <p>
+        簡易入力ウィンドウを呼び出す2つのホットキー（<span class="kbd">Ctrl+Insert</span> /
+        <span class="kbd">Ctrl+Shift+-</span>）は、表示メニューからそれぞれ個別にオン・オフを切り替えられます。
+        反応しないときは、同じメニューの <span class="kbd">ホットキーの状態を確認…</span> で、
+        実際に登録できているかを確かめられます。
+      </p>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="shortcuts">
+      <h2><span class="num">14</span>ショートカット一覧</h2>
+      <table class="keys">
+        <tr><th>キー</th><th>動作</th></tr>
+        <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">N</span></td><td>新規</td></tr>
+        <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">O</span></td><td>開く</td></tr>
+        <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">S</span></td><td>保存</td></tr>
+        <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">F</span></td><td>検索</td></tr>
+        <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">H</span></td><td>置換</td></tr>
+        <tr><td class="k"><span class="kbd">F3</span> / <span class="kbd">Shift</span>+<span class="kbd">F3</span></td><td>次を検索 / 前を検索</td></tr>
+        <tr><td class="k"><span class="kbd">F2</span></td><td>再変換 ― カーソル直前の語の候補を開く（押すたびに左の語へ遡る）</td></tr>
+        <tr><td class="k"><span class="kbd">←</span> / <span class="kbd">→</span>（候補一覧が開いているとき）</td><td>再変換の対象の語を前後に移す</td></tr>
+        <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">Tab</span></td><td>タブの切り替え</td></tr>
+        <tr><td class="k"><span class="kbd">F1</span></td><td>語を拾って引用するモードの切り替え（メモ欄）</td></tr>
+        <tr><td class="k"><span class="kbd">=</span>（全角時 <span class="kbd">Shift</span>+<span class="kbd">-</span>）</td><td>同上（メモ欄限定）</td></tr>
+        <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">C</span>（選択なし）</td><td>引用モードに入る（選択があるときは通常のコピー）</td></tr>
+        <tr><td class="k"><span class="kbd">Esc</span></td><td>引用モードの中止</td></tr>
+        <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">Insert</span></td><td>簡易入力ウィンドウを開く</td></tr>
+        <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">Shift</span>+<span class="kbd">-</span></td><td>同上</td></tr>
+        <tr><td class="k">行番号ダブルクリック</td><td>ブックマークの作成／解除</td></tr>
+      </table>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="faq">
+      <h2><span class="num">15</span>よくある質問</h2>
+
+      <h3><span class="dot"></span>正しく書いた語が直されてしまいます</h3>
+      <p>
+        補正結果をクリックし、「この補正は不要」または「今後いっさい直さない」を選んでください（6章）。
+        一度伝えた判断は、以後CorrectNoteが覚えておきます。
+      </p>
+
+      <h3><span class="dot"></span>同音異義語がうまく直りません</h3>
+      <p>
+        複数の語にまたがる誤変換は、文脈が無いと正誤を判断できないため、
+        意図的に自動補正の対象から外しています。入力済みの単語をクリックして、候補一覧から選んでください（3章）。
+      </p>
+
+      <h3><span class="dot"></span>入力した内容は外部に送信されますか</h3>
+      <p>
+        いいえ。CorrectNote は通信を行いません。判断に使う辞書・語彙・学習内容は、すべてお使いの端末の中だけに保存されます。
+      </p>
+
+      <h3><span class="dot"></span>簡易入力のショートカットキーが反応しません</h3>
+      <p>
+        表示メニューの<span class="kbd">ホットキーの状態を確認…</span>で、登録できているかを確認してください。
+        他のアプリが同じキーの組み合わせを既に使っている場合は登録が失敗します。
+        CorrectNote起動時に登録を試みます。
+      </p>
+    </section>
+
+    <footer>CorrectNote 説明書</footer>
+  </main>
+</div>
+
+<script>
+  // 目次を見出しから自動生成し、スクロール位置に応じて現在地をハイライトする
+  (function(){
+    const sections = Array.from(document.querySelectorAll('main > section'));
+    const list = document.getElementById('toc-list');
+    const links = [];
+    sections.forEach(sec=>{
+      const h2 = sec.querySelector('h2');
+      if(!h2) return;
+      const title = h2.textContent.replace(/^\d+\./,'').trim();
+      const li = document.createElement('li');
+      const a = document.createElement('a');
+      a.href = '#' + sec.id;
+      a.textContent = title;
+      li.appendChild(a);
+      list.appendChild(li);
+      links.push({a, sec});
+    });
+
+    const obs = new IntersectionObserver((entries)=>{
+      entries.forEach(entry=>{
+        const link = links.find(l => l.sec === entry.target);
+        if(!link) return;
+        if(entry.isIntersecting){
+          links.forEach(l => l.a.classList.remove('current'));
+          link.a.classList.add('current');
+        }
+      });
+    }, { rootMargin: '-10% 0px -75% 0px', threshold: 0 });
+
+    sections.forEach(sec => obs.observe(sec));
+  })();
+</script>
+</body>
+</html>

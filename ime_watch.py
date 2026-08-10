@@ -93,3 +93,40 @@ def current_input_method(hwnd):
             imm.ImmReleaseContext(hwnd, himc)
     except Exception:
         return None
+
+
+# 変換中の文字列を問い合わせるための IMM32 の指定値（imm.h より）
+GCS_COMPSTR = 0x0008
+
+
+def composition_active(hwnd):
+    """
+    そのウィンドウで IME がいま変換（未確定文字の入力）中かを返す。
+
+    hwnd: 対象ウィジェットのハンドル（tkinter なら widget.winfo_id()）
+
+    戻り値: True / False / None（判定できない）
+        括弧ボタンが「変換を確定する前の文字の上から押されたか」を
+        知るために使う（app.py の _wrap_with_brackets）。変換中に
+        括弧を差し込むと、確定した文字は括弧の中へ入るがカーソルも
+        中に残るため、確定を後追いで捉えて外へ出す構えをする。
+        None のときは呼び出し側で何もしないこと。
+    """
+    if not HAS_SUPPORT or not hwnd:
+        return None
+    try:
+        import ctypes
+        imm = ctypes.windll.imm32
+        himc = imm.ImmGetContext(hwnd)
+        if not himc:
+            return None
+        try:
+            # ImmGetCompositionStringW は、変換中の文字列の
+            # バイト数を返す（バッファ無しで長さだけ聞ける）。
+            # 0 より大きければ、いま未確定の文字がある。
+            n = imm.ImmGetCompositionStringW(himc, GCS_COMPSTR, None, 0)
+            return bool(n and n > 0)
+        finally:
+            imm.ImmReleaseContext(hwnd, himc)
+    except Exception:
+        return None

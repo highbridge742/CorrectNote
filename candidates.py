@@ -509,4 +509,40 @@ KIND_LABELS = {
     'homophone': '同音',
     'typo': '打ち間違い',
     'kana': 'かな',
+    'symbol': '記号の言い換え',
 }
+
+
+# ============================================================
+# 記号の言い換え（F2 から選ぶ）
+# ============================================================
+# 「〜」は範囲を表す記号だが、文章では「から」と書きたいことが多い。
+# 打ち直すより選べたほうが速い、といううにさんの指定（2026-08-10）。
+#
+# 記号は読みを持たないので、読みを起点にした候補づくり
+# （build_candidates）には一切かからない。ここで表として持つ。
+# 増やすときはこの表に足すだけでよい。
+SYMBOL_WORDS = {
+    '〜': ['から'],
+    '～': ['から'],
+    '~': ['から'],
+}
+
+
+def symbol_candidates(text):
+    """
+    記号に対する言い換えの候補（〜 → から）。
+
+    text: 選ばれている文字列（記号1文字を想定）
+    戻り値: build_candidates と同じ形の候補の並び
+    """
+    words = SYMBOL_WORDS.get(text)
+    if not words:
+        return []
+    return [{'surface': w, 'reading': None, 'kind': 'symbol'}
+            for w in words]
+
+
+def is_symbol_word(text):
+    """F2 の対象にしてよい記号か（言い換えを持っているか）。"""
+    return bool(text) and text in SYMBOL_WORDS
