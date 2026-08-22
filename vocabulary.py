@@ -41,6 +41,8 @@ find_homophone_replacements / find_particle_replacements など）が
 ここに補正の判断を書き戻さないこと。
 """
 
+import functools
+import heapq
 import json
 import math
 import os
@@ -48,6 +50,10 @@ import time
 from collections import defaultdict
 
 from kana_layout import nearby_candidates
+try:
+    from kana_layout import ALL_KANA as _ALL_KANA
+except Exception:      # pragma: no cover
+    _ALL_KANA = ()
 
 
 class VocabularyStore:
@@ -73,38 +79,119 @@ class VocabularyStore:
         self._next_chars_cache = None    # 前方一致文字列 -> 次の1文字の集合
         self._surface_to_reading = None  # surface -> reading の逆引きdict
         self._surface_index = None       # 先頭文字 -> [(reading, surface, entry)] のインデックス
+        self._trie = None                # 読みの木（項目48-GB）
+        # **語彙が変わった回数**（項目48-BT）。外の控えは、これを
+        # 見分けに使う。件数では足りない——**語が増えなくても
+        # 使用回数は変わる**（回数が敷居に届いた瞬間・同じ読みの
+        # 表記が入れ替わった瞬間が、件数の変わらない変化）。
+        self._revision = 0
+        # **語の顔ぶれが変わった回数**（項目48-BV）。上とは別に持つ。
+        # 使用回数で答えが変わらない控え（文脈語彙）は、こちらを見る。
+        # `revision` を見せると**打鍵のたびに作り直す**ことになり、
+        # 1000行のタブで毎回0.6秒かかる（そのための控えなのに）。
+        self._shape_revision = 0
         if path and os.path.exists(path):
             self.load()
 
+    def revision(self):
+        """
+        語彙が変わった回数（外の控えの見分け用・項目48-BT）。
+
+        **使用回数が増えただけでも進む。** 回数で答えが変わる控え
+        （直し先の一覧など）はこちらを見ること。
+        """
+        return getattr(self, '_revision', 0)
+
+    def shape_revision(self):
+        """
+        **語の顔ぶれ**が変わった回数（項目48-BV）。
+
+        足した・消した・分類が変わった、のときだけ進む。
+        **使用回数が増えただけでは進まない。**
+        読み・表記・分類しか見ない控えはこちらを見ること
+        （打鍵のたびに作り直さずに済む）。
+        """
+        return getattr(self, '_shape_revision', 0)
+
     def _invalidate_cache(self):
         """語彙が変わったときにキャッシュを破棄する。"""
+        self._revision = getattr(self, '_revision', 0) + 1
+        self._shape_revision = getattr(self, '_shape_revision', 0) + 1
         self._readings_cache = None
         self._surfaces_cache = None
         self._prefixes_cache = None
         self._next_chars_cache = None
         self._surface_to_reading = None
         self._surface_index = None
+        self._trie = None
+
+    def reading_trie(self):
+        """
+        **読みを1本の木にまとめたもの**（項目48-GB）。
+
+        同じ頭を持つ読みは木の上で1本にまとまる。
+        `find_similar_readings` はこれを降りながら距離を測るので、
+        「あ行から始まる相手」を何千件も個別に見なくて済む。
+
+        作るのに約 35ms。**語彙が変わったときだけ**作り直す
+        （`_invalidate_cache`。使用回数が増えただけでは作り直さない）。
+        """
+        if getattr(self, '_trie', None) is None:
+            self._trie = _ReadingTrie(self._by_reading.keys())
+        return self._trie
 
     # ---------------- 記録 ----------------
 
-    def add(self, reading, surface, category='その他'):
-        """語彙を1件記録する。既にあれば使用回数を増やす。"""
+    def add(self, reading, surface, category='その他', world=0):
+        """
+        語彙を1件記録する。既にあれば使用回数を増やす。
+
+        world: **世の中での使われぶり**（項目48-DA）。
+            辞書から取り込むときに、書籍での頻度から与える。
+            `count`（＝**この人が使った回数**）とは**別の持ち物**に
+            する。片方の数で両方を表すと、
+
+                見える／見えない … `count >= 2` の壁
+                どれが勝つか     … 回数の大小
+
+            の2つの役目が絡まり、**回数を配ると壁が中途半端に開く**
+            （よく使う語だけ見えて、正解が下位にいると見えない）。
+            分けておけば、**見える範囲は広く・順位は書籍の頻度で**
+            が同時に成り立つ。
+
+            **既にある語には触らない**（学び20）。
+        """
         if not reading or not surface:
             return
         entry = self._by_reading[reading].get(surface)
         if entry:
             entry['count'] += 1
             entry['last_seen'] = time.time()
-            if category != 'その他':
+            if category != 'その他' and entry.get('category') != category:
                 entry['category'] = category
+                # 分類は**顔ぶれ**の側（項目48-BV）。文脈語彙は
+                # 分類を持って回るので、変わったら作り直させる。
+                self._shape_revision = getattr(
+                    self, '_shape_revision', 0) + 1
+            # **件数は変わらないが、中身は変わった**（項目48-BT）。
+            # ここを数えないと、回数が敷居に届いた語がその場では
+            # 直し先に入らない（`cachecheck.py` で見つけた）。
+            self._revision = getattr(self, '_revision', 0) + 1
         else:
-            self._by_reading[reading][surface] = {
+            entry = {
                 'reading': reading,
                 'surface': surface,
                 'count': 1,
                 'last_seen': time.time(),
                 'category': category,
             }
+            if world:
+                # **`count` は増やさない。** 世の中での重みは別の鍵。
+                # **1 でも書く。** 「辞書から取り込んだ語である」
+                # という印そのものが、見える／見えないの判断に要る
+                # （項目48-DA）。
+                entry['world'] = int(world)
+            self._by_reading[reading][surface] = entry
             self._invalidate_cache()
 
     def remove(self, reading, surface):
@@ -126,6 +213,46 @@ class VocabularyStore:
             del self._by_reading[reading]
         self._invalidate_cache()
         return True
+
+    # 同音異義語で選ばれなかった表記を、どれだけ残すか。
+    # うにさんの指定（2026-08-10）:「同音異義語で選ばれなかった
+    # 場合は評価値を大きく減らしてください」。
+    DEMOTE_FACTOR = 0.2
+
+    def demote_homophones(self, reading, chosen, factor=None):
+        """
+        同じ読みで**選ばれなかった**表記の使用実績を大きく下げる。
+
+        ユーザーが同音異義語の中から1つを選び直したということは、
+        「その読みで欲しいのはこれで、他ではない」という、いちばん
+        はっきりした意思表示になる。それでも他の表記が高い実績を
+        持ったままだと、次に同じ読みを書いたときにまた競り勝って
+        しまう（実機で「単語」と「玉子」が競った件と同じ形）。
+
+        **消しはしない**（1回ぶんは残す）。語彙を勝手に消さない
+        という方針を守りつつ、判断材料としての重みだけ落とす。
+        また使えば `add` で戻る。
+
+        戻り値: 下げた件数。
+        """
+        if not reading:
+            return 0
+        f = self.DEMOTE_FACTOR if factor is None else factor
+        entries = self._by_reading.get(reading)
+        if not entries:
+            return 0
+        n = 0
+        for surface, entry in entries.items():
+            if surface == chosen:
+                continue
+            old = entry.get('count', 0)
+            new = max(1, int(old * f))
+            if new < old:
+                entry['count'] = new
+                n += 1
+        if n:
+            self._invalidate_cache()
+        return n
 
     # ---------------- 検索 ----------------
 
@@ -184,8 +311,11 @@ class VocabularyStore:
         """
         全ての読みの前方一致集合（キャッシュ）。
 
-        ビームサーチでの枝刈りに使う。
-        33万語があっても一度だけ計算して使い回す。
+        **いまは誰も使っていない**（項目48-GE）。
+        `_find_known_readings_flex_uncached` がこれを引いていたが、
+        `reading_trie()` の節をたどる形にしたので要らなくなった。
+        呼ばれなければ作られない（13万件の集合を作らずに済む）。
+        新しく使う前に、木で足りないかを考えること。
         """
         if self._prefixes_cache is None:
             prefixes = set()
@@ -205,6 +335,12 @@ class VocabularyStore:
 
         全読みから作った「前方一致文字列 → 次の1文字の集合」の表を
         一度だけ構築してキャッシュする（トライ木と同じ役割）。
+
+        **いまは誰も使っていない**（項目48-GE）。書いてあるとおり
+        「トライ木と同じ役割」だったので、本物の木（`reading_trie`）
+        に置き換えた。**集合を返すので、並ぶ順が起動ごとに変わる**
+        （`PYTHONHASHSEED` に依る）という難点もあった。
+        木の子は読みを並べ直してから作るので、順が動かない。
         """
         if self._next_chars_cache is None:
             table = defaultdict(set)
@@ -339,7 +475,21 @@ def _find_known_readings_flex_uncached(typed, store, max_dist=1.6,
 
     ここでは (語彙側の読みの位置, 入力側の位置) の2次元状態を
     ビームサーチで進めることで、この4種類をまとめて扱う。
-    語彙が33万語規模でも動くよう、前方一致キャッシュで枝刈りする。
+
+    **語彙側の位置は「読みの木の節」で持つ**（項目48-GE）。
+    以前は**前方一致の文字列そのもの**を持ち、進むたびに
+    `prefix + 字` を作って「その文字列が前方一致の集合に在るか」を
+    引いていた。**それは木を、文字列で書いたものだった**
+    （元の書き置きにも「トライ木と同じ役割」と書いてある）。
+    48-GB で本物の木を作ったので、そちらに乗せ替える。
+
+        prefix + 字 が前方一致集合に在るか   →  children[節].get(字)
+        store.next_chars(prefix)            →  children[節] の中身
+        prefix が読みとして在るか             →  word[節] is not None
+
+    文字列を作らない・数え直さないので**答えは変わらず**、
+    `all_prefixes`（13万件の集合）も要らなくなる。
+    **IMEの予測変換が前方一致に木を使うのと同じ形**である。
 
     戻り値: [(復元された読み, 訂正コスト, 訂正した文字数), ...] コストの低い順
     """
@@ -349,11 +499,12 @@ def _find_known_readings_flex_uncached(typed, store, max_dist=1.6,
     known = store.all_readings()
     if not known:
         return []
-    prefixes = store.all_prefixes()
+    trie = store.reading_trie()
+    children = trie.children
+    word = trie.word
 
-    # 状態: (語彙側で確定した読みの文字列, 消費した入力の位置, 訂正数)
-    # 語彙側の文字列は必ず prefixes に含まれるものだけを残す（枝刈り）。
-    beam = {('', 0): (0.0, 0)}   # (prefix, typed_pos) -> (cost, edits)
+    # 状態: (読みの木の節, 消費した入力の位置) -> (費用, 訂正数)
+    beam = {(0, 0): (0.0, 0)}
     n = len(typed)
 
     # 1文字の脱字・重複を許すコスト（隣接キー押し間違いと同程度に扱う）
@@ -372,47 +523,48 @@ def _find_known_readings_flex_uncached(typed, store, max_dist=1.6,
                 next_beam[key] = (cost, edits)
 
         progressed = False
-        for (prefix, pos), (cost, edits) in beam.items():
-            if prefix in known and pos >= n:
-                _relax((prefix, pos), cost, edits)
+        for (node, pos), (cost, edits) in beam.items():
+            if word[node] is not None and pos >= n:
+                _relax((node, pos), cost, edits)
                 continue
+            kids = children[node]
 
             # --- 通常の1文字対応（一致 or 置換） ---
             if pos < n:
                 ch = typed[pos]
                 for cand_char, d in nearby_candidates(ch, max_dist=max_dist):
-                    new_prefix = prefix + cand_char
-                    if new_prefix not in prefixes:
+                    nxt = kids.get(cand_char)
+                    if nxt is None:
                         continue
                     new_edits = edits + (0 if cand_char == ch else 1)
-                    _relax((new_prefix, pos + 1), cost + d, new_edits)
+                    _relax((nxt, pos + 1), cost + d, new_edits)
                     progressed = True
 
             # --- 脱字: 入力に無い1文字を語彙側が持っている（挿入で補う） ---
             # 語彙側だけ1文字進める（＝入力側の脱字を補う）。
-            # 全かなを試すと遅すぎるので、実際にこのprefixの続きとして
-            # 語彙に存在する文字だけを候補にする（トライ木的な絞り込み）。
-            for cand_char in store.next_chars(prefix):
-                new_prefix = prefix + cand_char
-                if new_prefix not in prefixes:
-                    continue
-                _relax((new_prefix, pos), cost + SKIP_COST, edits + 1)
+            # 全かなを試すと遅すぎるので、**その節から実際に伸びている
+            # 字だけ**を候補にする（＝木の子。以前は
+            # `store.next_chars(prefix)` が同じ表を字で引いていた）。
+            for nxt in kids.values():
+                _relax((nxt, pos), cost + SKIP_COST, edits + 1)
                 progressed = True
 
             # --- 重複打鍵: 入力側だけ1文字進める（＝入力の余分な1文字を捨てる） ---
             if pos < n:
-                _relax((prefix, pos + 1), cost + SKIP_COST, edits + 1)
+                _relax((node, pos + 1), cost + SKIP_COST, edits + 1)
                 progressed = True
 
             # --- 入れ替わり: 隣り合う2文字の順序を入れ替えて対応させる ---
             if pos + 1 < n:
                 ch1, ch2 = typed[pos], typed[pos + 1]
-                new_prefix = prefix + ch2 + ch1
-                if new_prefix in prefixes:
-                    new_edits = edits + (0 if ch1 == ch2 else 1)
-                    _relax((new_prefix, pos + 2), cost + TRANSPOSE_COST,
-                          new_edits)
-                    progressed = True
+                mid = kids.get(ch2)
+                if mid is not None:
+                    nxt = children[mid].get(ch1)
+                    if nxt is not None:
+                        new_edits = edits + (0 if ch1 == ch2 else 1)
+                        _relax((nxt, pos + 2), cost + TRANSPOSE_COST,
+                               new_edits)
+                        progressed = True
 
         if not next_beam:
             break
@@ -425,8 +577,9 @@ def _find_known_readings_flex_uncached(typed, store, max_dist=1.6,
     # ーが動く・消える訂正は別の語への化けにしかならない）。
     _bar_pos = tuple(i for i, c in enumerate(typed) if c == 'ー')
     results = []
-    for (prefix, pos), (cost, edits) in beam.items():
-        if prefix in known and pos >= n:
+    for (node, pos), (cost, edits) in beam.items():
+        prefix = word[node]
+        if prefix is not None and pos >= n:
             if tuple(i for i, c in enumerate(prefix)
                      if c == 'ー') != _bar_pos:
                 continue
@@ -483,7 +636,13 @@ def build_context_vocab(all_lines, store):
     return context
 
 
-def build_context_vocab_cached(all_lines, store, cache):
+# 文脈語彙の行ごとの控えを、何行ぶんまで持つか。
+# タブを行き来しても解析し直さずに済む程度に大きく取る
+# （実機のタブは最大1000行ほど。全タブぶん持っても軽い）。
+_CTX_CACHE_LIMIT = 8000
+
+
+def build_context_vocab_cached(all_lines, store, cache, attested_out=None):
     """
     build_context_vocab の差分版。行ごとの抽出結果を控えて使い回す。
 
@@ -497,18 +656,32 @@ def build_context_vocab_cached(all_lines, store, cache):
     cache は呼び出し側が持ち続ける辞書:
         {'_store_size': int, 行の文字列: [(読み, (表記, 分類)), ...]}
     語彙ストアが育つと同じ行でも抽出結果が変わりうるため、
-    ストアの語数が変わったら控えを捨てて作り直す。
+    **語の顔ぶれが変わったら**控えを捨てて作り直す。
     使われなくなった行の控えは呼び出しの最後に落とす
     （消えた行の控えが溜まり続けないように）。
+
+    見分けは `store.shape_revision()`（項目48-BV）。**語数では
+    足りない**——起動のたびに英単語を捨てて拾い直すので、
+    **消した数と足した数が同じなら語数は動かない**。それで
+    「消したはずの語が文脈語彙に残る」が起きていた
+    （`cachecheck.py` で見つけた）。
+
+    **`revision()` のほうを見てはいけない。** あちらは使用回数が
+    増えただけでも進むので、**打鍵のたびに全行を解析し直す**
+    ことになる（1000行で毎回0.6秒。控えの意味が無くなる）。
+    ここが見ているのは読み・表記・分類だけで、回数は見ていない。
     """
     from morphology import tokenize, HAS_JANOME
     if not HAS_JANOME:
         return {}
 
     try:
-        store_size = len(store.to_list())
+        store_size = store.shape_revision()
     except Exception:
-        store_size = -1
+        try:
+            store_size = len(store.to_list())
+        except Exception:
+            store_size = -1
     if cache.get('_store_size') != store_size:
         cache.clear()
         cache['_store_size'] = store_size
@@ -532,20 +705,60 @@ def build_context_vocab_cached(all_lines, store, cache):
             out.append((tok.reading, (tok.surface, entry['category'])))
         return out
 
+    def _extract_all(line):
+        """
+        **メモに実際に書かれている**（読み, 表記）を全部集める。
+
+        `_extract` と違い、語彙にあるかどうかを問わない。
+        選び直しの候補づくりに使う（うにさんの指摘・2026-08-11:
+        「『ひらがな』をドラッグしても候補に『平仮名』が無い」。
+        `平仮名` は janome の辞書にあるがコストが高く索引に
+        入らず、自動学習も「同じ読みに別表記が既にある語は
+        覚えない」規則で覚えられないため、どこからも出てこない）。
+        候補は選び直しの材料でしかないので、自動補正より広く取る。
+        """
+        out = []
+        for tok in tokenize(line):
+            if tok.is_skippable or len(tok.surface) < 2:
+                continue
+            if not tok.has_reading or not tok.reading:
+                continue
+            if tok.surface == tok.reading:
+                continue        # かなそのままは候補にならない
+            out.append((tok.reading, tok.surface))
+        return out
+
     context = {}
     seen = {'_store_size'}
+    want_attested = attested_out is not None
     for line in all_lines:
         if not line.strip():
             continue
         got = cache.get(line)
-        if got is None:
-            got = _extract(line)
+        if got is None or (want_attested and len(got) < 2):
+            got = (_extract(line), _extract_all(line))
+            cache[line] = got
+        elif not isinstance(got, tuple):
+            got = (got, [])
             cache[line] = got
         seen.add(line)
-        for reading, val in got:
+        for reading, val in got[0]:
             context[reading] = val
-    for key in [k for k in cache if k not in seen]:
-        del cache[key]
+        if want_attested:
+            for reading, surface in got[1]:
+                bucket = attested_out.setdefault(reading, [])
+                if surface not in bucket:
+                    bucket.append(surface)
+    # 使われなくなった行の控えを落とす。ただし**毎回は落とさない**。
+    # 落としてしまうと、タブを切り替えるたびに相手のタブの控えが
+    # 消え、戻ったときに全行を解析し直すことになる
+    # （1000行のタブで 0.7 秒。うにさんから「タブ切り替え時に
+    # とても待たされます」の指摘・2026-08-11）。
+    # 行の文字列を鍵にしているので、別のタブの行が残っていても
+    # 誤って使われることは無い。溜まりすぎたときだけ掃除する。
+    if len(cache) > _CTX_CACHE_LIMIT:
+        for key in [k for k in cache if k not in seen]:
+            del cache[key]
     return context
 
 
@@ -593,6 +806,59 @@ _GAP_COST = 2.6
 # 打ち間違いの中でも起きやすいので、安く数える。
 _REPEAT_GAP_COST = 0.6
 
+# **隣どうしの入れ替え**（順序違い）。SPEC の「誤打の種類」に
+# 挙がっている3つのうちの1つ（項目48-CU）。
+#
+# 入れ替えを**1回の訂正**として数えないと、正解に届かない:
+#     やすぎら（やすらぎ の入れ替え）
+#       やすらぎ … 置換2回（ら↔ぎ）＝ 訂正2回
+#       やすぎる … 置換1回（ら→る）＝ **訂正1回**
+#     並べる順が (訂正の回数, 費用, …) なので、
+#     **回数の少ない間違った答えが必ず勝つ**。
+#
+# 費用は「連打の削除(0.6)」より高く、「遠い置換(2.4)」「押し忘れ
+# (2.6)」より安い。指の順番が入れ替わるのはよくある誤打だが、
+# 何もしないよりは高くしておく。
+#
+# **場所で費用を変える**（うにさんの指定・2026-08-13・項目48-CV）:
+#
+#   「順序違いは、さいしょのもじは正しい確率がかなり高く、
+#     なんなら順序の対象外としてもかまいません。
+#     ただし濁点か半濁点のキーよりも前に2文字めが割り込む
+#     ケースはあります。プラネタリウムでもその例はありました。
+#     また最後の文字も正しい確率は高いです。ただし間違ってる
+#     こともあるので対象外とはしません。
+#     最初の文字と最後の文字を固定したとすると、その中間の文字が
+#     入れ替わっていても人間は正しい順序に置き換えて読むことは
+#     容易いです。」
+#
+# **両端に触れない入れ替えだけを安くする。** 3つの種のうち
+# 中間どうしの入れ替えが、人にとっていちばん読み替えが容易い側。
+#
+#   実測（うにさんの語彙600語・種3つ・種を3回振り直して確認）:
+#       中間の費用 1.8 → 1.4 で
+#         seed 7   直った 82→84 / 化けた 16→15
+#         seed 21  直った 79→83 / 化けた  7→ 6
+#         seed 33  直った 91→92 / 化けた  8→ 8
+#       **3回とも同じ向き**。小さいが揺れではない。
+#
+# **語頭を対象外にするのは、測って入れなかった**（学び19）。
+# うにさんは「対象外としてもかまいません」と言われたが、実測では
+#       語頭の入れ替えを切る   直った 116→77 / 化けた 20→**31**
+#       語頭を高くする(2.4)    直った 116→103 / 化けた 20→21
+# と**どちらも悪くなる**。直す道を塞ぐと「そのまま」になるのでは
+# なく、**別の直しが選ばれて化ける**ため。他の5種の成績は
+# 1件も動かなかった（＝語頭の候補は他の判断に干渉していない）。
+# 語頭がめったに間違わないのは**材料の作り方**の話として正しく、
+# `readcheck.py` は順序違いを語頭・中間・語末に分けて測る。
+#
+# 濁点・半濁点が語頭に絡む割り込み（フ→ア→゜ ＝ プラネタリウム）は、
+# DP の手前の `normalize_marks(swap_across=True)`（項目48-AO）が
+# 別経路で拾うので、ここでは扱わない。
+_SWAP_COST_MID = 1.4        # 両端に触れない入れ替え
+_SWAP_COST_TAIL = 1.8       # 語末を巻き込む
+_SWAP_COST_HEAD = 1.8       # 語頭を巻き込む（切らない。上の実測）
+
 _SIM_CACHE = {}
 _SIM_CACHE_LIMIT = 4000
 
@@ -625,8 +891,15 @@ def _char_floor_costs():
     return table
 
 
+@functools.lru_cache(maxsize=None)
 def _sub_cost(a, b):
-    """1文字を別の文字に取り違えた費用。"""
+    """
+    1文字を別の文字に取り違えた費用。
+
+    **文字2つだけで決まる純粋な計算**なので、まるごと控える。
+    1000行のタブの解析では26万回呼ばれ、しかも毎回
+    `from kana_layout import ...` を通っていた（2026-08-11）。
+    """
     if a == b:
         return 0.0
     try:
@@ -639,7 +912,7 @@ def _sub_cost(a, b):
     return min(d, _FAR_SUBSTITUTION_COST)
 
 
-def weighted_edit_distance(typed, target):
+def weighted_edit_distance(typed, target, limit=None):
     """
     2つのかな列の隔たりを (費用, 訂正の回数) で返す。
 
@@ -655,6 +928,18 @@ def weighted_edit_distance(typed, target):
     費用が偶然同じになるが、選ぶべきは前者である。
 
     費用が同じ経路が複数あるときは、訂正の回数が少ないほうを採る。
+
+    limit: これ以上になると分かった時点で打ち切ってよい額。
+        DP の各段の最小値は、そこから先で減ることが無い
+        （どの操作も費用が0以上）ので、段の最小が limit に届いたら
+        止めてよい。**返す額は limit ちょうど**なので、
+        呼び出し側は必ず捨てる。None なら最後まで計算する
+        （テストや他の用途のため、ふるまいを変えない）。
+
+        1000行のタブの解析では、この関数が1行あたり8000回近く
+        呼ばれる。その大半は「遠すぎて候補にならない」相手なので、
+        打ち切りがそのまま効く（2026-08-11・うにさんから
+        「1000行あると待ち時間が長い」の指摘）。
     """
     n, m = len(typed), len(target)
     if n == 0:
@@ -674,18 +959,72 @@ def weighted_edit_distance(typed, target):
     prev = [(0.0, 0)]
     for j in range(1, m + 1):
         prev.append((prev[j - 1][0] + _GAP_COST, prev[j - 1][1] + 1))
+    prev2 = None        # 2つ前の段。**入れ替え**を見るのに要る
+    # 1つ前の段の最小。打ち切りの判断に要る（項目48-GB。下を見ること）。
+    prev_row_min = 0.0
     for i in range(1, n + 1):
-        cur = [(prev[0][0] + _del_cost(i - 1), prev[0][1] + 1)]
+        dc = _del_cost(i - 1)
+        cur = [(prev[0][0] + dc, prev[0][1] + 1)]
         ch = typed[i - 1]
+        row_min = cur[0][0]
         for j in range(1, m + 1):
-            options = [
-                (prev[j][0] + _del_cost(i - 1), prev[j][1] + 1),
-                (cur[j - 1][0] + _GAP_COST, cur[j - 1][1] + 1),
-            ]
+            # 削除・挿入・置換の3通り。min(リスト) を組み立てず
+            # その場で比べる（この2行の中が全体でいちばん回数の多い
+            # 場所で、タプルのリストを作るだけで時間を食っていた）。
+            # 同額のときは「削除→挿入→置換」の順で先に見つけたものを
+            # 採る。min(options) と同じ並びなので結果は変わらない。
+            best = (prev[j][0] + dc, prev[j][1] + 1)
+            ins = (cur[j - 1][0] + _GAP_COST, cur[j - 1][1] + 1)
+            if ins < best:
+                best = ins
             sc = _sub_cost(ch, target[j - 1])
-            options.append((prev[j - 1][0] + sc,
-                            prev[j - 1][1] + (0 if sc == 0.0 else 1)))
-            cur.append(min(options))
+            sub = (prev[j - 1][0] + sc,
+                   prev[j - 1][1] + (0 if sc == 0.0 else 1))
+            if sub < best:
+                best = sub
+            # **隣どうしの入れ替え**（項目48-CU）。
+            # typed の2文字が、target では逆順に並んでいるとき。
+            # 置換2回ではなく**1回の訂正**として数える。
+            if (prev2 is not None and j > 1
+                    and ch == target[j - 2]
+                    and typed[i - 2] == target[j - 1]
+                    and ch != typed[i - 2]):
+                # 入れ替えた2文字は typed の (i-2, i-1)。
+                # **場所で費用が変わる**（項目48-CV）。
+                if i - 2 == 0:
+                    _sw = _SWAP_COST_HEAD        # 語頭を巻き込む
+                elif i - 1 == n - 1:
+                    _sw = _SWAP_COST_TAIL        # 語末を巻き込む
+                else:
+                    _sw = _SWAP_COST_MID         # 中間どうし
+                if _sw is not None:
+                    tr = (prev2[j - 2][0] + _sw, prev2[j - 2][1] + 1)
+                    if tr < best:
+                        best = tr
+            cur.append(best)
+            if best[0] < row_min:
+                row_min = best[0]
+        # **打ち切りは、2段つづけて届かないときだけ**（項目48-GB）。
+        #
+        # 「どの操作も費用が0以上だから、段の最小が limit に届いたら
+        #   止めてよい」は、**入れ替え（項目48-CU）を入れた時点で
+        #   成り立たなくなっていた**。入れ替えは `prev2`（2つ前の段）
+        #   から来るので、**1つの段を飛び越える**。飛ばされた段の
+        #   最小が高くても、答えは安いことがある。
+        #
+        # 実際に取りこぼしていた（2026-08-19・`probe_trie` で発見）:
+        #
+        #     だいぶんじ → だいあじん   本当は 4.20 なのに 4.50 で打ち切り
+        #                              （末尾 んじ ↔ じん が入れ替え）
+        #     てんかした → はなしかた   本当は 4.20 なのに 4.50 で打ち切り
+        #
+        # 経路は1歩で 0・1・2 段しか進めないので、**2段つづけて
+        # 届かなければ、もう届かない**。そこで初めて止める。
+        if limit is not None and row_min >= limit \
+                and prev_row_min >= limit:
+            return (limit, n + m)
+        prev_row_min = row_min
+        prev2 = prev
         prev = cur
     return prev[m]
 
@@ -720,6 +1059,327 @@ def _flattens_small_kana(typed, reading):
     return r_small < t_small
 
 
+# **まだ育っていない語彙か**の見分け（項目48-CX）。
+#
+# 「使われた読み」が全体に占める割合で見る。実測（2026-08-14）:
+#
+#     ダウンロードしただけ   14,551 読み中 **373（2.6%）**
+#     うにさんの語彙         15,331 読み中 **11,941（77.9%）**
+#
+# **30倍の開き**がある。どこで切っても同じなので、真ん中の広い
+# ところ（1割）に置く。**細かい差を読む場所ではない**（学び50）。
+# 語彙が育つにつれて自動的に「育った」側へ移る。
+_YOUNG_RATIO = 0.10
+
+
+def store_is_young(store):
+    """
+    **使った跡がほとんど無い＝ダウンロードしただけの状態か。**
+
+    初期状態では辞書から取り込んだ語の使用回数が全部1なので、
+    「実際に使われた語だけを候補にする」という既定
+    （`find_similar_readings` の `min_count=2`）が
+    **候補の97%を捨ててしまう**。そこだけ緩めるための見分け。
+
+    数え直しは語彙が変わったときだけ（`revision()` を鍵にする）。
+    """
+    try:
+        rev = store.revision()
+    except Exception:
+        rev = None
+    cached = getattr(store, '_young_cache', None)
+    if cached is not None and cached[0] == rev:
+        return cached[1]
+    total = used = 0
+    try:
+        for surfaces in store._by_reading.values():
+            total += 1
+            for e in surfaces.values():
+                if (e.get('count') or 0) >= 2:
+                    used += 1
+                    break
+    except Exception:
+        return False
+    young = bool(total) and (used / total) < _YOUNG_RATIO
+    try:
+        store._young_cache = (rev, young)
+    except Exception:
+        pass
+    return young
+
+
+# ============================================================
+# 読みの木（トライ）と、木を降りる探索（項目48-GB）
+# ============================================================
+# うにさんの問い（2026-08-19）:
+#
+# > 「あらゆる補正後の文字列を、語のリストと一致するかを判定して
+# >   いる認識でよいか？」
+#
+# 半分そうで、半分は逆だった。**作る側**（変形を作って辞書を引く）は
+# 速く、**走る側**（22,714 件を1件ずつ見る）が全体の 78% を食って
+# いた（項目48-GA）。うにさんの指示「よいです。続けて」を受けて、
+# 走る側を**木を降りる形**に置き換えた。
+#
+# **答えは変えない。** `weighted_edit_distance` の漸化式そのままを、
+# 木の上でたどる。同じ頭を持つ読みは木の上で1本にまとまるので、
+# 「あ行から始まる相手」を何千件も個別に見なくて済む。
+#
+#     読み 22,714 件 → 木の節 47,914（作るのに約 35ms）
+#
+# **確かめかた**: `probe_trie.py` が、実機メモで実際に呼ばれた
+# 問い合わせを両方に通して**1件ずつ突き合わせる**。
+# `CN_TRIE=0` で今までの総当たりに戻せる（比べるため）。
+_USE_TRIE = (os.environ.get('CN_TRIE', '1') != '0')
+
+
+class _ReadingTrie:
+    """
+    語彙の読みを1本の木にまとめたもの。
+
+    `children[node]` は {次の1文字: 次の節}。
+    `word[node]` はその節で終わる読み（終わらないなら None）。
+
+    **並べ直してから作る**（`sorted`）。集合の列挙順に頼ると
+    起動ごとに節の番号が変わる（項目48-DR の再発防止）。
+    """
+
+    __slots__ = ('children', 'word', 'alphabet', 'minrem', 'maxrem')
+
+    def __init__(self, readings):
+        self.children = [{}]
+        self.word = [None]
+        children = self.children
+        word = self.word
+        for r in sorted(readings):
+            node = 0
+            for ch in r:
+                nxt = children[node].get(ch)
+                if nxt is None:
+                    nxt = len(children)
+                    children.append({})
+                    word.append(None)
+                    children[node][ch] = nxt
+                node = nxt
+            word[node] = r
+        # **木に出てくる字を、木自身から集める**（項目48-GC）。
+        # 以前は `kana_layout.ALL_KANA` で置き換え表を作っていたが、
+        # 語彙には ALL_KANA に無い字（を・ゐ・ゎ・`en:` の英字）が
+        # 混じっていて、**その字を含む読みに置き換えで辿り着けなかった**。
+        #
+        #     おつーじて → をつーじて   走る側は 2.4 で見つける
+        #                              木は見つけられなかった
+        #
+        # 木の側が黙って取りこぼす形だったので、木自身の字で表を作る。
+        alpha = set()
+        for d in children:
+            alpha.update(d)
+        self.alphabet = tuple(sorted(alpha))
+        # **節ごとの「残りの丈」**（項目48-GC）。
+        # minrem[節] = その節から下にある語の、いちばん短い残りの長さ。
+        # maxrem[節] = いちばん長い残りの長さ。探索の見込み（下界）に使う。
+        NN = len(children)
+        INF = 1 << 30
+        minrem = [INF] * NN
+        maxrem = [-1] * NN
+        order = []
+        st = [0]
+        while st:
+            v = st.pop()
+            order.append(v)
+            st.extend(children[v].values())
+        for v in reversed(order):          # 子が先に決まる順
+            mn = 0 if word[v] is not None else INF
+            mx = 0 if word[v] is not None else -1
+            for nx in children[v].values():
+                a = minrem[nx] + 1
+                if a < mn:
+                    mn = a
+                b = maxrem[nx] + 1
+                if b > mx:
+                    mx = b
+            minrem[v] = mn
+            maxrem[v] = mx
+        self.minrem = minrem
+        self.maxrem = maxrem
+
+
+def _trie_costs(typed, store, max_cost, max_len_diff):
+    """
+    木を降りて、**敷居に届く読みとその費用**を全部返す。
+
+    `{読み: (費用, 訂正の回数)}`。
+    `weighted_edit_distance` が持つ4つの手だけを使う:
+
+        置き換え   打った1字を、節の子の字に対応させる
+        脱字       節の子の字を、打たずに補う（挿入）
+        余分       打った1字を捨てる（削除。連打なら安い）
+        入れ替え   隣り合う2字を逆順で対応させる
+
+    費用の安い順に取り出す（ダイクストラ）ので、どの状態にも
+    **いちばん安い行き方で1度だけ**着く。費用が同じときは
+    訂正の回数が少ないほうを採る——`weighted_edit_distance` が
+    `(費用, 回数)` の組を最小化するのと同じ。
+
+    **先の見込み（項目48-GC）**: ある節から下にある語の丈は
+    `minrem`／`maxrem` で分かっている。打ち残した字の数と丈が
+    食い違えば、その差だけ「押し忘れ」か「余分」が**必ず**掛かる。
+    いま掛かっている額にその分を足して敷居に届くなら、
+    **その先には答えが無い**ので、進まない。
+    見込みは必ず控えめ（下界）なので**取りこぼしは起きない**。
+    取り出す節が1回 3,936 → 1,103 に減った。
+    """
+    trie = store.reading_trie()
+    children = trie.children
+    word = trie.word
+    minrem = trie.minrem
+    maxrem = trie.maxrem
+    NN = len(children)
+    n = len(typed)
+    max_depth = n + max_len_diff
+
+    # 打った字ごとの費用表。`_sub_cost` を輪の中で呼ばずに済む。
+    # **木に出てくる字すべて**で作る（項目48-GC）。`_ALL_KANA` で
+    # 作っていたときは、を・ゐ・ゎ を含む読みへ置き換えで辿り着け
+    # なかった（走る側は辿り着けるので、両者が食い違っていた）。
+    alphabet = trie.alphabet
+    subrow = {}
+    for ch in set(typed):
+        row = {}
+        for k in alphabet:
+            c = _sub_cost(ch, k)
+            if c < max_cost:
+                row[k] = c
+        subrow[ch] = row
+
+    del_cost = []
+    for i in range(n):
+        ch = typed[i]
+        if (i > 0 and typed[i - 1] == ch) or \
+                (i + 1 < n and typed[i + 1] == ch):
+            del_cost.append(_REPEAT_GAP_COST)
+        else:
+            del_cost.append(_GAP_COST)
+    # i 文字目から先で、いちばん安い「余分」の額。
+    # 見込み（下界）で「あと何回は必ず捨てる」に掛ける。
+    sufmin = [_GAP_COST] * (n + 2)
+    _m = _GAP_COST
+    for i in range(n - 1, -1, -1):
+        if del_cost[i] < _m:
+            _m = del_cost[i]
+        sufmin[i] = _m
+
+    best = {0: (0.0, 0)}
+    heap = [(0.0, 0, 0, 0, 0)]      # (費用, 訂正数, 打った側の位置, 節, 深さ)
+    found = {}
+    push = heapq.heappush
+    pop = heapq.heappop
+    while heap:
+        cost, edits, i, node, dep = pop(heap)
+        if best.get(i * NN + node) != (cost, edits):
+            continue                # もっと安い行き方で既に着いている
+        if i == n:
+            w = word[node]
+            if w is not None:
+                found[w] = (cost, edits)
+        kids = children[node]
+        rem = n - i                     # まだ打ち残している字の数
+        if kids and dep < max_depth:
+            ins_c = cost + _GAP_COST
+            ins_e = edits + 1
+            ins_ok = ins_c < max_cost
+            row = subrow[typed[i]] if i < n else None
+            base = (i + 1) * NN
+            sm0 = sufmin[i]
+            sm1 = sufmin[i + 1]
+            rem1 = rem - 1
+            for ch, nx in kids.items():
+                mn = minrem[nx]
+                if ins_ok:
+                    # 見込み: この子の下の語の丈と、打ち残しの差
+                    if mn > rem:
+                        h = ins_c + (mn - rem) * _GAP_COST
+                    else:
+                        mx = maxrem[nx]
+                        h = ins_c + (rem - mx) * sm0 if rem > mx else ins_c
+                    if h < max_cost:
+                        key = i * NN + nx
+                        cur = best.get(key)
+                        if cur is None or (ins_c, ins_e) < cur:
+                            best[key] = (ins_c, ins_e)
+                            push(heap, (ins_c, ins_e, i, nx, dep + 1))
+                if row is not None:
+                    sc = row.get(ch)
+                    if sc is None:
+                        continue
+                    c2 = cost + sc
+                    if c2 >= max_cost:
+                        continue
+                    if mn > rem1:
+                        if c2 + (mn - rem1) * _GAP_COST >= max_cost:
+                            continue
+                    else:
+                        mx = maxrem[nx]
+                        if rem1 > mx and \
+                                c2 + (rem1 - mx) * sm1 >= max_cost:
+                            continue
+                    e2 = edits if sc == 0.0 else edits + 1
+                    key = base + nx
+                    cur = best.get(key)
+                    if cur is None or (c2, e2) < cur:
+                        best[key] = (c2, e2)
+                        push(heap, (c2, e2, i + 1, nx, dep + 1))
+        if i >= n:
+            continue
+        c2 = cost + del_cost[i]
+        if c2 < max_cost:
+            rem1 = rem - 1
+            mn = minrem[node]
+            if mn > rem1:
+                h = c2 + (mn - rem1) * _GAP_COST
+            else:
+                mx = maxrem[node]
+                h = c2 + (rem1 - mx) * sufmin[i + 1] if rem1 > mx else c2
+            if h < max_cost:
+                key = (i + 1) * NN + node
+                cur = best.get(key)
+                e2 = edits + 1
+                if cur is None or (c2, e2) < cur:
+                    best[key] = (c2, e2)
+                    push(heap, (c2, e2, i + 1, node, dep))
+        if i + 1 < n and typed[i] != typed[i + 1] and dep + 2 <= max_depth:
+            mid = kids.get(typed[i + 1])
+            if mid is not None:
+                gnd = children[mid].get(typed[i])
+                if gnd is not None:
+                    if i == 0:
+                        sw = _SWAP_COST_HEAD
+                    elif i + 1 == n - 1:
+                        sw = _SWAP_COST_TAIL
+                    else:
+                        sw = _SWAP_COST_MID
+                    if sw is not None:
+                        c2 = cost + sw
+                        if c2 < max_cost:
+                            rem2 = rem - 2
+                            mn = minrem[gnd]
+                            if mn > rem2:
+                                h = c2 + (mn - rem2) * _GAP_COST
+                            else:
+                                mx = maxrem[gnd]
+                                h = (c2 + (rem2 - mx) * sufmin[i + 2]
+                                     if rem2 > mx else c2)
+                            if h < max_cost:
+                                e2 = edits + 1
+                                key = (i + 2) * NN + gnd
+                                cur = best.get(key)
+                                if cur is None or (c2, e2) < cur:
+                                    best[key] = (c2, e2)
+                                    push(heap,
+                                         (c2, e2, i + 2, gnd, dep + 2))
+    return found
+
+
 def find_similar_readings(typed, store, max_cost=4.0, max_len_diff=3,
                           limit=6, min_count=2):
     """
@@ -734,6 +1394,12 @@ def find_similar_readings(typed, store, max_cost=4.0, max_len_diff=3,
     min_count: 覚えた回数がこれ未満の語は候補にしない
         （辞書から取り込んだだけの珍しい語に引き寄せられないよう、
           既定では「実際に使われた語」に限る）
+
+    **「1文字違いは隣のキーのときだけ」の門はここには置かない**
+    （項目48-FX）。ここで候補ごと落とすと、**拮抗の裁定に使う
+    相手まで消えて**、それまで拮抗で止まっていた別の直しが
+    独り勝ちしてしまう（実機メモで `たんほの` が `たんぼの` に
+    化けた）。門は `rebuild_window_core` が**決めた答え**に掛ける。
 
     戻り値: [(読み, 費用, 訂正の回数), ...]  typed 自身は含めない
     """
@@ -776,6 +1442,11 @@ def find_similar_readings(typed, store, max_cost=4.0, max_len_diff=3,
     # 重いDPを実行せずに捨てられる。
     # typed に含まれる文字は費用0とみなす（一致できるかもしれない
     # ため。実際より安く見積もる方向の誤差しか無い）。
+    #
+    # **個数まで見る形にしても、DPは1回も減らなかった**
+    # （2026-08-12 に実測。161,354 → 161,354）。生き残る読みは
+    # 文字の**個数まで**typed と噛み合っているので、集合で見る
+    # いまの形で足りている。**同じ道をもう一度通らないこと。**
     dmin_cache = {}
 
     def _dmin(c):
@@ -790,25 +1461,94 @@ def find_similar_readings(typed, store, max_cost=4.0, max_len_diff=3,
     # 化け（もしもーし→もしーと、みかーん→みかん）にしかならない
     # （2026-08-08、セリフの検証で合意）。
     _bar_pos = tuple(i for i, c in enumerate(typed) if c == 'ー')
+    _has_bar = bool(_bar_pos)
 
+    # **安い判定から順に置く。** 語彙は15000件を超えており、この
+    # ループは1行の解析で20回以上回る。以前は長さの比較（いちばん
+    # 安い）が最後にあり、その手前で全件に対して
+    # 「ーの位置のタプルを作る」「小書きを開くだけかを調べる」を
+    # やっていた（2026-08-11・うにさんから「1000行あると待ち時間が
+    # 長い」の指摘）。並べ替えただけで、ふるまいは変えていない。
+    _min_len = n - max_len_diff
+    _max_len = n + max_len_diff
+    # 打たれた側の小書き（拗音・小書き母音）の数。**輪の外で1回だけ**
+    # 数える（項目48-GA。下の関門の説明を見ること）。
+    _t_small = 0
+    for _c in typed:
+        if _c in _SMALL_KANA_SET:
+            _t_small += 1
+    # **木を降りて費用まで出しておく**（項目48-GB）。
+    # 出せたら、下の輪は「関門を掛けるだけ」になる
+    # （下界の見積もりも本計算も、もう要らない）。
+    _known = None
+    if _USE_TRIE:
+        try:
+            _known = _trie_costs(typed, store, max_cost, max_len_diff)
+            readings = _known
+        except Exception:
+            _known = None
     for reading in readings:
+        m = len(reading)
+        if m < _min_len or m > _max_len:
+            continue
         if reading == typed:
             continue
-        if tuple(i for i, c in enumerate(reading)
-                 if c == 'ー') != _bar_pos:
-            continue
-        # 拗音・促音を開くだけの候補は作らない（にゃん→にやん）
-        if _flattens_small_kana(typed, reading):
+        # 長音「ー」の位置は動かさない。typed に ー が無いときは
+        # 「相手にも ー が無い」だけを見ればよく、タプルを作らずに済む
+        # （こちらが大多数）。
+        if _has_bar:
+            if tuple(i for i, c in enumerate(reading)
+                     if c == 'ー') != _bar_pos:
+                continue
+        elif 'ー' in reading:
             continue
         # 促音・小書きで終わる読みは活用の断片（つよかっ・打っ 等。
         # 自動学習が拾ってしまった語幹）。独立した語として当てると
         # 「つよかった」→「つよかっ」のような破壊になるので、
         # 再構築の候補には出さない（クリックの候補づくりは
-        # 別経路なので影響しない）。
-        if reading[-1] in 'っゃゅょぁぃぅぇぉ':
+        # 別経路なので影響しない）。この判定は文字1つを見るだけ
+        # なので、_flattens_small_kana より先に置く。
+        # **拗音（ゃゅょ）は外した**（項目48-GK）。`corrector.py` の
+        # `_FRAGMENT_TAILS` と同じ理由——拗音で終わる読みは
+        # 辞書・解除・削除・場所・後者・神社…と**普通の語が 534件**。
+        # ここで落としていたので、直し先としてまるごと見えなかった。
+        if reading[-1] in 'っぁぃぅぇぉ':
             continue
-        m = len(reading)
-        if abs(m - n) > max_len_diff:
+        # 拗音・促音を開くだけの候補は作らない（にゃん→にやん）
+        #
+        # **下界の見積もりを先に置く形も試したが、差が無かった**
+        # （2026-08-12 に実測。候補 619,855 のうち下界で落ちるのは
+        # 74% なので、この判定を1/4に減らせる計算だったが、
+        # 977行で 8.18秒 対 8.16秒＝誤差の範囲）。
+        # **効かない入れ替えを核に残さない。同じ道を通らないこと。**
+        #
+        # **打たれた側に小書きが1つも無ければ、この関門は決して
+        # 働かない**（項目48-GA）。`_flattens_small_kana` は
+        # 「小書きが**減る**訂正か」を見るので、元が 0 個なら
+        # `r_small < 0` になることは無い。それでも 17,000 回
+        # 呼ばれていて、`probe_scan` で **1件も捨てずに 5ms** を
+        # 使っていた。数えるのは輪の外で1回でよい（`_t_small`）。
+        # **答えは1つも変わらない**（同じ判定を書き写しただけ）。
+        if _t_small and len(reading) == n:
+            if sum(1 for c in reading
+                   if c in _SMALL_KANA_SET) < _t_small:
+                continue
+        # **木が費用まで出しているなら、下界も本計算も飛ばす**
+        # （項目48-GB）。下の下界2つは「本計算をしないで済ませる」
+        # ための見積もりなので、費用が既にあるなら要らない。
+        if _known is not None:
+            cost, edits = _known[reading]
+            if cost >= max_cost:
+                continue
+            if min_count > 0:
+                try:
+                    if not any((e.get('count', 0) or 0) >= min_count
+                               or (e.get('world', 0) or 0) >= 1
+                               for e in store.lookup(reading)):
+                        continue
+                except Exception:
+                    continue
+            out.append((reading, cost, edits))
             continue
         lower = 0.0
         for c in reading:
@@ -818,12 +1558,79 @@ def find_similar_readings(typed, store, max_cost=4.0, max_len_diff=3,
                     break
         if lower >= max_cost:
             continue
-        cost, edits = weighted_edit_distance(typed, reading)
+        # **逆向きの下界も見る**（項目48-FT・設計20・2026-08-19）。
+        #
+        # 上の下界は「**相手の字のうち、こちらに無いもの**」しか
+        # 数えていない。**こちらの字のうち、相手に無いもの**も、
+        # 置換か挿入で必ず費用が掛かる。どちらも正しい下界なので
+        # **大きいほう**を採ってよい（和ではなく max。和にすると
+        # 同じ1手を二重に数えて、正しい候補まで落としかねない）。
+        #
+        # **これがいちばん効いた。** 実測（実機の語彙・60行）:
+        #     重み付き編集距離の呼び出し **921,408 → 86,046 回（−91%）**
+        #     1行あたり **249ms → 159ms**
+        #
+        # 過去の高速化の試み（下界を先に置く／文字の個数まで見る）も、
+        # 今回まず試した削除近傍の索引（SymSpell）も、どれも
+        # **候補を絞る**話だった。実際に重かったのは
+        # **距離の計算そのもの**で、そこへ届く数を減らすのが効いた。
+        #
+        # **答えは変わらない**（下界なので、落とすのは
+        # 「どうやっても敷居に届かない」相手だけ）。
+        # 1,540通りの問い合わせで**差 0 件**を確かめてある。
+        r_set = set(reading)
+        back = 0.0
+        for _i, c in enumerate(typed):
+            if c not in r_set:
+                # **落とすときの最低額は、連打かどうかで変わる**
+                # （`weighted_edit_distance._del_cost` と同じ規則）。
+                # ここを `_GAP_COST` に決め打ちしたら、
+                # `おおげさ` `しゃんんりあ` のように**連打を含む読み**で
+                # 正しい候補を落とした（7,200組中 **97組**がずれた。
+                # 2026-08-19 に実測して直した）。
+                # **下界は、いちばん安い道を見落とさないこと。**
+                if ((_i > 0 and typed[_i - 1] == c)
+                        or (_i + 1 < n and typed[_i + 1] == c)):
+                    best = _REPEAT_GAP_COST
+                else:
+                    best = _GAP_COST
+                for t in r_set:
+                    x = _sub_cost(c, t)
+                    if x < best:
+                        best = x
+                        if best <= 0.0:
+                            break
+                back += best
+                if back >= max_cost:
+                    break
+        if back >= max_cost:
+            continue
+        cost, edits = weighted_edit_distance(typed, reading, limit=max_cost)
         if cost >= max_cost:
             continue
         if min_count > 0:
             try:
-                if not any(e['count'] >= min_count
+                # **見えるかどうかは「この人が使った回数」か
+                #   「世の中での使われぶり」のどちらかで足りる**
+                #   （項目48-DA）。
+                # 辞書から取り込んだ語は、使ったことが無くても
+                # **書籍でよく使う語なら候補にする**。
+                # うにさんの指定（2026-08-14）:
+                #   「ある程度使うと快適になるのであれば、その
+                #     ある程度を初期とするべきです。すべての
+                #     日本語の頻度は均一ではない。日常使いやすい
+                #     ものを補正しやすく。」
+                # **辞書から取り込んだ語は、使ったことが無くても見える**
+                # （`world` が付いている＝辞書由来）。
+                # 実測（初期状態・同じ材料2,300件・2026-08-14）:
+                #     見える範囲を狭めると**両方悪くなる**
+                #       上位34%だけ  直った 292 / 化けた 93
+                #       上位78%      直った 374 / 化けた 75
+                #       ぜんぶ       ← いちばん広い（下で測る）
+                #   正解が見えないまま誤りだけが見える「半開き」が
+                #   いちばん悪い。**見える範囲は広く、順位で決める。**
+                if not any((e.get('count', 0) or 0) >= min_count
+                           or (e.get('world', 0) or 0) >= 1
                            for e in store.lookup(reading)):
                     continue
             except Exception:
@@ -835,7 +1642,36 @@ def find_similar_readings(typed, store, max_cost=4.0, max_len_diff=3,
     # 候補のどれが「最有力」かが起動ごとに揺れ、同じメモでも
     # 起動のたびに補正結果が変わりうる（総点検で 実在/実害 が
     # 入れ替わるのを確認。2026-08-08）。
-    out.sort(key=lambda rce: (rce[2], rce[1], -len(rce[0]), rce[0]))
+    # **同じ費用・同じ訂正回数なら、書籍でよく使う語を先にする**
+    # （うにさんの指定・2026-08-14・項目48-CZ）:
+    #
+    #   「すべての日本語の頻度は均一ではない。
+    #     日常使いやすいものを補正しやすく。
+    #     書籍から学んだものを、初期としてよいかと。」
+    #
+    # `familiarity.json` は UniDic／BCCWJ（**書籍を柱にした
+    # コーパス**。項目48-AE でうにさんが「新聞ではなく書籍から」と
+    # 指定されたもの）から作った「馴染みの薄さ」の表。
+    # **大きいほど馴染みが薄い。** 小さいものを先にする。
+    #
+    # **順位づけにしか使わない。** 候補から外しはしない
+    # （表に無い語は 0＝いちばん馴染みがある扱いになるので、
+    #   外す方向に使うと表に載っていない語を全部殺してしまう）。
+    # 費用と訂正回数が決めたあとの、**最後の並べ替え**だけ。
+    def _familiar(reading):
+        try:
+            import familiarity as _f
+            best = None
+            for e in store.lookup(reading):
+                v = _f.bias(e.get('surface') or '')
+                if best is None or v < best:
+                    best = v
+            return best if best is not None else 0
+        except Exception:
+            return 0
+
+    out.sort(key=lambda rce: (rce[2], rce[1], _familiar(rce[0]),
+                              -len(rce[0]), rce[0]))
     out = out[:limit]
 
     if len(_SIM_CACHE) >= _SIM_CACHE_LIMIT:

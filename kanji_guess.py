@@ -64,6 +64,27 @@ MAX_INNER_KANA = 2
 # （「単語の繋がり」を「単語の繋がり」全体で1語と見ない）。
 _BOUNDARY_KANA = set('のはをがにへとでもやかねよねなら')
 
+# **語の一部になりえない、硬い境目**（項目48-CH・2026-08-13）。
+#
+# 上の `_BOUNDARY_KANA` は「助詞かもしれない字」で、**1文字でも
+# 助詞でない字が混じれば塊として繋ぐ**作りになっている。
+# 「目もち長」の「もち」を繋ぐために要る決まりだが、
+# **「るを」のように活用語尾＋助詞の組でも繋がってしまう**:
+#
+#     物語るを確認しました。  →  物語を確認しました。
+#     （塊が `物語るを確認` になり、助詞「を」を跨いでいた）
+#
+# `を` は現代語では**ほぼ必ず助詞**で、語の送り仮名になることが無い。
+# ここだけは「1文字でもあれば切る」にする。
+#
+# 実測: 実機のメモ全6タブ＋正しい日本語＋散文で、
+# **変わった行は51件のまま、答えも1件も動かない**。
+# `たん子の繋がり → 単語の繋がり` も通ったまま。
+# （`が` `は` `に` `で` `と` `も` は語の中にも現れる——すが・かが・
+#   には・ので・こと・もの——ので、同じ扱いにはしない）
+_HARD_BOUNDARY_KANA = 'を'
+
+
 # 読みの組み合わせを何通りまで試すか。
 # 漢字1文字あたり2〜3通りの読みがあるため、掛け算で急に増える。
 MAX_COMBOS = 24
@@ -267,6 +288,30 @@ def find_kanji_runs(line):
                        and k - j < MAX_INNER_KANA):
                     k += 1
                 inner = line[j:k]
+                if (k < n and _is_kanji(line[k])
+                        and inner[-1:] in _HARD_BOUNDARY_KANA):
+                    # **`を` のすぐ後ろに漢字が来る形は、そこで切る**
+                    # （項目48-CH）。`を` は現代語ではほぼ必ず助詞で、
+                    # その直後の漢字は**別の語の頭**である。
+                    #
+                    #   物語るを確認しました。 → 物語を確認しました。
+                    #   （塊が `物語るを確認` になっていた）
+                    #
+                    # **`を` が橋の途中にあるとき（`をお願` など）は
+                    # 触らない。** そこで切ると塊が短くなり、
+                    # **短くなったぶん新しく直せてしまう**:
+                    #
+                    #   再実行をお願いします。 → 最高をお願いします。
+                    #   （`再実行をお願` を `再実行` に切ったせい。
+                    #     実 janome では `再実行` が実在語として
+                    #     守られるので出ないが、mock では出た）
+                    #
+                    # 塊ごと捨てる形も測ったが、
+                    # `該当あの範囲を選ぶ`（混入かなの削除）が
+                    # 直らなくなった（tests_mock が1件落ちた）。
+                    # **`を` が橋の最後にあるときだけ**が、3つとも
+                    # 満たす唯一の形だった。
+                    break
                 if (k < n and _is_kanji(line[k])
                         and any(c not in _BOUNDARY_KANA for c in inner)):
                     j = k
@@ -663,10 +708,28 @@ def readings_for_char(ch, dict_index=None):
     except Exception:
         pass
 
+    # **UniDic から作った表で埋める**（うにさんの指定・2026-08-11）。
+    #
+    # うにさんのメモに出る漢字632種のうち、**284種（44%）は
+    # ここまでで読みが1つも取れていなかった**。`格` `賀` もそこに
+    # 入っていて、`性格` `賀古` は読みの候補がゼロだった
+    # （＝関門で止まっていたのではなく、**土俵に上がれていなかった**）。
+    #
+    # 表は音読みを先に並べて返す。誤変換のもとになる読みは
+    # たいてい熟語の音読みなので、そちらを先に試したい。
+    try:
+        import kanji_onkun
+        for r in kanji_onkun.readings_of(ch):
+            if r not in out:
+                out.append(r)
+    except Exception:
+        pass
+
     return out
 
 
-def reading_combos(text, dict_index=None, max_combos=MAX_COMBOS):
+def reading_combos(text, dict_index=None, max_combos=MAX_COMBOS,
+                   next_char=None):
     """
     漢字列がとりうる読みの組み合わせを、確からしい順に並べる。
 
@@ -677,13 +740,115 @@ def reading_combos(text, dict_index=None, max_combos=MAX_COMBOS):
     戻り値: [読みの文字列, ...]
     """
     return [r for r, _rank in reading_combos_with_rank(text, dict_index,
-                                                        max_combos)]
+                                                        max_combos,
+                                                        next_char)]
 
 
-def reading_combos_with_rank(text, dict_index=None, max_combos=MAX_COMBOS):
+def _drop_okurigana_readings(text, i, ch, readings, next_char):
+    """
+    **送り仮名が付いていない漢字から、送り仮名が要る読みを外す**
+    （うにさんの指定・2026-08-11・項目48-AP）。
+
+    「誤り・誤る・誤って」と**後ろに平仮名が付いて初めて**
+    `誤` は **あやま** と読める。付いていなければ **ご**。
+    だから `誤学習` は **ごがくしゅう**であって、
+    あやまがくしゅう ではない（IMEに打っても出てこない）。
+
+    **どこに平仮名があれば「付いている」と見るか**:
+
+      塊の中の、その字より後ろのどこか。すぐ隣でなくてよい。
+      複合動詞は送り仮名が後ろの字に付くため
+      （**見切れ** の `れ` は `切` に付くが、`見` も み と読む）。
+
+      塊の**最後の字**は、塊の外に何があるか分からない。
+      `next_char` を貰っていればそれで見て、
+      **貰っていなければ落とさない**（疑わしきは残す）。
+      `見せる` の `見` を けん にしてしまわないため。
+
+    表が無い環境でも動く（何も落とさないだけ）。
+    """
+    try:
+        import okurigana
+    except Exception:
+        return readings
+    for c in text[i + 1:]:
+        if _is_hiragana(c):
+            return readings
+    if i == len(text) - 1:
+        if next_char is None or _is_hiragana(next_char):
+            return readings
+    return okurigana.without_okurigana(ch, readings)
+
+
+# --------------------------------------------------------------------
+#  **IME から打った読み**を差す口（設計25(乙)）
+# --------------------------------------------------------------------
+#
+# うにさんの指定（2026-08-20）:
+#
+#     「確定直前のひらがな情報を保持する実装を次に始めてください。
+#       **ひらがながあれば、読みが分かるので自動補正します**」
+#
+# ここまでの読みは**逆算**（漢字を1字ずつ読みに戻して組み合わせる）
+# だった。逆算には限界があり、`奥悠久子帝` は **`帝` の読みが
+# どちらの表にも無い**ので **1つも組み合わせが作れなかった**
+# （項目48-GU の壁①）。**1字でも欠けると塊全体が0になる。**
+#
+# IME は、打った本人が何と打ったかを知っている。**逆算ではなく
+# 事実**なので、在るなら**先に**試す。
+#
+#   置き場は `ime_readings.py`（**語彙とは別**・学び2）。
+#   ここは**引くだけ**。書くのは app.py の見張りだけ。
+#
+# **差していないときは、今までと1バイトも変わらない**
+# （`_IME_READINGS_PROVIDER` が None なら素通り）。
+# ものさし（readcheck / fpcheck / seedcheck / memodiff）は
+# 差さずに回るので、**対が空なら diff は0行**になる。
+_IME_READINGS_PROVIDER = None
+
+
+def set_ime_readings_provider(fn):
+    """
+    「表記 → 打った読みの並び」を返す関数を差す（`None` で外す）。
+
+    `app.py` が `IMEReadings.readings_for` を差す。
+    **差さなければ何も変わらない**（今までどおり逆算だけ）。
+    """
+    global _IME_READINGS_PROVIDER
+    _IME_READINGS_PROVIDER = fn
+
+
+def ime_readings_for(text):
+    """
+    その表記について**打たれた読み**を返す（無ければ空）。
+
+    **落ちても無かったことにする。** 補正の本筋は逆算のままで、
+    ここは足すだけの道。落ちて全体が止まってはいけない。
+    """
+    fn = _IME_READINGS_PROVIDER
+    if fn is None or not text:
+        return []
+    try:
+        got = fn(text)
+    except Exception:
+        return []
+    return [r for r in (got or ()) if r and isinstance(r, str)]
+
+
+def reading_combos_with_rank(text, dict_index=None, max_combos=MAX_COMBOS,
+                             next_char=None):
     """
     reading_combos と同じだが、各組み合わせの
     「読みとしての確からしさ」を表す数値（rank）も一緒に返す。
+
+    **打った読みが分かっているなら、それを先頭に置く**（設計25(乙)）。
+    `set_ime_readings_provider` で差されているときだけ効く。
+    逆算で1つも作れない塊（`奥悠久子帝`）でも、打った読みが
+    在れば**そこだけは返す**。
+
+    `next_char` は**塊のすぐ後ろの1文字**（行の中での次の文字）。
+    最後の字に送り仮名が付いているかの判断だけに使う。
+    渡さなければ「分からない」＝落とさない。
 
     rank は、その組み合わせを作るのに使った各文字の読みの
     優先順位（0が最も一般的）の合計。値が小さいほど、
@@ -701,11 +866,24 @@ def reading_combos_with_rank(text, dict_index=None, max_combos=MAX_COMBOS):
 
     戻り値: [(読みの文字列, rank), ...]
     """
+    # **打った読み**（在れば）。逆算より先に置く。
+    known = ime_readings_for(text)
+    # **対で塊を切り分けた組み立て**（項目48-HB・案B）。
+    # 塊まるごとの対が無いときだけ。対が空なら [] で、何も変わらない。
+    segs = [] if known else _ime_segment_combos(text, dict_index, next_char)
+
+    n = len(text)
     per_char = []
-    for ch in text:
+    for i, ch in enumerate(text):
         rs = readings_for_char(ch, dict_index)
         if not rs:
-            return []      # 1文字でも読めないなら組み合わせを作れない
+            # 1文字でも読めないなら組み合わせを作れない。
+            # **ただし打った読みが在るなら、それは返す**
+            # （`奥悠久子帝` は `帝` が読めず、ここで 0件だった）。
+            # 対で切り分けた組み立て（segs）も同じ扱い。読めない字が
+            # 対の中に覆われていれば、組み立ては作れている（48-HB）。
+            return _with_ime_readings(known, segs)
+        rs = _drop_okurigana_readings(text, i, ch, rs, next_char)
         per_char.append(rs[:3])
 
     combos = [('', 0, 0)]
@@ -730,7 +908,169 @@ def reading_combos_with_rank(text, dict_index=None, max_combos=MAX_COMBOS):
     # 上位だけを探索する際に本命を取りこぼす
     # （実機で「素帰任」が「確認」に届かなくなった原因）。
     combos.sort(key=lambda prc: (prc[1], prc[2]))
-    return [(r, rank) for r, rank, _changed in combos]
+    return _with_ime_readings(
+        known,
+        _merge_by_rank(segs, [(r, rank) for r, rank, _changed in combos]))
+
+
+def _with_ime_readings(known, guessed):
+    """
+    **打った読み**を、逆算で作った読みの**前**に並べる（設計25(乙)）。
+
+    known:   IME から取れた読み（新しい順）。無ければ空。
+    guessed: 逆算で作った [(読み, rank), ...]
+
+    - 打った読みの rank は **0**（いちばん確からしい）。
+      負の値は使わない。rank は下流で訂正コストと足し合わされる
+      ので、そこに負の値を持ち込むと比較の意味が変わる。
+    - **同じ読みは重ねない。** 逆算でも同じ読みに届いていたら、
+      前のほう（打った側）だけを残す。
+    - **known が空なら guessed をそのまま返す**
+      ＝差していない環境では今までと同じ答えになる。
+
+    > **押し出されることに注意。** 呼ぶ側は `combos[:6]` で
+    > 上から6つしか試さない（`corrector.py`）。打った読みを k 個
+    > 前に置くと、逆算の下位 k 個は窓から出る。1表記あたりの
+    > 読みはたいてい1つなので影響は小さいが、**0ではない**。
+    """
+    if not known:
+        return guessed
+    out = []
+    seen = set()
+    for r in known:
+        if r and r not in seen:
+            seen.add(r)
+            out.append((r, 0))
+    for r, rank in guessed:
+        if r not in seen:
+            seen.add(r)
+            out.append((r, rank))
+    return out
+
+
+# --------------------------------------------------------------------
+#  **対で塊を切り分けて読みを組み立てる**（項目48-HB・設計25(乙)の引き方）
+# --------------------------------------------------------------------
+#
+# 対は「IME が一度に確定した範囲」で覚えるが、エンジンは「塊」で
+# 読みを聞く。**塊は語ではない**（漢字・カタカナの連なりで切られる）
+# ので、表記の完全一致では**実質引けない**ことが実機の51行で
+# 確かめられた（項目48-HA §7-b・対のせいで変わった行 0件）。
+#
+# ここでは塊の**中**を対の表記で切り分ける:
+#
+#     該当あの範囲  =  該当(がいとう) + あ + の + 範囲(はんい)
+#
+# かなは素通し（表記＝読み）。対で覆えない字は、今までどおり
+# 1字ずつの逆算（readings_for_char）で補う。
+# **対を1つも使わなかった組み立ては返さない**（それは逆算と同じ
+# ものなので、逆算の側に任せる）。
+#
+# 決めごと:
+#   - **1文字だけの対は、塊の中では使わない。**
+#     `表 → おもて` を持っていると、`時刻表` の中に「おもて」が
+#     紛れ込む（正しい `じこくひょう` と並んでしまう）。
+#     1文字の対は、塊まるごとの一致（known）でだけ効かせる。
+#   - 対の読みは**新しい順に2つまで**。逆算の読みは**3つまで**
+#     （per_char[:3] と同じ幅）。
+#   - rank は「対＝0（打った事実）」「逆算＝読みの順位」の合計。
+#     逆算と同じ物差しなので、下流の訂正コストとそのまま足せる。
+#
+# > **土俵が広がる向きの変更である**（項目48-GU の但し書きと同じ）。
+# > 「その表記を打ったことがある」だけを根拠に、塊の一部へ読みを
+# > 与える。`奥悠久子帝 → おくゆくこてい` のような**誤変換の対**が
+# > 別の塊の中で使われる道もできる。使う向きは「漢字→読み」だけ
+# > （学び2）は保っている。
+_IME_SEG_MAX_SURFACE = 16    # 対の表記として試す最大の長さ
+_IME_SEG_MIN_SURFACE = 2     # 1文字の対は塊の中では使わない（上記）
+_IME_SEG_MAX_STATES = 4      # 位置ごとに残す組み立ての数
+_IME_SEG_MAX_TEXT = 32       # これより長い塊では組み立てない
+_IME_SEG_MAX_OUT = 3         # 返す組み立ての数
+
+
+def _ime_segment_combos(text, dict_index=None, next_char=None):
+    """
+    塊 `text` を対の表記で切り分けて、読みの組み立てを返す。
+
+    戻り値: [(読み, rank), ...]（対を1つ以上使えたものだけ・
+            rank の小さい順・最大 _IME_SEG_MAX_OUT 件）。
+    差されていない・対が空・覆えないときは []（＝何も変わらない）。
+    """
+    if _IME_READINGS_PROVIDER is None:
+        return []
+    n = len(text)
+    if n < 2 or n > _IME_SEG_MAX_TEXT:
+        return []
+
+    # states[i] = [(読みの前半, rank, 使った対の数), ...]
+    states = {0: [('', 0, 0)]}
+    for i in range(n):
+        cur = states.get(i)
+        if not cur:
+            continue
+        # 位置ごとに、rank の小さい順で数を絞る（組み合わせ爆発を防ぐ）
+        if len(cur) > _IME_SEG_MAX_STATES:
+            cur.sort(key=lambda s: s[1])
+            del cur[_IME_SEG_MAX_STATES:]
+        # --- 対（長い表記から） ---
+        top = min(n, i + _IME_SEG_MAX_SURFACE)
+        for j in range(top, i + _IME_SEG_MIN_SURFACE - 1, -1):
+            if j - i < _IME_SEG_MIN_SURFACE:
+                break
+            rds = ime_readings_for(text[i:j])
+            if not rds:
+                continue
+            dst = states.setdefault(j, [])
+            for k, rd in enumerate(rds[:2]):
+                for prefix, rank, used in cur:
+                    dst.append((prefix + rd, rank + k, used + 1))
+        # --- 1文字（かなは素通し・漢字は逆算） ---
+        ch = text[i]
+        rs = readings_for_char(ch, dict_index)
+        if rs:
+            rs = _drop_okurigana_readings(text, i, ch, rs, next_char)
+            dst = states.setdefault(i + 1, [])
+            for idx, r in enumerate(rs[:3]):
+                for prefix, rank, used in cur:
+                    dst.append((prefix + r, rank + idx, used))
+
+    got = [(r, rank) for r, rank, used in states.get(n, ())
+           if used >= 1 and r]
+    if not got:
+        return []
+    got.sort(key=lambda s: s[1])
+    out = []
+    seen = set()
+    for r, rank in got:
+        if r not in seen:
+            seen.add(r)
+            out.append((r, rank))
+        if len(out) >= _IME_SEG_MAX_OUT:
+            break
+    return out
+
+
+def _merge_by_rank(segs, guessed):
+    """
+    対で組み立てた読み（segs）と逆算の読み（guessed）を
+    **rank の小さい順**に混ぜる。同じ rank なら対の側を前に
+    （打った事実を含むぶんだけ確からしい）。同じ読みは重ねない。
+
+    segs が空なら guessed をそのまま返す
+    ＝**対が空なら今までと1バイトも変わらない**。
+    """
+    if not segs:
+        return guessed
+    tagged = ([(rank, 0, i, r) for i, (r, rank) in enumerate(segs)]
+              + [(rank, 1, i, r) for i, (r, rank) in enumerate(guessed)])
+    tagged.sort(key=lambda t: (t[0], t[1], t[2]))
+    out = []
+    seen = set()
+    for rank, _src, _i, r in tagged:
+        if r not in seen:
+            seen.add(r)
+            out.append((r, rank))
+    return out
 
 
 def looks_like_real_word(text, store, tokenize_fn=None):

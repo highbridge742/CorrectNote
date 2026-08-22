@@ -30,6 +30,15 @@ def check(path):
     tree = ast.parse(open(path, encoding='utf-8').read())
     problems = []
 
+    # このファイルのどこかのクラスで def されている名前を全部集める。
+    # 「他のクラスには在るのに、このクラスには無い」を見分けるため。
+    _ALL_METHODS = set()
+    for _n in ast.walk(tree):
+        if isinstance(_n, ast.ClassDef):
+            for _f in _n.body:
+                if isinstance(_f, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    _ALL_METHODS.add(_f.name)
+
     for node in ast.walk(tree):
         if not isinstance(node, ast.ClassDef):
             continue
@@ -68,15 +77,41 @@ def check(path):
             if not (isinstance(f.value, ast.Name) and f.value.id == 'self'):
                 continue
             if f.attr not in defined:
-                problems.append((f.lineno, node.name, f.attr))
+                problems.append((f.lineno, node.name, f.attr, '呼び出し'))
+
+        # **値として渡す形も見る**（2026-08-18 に痛い目を見て足した）。
+        #
+        #     self.editor.bind('<Control-a>', self._on_select_all)
+        #
+        # これは**呼び出しではない**ので上の検査を素通りしていた。
+        # `_on_select_all` を別のクラスに書いてしまい、
+        # **アプリが起動しなくなった**（うにさんの画面で
+        # AttributeError）。呼ぶ形だけ見ていては足りない。
+        #
+        # ただし「このファイルのどこかのクラスにはある名前」に絞る。
+        # tkinter などから受け継いだ属性を誤って挙げないため。
+        for item in ast.walk(node):
+            if not isinstance(item, ast.Attribute):
+                continue
+            if not (isinstance(item.value, ast.Name)
+                    and item.value.id == 'self'):
+                continue
+            if not isinstance(item.ctx, ast.Load):
+                continue        # 代入の左辺は見ない
+            if item.attr in defined:
+                continue
+            if item.attr not in _ALL_METHODS:
+                continue        # このファイルのどこにも無い名前は判断しない
+            problems.append((item.lineno, node.name, item.attr,
+                             '値として使用'))
 
     return problems
 
 
 ok = True
-for path in sys.argv[1:]:
-    for lineno, cls, name in check(path):
+for path in (sys.argv[1:] or ['app.py']):
+    for lineno, cls, name, how in check(path):
         ok = False
-        print(f'{path}:{lineno}: {cls}.{name} が定義されていません')
+        print(f'{path}:{lineno}: {cls}.{name} が定義されていません（{how}）')
 if ok:
     print('未定義のメソッド呼び出しはありません')

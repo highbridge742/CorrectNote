@@ -95,12 +95,16 @@ def _should_prune(surface, pos, sub_pos, sub_sub_pos, cost):
 
 
 # キャッシュの形式が変わったら数字を上げる（古い索引を作り直させる）
-CACHE_VERSION = 3
+CACHE_VERSION = 5
 # 索引として最低限あるべき読みの数。これを下回るものは
 # 作りかけ・壊れた索引とみなして作り直す。
 # （空の索引が保存されると、候補が一切出ないのに
 #   「索引はある」と扱われて原因が分からなくなるため）
 _MIN_READINGS = 5000
+
+# 「世の中の語か」を答える集合に入れる読みの長さの上限。
+# 長い読みは芯にならないので持たない（大きさを抑える）。
+_WORLD_MAX_LEN = 12
 
 
 def _is_kana(s):
@@ -118,6 +122,12 @@ class DictIndex:
         self.cache_path = cache_path
         self._by_reading = None    # reading -> [surface, ...]
         self._by_surface = None    # surface -> [reading, ...]
+        # **刈り込む前の読み全部**（項目48-DY）。
+        # `_by_reading` は地名・人名・難語を刈り込んだあとの
+        # 10,584読みしか無い。それだと `かんむり` のような
+        # **ふつうの語まで「知らない」**ことになる。
+        # 「その並びは世の中の語か」を答えるためだけの集合。
+        self._world = None         # {reading, ...}（刈り込まない）
 
     @property
     def ready(self):
@@ -151,6 +161,31 @@ class DictIndex:
             return []
         return list(self._by_reading.get(reading, ()))[:limit]
 
+    def is_world_reading(self, reading):
+        """
+        **その並びは、世の中に在る語の読みか**（項目48-DY）。
+
+        `surfaces_for_reading` との違い（**使い分けること**）:
+
+            surfaces_for_reading  刈り込んだあとの索引を引く。
+                                  「このアプリが提案してよい語か」
+            is_world_reading      **刈り込む前**の読み全部を引く。
+                                  「日本語として在る並びか」
+
+        後者は**触らない側に倒すため**だけに使う。地名・人名・
+        難語も「在る」と答える。`かんむり` は刈り込みで索引から
+        落ちているが、**世の中には在る**ので直してはいけない。
+
+        実測（2026-08-16・38語で確かめた）:
+            触ってはいけない語  16/16 が「在る」
+            壊れている並び      20/22 が「無い」
+            （例外の2つは `てんまん`（天満）と `かあちゃん`。
+              どちらも本当に在る語なので、判定は正しい）
+        """
+        if not reading or not self._world:
+            return False
+        return reading in self._world
+
     def readings_for_surface(self, surface, limit=_MAX_READINGS):
         """この表記が持ちうる読みの一覧（時 -> とき, じ）。"""
         if not self.ready or not surface:
@@ -172,6 +207,7 @@ class DictIndex:
         # これにより、品詞が取れない環境でも地名・人名・難語を弾ける。
         by_reading = {}
         by_surface = {}
+        world = set()
         n = 0
         for surface, reading, pos, sub_pos, sub_sub_pos, cost in \
                 iter_janome_entries(min_len=1, max_len=8):
@@ -181,6 +217,11 @@ class DictIndex:
                 continue
             if not reading or not _is_kana(reading):
                 continue
+            # **刈り込む前に控える**（項目48-DY）。
+            # ここは「世の中に在る読みか」を答えるだけなので、
+            # 地名・人名・難語も入れてよい（触らない側に倒すため）。
+            if len(reading) <= _WORLD_MAX_LEN:
+                world.add(reading)
             if _should_prune(surface, pos, sub_pos, sub_sub_pos, cost):
                 continue
             by_reading.setdefault(reading, []).append((cost, surface))
@@ -209,6 +250,7 @@ class DictIndex:
                             for r, v in by_reading.items()}
         self._by_surface = {s: _dedup_sorted(v, _MAX_READINGS)
                             for s, v in by_surface.items()}
+        self._world = world
 
     # ------------------------------------------------------------
     # キャッシュ
@@ -225,7 +267,8 @@ class DictIndex:
             with open(tmp, 'w', encoding='utf-8') as f:
                 json.dump({'version': CACHE_VERSION,
                            'by_reading': self._by_reading,
-                           'by_surface': self._by_surface},
+                           'by_surface': self._by_surface,
+                           'world': sorted(self._world or ())},
                           f, ensure_ascii=False)
             os.replace(tmp, self.cache_path)
         except Exception:
@@ -246,6 +289,7 @@ class DictIndex:
                 return False
             self._by_reading = by_reading
             self._by_surface = by_surface
+            self._world = set(data.get('world') or ())
             return True
         except Exception:
             return False

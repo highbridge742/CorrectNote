@@ -223,6 +223,13 @@ def katakana_to_hiragana(text):
 
 
 # 単独の濁点・半濁点（かな入力で「゛」キーだけが確定してしまった状態）
+def _is_kana_char(ch):
+    """ひらがな・カタカナか（濁点を落としてよい根拠になる文字）。"""
+    return bool(ch) and (
+        '\u3041' <= ch <= '\u3096' or '\u30a1' <= ch <= '\u30fa'
+        or ch == 'ー')
+
+
 DAKUTEN_MARKS = ('\u309b', '\u3099', '゛')      # 濁点
 HANDAKUTEN_MARKS = ('\u309c', '\u309a', '゜')   # 半濁点
 
@@ -238,9 +245,68 @@ _HANDAKUTEN_COMPOSE = {
 }
 
 
-def normalize_marks(text):
+def _with_katakana(table):
+    """
+    ひらがなの合成表に、同じ内容のカタカナの組を足す。
+
+    検証レポート 2-D: 表がひらがなの鍵しか持っていなかったため、
+    分解済み（NFD）のカタカナでは合成先が見つからず、
+    **濁点そのものを捨てていた**（バックアップ → ハックアッフ）。
+    macOS 由来のファイル名やクリップボードを貼ると行ごと壊れる。
+
+    ひらがなとカタカナはコード上 0x60 ずれているだけなので、
+    表を二重に持たず、ここで機械的に作る（片方だけ直す事故を防ぐ）。
+    """
+    out = dict(table)
+    for src, dst in table.items():
+        out[chr(ord(src) + 0x60)] = chr(ord(dst) + 0x60)
+    return out
+
+
+_DAKUTEN_COMPOSE = _with_katakana(_DAKUTEN_COMPOSE)
+_HANDAKUTEN_COMPOSE = _with_katakana(_HANDAKUTEN_COMPOSE)
+
+
+def _compose_across_one(out, table):
+    """
+    **1つ前のかなを跨いで合成する（順序の入れ替え）**。
+
+    うにさんの指定（2026-08-11・項目48-AO）:
+
+        「ふ・半濁点・あ」の3つの順番が入れ替わって
+        「ふ・あ・半濁点」になっただけなので、
+        **他の順序間違いと同じ扱い**でよい。
+
+    直前の1文字がその印を受け取れず（＝合成に失敗し）、
+    **その1つ前なら受け取れる**ときだけ、印をそちらへ渡す。
+    **間に入った1打は消さずにそのまま残す**（本文の文字を
+    落とさないため。項目48-AO の道(b)を採らなかった理由）。
+
+        フア゜ラネタリウム → プアラネタリウム
+                            → プラネタリウム（外来語の経路が1手で届く）
+
+    表の鍵はかなだけなので、引けた時点で out[-2] はかな。
+    間の1打がかなでないとき（記号・英字）は呼ばれない
+    （そこは 48-AA の「わざと書いた印」として残す側）。
+    """
+    if len(out) < 2:
+        return False
+    composed = table.get(out[-2])
+    if not composed:
+        return False
+    out[-2] = composed
+    return True
+
+
+def normalize_marks(text, swap_across=False):
     """
     分離した濁点・半濁点を前の文字と合成する。
+
+    swap_across: 直前の1文字が印を受け取れないとき、**1つ前の
+        かなを跨いで**合成してみる（打つ順番の入れ替え・項目48-AO）。
+        既定は False。**落としたほうで補正が届かなかったときだけ**
+        呼び出し側が True で呼び直す（学び38: 許可は、候補を絞る
+        前ではなく、決まってから掛ける）。
 
     かな入力では濁点が独立したキーなので、
     「たんこ゛」のように濁点だけが残ることがある。
@@ -248,6 +314,17 @@ def normalize_marks(text):
 
     「こ゜」のように合成できない組み合わせは、
     濁点キーの誤打なので取り除く。
+
+    **ただし、かなの後ろでなければ落とさない**（2026-08-11）。
+    落とす根拠は「かなを打った直後に濁点キーを叩いた」ことなので、
+    **前がかなでなければその根拠が無い**。
+    うにさんのメモには `@ ⇒ ゛` `[ ⇒ ゜` のように、記号の説明として
+    **わざと単体で書いた濁点**がある（JISかな配列の対応表）。
+    これを落とすのは、**正しく書いたものを消している**。
+
+    うにさんは「゛゜は単体で書くことはないのでスルーします」と
+    言っているが、それは「直せるようにしなくてよい」であって
+    「消してよい」ではない。**何もしないほうが、消すよりよい。**
     """
     if not text:
         return text
@@ -259,7 +336,16 @@ def normalize_marks(text):
                 if composed:
                     out[-1] = composed
                     continue
-            continue    # 合成できない濁点は誤打なので落とす
+                if not _is_kana_char(out[-1]):
+                    out.append(ch)      # わざと書かれた濁点。残す
+                    continue
+                # 打つ順番が入れ替わっただけかもしれない（項目48-AO）
+                if swap_across and _compose_across_one(out,
+                                                       _DAKUTEN_COMPOSE):
+                    continue
+                continue    # かなの後ろの合成できない濁点は誤打
+            out.append(ch)              # 行頭の濁点。残す
+            continue
         if ch in HANDAKUTEN_MARKS:
             if out:
                 composed = _HANDAKUTEN_COMPOSE.get(out[-1])
@@ -271,6 +357,17 @@ def normalize_marks(text):
                 if composed:
                     out[-1] = composed
                     continue
+                if not _is_kana_char(out[-1]):
+                    out.append(ch)      # わざと書かれた半濁点。残す
+                    continue
+                # 打つ順番が入れ替わっただけかもしれない（項目48-AO）。
+                # ここでは**同じ印**でしか跨がない。半濁点→濁点の
+                # 読み替えまで重ねると、推測が3段になる。
+                if swap_across and _compose_across_one(
+                        out, _HANDAKUTEN_COMPOSE):
+                    continue
+                continue
+            out.append(ch)              # 行頭の半濁点。残す
             continue
         out.append(ch)
     return ''.join(out)
@@ -337,6 +434,87 @@ def _tokenize_janome(line):
             pos_sub=pos_sub,
         ))
     return tokens
+
+
+# 「その並びを、いちばん自然に読んだときの不自然さ」の控え。
+# 同じ文字列を何度も測るので（候補ごとに1回ずつ呼ばれる）、
+# 覚えておかないと重い。上限を切っておく。
+_COST_CACHE = {}
+_COST_CACHE_LIMIT = 20000
+
+
+def path_cost(line):
+    """
+    その並びを**いちばん自然に読んだとき**の不自然さの合計。
+
+    うにさんの指摘（2026-08-11）:
+    「正しく読めるとは、**辞書と一致する**ではなく、
+    **単語と単語の結びつきに違和感がない**こと」
+
+    janome（IPAdic）は形態素の**並びやすさ**（連接コスト）を
+    持っている。Viterbi の最小コスト（`node.min_cost`）は
+    「その文をいちばん自然に読んだときの不自然さの合計」そのもので、
+    **辞書に載っているかではなく、繋がりが自然かを直接測る**。
+
+    しかも**初期状態から使える**（IPAdic は janome に同梱。
+    学習も、メモも要らない）。
+
+    **絶対値では使えない**（実測・項目48-AD）。語の長さや珍しさに
+    引きずられるので、`7文字の名詞`（正しい）のほうが、たいていの
+    壊れた並びより高く出る。**必ず比べて使うこと**
+    （`naturalness.py` を参照）。
+
+    戻り値: 不自然さの合計。janome が無い・測れないときは **None**
+        （＝「意見なし」。呼ぶ側は今までどおりの判断をすること）。
+
+    **錠前の中で測る。** janome の Tokenizer は1つしか無く、
+    同時に呼ぶとアプリごと落ちる（学び16）。ここも tokenize と
+    同じ構えにしてある。
+    """
+    if not line or not HAS_JANOME:
+        return None
+    got = _COST_CACHE.get(line)
+    if got is not None:
+        return got
+    try:
+        with _TOKENIZE_LOCK:
+            raw = list(_TOKENIZER.tokenize(line))
+    except SystemExit:
+        return None
+    except Exception:
+        return None
+    if not raw:
+        return None
+    try:
+        cost = raw[-1].node.min_cost
+    except Exception:
+        # janome の作りが変わって min_cost が取れない。
+        # **黙って 0 を返さないこと**（0 は「完全に自然」の意味に
+        # なってしまい、あらゆる直しが通る）。意見なしにする。
+        return None
+    if len(_COST_CACHE) >= _COST_CACHE_LIMIT:
+        _COST_CACHE.clear()
+    _COST_CACHE[line] = cost
+    return cost
+
+
+def path_words(line):
+    """
+    その並びを**いちばん自然に読んだとき**の語の並び。
+
+    馴染みの薄さ（`familiarity`）を測るのに使う。
+    janome が無い・測れないときは空。
+    """
+    if not line or not HAS_JANOME:
+        return []
+    try:
+        with _TOKENIZE_LOCK:
+            raw = list(_TOKENIZER.tokenize(line))
+    except SystemExit:
+        return []
+    except Exception:
+        return []
+    return [t.surface for t in raw]
 
 
 def _char_kind(ch):

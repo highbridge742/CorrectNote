@@ -88,6 +88,9 @@ DEFAULTS = {
     # 紫の色付け（判断に迷った箇所 unsure）。あまり役に立って
     # いないとの指摘で、既定はオフ（2026-08-09）。
     'show_unsure': False,
+    # 目に見えない空白（半角・全角・タブ）を見せる（項目48-IF・
+    # うにさんの指定・2026-08-21「**デフォルトはオン**」）。
+    'show_whitespace': True,
     'find_match_case': False,
     'find_whole_word': False,
     'find_regex': True,

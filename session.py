@@ -55,14 +55,22 @@ SESSION_VERSION = 1
 
 
 def new_tab(text='', path=None, saved=True, cursor='1.0', scroll=0.0,
-            title=None, bookmarks=None):
-    """タブ1つぶんの控えを作る。"""
+            title=None, bookmarks=None, top=None):
+    """タブ1つぶんの控えを作る。
+
+    top: 画面のいちばん上に見えていた**行番号**（1始まり）。
+        scroll（割合）は折り返しや解析後の描き直しで意味がずれる
+        ので、復元はこちらを優先する（2026-08-16・実機の報告
+        「タブ移動して戻ってくると、スクロール位置が変わって
+        しまう」）。古い控えには無いので None を許す。
+    """
     return {
         'text': text,
         'path': path,
         'saved': saved,
         'cursor': cursor,
         'scroll': scroll,
+        'top': top,
         'title': title,
         'bookmarks': sorted(bookmarks) if bookmarks else [],
     }

@@ -72,6 +72,58 @@ except Exception as e:
     print(f'[NG] janome の読み込みに失敗: {e}')
     sys.exit(1)
 
+# **同梱の表が読めているか**（項目48-DK・2026-08-15）。
+#
+# `familiarity.json`（書籍での使われぶり・UniDic 由来）と
+# `kanji_onkun.json`（漢字の音訓）は **`.py` ではない同梱物**。
+# どちらの読み込み側も「無くても動く」造りにしてあるので、
+# **落ちても何も起きない**。実際、
+#
+#   - `correctnote.spec` の `datas` に入っておらず、
+#     **exe には最初から入っていなかった**
+#   - `freshstate.py` は `*.py` だけを写すので、
+#     **初期状態の測定でも毎回落ちていた**
+#
+# という取りこぼしを2026-08-15に見つけた。
+# **静かに落ちるものは、声を出させる。**
+# **在るのに読めていないときだけ赤くする。**
+# ファイルそのものが無いのは、うにさん待ちの持ち越し
+# （README_SNAPSHOT の「うにさん待ちのもの 3」）であって、
+# こちらが CI を止めてよい話ではない。**声は出す。**
+#
+# **見張る相手の名簿は `bundle_manifest.py` ただ1つ**（項目48-GS）。
+# ここに書き写すと、spec に足したものをこちらに足し忘れる
+# ——実際、spec と ci と freshstate で3つに分かれていた。
+import os as _os
+
+import bundle_manifest as _bm
+
+_here = _os.path.dirname(_os.path.abspath(__file__))
+
+for _item in _bm.ITEMS:
+    _there = _os.path.exists(_os.path.join(_here, _item.name)) \
+        or _os.path.exists(_item.name)
+    if not _item.module:
+        # 読み込み側のいない同梱物（説明書・NOTICE）は、在るかだけ見る
+        print(f'[OK] 同梱物 {_item.name} が在る' if _there
+              else f'!! {_item.name} が**入っていない**。{_item.why}')
+        continue
+    try:
+        _ok = __import__(_item.module).available()
+    except Exception as _e:
+        print(f'[NG] {_item.name} の読み込みで落ちた: {_e}')
+        sys.exit(1)
+    if _ok:
+        print(f'[OK] 同梱の表 {_item.name} が読めている')
+    elif _there:
+        print(f'[NG] **{_item.name} は在るのに読めていない**'
+              f'（中身が壊れている）')
+        sys.exit(1)
+    else:
+        print(f'!! {_item.name} が**入っていない**。'
+              f'この表に頼る機能は静かに効かなくなる')
+        print(f'!! （{_item.why}）')
+
 store = VocabularyStore()
 added = load_seed(store)
 print(f'[OK] 初期語彙を投入: {added} 件')

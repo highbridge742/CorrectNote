@@ -96,7 +96,18 @@ def current_input_method(hwnd):
 
 
 # 変換中の文字列を問い合わせるための IMM32 の指定値（imm.h より）
+GCS_COMPREADSTR = 0x0001
 GCS_COMPSTR = 0x0008
+GCS_RESULTREADSTR = 0x0200
+GCS_RESULTSTR = 0x0800
+
+# read_composition が返す4つ（項目48-GX で実機から取れた）。
+COMPOSITION_FIELDS = (
+    ('comp', GCS_COMPSTR),                   # いま未確定の**文字列**
+    ('comp_reading', GCS_COMPREADSTR),       # いま未確定の**読み**
+    ('result', GCS_RESULTSTR),               # 確定した**文字列**
+    ('result_reading', GCS_RESULTREADSTR),   # 確定した文字列の**読み**
+)
 
 
 def composition_active(hwnd):
@@ -126,6 +137,71 @@ def composition_active(hwnd):
             # 0 より大きければ、いま未確定の文字がある。
             n = imm.ImmGetCompositionStringW(himc, GCS_COMPSTR, None, 0)
             return bool(n and n > 0)
+        finally:
+            imm.ImmReleaseContext(hwnd, himc)
+    except Exception:
+        return None
+
+
+def read_composition(hwnd):
+    """
+    **変換中／確定した文字列と、その読みを取る**（設計25(甲)）。
+
+    `composition_active` は同じ呼び出しを**長さだけ**で使っている。
+    ここは**同じ呼び出しにバッファを渡すだけ**（項目48-GX）。
+
+    hwnd: 対象ウィジェットのハンドル（tkinter なら widget.winfo_id()）
+
+    戻り値: 次の鍵を持つ辞書。取れないものは空文字。
+        取得そのものができない（Windows 以外・IME が無い）なら None。
+
+            comp            いま未確定の文字列（**変換すると漢字に変わる**）
+            comp_reading    いま未確定の読み（**変換後も残る**）
+            result          確定した文字列
+            result_reading  確定した文字列の読み（**表記と対で来る**）
+
+    実機で確かめた値（2026-08-20）:
+
+        RESULTSTR      = '奥悠久子帝'
+        RESULTREADSTR  = 'ｵｸﾕｸｺﾃｲ'      ←**半角カタカナで返る**
+
+    **読みは `ime_readings.reading_to_hiragana` に通してから使うこと。**
+    半角のまま渡すと静かに何とも当たらなくなる。
+
+    > **`ImmGetCompositionStringW` は NUL 終端を付けない。**
+    > 返ってきた**バイト数で切って** utf-16-le で読むこと。
+    > `create_unicode_buffer().value` で読むと**隣の値を巻き込む**。
+
+    限界（項目48-GX）:
+      - **貼り付け・引用には効かない**（未確定を通らない）
+      - IME を切っている間も無い
+      - **TSF ベースの新しい IME では空のことがある**
+        → 空でも落ちない。ただ覚えないだけ。
+    """
+    if not HAS_SUPPORT or not hwnd:
+        return None
+    try:
+        import ctypes
+        imm = ctypes.windll.imm32
+        himc = imm.ImmGetContext(hwnd)
+        if not himc:
+            return None
+        out = {}
+        try:
+            for name, idx in COMPOSITION_FIELDS:
+                out[name] = ''
+                try:
+                    n = imm.ImmGetCompositionStringW(himc, idx, None, 0)
+                    if not n or n <= 0:
+                        continue
+                    raw = ctypes.create_string_buffer(n)
+                    got = imm.ImmGetCompositionStringW(himc, idx, raw, n)
+                    if got is None or got <= 0:
+                        continue
+                    out[name] = raw.raw[:got].decode('utf-16-le', 'ignore')
+                except Exception:
+                    pass    # 1つ取れなくても、ほかは取る
+            return out
         finally:
             imm.ImmReleaseContext(hwnd, himc)
     except Exception:

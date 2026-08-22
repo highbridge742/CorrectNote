@@ -171,7 +171,8 @@ def _units_from_spans(text, spans, details, marked_kind):
     return units
 
 
-def build_suspect_units(result, tokenize_fn, choice_store=None):
+def build_suspect_units(result, tokenize_fn, choice_store=None,
+                        known_kana_word=None):
     """
     自動では直さず、疑わしい箇所に色をつけるだけの表示のための組み立て。
 
@@ -184,6 +185,13 @@ def build_suspect_units(result, tokenize_fn, choice_store=None):
     表記は変わらないので、ここでの「選び直し」は
     テキストを差し替えるのではなく、呼び出し側が
     カーソル位置への差し込みなど、別の形で反映する。
+
+    known_kana_word: かなの並びを1語として認めてよいかを返す関数
+        （項目48-P）。1文字ずつに切れたひらがなのうち「本人が
+        書いている語」だけを1つの単位に繋ぐ。**メモ欄の F2 と
+        オンマウスはこちらの単位を使う**ので、ここに渡さないと
+        「ひらがな」が4つに分かれたままになる（うにさんの指摘・
+        2026-08-11 の2回目）。None なら今までどおり。
 
     戻り値: (表示するテキスト＝result['original'], [単位, ...])
         単位の kind は 'suspect'（疑わしい）/ 'chosen'（選び直し済み)/
@@ -209,8 +217,9 @@ def build_suspect_units(result, tokenize_fn, choice_store=None):
         # 補正の色になる」と報告された）。区切りが分からなくても
         # 補正の位置（original_spans）は分かっているので、
         # スパンの内外で分割して、色は該当箇所だけに付ける。
-        return text, _units_from_spans(text, suspect_spans, details,
-                                       'suspect')
+        return text, _merge_functional_runs(_merge_kana_runs(
+            _units_from_spans(text, suspect_spans, details, 'suspect'),
+            known_kana_word))
 
     units = []
     for i, tok in enumerate(tokens):
@@ -245,18 +254,318 @@ def build_suspect_units(result, tokenize_fn, choice_store=None):
             'kind': kind,
             'detail': detail,
             'chosen_hint': chosen,
+            # **品詞**（項目48-GL）。活用する語を、うしろの
+            # 活用語尾・助動詞と繋ぐのに使う（`見｜ています` を
+            # `見ています` に）。
+            'pos': _pos_tag or '',
         })
 
-    return text, units
+    return text, _merge_stem_with_tail(_merge_functional_runs(
+        _merge_kana_runs(units, known_kana_word)))
 
 
-def build_line_units(result, tokenize_fn, choice_store=None):
+def _merge_kana_runs(units, known):
+    """
+    1文字ずつに切れたひらがなを、**メモに書かれている語**なら繋ぐ。
+
+    うにさんの指摘（2026-08-11）:「『ひらがな』部分をドラッグ
+    しましたが、候補に『平仮名』がありませんでした。1文字ずつに
+    分解されているのが違和感あります」。
+
+    janome は `ひらがな` を辞書に持っておらず（持っているのは
+    `平仮名`）、`ひ`(動詞) `ら`(接尾) `が`(助詞) `な`(助詞) の
+    4つに切ってしまう。1文字ずつでは、クリックしても意味のある
+    候補が出ない。
+
+    **繋いでよい根拠は「その並びを本人が書いている」こと。**
+    語彙にある読み、またはメモのどこかに書かれている読みなら、
+    それは1つの語として扱ってよい。根拠が無ければ触らない
+    （`あいうえお` のような並びを勝手に1語にしない）。
+
+    安全のため、次は繋がない:
+      - 1文字より長い単位（`たん`+`ご` のような組は触らない）
+      - **3文字に満たない並び**。`う`+`え` を `うえ`(上) に繋ぐ
+        ような、たまたま2文字の語になる組は当たりが多すぎる。
+        まずは安全側に倒しておく（緩めるならここの `i + 2`）
+      - ひらがな以外を含む単位
+      - 補正が当たっている単位（色と対応が崩れる）
+      - 選び直しの記録が付いている単位
+
+    known: その並びを語として認めてよいかを返す関数。
+    """
+    if not units or known is None:
+        return units
+
+    def _plain_kana(u):
+        t = u.get('text') or ''
+        return (len(t) == 1
+                and '\u3041' <= t <= '\u3096'
+                and u.get('kind') == 'plain'
+                and not u.get('detail')
+                and not u.get('choice'))
+
+    out = []
+    i = 0
+    n = len(units)
+    while i < n:
+        if not _plain_kana(units[i]):
+            out.append(units[i])
+            i += 1
+            continue
+        j = i
+        while j < n and _plain_kana(units[j]):
+            j += 1
+        # いちばん長い並びから順に、語として認められる切れ目を探す
+        while i < j:
+            best = None
+            for end in range(j, i + 2, -1):       # 3文字以上
+                joined = ''.join(units[k]['text'] for k in range(i, end))
+                if len(joined) > 8:
+                    continue
+                if known(joined):
+                    best = (end, joined)
+                    break
+            if best is None:
+                out.append(units[i])
+                i += 1
+                continue
+            end, joined = best
+            head = dict(units[i])
+            head['text'] = joined
+            head['base'] = joined
+            head['reading'] = joined
+            head['end'] = units[end - 1]['end']
+            head['next'] = units[end - 1].get('next', '')
+            out.append(head)
+            i = end
+    return out
+
+
+# クリックの単位としてまとめてよい、ひらがなだけの並びの上限。
+# これより長くまとめると、色を付ける範囲が広くなりすぎる。
+_FUNC_RUN_MAX = 12
+
+# **まとまりの先頭に置いてはいけない助詞**（項目48-GL）。
+#
+# うにさんの指定（2026-08-20）:
+#   「**が、を1文字で切りましょう。それが正しい形です**」
+#
+# `が` `を` は**前の内容語に付く格助詞**であって、うしろの
+# ひらがなの塊の一部ではない。まとめてしまうと
+#
+#     解析 | ができるようにします      ← `が` が飲まれている
+#
+# となり、区切りが日本語の形と合わなくなる。正しくはこう:
+#
+#     解析 | が | できるようにします
+#
+# **先頭にあるときだけ**切り離す。`ますが` の `が` は接続助詞で
+# 役目が違うので、まとまりの途中にあるぶんは触らない。
+#
+# うにさんの追加指定（2026-08-20）:「**に、で、は、も同様に**」
+_NO_HEAD_PARTICLES = frozenset('がをにではも')
+
+
+def _stands_alone(units, k):
+    """この1文字の助詞は、**単独の単位にする**か（項目48-GL）。
+
+    格助詞・係助詞は**前の内容語に付く**もので、うしろの
+    ひらがなの塊の一部ではない:
+
+        単語 | の | 繋がり      `の` の前は名詞 → 単独
+        これ | は | 正しく      `は` の前は代名詞 → 単独
+
+    けれど、**前が機能語なら**それは活用の形の一部であって、
+    独立した助詞ではない。切ると逆に細切れになる:
+
+        ても   `も` の前は接続助詞 `て` → 切らない
+        ますが `が` の前は助動詞 `ます` → 切らない
+    """
+    t = units[k].get('text') or ''
+    if len(t) != 1 or t not in _NO_HEAD_PARTICLES:
+        return False
+    if k == 0:
+        return True
+    prev = units[k - 1]
+    if prev.get('end') != units[k].get('start'):
+        return True
+    major = (prev.get('pos') or '').split(':')[0]
+    return major not in ('助詞', '助動詞')
+
+
+def _is_plain_kana_unit(u):
+    """まとめてよい単位か（そのままの語で、色も記憶も付いていない）。"""
+    t = u.get('text') or ''
+    return (bool(t)
+            and all('\u3041' <= c <= '\u3096' for c in t)
+            and u.get('kind') == 'plain'
+            and not u.get('detail')
+            and not u.get('chosen_hint'))
+
+
+def _merge_functional_runs(units):
+    """
+    続けて並んだ**機能語だけのひらがな**を、1つの単位にまとめる
+    （項目48-GL）。
+
+    うにさんの指摘（2026-08-20）:
+
+    > 「F2の選択候補でもよく思いますが、**ひらがな部分は1文字で
+    >   切れすぎ**です。漢字の単語はよいが、**その間のひらがなは
+    >   細切れになるので拾いにくく**、またそれぞれの補正候補も大げさ」
+
+    実測（実機メモ200行・`probe_units.py`）:
+
+        単位ぜんぶ 3,245 のうち **1文字のひらがなが 961（30%）**
+        ひらがなの連なり 586 か所のうち **190（32%）が3個以上に割れる**
+
+            設定 | を | 変更 | し | て | ください | 。
+            補正 | が | 有効 | に | なっ | て | い | ます | 。
+
+    項目48-P は「本人が書いている**語**なら繋ぐ」だったので、
+    `してください` のような**助詞・活用語尾の並び**は残っていた。
+    ここは逆に「**語でないもの**（機能語だけ）」を繋ぐ。
+
+            設定 | を | 変更 | してください | 。
+            補正 | が | 有効 | になっています | 。
+
+    **内容語は巻き込まない。** 繋ぐ前に
+    `corrector._is_all_functional` で確かめる（`をつかう`
+    `ひらがなを` `のつながり` はどれも False になる）。
+
+    まとめた単位には `functional=True` を立てる。**呼ぶ側は、
+    ここに補正候補を出さない**（`の` を押すと `ノア／熨斗／乗せ…`
+    と9件出ていた。うにさんの言う「候補も大げさ」）。
+    """
+    try:
+        from corrector import _is_all_functional
+    except Exception:
+        return units
+    out = []
+    i = 0
+    n = len(units)
+    while i < n:
+        if not _is_plain_kana_unit(units[i]):
+            out.append(units[i])
+            i += 1
+            continue
+        # **助詞は1文字で切る**（項目48-GL・うにさんの指定）
+        if _stands_alone(units, i):
+            u = dict(units[i])
+            u['functional'] = True
+            out.append(u)
+            i += 1
+            continue
+        # つながっている「そのままのひらがな」をできるだけ長く取る。
+        # **単独で立つ助詞は、そこで区切る**（飲み込まない）。
+        j = i + 1
+        while (j < n and _is_plain_kana_unit(units[j])
+               and units[j]['start'] == units[j - 1]['end']
+               and not _stands_alone(units, j)):
+            j += 1
+        # 長いほうから、機能語だけで説明が付く切れ目を探す
+        while i < j:
+            best = None
+            for end in range(j, i + 1, -1):        # 2単位以上
+                joined = ''.join(units[k]['text'] for k in range(i, end))
+                if len(joined) > _FUNC_RUN_MAX:
+                    continue
+                if _is_all_functional(joined):
+                    best = (end, joined)
+                    break
+            if best is None:
+                u = dict(units[i])
+                # **1文字の助詞にも候補は出さない**（同じ理由）
+                if len(u.get('text') or '') == 1:
+                    u['functional'] = True
+                out.append(u)
+                i += 1
+                continue
+            end, joined = best
+            head = dict(units[i])
+            head['text'] = joined
+            head['base'] = joined
+            head['reading'] = joined
+            head['end'] = units[end - 1]['end']
+            head['next'] = units[end - 1].get('next', '')
+            head['functional'] = True
+            out.append(head)
+            i = end
+    return out
+
+
+# 活用する語と、そのうしろの機能語をまとめるときの上限。
+_STEM_TAIL_MAX = 8
+
+
+def _merge_stem_with_tail(units):
+    """
+    **活用する語（動詞・形容詞）を、うしろの活用語尾と繋ぐ**
+    （項目48-GL）。
+
+    うにさんの指摘（2026-08-20）:
+
+    > 「**見ています、は見とてに分かれるのが違和感あります**」
+
+        単語 | の | 繋がり | を | 見 | ています     ← 分かれている
+        単語 | の | 繋がり | を | 見ています        ← こちら
+
+    `見` は動詞の語幹で、`ています` はその活用。**切り離すと
+    どちらも語として立たない**。名詞は繋がない（`変更 |
+    してください` はそのまま。うにさんの「漢字の単語はよい」）。
+
+    うしろが長すぎるときは繋がない（`動く | ようにしてください`）。
+    そこまでまとめると、掴む単位としては大きすぎる。
+    """
+    out = []
+    i = 0
+    n = len(units)
+    while i < n:
+        u = units[i]
+        pos = (u.get('pos') or '').split(':')[0]
+        nxt = units[i + 1] if i + 1 < n else None
+        if (pos in ('動詞', '形容詞')
+                and u.get('kind') == 'plain'
+                and not u.get('detail')
+                and not u.get('chosen_hint')
+                # **まとめ済みの塊は語幹ではない**。ここで繋ぐと、
+                # せっかく単独にした助詞をまた飲み込んでしまう
+                # （`できるよう` ＋ `に` → `できるように`）。
+                and not u.get('functional')
+                and nxt is not None
+                and nxt.get('functional')
+                # **単独で立つ助詞は飲み込まない**（うにさんの指定）
+                and (nxt.get('text') or '') not in _NO_HEAD_PARTICLES
+                and nxt['start'] == u['end']
+                and len(nxt.get('text') or '') <= _STEM_TAIL_MAX):
+            head = dict(u)
+            head['text'] = (u.get('text') or '') + (nxt.get('text') or '')
+            head['base'] = head['text']
+            head['end'] = nxt['end']
+            head['next'] = nxt.get('next', '')
+            # **候補は出す。** 語幹を含むので、直し先が在りうる
+            # （`見ています` は `視ています` のような書き分けがある）。
+            head.pop('functional', None)
+            out.append(head)
+            i += 2
+            continue
+        out.append(u)
+        i += 1
+    return out
+
+
+def build_line_units(result, tokenize_fn, choice_store=None,
+                     known_kana_word=None):
     """
     1行分の補正結果を、語の単位に組み立てる。
 
     result: corrector.correct_line() の戻り値
     tokenize_fn: 行を語に区切る関数
     choice_store: choices.ChoiceStore（ユーザーの選び直しの記憶）
+    known_kana_word: かなの並びを1語として認めてよいかを返す関数
+        （項目48-P）。渡すと、1文字ずつに切れたひらがなのうち
+        「本人が書いている語」だけを1つの単位に繋ぐ。
+        None なら今までどおり切れたまま。
 
     戻り値: (表示するテキスト, [単位, ...])
     """
@@ -361,7 +670,8 @@ def build_line_units(result, tokenize_fn, choice_store=None):
              detail, prev_w, next_w)
         src_pos = frag_end
 
-    return ''.join(out), units
+    return ''.join(out), _merge_functional_runs(
+        _merge_kana_runs(units, known_kana_word))
 
 
 def make_range_unit(line_text, units, start, end):

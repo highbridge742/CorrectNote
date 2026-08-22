@@ -33,6 +33,12 @@ IMEの変換候補と同じ感覚で使えるよう、候補は次の順に並�
 選ぶのはユーザーなので、可能性を広く並べることだけを仕事にする。
 """
 
+from kana_layout import same_key_characters
+
+# **「語＋接尾で組み立てた表記」の専用枠**（項目48-FA・設計15）。
+# ふつうの打ち間違い候補（`max_typos`）とは別に数える。
+_MAX_BUILT = 2
+
 
 def _is_hiragana(ch):
     return '\u3041' <= ch <= '\u3096'
@@ -162,10 +168,113 @@ def align_okurigana(original, candidate):
     return c_stem + o_tail
 
 
+def _attested_unit(surface, reading, store, dict_index=None):
+    """
+    その表記は「もう出来上がっている」か（項目48-FA・設計15）。
+
+    2通りのどちらかなら出来上がり:
+
+      1. **単位として在る** —— 語彙にある／刈り込んだ索引にある
+         （自動補正の門(1)・項目48-CF/CG と同じ判断）。
+      2. **そのままの読みが、その表記そのものに組める** ——
+         `ぐたいてき` → 具体＋的 → `具体的`（書かれたとおり）。
+         `かいはつしゃ` → 開発＋者 → `開発者`。
+         これは**生産的な派生語**の形で、語彙にも索引にも入って
+         いないのに正しく書けている（第44回 `probe_asis2.py` で
+         実測: 開発者・操作性・実行時・具体的・必要性・利用者・
+         最大化・最小化・巨大化・関係者・合計数・個別化・
+         反対側・作業中・実現性 が、これで守れる）。
+
+    直したい側は通る: `再退化`（どこにも組めない）・`誘い消化`
+    （同）・`殺意代価`（同）・`最大家事`（組めるが **`最大化時`**
+    であって書かれたとおりではない）。
+    """
+    if not surface:
+        return False
+    try:
+        if store.lookup(surface) or store.reading_of(surface):
+            return True
+    except Exception:
+        pass
+    if dict_index is not None:
+        try:
+            if dict_index.readings_for_surface(surface):
+                return True
+        except Exception:
+            pass
+    # **世の中で1語として在るなら、もう出来上がっている**
+    # （項目48-FC・設計16）。同梱の材料だけでは `一時的` `仕様書`
+    # `再起動` `効率化` `効率的` `実体化` `説明書` を守れなかった
+    # （第45回の実測）。ここが埋める。
+    try:
+        import seed_japanese as _sj
+        if _sj.is_unit(surface):
+            return True
+    except Exception:
+        pass
+    if reading:
+        try:
+            from corrector import compose_suffix_surface
+            if compose_suffix_surface(reading, store, dict_index) == surface:
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def _reading_worth_offering(reading, store, dict_index=None):
+    """
+    その読みは、そのまま「かなの候補」として出す値打ちがあるか
+    （項目48-ET・うにさん指示 (g)「不自然な文字列は候補に出さない」）。
+
+    出してよいのは、**同梱の材料のどれかで説明が付く**とき:
+
+        語彙にある ／ 刈り込んだ索引にある ／ 世の中の集合にある
+
+    3つとも無いなら、それは「漢字から推した壊れた読み」であって、
+    かなで置いておきたい語ではない（`メモチチョウ`
+    `カンイリュウリョク`）。**判定できないときは出す側**に倒す
+    （索引が無い環境では今までどおり）。
+    """
+    if not reading or len(reading) < 2:
+        return True
+    try:
+        if store.lookup(reading) or store.reading_of(reading):
+            return True
+    except Exception:
+        return True
+    if dict_index is None:
+        return True                  # 見分けられないので今までどおり
+    try:
+        if dict_index.surfaces_for_reading(reading):
+            return True
+    except Exception:
+        return True
+    try:
+        if all('ぁ' <= c <= 'ゖ' or c == 'ー' for c in reading) \
+                and dict_index.is_world_reading(reading):
+            return True
+    except Exception:
+        return True
+    # **語＋機能語で敷き詰まるなら出す**（`さついだいか`＝
+    # さつい＋だいか）。うにさんの指示 (g) は「造語めいた複合を
+    # **ひらがなに開いて**そこから直す」なので、開いた形そのものは
+    # 候補に残す。落としたいのは `メモチチョウ` のように
+    # **どうやっても説明が付かない**並びだけ。
+    try:
+        from corrector import _covered_by_known
+        if _covered_by_known(reading, store):
+            return True
+    except Exception:
+        return True                  # 見分けられないなら出す側
+    return False
+
+
 def build_candidates(surface, reading, store, find_readings,
                      max_dist=1.6, max_edits=2,
                      max_homophones=8, max_typos=8, dict_index=None,
-                     context_vec=None, surrounding_words=None):
+                     context_vec=None, surrounding_words=None,
+                     attested=None):
     """
     ある語について、選び直せる候補を作る。
 
@@ -183,6 +292,16 @@ def build_candidates(surface, reading, store, find_readings,
         None なら、これまでどおりの順（探索で見つかった順）。
     surrounding_words: 対象語の前後の内容語（近い順）。
         context_vec と併せて渡す。
+    attested: **メモのどこかに実際に書かれている**表記の一覧
+        （{読み: [表記, ...]}）。語彙にも辞書索引にも無い語を
+        候補に出すために使う（うにさんの指摘・2026-08-11:
+        「『ひらがな』をドラッグしても候補に『平仮名』が無い」）。
+        `平仮名` は janome の辞書にあるが**コストが 5614** あり、
+        索引の上限 4000 に弾かれて入っていない。それでも
+        **本人がメモに書いている語**なら、候補に出すのが筋
+        （「メモのどこかに正しく書いてある語」という、このアプリの
+        よりどころそのもの）。候補は選び直しの材料でしかなく、
+        勝手に置き換わるわけではないので、自動補正より広く取ってよい。
 
     戻り値: [{'surface', 'reading', 'kind'}, ...]
         kind は 'homophone'（同音異義語）/ 'typo'（打ち間違い）/
@@ -209,6 +328,11 @@ def build_candidates(surface, reading, store, find_readings,
         # その後に janome 辞書全体から補う。
         for entry in store.lookup(reading)[:max_homophones]:
             push(entry['surface'], reading, 'homophone')
+        # メモに実際に書かれている表記（語彙・索引に無くてもよい）。
+        # 語彙の次・辞書索引より先に置く。本人が書いた語のほうが、
+        # 辞書から拾った語より当たりやすいため。
+        for cand in (attested or {}).get(reading, ())[:max_homophones]:
+            push(cand, reading, 'homophone')
         if dict_index is not None:
             for s in dict_index.surfaces_for_reading(reading):
                 if len([c for c in out if c['kind'] == 'homophone']) \
@@ -246,6 +370,122 @@ def build_candidates(surface, reading, store, find_readings,
                 if len(out) > before:
                     n_typo += 1
 
+        # --- 2.2 入り込んだ1打を落として、語＋接尾で表記を組む ---
+        #
+        # うにさんの指示 (g)（2026-08-18）:
+        #   「殺意代価という連結した単語が**造語に当たる**。…
+        #     **ひらがなに開く**（さついだいか）…そこから
+        #     順序入れ替え、隣接キー、脱字、シフトキー抜けを
+        #     処理順でチェックする。**通ってきた道**です」
+        #
+        # 通ってきた道の2つを組み合わせるだけ（項目48-EU・48-EV）:
+        #
+        #     さついだいか → （`つ` が入り込んだ）→ さいだいか
+        #                  → （語＋接尾の合成）→ **最大化**
+        #
+        # `さいだいか` は**読みとしてはどこにも無い**（派生語なので
+        # 当然）。だから上の `find_readings` の道では届かない。
+        # **表記を組み立てられるときだけ**候補に出す。
+        # **候補に出すだけ**で、自動補正には上げない（(g) どおり。
+        # ユーザーが選べば choices が学習する＝(d) の短期参照）。
+        try:
+            from corrector import (_typo_repairs_intruded, _typo_repairs,
+                                   compose_suffix_surface,
+                                   typo_repairs_nearby_key,
+                                   _charngram_gain)
+            # まず**打ち間違いを直さずに**組めるか
+            # （`さいだいかじ` → 最大＋化＋時。`最大家事` の的）。
+            _s0 = compose_suffix_surface(reading, store, dict_index)
+            # ここにも比べる門を掛ける（項目48-EY）。**打ち間違いを
+            # 直さずに組めてしまう**ときのほうが危なくて、
+            # `一時的 → 位置時的`（-1.55）はこの道から出ていた。
+            if _s0:
+                _g0 = _charngram_gain(surface, _s0)
+                if _g0 is not None and _g0 < 0.0:
+                    _s0 = None
+            if _s0 and n_typo < max_typos:
+                before = len(out)
+                push(_s0, reading, 'homophone')
+                if len(out) > before:
+                    n_typo += 1
+            # --- 設計15（項目48-FA・2026-08-18）---
+            #
+            # 第44回で測った「入口の三重の狭さ」の (b) を、
+            # **候補一覧でだけ**広げる（Fable 5 の判断）。
+            #
+            # 入り込んだ1打を落とすだけでなく、**誤打の種類4種
+            # （重複打鍵・脱字・順序違い・濁点）と隣接キーの
+            # 打ち間違い**からも表記を組む:
+            #
+            #     再退化 → さいたいか →（濁点 た→だ）→ さいだいか
+            #            → 最大＋化 → **最大化**
+            #
+            # **自動補正には入れない。** 第44回に実測したとおり、
+            # 広げると `投機的 → 同期的`(+2.56)・`符号化 → 複合化`
+            # (+2.08) のような**もっともらしい別語への化け**が
+            # 起きて、48-EY の比べる門でも止まらない
+            # （どれも日本語としてまともな語なので字の並びは
+            #   良くなってしまう）。選ぶのがユーザーである
+            # 候補一覧なら、広く見せてよい（48-EV と同じ判断）。
+            #
+            # **枠は別に持つ**（48-EV の学び「既存の答えを押しのけ
+            # ない」）。組み立てた表記は**ふつうの打ち間違い候補とは
+            # 別の種類**（読みとしてはどこにも無い派生語）なので、
+            # `max_typos` を食い合わせず、**専用の枠 2つ**で出す。
+            #
+            # 食い合わせにすると、`再退化` では上の探索が枠8つを
+            # 使い切ってしまい（妻帯・最大・再開・際会…）、
+            # **肝心の `最大化` が出ませんでした**（実測）。
+            _reps = list(_typo_repairs_intruded(reading))
+            # **広げるのは「いま書かれている語が単位として無い」
+            # ときだけ**（門(1)「単位として在るなら触らない」の
+            # 候補一覧版・項目48-CF/CG と同じ考え）。
+            #
+            # これが無いと、正しく書けている語に派生形をぶら下げて
+            # **候補が荒れました**（実測）:
+            #
+            #     単語 → 単語化・単語時   補正 → **徒歩性**・**補佐性**
+            #
+            # `再退化`・`誘い消化`・`殺意代価` はどこにも無いので通る。
+            if not _attested_unit(surface, reading, store, dict_index):
+                for _extra in (typo_repairs_nearby_key(reading),
+                               _typo_repairs(reading)):
+                    for _x in _extra:
+                        if _x not in _reps:
+                            _reps.append(_x)
+            _n_built = 0
+            for _rep in _reps:
+                if _n_built >= _MAX_BUILT:
+                    break
+                if store.lookup(_rep):
+                    continue        # 実績があるなら上の道が出している
+                _s = compose_suffix_surface(_rep, store, dict_index)
+                if not _s:
+                    continue
+                # **字の並びが悪くなる方向のものは出さない**
+                # （項目48-EY の比べる門を、候補一覧でも使う。
+                #   うにさん指示 (g)「不自然な文字列は候補に
+                #   出さないように」）。
+                #
+                # 自動補正は余裕 +1.5 を要るが、**候補は選ぶのが
+                # ユーザー**なので「悪くならないこと」だけを見る:
+                #
+                #     再退化 → 最大化 **+3.20**  誘い消化 → 最小化 **+2.91**
+                #     開発者 → **会派者** -1.26  一時的 → **位置時的** -1.55
+                #     説明書 → **説明化** -1.62  最大家事 → **最大時化** -2.06
+                #
+                # これが無いと、うにさんが「違和感」と呼んだ形の
+                # 文字列を、こちらから候補に並べてしまいます（実測）。
+                _gain = _charngram_gain(surface, _s)
+                if _gain is not None and _gain < 0.0:
+                    continue
+                before = len(out)
+                push(_s, _rep, 'typo')
+                if len(out) > before:
+                    _n_built += 1
+        except Exception:
+            pass
+
         # --- 2.5 配列上で遠い取り違え ---
         # 従来の探索（find_readings）は隣接キーの押し間違いしか
         # 扱えないため、「乱後（らんご）」「やん後（やんご）」の
@@ -281,13 +521,93 @@ def build_candidates(surface, reading, store, find_readings,
 
         # --- 3. かなそのもの ---
         # 「漢字にせずひらがなで置いておきたい」場合があるため。
-        push(reading, reading, 'kana')
-        push(_to_katakana(reading), reading, 'kana')
+        #
+        # **ただし、その読みが壊れているなら出さない**
+        # （項目48-ET・うにさん指示 (g)・2026-08-18）:
+        #
+        #     「**不自然な文字列は候補に出さないように。**」
+        #
+        # `目もち長` の候補に `メモチチョウ`、`簡易流力` の候補に
+        # `カンイリュウリョク` が出ていた（`probe_candidates.py` で
+        # 数えた。候補65件のうち5件がこれ）。**どれも「漢字から
+        # 推した壊れた読み」をそのままカタカナにしたもの**で、
+        # 選びたい人はいない。
+        #
+        # 見分けは**新しい判断を作らず**、同梱の材料で説明が付くか
+        # だけを見る（語彙・索引・世の中の集合）。
+        # **説明が付かないときだけ落とす**（48-AR の轍を踏まない：
+        # 分からないなら今までどおり出す、ではなく、ここは
+        # 「材料のどれにも無い」と**言い切れる**ときだけ落とす）。
+        if _reading_worth_offering(reading, store, dict_index):
+            push(reading, reading, 'kana')
+            push(_to_katakana(reading), reading, 'kana')
+
+    # **同点崩し**（項目48-FD・設計19(ii)）。
+    # **並べ替えるだけ。足しも引きもしない。**
+    _prefer_known_units(out)
 
     if context_vec is not None and surrounding_words:
         _reorder_by_context(out, context_vec, surrounding_words)
 
     return out
+
+
+def _prefer_known_units(candidates):
+    """
+    **同じ種類の中で、世の中に1語として在る表記を上へ**
+    （項目48-FD・設計19(ii)）。
+
+    `seed_japanese` の**直し先側**（固有名詞を除いた 105,495語）を
+    使う。固有名詞を上げないのは、珍しい地名・人名が候補の頭に
+    出ると選びにくくなるため（SCOWL の 35/70 と同じ考え）。
+
+    **候補の追加も削除もしない。並び順だけ。** 種類（kind）の
+    まとまりも崩さない（同音異義語 → 打ち間違い → かな の大枠は
+    設計上の意図なので触らない）。
+
+    **安定な並べ替え**なので、同じ側どうしの順は元のまま。
+    このあとの `_reorder_by_context` も安定ソートなので、
+    文脈の手がかりがあるときはそちらが勝ち、**同点のときだけ
+    ここの結果が残る**（＝「同点崩し」）。
+
+    **表が意見を持てない候補は、1つも動かさない**（`in_scope`）。
+    表に入っているのは**漢字だけ 2〜8字**なので、`メモ帳`・
+    `ひらがな`・`棚上げ` は「無い」のではなく**範囲の外**。
+    最初これを混ぜて、`目もち長` の答えである **`メモ帳` を
+    `無料` の下へ落とした**（2026-08-18 に実測して直した）。
+    範囲の外のものは**元の位置に釘付け**にし、範囲の中のものだけを
+    その空き位置の中で並べ替える。
+
+    表が無ければ何もしない（`available()` が False）。
+    """
+    if len(candidates) < 2:
+        return
+    try:
+        import seed_japanese as _sj
+        if not _sj.available():
+            return
+    except Exception:
+        return
+    by_kind = {}
+    order = []
+    for c in candidates:
+        k = c['kind']
+        if k not in by_kind:
+            by_kind[k] = []
+            order.append(k)
+        by_kind[k].append(c)
+    for k in order:
+        group = by_kind[k]
+        slots = [i for i, c in enumerate(group)
+                 if _sj.in_scope(c['surface'])]
+        if len(slots) < 2:
+            continue
+        picked = [group[i] for i in slots]
+        picked.sort(key=lambda c: 0 if _sj.is_common_unit(c['surface'])
+                    else 1)
+        for i, c in zip(slots, picked):
+            group[i] = c
+    candidates[:] = [c for k in order for c in by_kind[k]]
 
 
 def _reorder_by_context(candidates, context_vec, surrounding_words):
@@ -510,6 +830,7 @@ KIND_LABELS = {
     'typo': '打ち間違い',
     'kana': 'かな',
     'symbol': '記号の言い換え',
+    'samekey': '同じキーの文字',
 }
 
 
@@ -529,20 +850,78 @@ SYMBOL_WORDS = {
 }
 
 
+# 同一キーの文字も候補に出す記号（うにさんの指定・2026-08-11・C-4）。
+#
+# 「（は、ゆを候補に出したり、！は、ぬや１を候補に出したり、
+#   同一キーにある文字を候補に出す」。
+# 実際の並びは kana_layout.same_key_characters が作る。
+#
+# **F2 で止まる記号は、ここに入れたものだけ。**
+# 表に載っている記号を全部 F2 の通り道にすると、`、` と `。` で
+# 毎回止まることになる。うにさんは前に「句点で終えると遡れません」
+# と言っていて、句読点で足を取られるのを嫌っている（項目41）。
+# なので**句読点は通り道から外し**、ドラッグや右クリックで
+# 直に選んだときだけ候補を出す（下の symbol_candidates は
+# この集合を見ない）。
+#
+# 増やすときはここに足す。減らしたくなったら消すだけでよい。
+F2_SYMBOL_STOPS = frozenset(
+    '！？（）｛｝「」［］＜＞＝＋＊＃＄％＆＠｜＿'
+    '!?(){}[]<>=+*#$%&@|_'
+    '〜～~'
+)
+
+
 def symbol_candidates(text):
     """
-    記号に対する言い換えの候補（〜 → から）。
+    記号に対する候補。2種類ある。
+
+    1. 言い換え（〜 → から）。SYMBOL_WORDS の表。
+    2. **同一キーにある文字**（（ → ゆ / ！ → ぬ・１）。
+       かな入力とローマ字入力、Shift の有無を取り違えると、
+       同じキーの上で文字が入れ替わる。打ち直すより選べたほうが
+       速い、といううにさんの指定（2026-08-11・C-4）。
 
     text: 選ばれている文字列（記号1文字を想定）
     戻り値: build_candidates と同じ形の候補の並び
     """
-    words = SYMBOL_WORDS.get(text)
-    if not words:
+    if not text or len(text) != 1:
         return []
-    return [{'surface': w, 'reading': None, 'kind': 'symbol'}
-            for w in words]
+    out = []
+    for w in SYMBOL_WORDS.get(text) or ():
+        out.append({'surface': w, 'reading': None, 'kind': 'symbol'})
+    if _takes_same_key(text):
+        for w in same_key_characters(text):
+            out.append({'surface': w, 'reading': None, 'kind': 'samekey'})
+    return out
+
+
+# 同一キーの候補を出さない文字。
+# `゛゜` は「単体で書くことはないのでスルーします」（うにさん・
+# 2026-08-11）。
+_NO_SAME_KEY = frozenset('゛゜')
+
+
+def _takes_same_key(ch):
+    """
+    同一キーの候補を出してよい文字か。**記号だけ**。
+
+    かな・英字・数字にまで出すと、ふつうの語の候補一覧の先頭に
+    「ゆ の候補は ゅ・8・( です」のような役に立たない並びが
+    割り込む。`isalnum()` はかな・漢字・全角数字も True になるので、
+    これ1つで「記号かどうか」を切り分けられる
+    （`ー` は Lm 扱いで True。長音は語の一部なので、これで正しい）。
+    """
+    return bool(ch) and not ch.isalnum() and ch not in _NO_SAME_KEY
 
 
 def is_symbol_word(text):
-    """F2 の対象にしてよい記号か（言い換えを持っているか）。"""
-    return bool(text) and text in SYMBOL_WORDS
+    """
+    F2 が止まってよい記号か。
+
+    **候補が出せるかどうかとは別**。句読点は候補を出せるが、
+    F2 の通り道からは外してある（F2_SYMBOL_STOPS の説明を参照）。
+    """
+    if not text:
+        return False
+    return text in SYMBOL_WORDS or text in F2_SYMBOL_STOPS

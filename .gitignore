@@ -11,14 +11,39 @@ choices.json
 settings.json
 setup.json
 dict_index.json
+# 前回の解析結果の控え（メモの原文と補正結果が丸ごと入っている）
+analysis_cache.json
+# 文字の並びの表のうち、メモから育てたぶん（項目48-BN）
+charngram.json
+# IME が確定した「表記 → 打った読み」の対（設計25(甲)）。
+# **打った文章の断片そのもの。** session.json と同格。
+ime_readings.json
 
 # 診断の出力（実機のパス・メモの断片が含まれる）
 kanji_shindan.txt
 probe.txt
 rebuild.txt
 
-# 開発メモ（個人のメモの実例が含まれる）
-SPEC.md
+# 開発メモ（個人のメモの実例が引用で入っている）
+#
+# **`SPEC.md` だけでは足りない**（2026-08-20・うにさんの未回答の
+# 問いへの答え）。第49回で大きいファイルを分けたため、
+# `SPEC_記録_*.md` `SPEC_履歴_*.md` `SPEC_旧_*.md` `引き継ぎ.md`
+# などが新しくでき、**どれも `SPEC.md` という行では除外されない**。
+# 中身にはうにさんのメモが引用で入っているので、公開リポジトリに
+# 入ると困る。**名前の形で除外する。**
+SPEC*.md
+引き継ぎ.md
+更新したファイル_*.md
+Fableへ伝える変更点_*.md
+第*回*.md
+続き*.md
+2つの向き_*.md
+総当たりの中身_*.md
+# （`README.md` と `release_v*.md` は**公開するもの**なので入れない）
+
+# 測るための材料（corpus_build.py が作る。SPEC.md の複製が入る）
+corpus/
 
 # ルート直下の build.yml は作業用の控え
 # （本物は .github/workflows/build.yml）

@@ -161,13 +161,29 @@ class ContextVectorStore:
     # ------------------------------------------------------------
     # 類似度・スコア
     # ------------------------------------------------------------
-    def similarity(self, word_a, word_b):
+    def similarity(self, word_a, word_b, min_shared=1):
         """
         2語の共起ベクトル同士のコサイン類似度（0〜1程度）。
 
         直接一緒に出てきたことが無くても、共通の共起相手が多ければ
         値が高くなる（「分布仮説」：似た文脈で使われる語は意味も近い）。
         どちらかの語のデータが無ければ 0.0。
+
+        min_shared: **共通の相手がこの数に満たなければ 0.0 にする**
+            （項目48-BY・2026-08-13）。既定の 1 は今までどおり。
+
+            共通の相手が1語しか無いとき、コサイン類似度は
+            **その1語だけで決まる**。片方の語の共起が少ないと、
+            その1語がベクトルの大半を占めるので、値は大きく出る:
+
+                制度 × 置き換え = (15×102) / (20.7×159.5) = 0.4627
+                共通の相手は `ない` 1語だけ
+                （`ない` は 制度 の72%・置き換え の64%を占める）
+
+            これで `判断の精度に依存しない` が
+            `判断の制度に依存しない` に化けていた。
+            **「似ている」ではなく「たまたま同じ1語の隣にいた」。**
+            自動補正の判断に使うときは 2 以上を渡すこと。
         """
         if word_a == word_b:
             return 1.0
@@ -177,7 +193,7 @@ class ContextVectorStore:
             return 0.0
         # 疎ベクトルの内積は、共通のキーだけを見れば十分
         keys = set(va.keys()) & set(vb.keys())
-        if not keys:
+        if len(keys) < min_shared:
             return 0.0
         dot = sum(va[k] * vb[k] for k in keys)
         norm_a = math.sqrt(sum(v * v for v in va.values()))
@@ -186,7 +202,7 @@ class ContextVectorStore:
             return 0.0
         return dot / (norm_a * norm_b)
 
-    def context_score(self, candidate, surrounding_words):
+    def context_score(self, candidate, surrounding_words, min_shared=1):
         """
         候補の語が、周辺の語（文脈）とどれだけ馴染むかのスコア。
 
@@ -204,7 +220,7 @@ class ContextVectorStore:
         total_score = 0.0
         for rank, w in enumerate(surrounding_words):
             weight = 1.0 / (rank + 1)   # 近いものほど重い
-            sim = self.similarity(candidate, w)
+            sim = self.similarity(candidate, w, min_shared=min_shared)
             total_score += sim * weight
             total_w += weight
         if total_w == 0:
@@ -212,7 +228,7 @@ class ContextVectorStore:
         return total_score / total_w
 
     def pick_best_by_context(self, candidates, surrounding_words,
-                             min_margin=0.08):
+                             min_margin=0.08, min_shared=1):
         """
         複数の候補（同じ読みを持つ複数の表記）のうち、
         文脈に最も合うものを選ぶ。
@@ -227,7 +243,8 @@ class ContextVectorStore:
         """
         if len(candidates) < 2 or not surrounding_words:
             return None
-        scored = [(c, self.context_score(c, surrounding_words))
+        scored = [(c, self.context_score(c, surrounding_words,
+                                         min_shared=min_shared))
                   for c in candidates]
         scored.sort(key=lambda cs: -cs[1])
         best, best_score = scored[0]
@@ -242,6 +259,11 @@ class ContextVectorStore:
         """
         候補一覧（辞書のリストなど、'surface' キーを含む）を、
         文脈スコアの高い順に並べ替えるための、表記ごとのスコアを返す。
+
+        **min_shared は掛けない。** 自動で書き換えるわけではなく、
+        ユーザーが目で見て選ぶ候補の並び順なので、細い証拠でも
+        並べる材料として使ってよい（学び39・判定の向きが違えば
+        要る強さも違う）。
 
         自動補正の可否判定（pick_best_by_context）とは別に、
         ユーザーがクリックで選び直す際の候補順（candidates.py）にも

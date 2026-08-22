@@ -53,6 +53,22 @@ except Exception:
         return _fallback_lock
 
 
+# 取り込みの決まりごとの版（うにさんの指定・2026-08-11・D-1）。
+#
+# **下の取り込みの決まり（品詞・コスト上限・語数・枠の割合）を
+# 変えたら、必ずこの数字を上げること。**
+# 上げると、次の起動で「辞書を作り直しますか？」と一度だけ尋ねる
+# （app.py の `_maybe_offer_data_update`）。上げ忘れると、
+# 更新したのに古い決まりで取り込んだ語彙のまま使い続けることになる
+# （うにさんの報告:「アップデートした際に辞書と索引が古いまま」）。
+#
+# 版を上げても**語を消すことはない**。足りないものを足すだけ。
+# 2 に上げた（項目48-DX・2026-08-16）。**読みの取りかたが変わった**
+# ので、既に取り込んである語彙には `がっこー` のような
+# 「発音の形」の読みが残っている。作り直しで正しい読みが足される
+# （足すだけなので、覚えた語は消えない）。
+IMPORT_RECIPE_VERSION = 2
+
 # 取り込む品詞
 IMPORT_POS = ('名詞', '動詞', '形容詞', '副詞')
 
@@ -69,45 +85,49 @@ EXCLUDE_SUB_POS = (
 # 誤変換候補のノイズが増えて誤補正の原因になる。
 GENERAL_COST_LIMIT = 4500
 
-# 取り込む語数の上限。厳選する方針にしたため大幅に減らす。
-DEFAULT_MAX_WORDS = 6000
+# 取り込む語数の上限。
+# 2026-08-10 に 6000 → 16000。品詞が読めるようになって固有名詞が
+# 落ちるようになり、同じ語数でも中身が濃くなったうえで、
+# なお「補正」「スクロール」「貼り付け」のような日常語が
+# 枠に入りきらなかったため。
+DEFAULT_MAX_WORDS = 16000
+
+# 品詞ごとの取り込み枠（上限に対する割合）。
+#
+# **コスト順にそのまま上から取ると、日常語が入らない。**
+# IPAdic のコストは新聞のコーパス由来なので、上位が
+# 「連盟・協会・研究所・貿易・五輪・国際線」のような語に偏る。
+# 一方、メモ書きでよく使う「補正・入力・変換・設定・削除・
+# スクロール」は、動作を表す 名詞/サ変接続 にまとまっている。
+# 品詞ごとに枠を分けて、それぞれの中でコスト順に採る。
+#
+# (品詞, 品詞細分類, 割合)。品詞細分類が None ならその品詞の残り全部。
+# 最後の (None, None) は、どの枠にも入らなかったものの受け皿。
+IMPORT_QUOTA = (
+    ('名詞', 'サ変接続', 0.22),        # 操作・動作の語（補正・入力・変換）
+    ('名詞', '一般', 0.38),
+    ('名詞', '形容動詞語幹', 0.08),
+    ('動詞', None, 0.18),
+    ('形容詞', None, 0.06),
+    ('副詞', None, 0.05),
+    (None, None, 0.03),
+)
 
 # 記号・スペース類。これを含む語は除外する
 _SYMBOLS = set('・。、「」『』【】〔〕（）()[]{}〜~―—‐/\\＼｜|＆&＋+＝=')
 
-# 国名・地名の接尾語パターン。固有名詞のsub_pos判定をすり抜けても
-# これらで終わる語は地名の可能性が非常に高いため除外する。
-#
-# 実機の janome では辞書エントリから品詞が取れないビルドがあり
-# （診断で品詞が全件空文字だった）、sub_pos == '固有名詞' の判定が
-# まったく効かないことがある。そのため品詞に頼らず、
-# **表記のパターンだけで**地名を弾けるようにしておく必要がある
-# （実機で「地名のようなものが多すぎる」と報告された）。
+# 2文字の漢字語のコスト上限（難読語・専門語を弾くための目安）。
+# 「補正」4276・「入力」4460・「変換」4463・「設定」4467・「削除」4466・
+# 「該当」4427 のような日常語がこの帯に入るため、以前の 3500 では
+# 日常の熟語がごっそり落ちていた（2026-08-10）。
+KANJI2_COST_LIMIT = 5600
 
-# それ自体が地名以外にほぼ使われない接尾語。語の長さを問わず弾く。
-_LONG_PLACE_SUFFIXES = (
-    '共和国', '王国', '連邦', '半島', '諸島', '海峡', '山脈',
-    '神社', '街道', '丁目', '原野',
-)
-
-# 一般語にも現れうる短い接尾語。
-# 「山」「谷間」のような一般語を巻き込まないよう、
-# 3文字以上の語（＝前に固有の部分が付いた形）にだけ適用する。
-# 地形・小地名に使われる漢字。これで終わる語は地名の可能性が高い。
-# 実機の辞書索引に「アナマ岩」「アボ鼻」「ウノ瀬」「カナデ鼻」等が
-# 大量に含まれていた（岬・岩礁・浜の固有名）。
-_GEO_TAIL_KANJI = (
-    '岩', '鼻', '瀬', '碆', '根', '崎', '岬', '浜', '磯', '礁',
-    '滝', '森', '平', '原', '峠', '沢', '谷', '尾', '沼', '池',
-    '海', '灘', '湾', '浦', '洲', '嶽', '岳', '峰', '塚', '窪',
-    '網', '立神', '場', '前',
-)
-
-_SHORT_PLACE_SUFFIXES = (
-    '県', '府', '都', '市', '区', '町', '村', '郡',
-    '山', '川', '湖', '島', '岬', '峠', '崎', '浜', '沢', '谷',
-    '駅', '寺', '城', '港', '橋', '峰', '岳', '街',
-)
+# 以前ここに置いていた地名の接尾語・地形の漢字の一覧
+# （_LONG_PLACE_SUFFIXES / _SHORT_PLACE_SUFFIXES / _GEO_TAIL_KANJI）は
+# 2026-08-10 に取り除いた。品詞が読めていなかったせいで固有名詞の
+# 除外が効かず、その穴を表記のパターンで塞ごうとしたものだった。
+# 品詞を extra 側から正しく取るようにしたので、役目を終えている
+# （`_parse_extra_pos` と `_should_exclude` の説明を参照）。
 
 
 def _should_exclude(surface, pos, sub_pos, sub_sub_pos, cost):
@@ -126,66 +146,29 @@ def _should_exclude(surface, pos, sub_pos, sub_sub_pos, cost):
     if any(c in _SYMBOLS for c in surface):
         return True
 
-    # 国名・地名パターン（固有名詞判定をすり抜けたものを追加で弾く）
+    # ------------------------------------------------------------------
+    # ここに以前あった手書きのふるいは、2026-08-10 に取り除いた。
     #
-    # 「山」「川」「谷」などの1文字の語尾は、そのままだと
-    # 「山」「谷間」のような一般語まで巻き込む。地名として現れるのは
-    # 「○○山」「○○川」のように前に固有の部分が付いた形なので、
-    # **3文字以上の語**に限って適用する。
-    # 「共和国」「山脈」のような、それ自体が地名以外にほぼ使われない
-    # 長い接尾語は、語の長さを問わず弾いてよい。
-    if surface.endswith(_LONG_PLACE_SUFFIXES):
-        return True
-    if len(surface) >= 3 and surface.endswith(_SHORT_PLACE_SUFFIXES):
-        return True
-
-    # カタカナ語の追加フィルタ
-    is_all_kata = all('\u30a1' <= c <= '\u30f6' or c == 'ー' for c in surface)
-    if is_all_kata:
-        # カタカナ語は略語・専門用語・固有名詞が非常に多いため、
-        # 日常語として使う機会の少ない語まで拾わないよう長めの語も除外する。
-        # （「イチロー」「デ杯」「ニタリクジラ」等）
-        if len(surface) <= 5:
-            return True
-        # カタカナ固有名詞は除外（外国人名・地名・作品名）
-        if sub_pos == '固有名詞':
-            return True
-
-    # カタカナ＋漢字の混在は、地名・小地名の可能性が非常に高い。
+    #   - 地名の接尾語（山・川・谷・共和国・山脈…）で終わる語の除外
+    #   - 「岩・鼻・瀬」など地形の漢字で終わる語の除外
+    #   - カタカナ5文字以下の除外
+    #   - 「〇〇事件」「〇〇号」の固有名詞パターン
     #
-    # 実機の辞書索引に「アナマ岩」「アボ鼻」「ウノ瀬」「カナデ鼻」の
-    # ような語が大量に含まれていた（実機で「岩・鼻などが多く、
-    # カタカナ+漢字のものはよく目につく」と報告された）。
-    # これらは岬・岩礁・浜の固有名で、日常のメモ書きにはまず現れない。
+    # どれも「固有名詞を落とせていない」ことへの対症療法だった。
+    # 本当の原因は品詞が読めていなかったこと（`_parse_extra_pos` の
+    # 説明）で、品詞を正しく取れば `EXCLUDE_SUB_POS` の固有名詞除外が
+    # 効き、「アボ鼻」「アナマ岩」「巽ノ瀬」は元から入らなくなる。
     #
-    # 一方で「コピー機」「メモ帳」「カタカナ表記」のような
-    # 実用的な複合語も同じ形をしているため、
-    # **地形・地名に使われる漢字で終わる場合だけ**を弾く。
-    _has_kata = any('\u30a1' <= c <= '\u30f6' for c in surface)
-    _has_kanji = any('\u4e00' <= c <= '\u9fff' for c in surface)
-    if _has_kata and _has_kanji and surface.endswith(_GEO_TAIL_KANJI):
-        return True
+    # 逆にこのふるいは日常語を巻き添えにしていた。とくにカタカナの
+    # 長さ規則は向きが逆で、**ドラッグ・クリック・コピー・ファイル・
+    # スクロール・ペーストが全滅**し、残るのは6文字以上の
+    # 「ゲームセンター」「シマフクロウ」「パパパパパパーン」
+    # ばかりだった（採用6000語の64%が6文字以上）。
+    # ------------------------------------------------------------------
 
-    # 地形を表す漢字で終わる3文字以上の語も、地名の可能性が高い。
-    # 「エンロク泣セ岩」のようにカタカナを含まないものも拾う。
-    if len(surface) >= 3 and surface.endswith(_GEO_TAIL_KANJI):
-        # ただし、その漢字だけで一般語として成立するもの
-        # （「火山岩」「石灰岩」等）まで巻き込まないよう、
-        # 全部が漢字の語は対象外にする。
-        if not all('\u4e00' <= c <= '\u9fff' for c in surface):
-            return True
-
-    # 漢字語の追加フィルタ
-    is_all_kanji = all('\u4e00' <= c <= '\u9fff' for c in surface)
-    if is_all_kanji:
-        # 2文字の漢字語でコストがやや高いものは難読語・専門語の可能性が高い
-        if len(surface) == 2 and cost > 3500:
-            return True
-
-    # 「〇〇事件」「〇〇号」等のパターンは補正には不要
-    if surface.endswith(('事件', '事故', '条約', '法案', '法律',
-                          '号', '式', '型')):
-        if sub_pos == '固有名詞':
+    # 2文字の漢字語でコストがやや高いものは難読語・専門語の可能性が高い
+    if len(surface) == 2 and all('\u4e00' <= c <= '\u9fff' for c in surface):
+        if cost > KANJI2_COST_LIMIT:
             return True
 
     # コストが高い語（使用頻度が低い）を除外
@@ -193,6 +176,77 @@ def _should_exclude(surface, pos, sub_pos, sub_sub_pos, cost):
         return True
 
     return False
+
+
+def _quota_bucket(pos, sub_pos):
+    """その語がどの枠に入るか。IMPORT_QUOTA の添字を返す。"""
+    for i, (q_pos, q_sub, _share) in enumerate(IMPORT_QUOTA):
+        if q_pos is None:
+            return i                        # 受け皿
+        if pos != q_pos:
+            continue
+        if q_sub is None or sub_pos == q_sub:
+            return i
+    return len(IMPORT_QUOTA) - 1
+
+
+def _apply_quota(candidates, limit):
+    """
+    コスト順に並んだ候補から、**品詞ごとの枠**に従って採る。
+
+    枠が余ったら（その品詞の候補が枠より少ないなど）、
+    余りはコスト順の続きから埋める。上限ちょうどまで使いきる。
+
+    candidates: (コスト, 表記, 読み, 品詞, 品詞細分類) をコスト昇順で
+    """
+    buckets = {}
+    for c in candidates:
+        buckets.setdefault(_quota_bucket(c[3], c[4]), []).append(c)
+
+    picked = []
+    taken = set()
+    for i, (_p, _s, share) in enumerate(IMPORT_QUOTA):
+        room = int(limit * share)
+        for c in buckets.get(i, ())[:room]:
+            picked.append(c)
+            taken.add(id(c))
+
+    # 枠を使いきれなかったぶんは、コスト順の続きで埋める
+    if len(picked) < limit:
+        for c in candidates:
+            if len(picked) >= limit:
+                break
+            if id(c) not in taken:
+                picked.append(c)
+                taken.add(id(c))
+
+    picked.sort(key=lambda c: c[0])
+    return picked[:limit]
+
+
+def accept_entry(surface, pos, sub_pos, sub_sub_pos, cost):
+    """
+    辞書の1件を語彙に取り込んでよいか。
+
+    取り込みの判断を1か所にまとめてある（取り込み本体と回帰テストの
+    両方がここを通る）。順に、
+      1. 品詞（名詞・動詞・形容詞・副詞だけ）
+      2. 品詞細分類（**固有名詞**・代名詞・数・接尾…を除く）
+      3. 表記とコストによる細かい除外（`_should_exclude`）
+    を見る。
+
+    **地名・人名は 2 で落ちる。** 品詞が読めていなかった頃は
+    ここが素通りしていたため、「アボ鼻」「アナマ岩」のような
+    岬・岩礁の固有名が大量に入っていた（2026-08-10）。
+
+    品詞が取れないビルドに当たったときは、1・2 を素通りさせて
+    3 だけで判断する（取りこぼすより、以前の挙動に戻すほうが安全）。
+    """
+    if pos and pos not in IMPORT_POS:
+        return False
+    if sub_pos and sub_pos in EXCLUDE_SUB_POS:
+        return False
+    return not _should_exclude(surface, pos, sub_pos, sub_sub_pos, cost)
 
 
 def _guess_category(pos, sub_pos, surface):
@@ -282,9 +336,24 @@ def _parse_compact(item):
     """
     compact 側の1件から (表記, 品詞, 生起コスト) を取り出す。
 
+    janome の内蔵辞書の並びは
+      compact = (表記, 左文脈ID, 右文脈ID, 生起コスト)
+      extra   = (品詞, 活用型, 活用形, 原形, 読み, 発音)
+    で、**compact 側に品詞は入っていない**（文字列は表記だけ）。
+    品詞は `_parse_extra_pos` が extra 側から取る。
+    ここが戻す品詞は、並びの違うビルドに当たったときの保険。
+
     生起コストは「その語の使われやすさ」を表し、小さいほど一般的。
-    語彙を絞り込むときの目安に使う。
+    語彙を絞り込むときの目安に使う。並びが分かっているときは
+    **4番目**から取る。以前は数値の最大値を当てずっぽうで
+    コストとみなしていたため、左右の文脈IDのほうが大きい語では
+    コストではなくIDを読んでいた。
     """
+    if (isinstance(item, (list, tuple)) and len(item) == 4
+            and isinstance(item[0], str)
+            and all(isinstance(n, int) for n in item[1:])):
+        return item[0], '', item[3]
+
     surface, pos_full, cost = '', '', None
     stack = [item]
     strings = []
@@ -313,9 +382,65 @@ def _parse_compact(item):
 
 
 def _parse_extra(item):
-    """extra 側の1件から読み（カタカナ）を取り出す。"""
+    """
+    extra 側の1件から**読み**（カタカナ）を取り出す。
+
+    **1つめではなく2つめを採る**（項目48-DX・2026-08-16）。
+    extra の並びは
+
+        [発音, 読み, 原形, ..., 品詞]
+        ['ガッコー', 'ガッコウ', '学校', '*', '*', '名詞,一般,*,*']
+        ['トーチャク', 'トウチャク', '到着', ...]
+        ['コーヒー',  'コーヒー',  'コーヒー', ...]   ← 外来語は同じ
+
+    で、**1つめは発音**（長音が `ー` になっている）。
+    ここで1つめを採っていたので、
+
+        辞書の索引 10,554読みのうち **3,886（37%）が `ー` の形**
+        うにさんの語彙 15,331読みのうち **3,006（20%）**
+
+    が「打っても一致しない読み」になっていた。
+    利用者は `がっこう` と打つので、`がっこー` の索引には当たらない。
+
+    そのせいで:
+      - 「索引にある語は触らない」（項目48-CF/48-CG）が
+        **長音を含む語に効いていなかった**。学校・東京・到着・
+        広告のような**よく使う語が守られていない**
+      - 語彙にも `がっこー` が入り、打った `がっこう` と別物になる
+
+    外来語は発音と読みが同じ（`コーヒー`）なので、2つめを採って
+    困ることはない。2つめが無い版に当たっても1つめに落とす。
+    """
+    got = [s for s in _extract_strings(item)
+           if s and s != '*' and _is_katakana_word(s)]
+    if len(got) >= 2:
+        return got[1]
+    return got[0] if got else ''
+
+
+def _parse_extra_pos(item):
+    """
+    extra 側の1件から品詞（「名詞,固有名詞,一般,*」の形）を取り出す。
+
+    **品詞は compact ではなく extra に入っている**（2026-08-10 に判明）。
+    以前は compact 側から「, を含む文字列」を品詞として探していたが、
+    compact 側の文字列は表記だけなので **品詞は常に空**だった。
+    そのため `IMPORT_POS`（名詞・動詞・形容詞・副詞に限る）も
+    **固有名詞の除外もまったく効いていなかった**。
+
+    実機の語彙・辞書索引に「アボ鼻」「アナマ岩」のような岬・岩礁の
+    固有名が大量に入っていたのはこれが原因。辞書側には
+    `名詞,固有名詞,一般` の印がちゃんと付いている。
+
+    並びの違うビルドに当たっても壊れないよう、先頭が品詞らしく
+    なければ、入れ子の中から「, を含む文字列」を探す形に落とす。
+    """
+    if isinstance(item, (list, tuple)) and item:
+        head = item[0]
+        if isinstance(head, str) and ',' in head:
+            return head
     for s in _extract_strings(item):
-        if s and s != '*' and _is_katakana_word(s):
+        if ',' in s:
             return s
     return ''
 
@@ -348,16 +473,21 @@ def iter_janome_entries(min_len=2, max_len=12):
             if not surface or not (min_len <= len(surface) <= max_len):
                 continue
 
+            reading = ''
+            extra_item = None
+            if extra_data is not None:
+                extra_item = _get_item(extra_data, key)
+                reading = _parse_extra(extra_item)
+                # **品詞は extra 側から取る**（_parse_extra_pos の説明）。
+                if not pos_full:
+                    pos_full = _parse_extra_pos(extra_item)
+            if not reading:
+                continue
+
             parts = pos_full.split(',') if pos_full else []
             pos = parts[0] if parts else ''
             sub_pos = parts[1] if len(parts) > 1 else ''
             sub_sub_pos = parts[2] if len(parts) > 2 else ''
-
-            reading = ''
-            if extra_data is not None:
-                reading = _parse_extra(_get_item(extra_data, key))
-            if not reading:
-                continue
 
             yield (surface, katakana_to_hiragana(reading),
                    pos, sub_pos, sub_sub_pos,
@@ -365,27 +495,42 @@ def iter_janome_entries(min_len=2, max_len=12):
 
 
 def import_from_janome(store, limit=DEFAULT_MAX_WORDS, min_len=2, max_len=12,
-                       progress=None):
+                       progress=None, only_new=False):
     """
     janome の辞書から、日常的に使う語を選んで取り込む。
 
     固有名詞（地名・人名・川名・岬名など）は原則除外する。
     コストが高い語（＝使用頻度が低い語）も除外する。
     上記フィルタ後、コストの低い順に上位 limit 語を採用する。
+
+    only_new=True: **既にある語には触らない**（うにさんの指定・
+        2026-08-11・D-1）。アプリを更新したあとの「取り込み直し」に
+        使う。`store.add` は既にある語の使用回数を増やすので、
+        そのまま呼び直すと**うにさんが実際に使っている語の回数が
+        水増しされる**。回数は「使用実績」の判断材料そのもので、
+        水増しすると補正の判断が狂う（プラネタリウムの回帰と
+        同じ形。学び20「数えるものには、必ず二度数えない仕組みを
+        付ける」）。
+
+    戻り値: 足した語数。only_new=True では**新しく足したぶんだけ**。
     """
     if not HAS_JANOME:
         return 0
+
+    known = set()
+    if only_new:
+        try:
+            known = {(e.get('reading'), e.get('surface'))
+                     for e in store.to_list()}
+        except Exception:
+            known = set()
 
     candidates = []
     seen = set()
 
     for surface, reading, pos, sub_pos, sub_sub_pos, cost in iter_janome_entries(
             min_len, max_len):
-        if pos and pos not in IMPORT_POS:
-            continue
-        if sub_pos in EXCLUDE_SUB_POS:
-            continue
-        if _should_exclude(surface, pos, sub_pos, sub_sub_pos, cost):
+        if not accept_entry(surface, pos, sub_pos, sub_sub_pos, cost):
             continue
 
         key = (reading, surface)
@@ -397,14 +542,59 @@ def import_from_janome(store, limit=DEFAULT_MAX_WORDS, min_len=2, max_len=12,
         if progress and len(candidates) % 20000 == 0:
             progress(len(candidates))
 
-    # コストが小さい（＝使用頻度が高い）語を優先して採用する
+    # コストが小さい（＝使用頻度が高い）語を優先して採用する。
+    # ただし**品詞ごとに枠を分ける**（IMPORT_QUOTA の説明を参照）。
     candidates.sort(key=lambda c: c[0])
     if limit:
-        candidates = candidates[:limit]
+        candidates = _apply_quota(candidates, limit)
+
+    # **書籍での使われぶりを `world` として持たせる**
+    # （うにさんの指定・2026-08-14・項目48-DA）:
+    #
+    #   「ある程度使うと快適になるのであれば、そのある程度を初期と
+    #     するべきです。すべての日本語の頻度は均一ではない。
+    #     日常使いやすいものを補正しやすく。書籍から学んだものを、
+    #     初期としてよいかと。」
+    #
+    # `familiarity.json`（UniDic／BCCWJ＝**書籍を柱にしたコーパス**。
+    # 項目48-AE でうにさんが「新聞ではなく書籍から」と指定された
+    # もの）の「ずれ」を足すと
+    #
+    #     書籍での重さ = IPAdic のコスト ＋ ずれ
+    #
+    # になる。小さいほど**書籍でよく使われる語**。
+    #
+    # **`count` は1のまま。** 回数は「この人が使った回数」という
+    # 意味を保つ（学び20）。世の中での重みは別の鍵 `world` に置く。
+    # 配る値はうにさんの実データの分布に合わせる（実測 2026-08-14。
+    # count>=20 が16% / >=5 が34% / >=2 が78%）。
+    try:
+        import familiarity as _fam
+    except Exception:
+        _fam = None
+
+    def _book_cost(cost, surface):
+        if _fam is None:
+            return cost
+        try:
+            return cost + _fam.bias(surface)
+        except Exception:
+            return cost
+
+    ranked = sorted(candidates, key=lambda c: _book_cost(c[0], c[1]))
+    n = len(ranked) or 1
+    world_of = {}
+    for i, (cost, surface, reading, pos, sub_pos) in enumerate(ranked):
+        p = i / n
+        world_of[(reading, surface)] = (
+            20 if p < 0.16 else 5 if p < 0.34 else 2 if p < 0.78 else 1)
 
     added = 0
     for cost, surface, reading, pos, sub_pos in candidates:
-        store.add(reading, surface, _guess_category(pos, sub_pos, surface))
+        if only_new and (reading, surface) in known:
+            continue
+        store.add(reading, surface, _guess_category(pos, sub_pos, surface),
+                  world=world_of.get((reading, surface), 1))
         added += 1
 
     return added
@@ -431,8 +621,17 @@ def learn_from_text(store, text, category_hint=None):
     added = 0
     seen = set()
 
-    with _janome_lock():
-        tokens = list(t.tokenize(text))
+    # janome は辞書の mmap が壊れると `sys.exit` を呼ぶ。これは
+    # SystemExit で、`except Exception` では捕まらない（学び16）。
+    # ここは打鍵の3秒後に after() から呼ばれるので、素通りさせると
+    # **無言でアプリが消える**（検証レポート 3-B）。
+    try:
+        with _janome_lock():
+            tokens = list(t.tokenize(text))
+    except SystemExit:
+        return 0
+    except Exception:
+        return 0
 
     for token in tokens:
         parts = token.part_of_speech.split(',')
@@ -538,6 +737,12 @@ def repair_conjugated_fragments(store):
         try:
             with _janome_lock():
                 toks = list(t.tokenize(surface))
+        except SystemExit:
+            # janome の `sys.exit` は Exception ではないので、
+            # これを書かないと素通りする（学び16・検証レポート 3-B）。
+            # ここは起動処理から呼ばれるため、素通りすると
+            # **無言で起動に失敗する**。
+            return fixed
         except Exception:
             continue
         if len(toks) != 1 or toks[0].surface != surface:

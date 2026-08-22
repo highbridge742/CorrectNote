@@ -114,6 +114,62 @@ def halfwidth_to_kana(text):
     return ''.join(out), converted, target
 
 
+# 式・識別子で「語」と「語／数」を繋ぐ記号。
+#
+# **かな配列でよく打つキーは入れない。** かな入力の列に必ず現れる
+# ので、入れると本物のかな打ちを巻き込む:
+#
+#     @ [ … 濁点・半濁点     ( ) ' … 小書きかな
+#     ] : _ < > , … む・け・ろ・、。・ね
+#
+# 実際、`[` を入れたらうにさん提示の実例 `md[ki)4l)h` を
+# 止めてしまった（`[` の両側が md と ki で、どちらも2文字だった）。
+# 残したのは、式・識別子で「繋ぐ」働きをする4つだけ。
+# `=` はかな配列に割り当てが無いので、いちばん安全。
+_JOIN_SYMBOLS = set('=-./')
+
+
+def _side_of_join(run):
+    """
+    記号の片側が「語」または「数」として立っているか。
+
+    英字なら**2文字以上**を求める。かな入力では英字1つが
+    かな1つなので、1文字だけの側は「語」ではなく打鍵1回。
+    英字と数字が混じった並び（`4l` `4r`）も語ではない。
+    """
+    if not run:
+        return False
+    if run.isdigit():
+        return True
+    return run.isalpha() and len(run) >= 2
+
+
+def _joins_word_and_value(text):
+    """記号が「語」と「語／数」を繋いでいるか（＝式・識別子の形）。"""
+    n = len(text)
+    for i, ch in enumerate(text):
+        if ch not in _JOIN_SYMBOLS:
+            continue
+        j = i - 1
+        while j >= 0 and text[j].isascii() and text[j].isalnum():
+            j -= 1
+        left = text[j + 1:i]
+        k = i + 1
+        # `=` はかな配列に割り当てが無いので、**引用符を飛ばして**
+        # 右側を見てよい（state='disabled' / mode="edit"）。
+        # かな打ちの列に `=` が出ることはない。
+        if ch == '=':
+            while k < n and text[k] in '\'"':
+                k += 1
+        start = k
+        while k < n and text[k].isascii() and text[k].isalnum():
+            k += 1
+        right = text[start:k]
+        if _side_of_join(left) and _side_of_join(right):
+            return True
+    return False
+
+
 def looks_like_halfwidth_input(text, min_len=4):
     """
     この文字列は「半角モードのまま打ってしまったかな」に見えるか。
@@ -188,6 +244,58 @@ def looks_like_halfwidth_input(text, min_len=4):
                     and text[i + 1].isalpha():
                 return False
 
+    # **記号が「語」と「語または数」を繋いでいるなら、式・識別子**
+    # （うにさんの指定・2026-08-11・項目48-AQ）。
+    #
+    # うにさんの筋道:「**数字の意図は見る必要があります。
+    # 後ろが単位の文字なのか、あとは計算式になっているか**、
+    # そういうところから」。
+    #
+    # 実機の材料で壊していたのは、まさにこの形だった:
+    #
+    #     width=1 / state='disabled' / &sort=releasedate   ← 代入
+    #     0-indexed / 1-indexed / sex-related              ← 数や語を繋ぐ
+    #     width/height / there/three                       ← 並列
+    #     9.py                                             ← 数＋拡張子
+    #
+    # **かな打ちの列と分けられるのは、両側の「長さ」で見るから。**
+    # かな入力では英字1つがかな1つになるので、記号のまわりに
+    # 「2文字以上の英字の並び」と「数字だけの並び」が揃うことは
+    # まれ。うにさん提示の実例はすべて片側が1文字か混じりになる:
+    #
+    #     md@i(4l)h    ( の左は i（1文字）
+    #     i(4l)hoy     ) の左は 4l（英字と数字の混じり）
+    #     hd(4r.bsw@   . の左は 4r（混じり）
+    #     c4w@r,       , の左は r（1文字）
+    #
+    # `@` は濁点キーなので、この判定からは外す（かな打ちに
+    # ほぼ必ず出るため。既存の `_.` の判定と同じ考え）。
+    if _joins_word_and_value(text):
+        return False
+
+    # 記号がまったく無い英小文字だけの並びは、英単語とみなす
+    # （検証レポート 2-F・2-G。after → ち破壊す、ctypes → そかん生徒、
+    #  before → 濃いはら、response → すいとせらみとい）。
+    #
+    # かな配列で日本語を打つと、濁点「@」半濁点「[」小書き「( ) '」
+    # 長音「\」句読点「< >」などの記号キーが**ほぼ必ず**混ざる。
+    # うにさんが挙げた半角入力の実例は12例すべてに記号がある
+    # （md@i(4l)h / qyb@kzut@l / ^ytyx;ue / c4w@r, / bkzg@f /
+    #   i(4l)hoy / fythkjji(4l)h / hd(4r.bsw@ / md[ki)4l)h /
+    #   cmcmbk:\rf / b@^ytyg)94w@gjr / up@uo<5eqyb@t@b@^ytyx;wm）。
+    #
+    # 意味の判定（makes_sense_as_japanese）には頼れない。
+    # `before` は「こいはらすい」で説明が100%付いてしまう一方、
+    # 直したい `md[ki)4l)h` は67%しかない。**割合では分けられない。**
+    #
+    # 前後の記号（Markdown の ** や引用符・読点）は剥がしてから見る。
+    # 「**after」「**（response,」のような形で紛れ込むため。
+    # ローマ字のべた打ち（mojinyuuryoku 等）はここで断っても、
+    # この後の correct_romaji が受け持つので取りこぼしにならない。
+    _core = text.strip('*"\'`,.:;!?()[]{}<>~=+|/\\-—…　（）「」『』【】')
+    if _core and _core.isascii() and _core.isalpha() and _core.islower():
+        return False
+
     # 小文字の英字だけでできた文字列（ctypes, hover 等）も変換しない。
     # かなを半角のまま打つと、母音（あうえお＝数字段）や濁点（@）
     # などの記号・数字がほぼ必ず混ざるため、英字だけの並びが
@@ -234,6 +342,41 @@ def looks_like_halfwidth_input(text, min_len=4):
 SYMBOL_KEYS = set('@[]:;,./\\^-()#$%&\'"!<>?_{}|+=*~')
 
 
+def _digits_after_letters(text, n_letters):
+    """
+    **数字が、英字より後ろにも現れるか**（項目48-CN）。
+
+    上の「数字のほうが英字より多いか同じなら数値とみなす」は、
+    「かなの大半は英字キーから出る」という前提だった。ところが
+    **あ行の多い短い語では崩れる**——数字段から出るかなは
+    `ぬふあうえおやゆよわ` の10個で、これが半分を占める語がある:
+
+        うしなう → 4du4   数字2・英字2  （止まっていた）
+        やくわり → 7h0l   数字2・英字2
+        あしおと → 3d6s   数字2・英字2
+
+    数値・単位・版数と分けるのは**数字の並び方**。
+    `2.5kg` `35mm` `12.5cm` `1.5L` `48-B.` `v1.1.0` は
+    **数字が先にまとまって、そのあと英字**が来る。かな打ちの列は
+    **英字のあとにも数字が出る**。
+
+    英字が1つしか無いものは数値側に寄せる（`v1.1.0` `v2`）。
+
+    実測: 数値・版数・項目番号の材料19例で**緩むものは0件**、
+    うにさん提示の半角入力の実例10件も**そのまま通る**。
+    うにさんの語400語のうち **25語**がこれで通るようになった。
+    """
+    if n_letters < 2:
+        return False
+    seen_letter = False
+    for ch in text:
+        if ch.isascii() and ch.isalpha():
+            seen_letter = True
+        elif ch.isdigit() and seen_letter:
+            return True
+    return False
+
+
 def correct_halfwidth(text, store, find_readings, max_dist=1.6):
     """
     半角モードのまま打ってしまった文字列を、かなに戻して補正する。
@@ -254,6 +397,26 @@ def correct_halfwidth(text, store, find_readings, max_dist=1.6):
     # 範囲は触らない」の数字版の関門（実機で電話番号が
     # 「けわあほオフ…」に化けた・2026-08-09）。
     if all(ch in '0123456789.,-:/()%+ ' for ch in text):
+        return None
+
+    # 上の関門は英字が1〜2文字混ざるだけで破れる（検証レポート 2-E）。
+    #   2.5kg → 震えのき / 12.5cm → ぬ震えそも / 1.5L → ぬるり
+    #   35mm  → あ獲物   / v1.1.0 → ややひぬるぬるわやや
+    #   48-B. → うゆ誇る
+    # 単位・版数・項目番号は「数字＋短い英字」の形なので、英字を
+    # 数えるだけでは足りない。**数字のほうが英字より多いか同じ**なら
+    # 数値とみなす。
+    #
+    # なぜこれで分けられるか: かな配列で日本語を打つと、かなの大半は
+    # 英字キーから出る（数字段から出るのは ぬふあうえおやゆよわ の
+    # 10個だけ）。だから「半角のまま打った日本語」は必ず英字が優勢に
+    # なる。うにさん提示の実例も md@i(4l)h（数字1・英字5）、
+    # c4w@r,（数字1・英字4）、i(4l)hoy（数字1・英字6）と、
+    # すべて英字が数字を大きく上回る。
+    _digits = sum(ch.isdigit() for ch in text)
+    _letters = sum(ch.isascii() and ch.isalpha() for ch in text)
+    if (_digits and _digits >= _letters
+            and not _digits_after_letters(text, _letters)):
         return None
 
     kana, _, _ = halfwidth_to_kana(text)
@@ -350,6 +513,35 @@ ROMAJI_TO_KANA = {
     'pya': 'ぴゃ', 'pyu': 'ぴゅ', 'pyo': 'ぴょ',
     'dya': 'ぢゃ', 'dyu': 'ぢゅ', 'dyo': 'ぢょ',
     'tsu': 'つ', 'chi': 'ち', 'shi': 'し',
+    # --- **ヘボン式／IME の既定の綴りが抜けていた**（項目48-CM）---
+    #
+    # `jya` `zyu` は入っていたのに、**`ja` `ju` `jo` が無かった**。
+    # これは MS-IME・Google 日本語入力の**既定**であり、
+    # ヘボン式でもこちらが標準。同じく `fa` `fi` `fe` `fo`
+    # （ファイル・フォルダ）、`che`（チェック）、`thi`（ティ）も
+    # 無かった。
+    #
+    # 効き（実測）: うにさんの語彙 15,493語のうち **1,167語（7.5%）**
+    # がこの綴りを必要とする。しかも**いちばんよく使う語**が並ぶ:
+    #
+    #     フォント1192回 ／ 順番1175回 ／ 通常1171回 ／ 重視1170回
+    #     チェック1163回 ／ フォーカス1142回 ／ ディスプレイ1124回
+    #     ファイル902回 ／ 情報855回 ／ 大丈夫592回
+    #
+    # つまり「日本語入力をオフのままローマ字で打った」とき、
+    # **もっともよく使う語ほど戻せなかった**。
+    #
+    # `ca` `ci` `cu` `ce` `co` `qu` は**入れない**。英語の綴りと
+    # ぶつかりやすく（code・care・cut）、得より害が大きい。
+    'ja': 'じゃ', 'ju': 'じゅ', 'jo': 'じょ', 'je': 'じぇ',
+    'jye': 'じぇ', 'zye': 'じぇ',
+    'fa': 'ふぁ', 'fi': 'ふぃ', 'fe': 'ふぇ', 'fo': 'ふぉ',
+    'che': 'ちぇ', 'tye': 'ちぇ',
+    'she': 'しぇ', 'sye': 'しぇ',
+    'thi': 'てぃ', 'dhi': 'でぃ', 'dhu': 'でゅ',
+    'wi': 'うぃ', 'we': 'うぇ',
+    'tsa': 'つぁ', 'tse': 'つぇ', 'tso': 'つぉ',
+    'vu': 'ヴ',
     # --- 2文字 ---
     'ka': 'か', 'ki': 'き', 'ku': 'く', 'ke': 'け', 'ko': 'こ',
     'sa': 'さ', 'si': 'し', 'su': 'す', 'se': 'せ', 'so': 'そ',
@@ -476,7 +668,20 @@ def correct_romaji(text, store, find_readings, max_dist=1.6, min_len=4):
     if len(kana) < 4:
         return None
     entries = [e for e in store.lookup(kana) if e['count'] >= 2]
-    if entries or makes_sense_as_japanese(kana, store):
+    # ローマ字のべた打ちは「日本語をそのまま打った」ものなので、
+    # 戻したかなは**丸ごと**日本語として説明が付くはず。穴があるなら、
+    # それは英単語がたまたまローマ字として読めただけ
+    # （検証レポート 2-F。change → ちゃんげ）。
+    #
+    # 実測（うにさんのメモの語彙で）:
+    #   ローマ字べた打ち  mojinyuuryoku / gakkou / pasokon /
+    #                     mojinonyuuryoku / tangonotunagari → 割合 1.00
+    #   英単語            change 0.75 / delete 0.67 / manage 0.67 /
+    #                     remote 0.67
+    # englishの多くは、そもそも純粋なかなに戻らないので手前で落ちる
+    # （before→'べfおれ'、window→'wいんどw'）。ここに来るのは
+    # 「たまたま最後までローマ字として読めた」ものだけ。
+    if entries or makes_sense_as_japanese(kana, store, min_ratio=1.0):
         return kana_to_kanji_where_possible(kana, store)
 
     # 訂正を伴う場合は、英単語が偶然かなの語に化けないよう厳しくする
