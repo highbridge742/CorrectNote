@@ -722,6 +722,46 @@ def run_settings_cases():
     check('折り返しの境目で帯を消す仕組みがある（タブ用）',
           'def _wrap_edge_columns' in _src and 'WS_NOBOX' in _src, True)
 
+    # --- 本文より下の左ドラッグは、スクロールにしない（項目48-IM） ---
+    #
+    # 束縛のところには前から「左ボタンは範囲選択に専念させる。
+    # スクロールは右ドラッグに移す」と書いてあったのに、
+    # `_on_editor_blank_press` だけが左ドラッグを横取りしていた
+    # （学び22）。指（タッチ）の1本指スクロールは残す。
+    _bp = _re3.search(r"def _on_editor_blank_press\(self, event\):(.*?)"
+                      r"def _on_editor_blank_drag", _src, _re3.S)
+    _bp_src = _bp.group(1) if _bp else ''
+    check('本文より下でも、マウスの左ドラッグはスクロールにしない',
+          'if not is_touch_pointer():' in _bp_src, True)
+    check('指（タッチ）の1本指スクロールは残っている',
+          'is_touch_pointer' in _bp_src and '_blank_drag' in _bp_src, True)
+
+    # --- 終端の罫線（項目48-IM） ---
+    #
+    # 空行には字が無いので、下線も打ち消し線も引けない（描いて確認）。
+    # **その行の字を小さくして、地色を敷く**しかない。
+    # カーソルがその行に居る間は引かない——引くと行が4pxになり、
+    # **カーソルまで4pxになって見えなくなる**。
+    _er = _re3.search(r"def _paint_end_rule\(self\):(.*?)"
+                      r"\n    def ", _src, _re3.S)
+    _er_src = _er.group(1) if _er else ''
+    check('終端の罫線を引く仕組みがある', bool(_er_src), True)
+    # **基準は「最後の改行」ではなく「最後の文字」**（うにさんの指定・
+    # 2026-08-22）。`Ctrl+A`（`_on_select_all`）が選ぶ範囲の終わりと
+    # 同じ数え方（`strip()`）で、中身のある最後の行を探し、その
+    # **ひとつ下の行**に引く。末尾に空行がいくつ続いても、罫線は
+    # **文字のすぐ下**に来る。
+    check('中身のある最後の行を Ctrl+A と同じ数え方で探す',
+          'lines[k - 1].strip():' in _er_src, True)
+    check('引くのは、そのひとつ下の行',
+          'target = last_text + 1' in _er_src, True)
+    check('その下に行が無ければ引かない',
+          'if target > len(lines):' in _er_src, True)
+    check('カーソルがその行に居る間は引かない',
+          'if cur == target:' in _er_src, True)
+    check('罫線は字を小さくして作る（下線では描かれない）',
+          'END_RULE_FONT_SIZE' in _src, True)
+
     # --- 印を置く欄は名簿1つ（項目48-IH） ---
     #
     # うにさんの指定「**簡易入力にも実装してください。オプションは

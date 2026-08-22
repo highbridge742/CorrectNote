@@ -3462,6 +3462,7 @@ class CorrectNoteApp:
         # そのまま塗り直される。
         try:
             self._configure_whitespace_tags()
+            self._configure_end_rule_tag()      # 終端の罫線（項目48-IM）
         except Exception:
             pass
         self.editor.config(selectbackground=EDITOR_SEL_BG,
@@ -5469,6 +5470,8 @@ class CorrectNoteApp:
         self.editor.tag_configure('unsure', background=UNSURE_BG)
         # 目に見えない空白の印（項目48-IF）
         self._configure_whitespace_tags()
+        # 終端の罫線（項目48-IM）
+        self._configure_end_rule_tag()
         # 統合レイアウトでオンマウスした語の背景色
         # （分割レイアウトのとき補正欄がやっていたことと同じ）
         self.editor.tag_configure('hover', background=HOVER_BG)
@@ -7253,6 +7256,97 @@ class CorrectNoteApp:
     WS_PAINT_MARGIN = 20
     WS_PAINT_DELAY_MS = 80
 
+    # ------------------------------------------------------------
+    # 終端の罫線（項目48-IM・うにさんの指定・2026-08-22）
+    # ------------------------------------------------------------
+    #
+    #   「文末のひとつ下の行の空白行には、**下に罫線を横一列**入れて
+    #     終端であることが分かるようにします」
+    #
+    # **空行には字が無い。** Tk の Text で引ける印を全部試した
+    # （`probe_endrule.py`）:
+    #
+    #     改行に下線        → **何も描かれない**（タブと同じ）
+    #     改行に打ち消し線  → **何も描かれない**
+    #     改行に地色        → **横いっぱいに描かれる**（幅348px＝欄の幅）
+    #                         ただし高さは行の高さ（24px）まるごと
+    #
+    # 地色しか無い。**そこで、その行の字を小さくする。**
+    # 空行には送る字が無いので、字を小さくしても**本文はずれない**
+    # （縮むのは、その空行の高さだけ）。実測:
+    #
+    #     字1 → 3px ／ 字2 → **4px** ／ 字3 → 5px ／ 字5 → 9px
+    #     （どれも幅は欄いっぱい。本文の行は24pxのまま）
+    #
+    # **カーソルがその行に居る間は引かない。** 引くと行が4pxになり、
+    # **カーソルまで4pxになって見えなくなる**（末尾で改行した直後が
+    # ちょうどこの状態）。居なくなったら引く。
+    END_RULE_TAG = 'end_rule'
+    END_RULE_FONT_SIZE = 2      # 実測 4px の帯になる
+
+    def _configure_end_rule_tag(self):
+        """終端の罫線の色を置き直す。テーマ切替でも呼ぶ。"""
+        for w in (getattr(self, 'editor', None),
+                  getattr(self, 'result_view', None)):
+            if w is None:
+                continue
+            try:
+                w.tag_configure(self.END_RULE_TAG, background=RULE,
+                                font=(EDITOR_FONT[0],
+                                      self.END_RULE_FONT_SIZE))
+                w.tag_lower(self.END_RULE_TAG)
+            except Exception:
+                pass
+
+    def _paint_end_rule(self):
+        """
+        **文字の終わりのひとつ下の行を、横一列の罫線にする。**
+
+        うにさんの指定（2026-08-22）:
+            「終端の線とは、**最後の改行ではなく、最後の文字を基準**に
+              します。**Ctrl+Aで選択される範囲の最後の行から、その
+              ひとつ下の行の下側**に罫線を引きます」
+
+        だから見るのは**いちばん下の行ではない**。`Ctrl+A`（項目48-FK）
+        が選ぶ範囲の終わり——**中身のある最後の行**——を探して、
+        その**ひとつ下の行**に引く。末尾に空行がいくつ続いていても、
+        罫線は**文字のすぐ下**に来る。
+
+        引かない場合:
+            中身のある行が1つも無い（まっさらな文書）
+            その下に行が無い（文書が改行で終わっていない）
+            **カーソルがその行に居る**（引くと行が4pxになり、
+            カーソルまで4pxになって見えなくなる）
+        """
+        for w in (getattr(self, 'editor', None),
+                  getattr(self, 'result_view', None)):
+            if w is None:
+                continue
+            try:
+                w.tag_remove(self.END_RULE_TAG, '1.0', 'end')
+                lines = w.get('1.0', 'end-1c').split('\n')
+                last_text = 0
+                for k in range(len(lines), 0, -1):
+                    # `strip()` で見るのは `_on_select_all`（Ctrl+A）と
+                    # 同じ数え方にするため。空白だけの行は「中身」に
+                    #数えない。
+                    if lines[k - 1].strip():
+                        last_text = k
+                        break
+                if not last_text:
+                    continue          # 中身のある行が無い
+                target = last_text + 1
+                if target > len(lines):
+                    continue          # その下に行が無い
+                if w is getattr(self, 'editor', None):
+                    cur = int(str(w.index('insert')).split('.')[0])
+                    if cur == target:
+                        continue      # カーソルが居る間は引かない
+                w.tag_add(self.END_RULE_TAG,
+                          f'{target}.0', f'{target + 1}.0')
+            except Exception:
+                pass
+
     def _whitespace_targets(self):
         """
         空白の印を置く欄を**1箇所で決める**。
@@ -7412,6 +7506,9 @@ class CorrectNoteApp:
                     w.tag_add(tag, *args)
                 except Exception:
                     pass
+        # 終端の罫線も、同じ予約に相乗りさせる（項目48-IM）。
+        # 予約を2つに増やすと、片方だけ呼び忘れる（学び22）。
+        self._paint_end_rule()
 
     def _wrap_edge_columns(self, w, li):
         """
@@ -9764,6 +9861,10 @@ class CorrectNoteApp:
         return was_scroll
 
     def _on_editor_release(self, event):
+        # カーソルが動いただけでも、終端の罫線は出し入れが要る
+        # （項目48-IM。打鍵は `_on_change` が拾うが、クリックは
+        # こちらでしか拾えない）。
+        self._schedule_whitespace_paint()
         was_scroll = self._drag_release(event, self.editor)
         if was_scroll:
             self.editor.focus_set()
@@ -10556,21 +10657,19 @@ class CorrectNoteApp:
         # する（うにさん指定・2026-08-09。タップだけなら通常どおり
         # カーソル移動になる）。マウスのときは、本文より下の余白から
         # 始めたドラッグだけをスクロールにする。
-        touch = is_touch_pointer()
-        if not touch:
-            try:
-                index = self.editor.index(f'@{event.x},{event.y}')
-                row = int(index.split('.')[0])
-                lines = self.editor.get('1.0', 'end-1c').split('\n')
-            except Exception:
-                return None
-            last = 0
-            for k in range(len(lines), 0, -1):
-                if lines[k - 1].strip():
-                    last = k
-                    break
-            if row <= last:
-                return None
+        # **マウスの左ドラッグは、どこから始めても選択に専念させる**
+        # （項目48-IM・うにさんの報告「文末よりも下だと、左クリックの
+        # ドラッグがスクロールになっていた」）。
+        #
+        # 束縛のところには既に「左ボタンは範囲選択に専念させる。
+        # スクロールは右ドラッグに移す」と書いてあったのに、
+        # **この道だけが左ドラッグを横取りしていた**——
+        # 学び22「片方だけに置くと、そちらを迂回して素通りする」。
+        #
+        # 指（タッチ）は別。1本指でなぞってスクロールするのは
+        # うにさんの指定（2026-08-09）なので、そのまま残す。
+        if not is_touch_pointer():
+            return None
         try:
             frac = self.editor.yview()[0]
         except Exception:
