@@ -50,8 +50,7 @@ finally:
 
 bundle_datas, _report, _missing_required = bundle_manifest.collect(
     _here, 'correctnote.spec')
-for _line in _report:
-    print(f'[correctnote.spec] {_line}')
+bundle_manifest.print_report(_report, 'correctnote.spec')
 bundle_manifest.write_report(_report, _here)
 
 a = Analysis(

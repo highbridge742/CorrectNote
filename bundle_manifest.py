@@ -26,6 +26,7 @@ exe に同梱するもの（**`.py` ではないもの**）の名簿。
 """
 
 import os
+import sys
 from collections import namedtuple
 
 # name     ファイル名（exe の中では '.' 直下＝ sys._MEIPASS 直下に置く）
@@ -120,6 +121,38 @@ def collect(here, label):
     lines.append(RESULT_LINE_NG if (missing_required or missing_optional)
                  else RESULT_LINE_OK)
     return datas, lines, missing_required
+
+
+def print_report(lines, label):
+    """
+    報告を画面（ビルドの記録）にも出す。**ここで絶対に落ちないこと。**
+
+    GitHub Actions の Windows は**画面の文字集合が cp1252** で、
+    日本語がそのまま出せない。`print` がそこで `UnicodeEncodeError`
+    を投げ、**ビルドが丸ごと止まった**（2026-08-22・項目48-IL）。
+
+    報告は「見えると助かるもの」であって、**ビルドを止めてよいもの
+    ではない**。出せない字は置き換えてでも、必ず先へ進む。
+    出す側（spec）で毎回書くと片方に書き忘れるので、**ここ1箇所**に
+    置いて、`correctnote.spec` と `kana_memo.spec` の両方から呼ぶ。
+    """
+    enc = getattr(sys.stdout, 'encoding', None) or 'ascii'
+    for line in lines:
+        text = f'[{label}] {line}'
+        try:
+            print(text)
+            continue
+        except Exception:
+            pass
+        try:
+            print(text.encode(enc, 'replace').decode(enc, 'replace'))
+            continue
+        except Exception:
+            pass
+        try:
+            print(text.encode('ascii', 'replace').decode('ascii'))
+        except Exception:
+            pass                 # ここまで来たら、黙って先へ進む
 
 
 def write_report(lines, here):

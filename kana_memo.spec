@@ -49,8 +49,7 @@ finally:
 # 足りないものは報告に出す（`ci_smoke_test.py` が同じ名簿で見張る）。
 bundle_datas, _report, _missing_required = bundle_manifest.collect(
     _here, 'kana_memo.spec')
-for _line in _report:
-    print(f'[kana_memo.spec] {_line}')
+bundle_manifest.print_report(_report, 'kana_memo.spec')
 bundle_manifest.write_report(_report, _here)
 
 a = Analysis(
