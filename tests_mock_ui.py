@@ -1120,6 +1120,136 @@ def run_drag_scroll_cases():
     check('例外が出ても 0 を返して止まらない',
           count_lines(_FakeText(RuntimeError()), '1.0', '1.5'), 0)
 
+    # --- キー名を指定した束縛は、IME の取り違えの受け皿を黙らせる ---
+    # （項目48-IN・2026-08-22）。Tk は同じ欄に <KeyPress> と <Delete> の
+    # 両方があると、keysym=Delete の打鍵では <Delete> だけを呼ぶ。
+    # <KeyPress> に張った _on_ime_ascii_key は一度も呼ばれない。
+    # テンキーの小数点は IME が入っていると keysym=Delete char='.' で
+    # 届く（実機で測った）ので、<Delete> の個別束縛（項目48-ED）に
+    # 横取りされて文字が消えていた。
+    #
+    # 見張り: 取り違えの対象のキー名（_IME_MISREAD_KEYSYMS）へ、
+    # Ctrl/Alt 無しで個別に束縛している行は、全部
+    #   (a) self._ime_first(...) で包んであるか、
+    #   (b) 渡す先のメソッドが最初の行で _ime_fkey_insert を呼ぶか
+    # のどちらかでなければならない。
+    assign8 = next(n for n in tree.body
+                   if isinstance(n, ast.Assign)
+                   and any(getattr(t, 'id', '') == '_IME_MISREAD_KEYSYMS'
+                           for t in n.targets))
+    ns8 = {}
+    exec(compile(ast.Module(body=[assign8], type_ignores=[]), '<f>', 'exec'),
+         ns8)
+    misread = ns8['_IME_MISREAD_KEYSYMS']
+    app_cls = next(n for n in tree.body
+                   if isinstance(n, ast.ClassDef)
+                   and n.name == 'CorrectNoteApp')
+    methods = {n.name: n for n in app_cls.body
+               if isinstance(n, ast.FunctionDef)}
+
+    def guarded_inside(name):
+        fn = methods.get(name)
+        if fn is None or not fn.body:
+            return False
+        body = fn.body
+        if (isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)):
+            body = body[1:]          # docstring を飛ばす
+        first = body[0] if body else None
+        if not isinstance(first, ast.Assign):
+            return False
+        value = first.value
+        if isinstance(value, ast.IfExp):      # `x if event is not None else None`
+            value = value.body
+        return (isinstance(value, ast.Call)
+                and isinstance(value.func, ast.Attribute)
+                and value.func.attr == '_ime_fkey_insert')
+
+    flagged = []
+    unguarded = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == 'bind'
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)):
+            continue
+        seq = node.args[0].value
+        if not seq.startswith('<') or seq.startswith('<<'):
+            continue
+        parts = seq.strip('<>').split('-')
+        # Ctrl/Alt を伴う束縛は IME の確定と型が違う（確定は
+        # 修飾なしで届く）ので、同じ鍵に当たらない。
+        if any(p in ('Control', 'Alt', 'Meta', 'Command', 'Mod1')
+               for p in parts[:-1]):
+            continue
+        if parts[-1] not in misread:
+            continue
+        flagged.append(f'{node.lineno}: {seq}')
+        if len(node.args) < 2:
+            unguarded.append(f'{node.lineno}: {seq}（渡す先が無い）')
+            continue
+        h = node.args[1]
+        wrapped = (isinstance(h, ast.Call)
+                   and isinstance(h.func, ast.Attribute)
+                   and h.func.attr == '_ime_first')
+        inside = (isinstance(h, ast.Attribute) and guarded_inside(h.attr))
+        if not (wrapped or inside):
+            unguarded.append(f'{node.lineno}: {seq}')
+    check('取り違えの対象のキー名への個別束縛が app.py に在る'
+          '（見張りが空振りしていない）', len(flagged) >= 8, True)
+    check('その束縛は全部 _ime_first で包むか、中で _ime_fkey_insert を'
+          '先に呼ぶ', unguarded, [])
+
+    # _ime_first そのものの動き（偽の self で回す）
+    func8 = methods['_ime_first']
+    ns9 = {'tk': __import__('types').SimpleNamespace(Listbox=type('LB', (), {}))}
+    exec(compile(ast.Module(body=[func8], type_ignores=[]), '<f>', 'exec'),
+         ns9)
+    ime_first = ns9['_ime_first']
+
+    class _Ev:
+        def __init__(self, keysym, char, widget=None):
+            self.keysym = keysym
+            self.char = char
+            self.widget = widget
+
+    class _Self:
+        def __init__(self):
+            self.calls = []
+
+        def _on_f2_range_keypress(self, e):
+            self.calls.append('C-1')
+            return None
+
+        def _on_ime_ascii_key(self, e):
+            self.calls.append('受け皿')
+            return 'break' if e.char == '.' else None
+
+        def _on_dropdown_keypress(self, e):
+            self.calls.append('一覧C-1')
+            return 'break' if e.char == '.' else None
+
+    s = _Self()
+    handler_calls = []
+    wrapped = ime_first(s, lambda e: handler_calls.append(e) or 'done')
+    check('IME が確定した `.`（keysym=Delete）は受け皿が先に取る',
+          wrapped(_Ev('Delete', '.')), 'break')
+    check('そのとき元の処理（範囲を消す）は呼ばれない', handler_calls, [])
+    check('順番は <KeyPress> と同じ（C-1 → 受け皿）',
+          s.calls, ['C-1', '受け皿'])
+    s.calls.clear()
+    check('本物の Delete（文字なし）は元の処理へ渡す',
+          wrapped(_Ev('Delete', '')), 'done')
+    check('そのとき元の処理に届いている', len(handler_calls), 1)
+    check('イベント無しで呼ばれても元の処理へ渡す', wrapped(None), 'done')
+    s.calls.clear()
+    lb = ns9['tk'].Listbox()
+    check('候補一覧（Listbox）では一覧の C-1 だけに回す',
+          wrapped(_Ev('Delete', '.', lb)), 'break')
+    check('一覧では受け皿（欄へ書く道）を通らない', s.calls, ['一覧C-1'])
+
     return all_ok
 
 

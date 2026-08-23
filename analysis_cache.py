@@ -164,7 +164,7 @@ import zlib
 #              **1文字だけの対は塊の中では使わない**（`表→おもて` が
 #              `時刻表` に紛れないように）。**対が空なら答えは
 #              1件も変わらない**のは今までどおり。
-ENGINE_STAMP = '2026-08-21e'   # 48-IE: 設計27の「ただ1つ」を外した(1字がらみの門で足りる)
+ENGINE_STAMP = '2026-08-23g'   # 48-IX 設計30(打った読みがそのまま語彙の語)＋印(漢字の名詞+する直付き)
 
 # 控えの形式の版。作りを変えたら上げる（古い控えは捨てられる）。
 CACHE_VERSION = 1
@@ -274,6 +274,23 @@ def _engine_source_stamp(app_dir):
     自動で拾う。exe では原型が無いので空になり、
     ENGINE_STAMP と APP_VERSION だけが頼りになる。
     """
+    # **最初に呼ばれたとき（起動時の読み込み）の大きさを覚えて、以後は
+    # それを返す**（項目48-IW・2026-08-23・実機で発覚）。
+    #
+    # 保存のたびにディスクを見ると、**動いているエンジンと指紋がずれる**:
+    # 古いエンジンで起動したまま `corrector.py` を差し替え、閉じるときに
+    # 控えを保存 → 指紋は新しいファイルの大きさ・答えは古いエンジン。
+    # 起動し直したアプリは指紋が一致するので**古い答えをそのまま使う**
+    # （`外しょつする → 外ショーツする` が直した後も残った）。
+    # 指紋は「この答えを出したエンジン」を表すものなので、読み込んだ
+    # ときの大きさで固定する。
+    global _ENGINE_SOURCES_SEEN
+    try:
+        _seen = _ENGINE_SOURCES_SEEN
+    except NameError:
+        _seen = None
+    if _seen is not None and _seen[0] == app_dir:
+        return list(_seen[1])
     out = []
     for name in ('corrector.py', 'vocabulary.py', 'kana_layout.py',
                  'halfwidth.py', 'loanword.py', 'morphology.py',
@@ -291,7 +308,11 @@ def _engine_source_stamp(app_dir):
             out.append(os.path.getsize(os.path.join(app_dir, name)))
         except Exception:
             pass
+    _ENGINE_SOURCES_SEEN = (app_dir, list(out))
     return out
+
+
+_ENGINE_SOURCES_SEEN = None
 
 
 def _ime_readings_stamp(ime_readings):
@@ -355,6 +376,8 @@ def _pack(result):
         's': [list(x) for x in (result.get('spans') or ())],
         'u': [list(x) for x in (result.get('unsure_spans') or ())],
         'os': [list(x) for x in (result.get('original_spans') or ())],
+        # 異様と見た範囲（項目48-IR・紫）
+        'od': [list(x) for x in (result.get('odd_spans') or ())],
     }
 
 
@@ -370,6 +393,7 @@ def _unpack(item):
         'unsure_spans': [tuple(x) for x in (item.get('u') or ())],
         'spans': [tuple(x) for x in (item.get('s') or ())],
         'original_spans': [tuple(x) for x in (item.get('os') or ())],
+        'odd_spans': [tuple(x) for x in (item.get('od') or ())],
     }
 
 

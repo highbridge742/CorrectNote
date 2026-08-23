@@ -1103,15 +1103,26 @@ def test_homophone_by_context():
     check('同じ読みに別の表記が無ければ触らない',
           pick('選択', 'せんたく', ['範囲', '操作']), None)
 
-    # 送り仮名・かな・カタカナを含む語は対象外。
+    # 送り仮名を含む語は、**複合動詞の一部なら触らない**（項目48-IQ）。
     # 「書き換わりました」の 換わり を 変わり にしてしまう誤爆が
-    # 実機のメモで出たため、漢字だけの語に限っている。
+    # 実機のメモで出た（48-DZ）。`書き換わる` が表に在るので守られる。
+    # 複合でない `換わり` は、共起が支持すれば直す（初期状態の同音の道）。
     for _ in range(30):
         store.add('かわり', '変わり', 'その他')
+    # 活用形の道は共通の相手3語以上を要る（項目48-IQ）ので、
+    # 共起の材料を少し厚くしておく。
     for _ in range(6):
-        cv.observe_line(['文字', '変わり', '補正', '表示'])
-    check('送り仮名を含む語は対象外（換わり → 変わり にしない）',
-          pick('換わり', 'かわり', ['文字', '補正']), None)
+        cv.observe_line(['文字', '変わり', '補正', '表示', '変換', '入力'])
+    check('複合動詞の一部（書き換わり）は触らない',
+          C._homophone_by_context('換わり', 'かわり', store, cv,
+                                  ['文字', '補正'],
+                                  attest_text='補正の文字列に書き換わりました。'),
+          None)
+    check('複合でなければ共起で 換わり → 変わり',
+          C._homophone_by_context('換わり', 'かわり', store, cv,
+                                  ['文字', '補正'],
+                                  attest_text='文字が換わりました。'),
+          ('変わり', 'その他', C.EVIDENCE_VECTOR))
 
     for _ in range(30):
         store.add('たんご', '単語', 'その他')
@@ -1180,10 +1191,10 @@ def test_homophone_conjugated():
     from vocabulary import VocabularyStore
     from context_vec import ContextVectorStore
 
-    print('--- 活用形の同音（並記の関門つき・既定は切） ---')
+    print('--- 活用形の同音（並記の関門＋共起・既定は入） ---')
 
-    # 既定は切（うにさんの判断・2026-08-16）。ここでは経路そのものを
-    # 確かめたいので、テストの中だけ入れて、最後に必ず戻す。
+    # 既定は**入**（項目48-IQ・2026-08-22・うにさんの指定「初期状態を
+    # 重要視」）。並記が無ければ共起で測る。ここでは明示して入れる。
     _saved = C._CONJ_HOMOPHONE
     C._CONJ_HOMOPHONE = True
 
@@ -1194,24 +1205,34 @@ def test_homophone_conjugated():
     for _ in range(4):
         store.add('うる', '売る', 'その他')        # 実績が乏しい
     cv = ContextVectorStore()
+    # 活用形の道は共通の相手3語以上を要る（項目48-IQ）
     for _ in range(6):
-        cv.observe_line(['文字', '打つ', '入力', '補正'])
+        cv.observe_line(['文字', '打つ', '入力', '補正', 'キー', '変換'])
 
     def pick(surface, reading, line, around=('文字', '入力')):
         return C._homophone_by_context(surface, reading, store, cv,
                                        list(around), attest_text=line)
 
     # --- 通ってほしいもの ---
+    # `売る` は4回使われている（語彙に裏打ちあり）ので、並記の関門は
+    # 向きを決めない。**共起**（文字・打つ）が 打っ を支持するので直る。
     check('同じ行に並記があれば 売っ → 打っ',
           pick('売っ', 'うっ', '売った文字 ⇒ 打った文字'),
-          ('打っ', 'その他', C.EVIDENCE_CONTEXT))
+          ('打っ', 'その他', C.EVIDENCE_VECTOR))
     check('送り仮名は元の形を残す（打つ ではなく 打っ）',
           (pick('売っ', 'うっ', '売った文字 ⇒ 打った文字') or (None,))[0],
           '打っ')
 
+    # 並記が無くても、**共起が支持すれば直す**（項目48-IQ。
+    # 初期状態の話題のまとまりがこの共起にあたる）。
+    check('並記が無くても共起が支持すれば 売っ → 打っ',
+          pick('売っ', 'うっ', '売った文字だけの行'),
+          ('打っ', 'その他', C.EVIDENCE_VECTOR))
+    check('共起の手がかりが無ければ触らない',
+          pick('売っ', 'うっ', '売った文字だけの行', around=('天気', '洗剤')),
+          None)
+
     # --- 通ってはいけないもの ---
-    check('同じ行に並記が無ければ触らない',
-          pick('売っ', 'うっ', '売った文字だけの行'), None)
     check('並記が無ければ 換わり → 変わり にしない（実機の誤爆）',
           pick('換わり', 'かわり',
                '補正の文字列に書き換わりました。',
@@ -1228,15 +1249,16 @@ def test_homophone_conjugated():
           pick('売っため', 'うっため', '売っため ⇒ 打っため'), None)
     check('読みの末尾が送り仮名と合わない形は触らない',
           pick('売っ', 'うった', '売った文字 ⇒ 打った文字'), None)
-    check('字数の違う語幹へは置き換えない',
-          pick('売っ', 'うっ', '売った ⇒ 打ち込った'), None)
+    check('字数の違う語幹へは置き換えない（打ち込っ は候補にならない）',
+          (pick('売っ', 'うっ', '売った ⇒ 打ち込った') or (None,))[0],
+          '打っ')
     check('栓を切れば経路ごと消える',
           (lambda: (setattr(C, '_CONJ_HOMOPHONE', False),
                     pick('売っ', 'うっ', '売った文字 ⇒ 打った文字'),
                     setattr(C, '_CONJ_HOMOPHONE', True))[1])(), None)
 
     C._CONJ_HOMOPHONE = _saved
-    check('既定は切のまま（保留中）', C._CONJ_HOMOPHONE, False)
+    check('既定は入（項目48-IQ）', C._CONJ_HOMOPHONE, True)
 
     return all_ok
 

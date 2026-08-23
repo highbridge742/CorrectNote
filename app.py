@@ -186,7 +186,7 @@ from seed_vocabulary import load_seed
 APP_TITLE = 'CorrectNote'
 
 # 画面に出すバージョン（メニューの「このアプリについて」）。
-# GitHub のタグと揃えること（タグは v を付けて v1.2.0）。
+# GitHub のタグと揃えること（タグは v を付けて v1.2.1）。
 # 1.0.0（公開時）からの変更: タブのドラッグ並べ替え、説明書の同梱と
 # 「このアプリについて」メニュー、重いタブの高速化、窓の移動を OS に
 # 任せる、括弧と F2 と引用モードの手直し（項目48-m〜48-p）。
@@ -195,10 +195,17 @@ APP_TITLE = 'CorrectNote'
 # 不具合、解析の高速化と前回結果の控え（起動 12.2秒→1.8秒・
 # タブ切り替え 6.5秒→0.7秒）、保存先が無いときの別名保存への誘導、
 # 前回の表示位置からの再開（項目48-F〜48-N）。
+# 1.2.1 での変更（**機能の追加は無い。直しが目的の版**）: テンキーの
+# 小数点で文字が消える不具合（項目48-IN。1.2.0 の説明で「直した」と
+# 書いたが、束縛の優先順位のせいで受け皿が一度も走っていなかった）、
+# 初期語彙の同点が OS の時計の刻みで決まっていた不具合（項目48-IO）、
+# 異様と見た範囲を紫で見せる・補正の直り具合（項目48-IP〜48-IX）。
 #
 # **バージョンを上げたら `analysis_cache.py` の ENGINE_STAMP も
 # 見直すこと**（補正の中身が変わっているなら必ず上げる）。
-APP_VERSION = '1.2.0'
+# 1.2.1 は `2026-08-23g` のまま——版を付け直しただけで、
+# 補正の中身はここでは変えていない（項目48-IX が最後の変更）。
+APP_VERSION = '1.2.1'
 
 # 同梱する説明書のファイル名。exe の中に入れて持ち歩き、
 # 初回起動時に exe と同じフォルダへ書き出す
@@ -470,13 +477,22 @@ def ime_confirmed_char(keysym, char):
 #     VK_DECIMAL = 0x6E = **110**  テンキーの小数点（NumLock 入）
 #
 # 48-EH は「**文字を伴っていれば**文字として入れる」で塞いだ。
-# ところがテンキーの小数点は、日本語IMEが入っている状態だと
-# **文字を伴わずに**（`char` が空のまま）届くことがある。
-# そうなると 48-EH の見分けを素通りし、`keysym` が `Delete` の
-# ままなので **Tk 標準の「カーソル位置の1文字を消す」が走る**。
+# 48-FY はこれに「テンキーの小数点は、日本語IMEが入っていると
+# **文字を伴わずに**（`char` が空・番号 110 のまま）届くことがある」
+# という**仮説**を足し、番号 110 で見分ける道を置いた。
 #
-# **キーの番号で見分ける。** テンキーの小数点は 110、
-# 本物の Delete は 46。番号が違うので取り違えようがない。
+# **実機で測ったら、その形は来なかった**（項目48-IN・2026-08-22・
+# うにさんの PC に SendInput で本物の打鍵を送って記録した）:
+#
+#     IME ひらがな  keysym=Delete keycode=46  char='.'  ← 項目31 と同じ形
+#     IME オフ      keysym=period keycode=110 char='.'  ← 初めから正常
+#     本物の Delete keysym=Delete keycode=46  char=''   state に 0x40000
+#
+# 消えていた本当の理由は、`<Delete>` の個別束縛（項目48-ED）が
+# `<KeyPress>` の受け皿を黙らせていたこと（`_ime_first` を参照）。
+# 48-FY の確認は関数を直接呼んでいたので、束縛の道を通っていなかった。
+#
+# この関数は**保険として残す**（触っても何も壊さない）。
 # NumLock を切っているときのテンキーの小数点は、Windows が
 # **VK_DELETE(46) として送る**ので、そちらは今までどおり
 # 「消す」が正しい（キーの意味そのものが Delete になる）。
@@ -1866,6 +1882,15 @@ class CorrectNoteApp:
             try:
                 import seed_japanese
                 seed_japanese.available()
+            except Exception:
+                pass
+            # **異様さの表もここで読む**（項目48-IR）。同梱の表から
+            # 漢字の隣接ペアを作るのに **1.35秒**（実測）。最初の解析の
+            # 途中で止まらないよう、裏で先に。読み終わるまで呼ばれたら
+            # 「意見なし」（色が付かないだけ）。
+            try:
+                import oddness
+                oddness.available()
             except Exception:
                 pass
             try:
@@ -3449,6 +3474,10 @@ class CorrectNoteApp:
         # タグの色は部品の option ではないので、個別に設定し直す
         self.editor.tag_configure('suspect', background=SUSPECT_BG)
         self.editor.tag_configure('unsure', background=UNSURE_BG)
+        # **異様と見た範囲**（項目48-IR）。判断に迷った箇所と同じ紫
+        # （うにさんの指定「とりあえず紫。同じ色でよい」）。
+        # 表示メニューの切り替えには**掛けない**（見えることが目的）。
+        self.editor.tag_configure('odd', background=UNSURE_BG)
         self.editor.tag_configure('autofixed', foreground=FIXED_FG)
         self.editor.tag_configure('autochosen', foreground=ACCENT)
         self.editor.tag_configure('hover', background=HOVER_BG)
@@ -5468,6 +5497,10 @@ class CorrectNoteApp:
         self.editor.pack(side='left', fill='both', expand=True)
         self.editor.tag_configure('suspect', background=SUSPECT_BG)
         self.editor.tag_configure('unsure', background=UNSURE_BG)
+        # **異様と見た範囲**（項目48-IR）。判断に迷った箇所と同じ紫
+        # （うにさんの指定「とりあえず紫。同じ色でよい」）。
+        # 表示メニューの切り替えには**掛けない**（見えることが目的）。
+        self.editor.tag_configure('odd', background=UNSURE_BG)
         # 目に見えない空白の印（項目48-IF）
         self._configure_whitespace_tags()
         # 終端の罫線（項目48-IM）
@@ -5654,13 +5687,30 @@ class CorrectNoteApp:
         # 立っていて、かつ候補一覧が開いていないときだけ働く。
         self.editor.bind('<KeyPress>', self._on_f2_range_keypress,
                          add=True)
-        self.editor.bind('<Delete>', self._on_f2_range_delete, add=True)
+        # **キー名を指定した束縛は、`<KeyPress>` の束縛を全部黙らせる**
+        # （項目48-IN・2026-08-22）。Tk は同じ欄に `<KeyPress>` と
+        # `<Delete>` の両方があると、keysym=Delete の打鍵では
+        # **より具体的な `<Delete>` だけ**を呼ぶ。`<KeyPress>` に張った
+        # `_on_ime_ascii_key`（IME が確定した `.` を文字として入れる・
+        # 項目31/48-EH/48-FY）は**一度も呼ばれなくなっていた**。
+        # テンキーの小数点は IME が入っていると `keysym=Delete
+        # keycode=46 char='.'` で届く（実機で測った）ので、ここで
+        # 横取りされて Tk 標準の「1文字消す」が走っていた。
+        # 取り違えの対象になるキー名（`_IME_MISREAD_KEYSYMS`）への
+        # 個別束縛は、**必ず `_ime_first` で包む**。F1/F2 は
+        # `_on_pick_key_widget` 等が同じ門を中で持っている。
+        self.editor.bind('<Delete>', self._ime_first(self._on_f2_range_delete),
+                         add=True)
         self.editor.bind('<BackSpace>', self._on_f2_range_delete,
                          add=True)
         self.editor.bind('<Shift-Left>',
-                         lambda e: self._on_f2_range_resize(-1), add=True)
+                         self._ime_first(
+                             lambda e: self._on_f2_range_resize(-1)),
+                         add=True)
         self.editor.bind('<Shift-Right>',
-                         lambda e: self._on_f2_range_resize(1), add=True)
+                         self._ime_first(
+                             lambda e: self._on_f2_range_resize(1)),
+                         add=True)
 
         # F2 で候補一覧（右クリックと同じ機能）。
         # マウスを使わずに選び直せるようにする。
@@ -8268,12 +8318,17 @@ class CorrectNoteApp:
 
         self.editor.tag_remove('suspect', '1.0', 'end')
         self.editor.tag_remove('unsure', '1.0', 'end')
+        self.editor.tag_remove('odd', '1.0', 'end')
         # タグの色は、毎回その時点のパレットで塗り直す。
         # テーマ切替や起動時の適用経路がどうであれ、解析が走った
         # 時点で必ず正しい配色になる（実機で「ダークモードなのに
         # unsure がライトの色のまま」になった保険）。
         self.editor.tag_configure('suspect', background=SUSPECT_BG)
         self.editor.tag_configure('unsure', background=UNSURE_BG)
+        # **異様と見た範囲**（項目48-IR）。判断に迷った箇所と同じ紫
+        # （うにさんの指定「とりあえず紫。同じ色でよい」）。
+        # 表示メニューの切り替えには**掛けない**（見えることが目的）。
+        self.editor.tag_configure('odd', background=UNSURE_BG)
         # 統合表示で自動反映した箇所の色（分割表示の補正欄と同じ配色）
         self.editor.tag_configure('autofixed', foreground=FIXED_FG)
         self.editor.tag_configure('autochosen', foreground=ACCENT)
@@ -8316,6 +8371,12 @@ class CorrectNoteApp:
                              if (_show_unsure and _intact) else ()):
                 self.editor.tag_add('unsure',
                                     f'{row}.{u_s}', f'{row}.{u_e}')
+            # **異様と見た範囲**（項目48-IR・2026-08-23）。直せなくても
+            # 紫で見せる（「どこまで判定できているのか」を見るため）。
+            # メニューの「紫の色付け」のオン・オフには掛けない。
+            for o_s, o_e in (result.get('odd_spans', ())
+                             if _intact else ()):
+                self.editor.tag_add('odd', f'{row}.{o_s}', f'{row}.{o_e}')
             if not result['changed'] or not _intact:
                 continue
             # 補正エンジンが返す original_spans は、元テキスト上での
@@ -9947,6 +10008,41 @@ class CorrectNoteApp:
     #       文字を入れてから** 'break' する。
     #   bind_all … Text のクラス束縛が**先**に走って文字はもう
     #       入っている。重ねて入れると `pp` になるので入れない。
+
+    def _ime_first(self, handler):
+        """
+        キー名を指定した束縛を、IME の取り違えの受け皿の**後ろ**に置く
+        （項目48-IN）。
+
+        Tk は同じ欄に `<KeyPress>` と `<Delete>` の両方が張ってあると、
+        keysym=Delete の打鍵では**より具体的な `<Delete>` だけ**を呼ぶ
+        （`<KeyPress>` の束縛は1つも走らない）。`<KeyPress>` に張った
+        `_on_ime_ascii_key` はそこで素通りされる。
+
+        だから、取り違えの対象になるキー名（`_IME_MISREAD_KEYSYMS`）へ
+        個別に束縛するときは、この包みを通す。IME が確定した文字なら
+        **`<KeyPress>` の束縛と同じ順**で文字として扱い（F2 の範囲が
+        あれば C-1＝範囲の後ろへ、無ければ受け皿がカーソル位置へ）、
+        文字でなければ（本物の Delete など）元の処理へ渡す。
+
+        候補一覧（Listbox）への束縛にも同じ包みを使う。一覧には
+        文字を書けないので、そちらは C-1（`_on_dropdown_keypress`）
+        だけに回す。
+        """
+        def wrapped(event=None):
+            if event is not None:
+                widget = getattr(event, 'widget', None)
+                if isinstance(widget, tk.Listbox):
+                    chain = (self._on_dropdown_keypress,)
+                else:
+                    chain = (self._on_f2_range_keypress,
+                             self._on_ime_ascii_key)
+                for fn in chain:
+                    got = fn(event)
+                    if got is not None:
+                        return got
+            return handler(event)
+        return wrapped
 
     def _ime_fkey_insert(self, event):
         """欄への束縛用。文字を入れて 'break'。文字でなければ None。"""
@@ -13116,18 +13212,28 @@ class CorrectNoteApp:
         lb.bind('<Double-Button-1>', pick)
         # 左右キーで、候補を出している語そのものを前後に移す
         # （うにさんの指定・2026-08-09）。
-        lb.bind('<Left>', lambda e: self._on_dropdown_horizontal(-1))
-        lb.bind('<Right>', lambda e: self._on_dropdown_horizontal(1))
+        #
+        # **IME が確定した記号は、これらのキー名で届く**（項目48-EH・
+        # 48-IN。`.`＝Delete・`%`＝Left・`'`＝Right・`&`＝Up・`(`＝Down・
+        # `!`＝Prior・`"`＝Next）。個別の束縛は `<KeyPress>` より先に
+        # 選ばれるので、そのままだと C-1（範囲の後ろへ入れる）へ
+        # 届かない。`_ime_first` で包んで、文字なら C-1 に回す。
+        lb.bind('<Left>',
+                self._ime_first(lambda e: self._on_dropdown_horizontal(-1)))
+        lb.bind('<Right>',
+                self._ime_first(lambda e: self._on_dropdown_horizontal(1)))
 
         # Shift+左右で、選んでいる範囲そのものを伸び縮みさせる
         # （IME の変換範囲調整と同じ。うにさんの指定・2026-08-11・C-3）。
         # Tk は修飾つきのほうを細かい型とみなすので、上の <Left> /
         # <Right> とは競合しない。
-        lb.bind('<Shift-Left>', lambda e: self._on_dropdown_resize(-1))
-        lb.bind('<Shift-Right>', lambda e: self._on_dropdown_resize(1))
+        lb.bind('<Shift-Left>',
+                self._ime_first(lambda e: self._on_dropdown_resize(-1)))
+        lb.bind('<Shift-Right>',
+                self._ime_first(lambda e: self._on_dropdown_resize(1)))
 
         # Delete で選んでいる範囲を消す（うにさんの指定・C-2）。
-        lb.bind('<Delete>', self._on_dropdown_delete)
+        lb.bind('<Delete>', self._ime_first(self._on_dropdown_delete))
         lb.bind('<BackSpace>', self._on_dropdown_delete)
 
         # 文字を打ったら、選んでいる範囲の後ろへ入れる
@@ -13159,8 +13265,8 @@ class CorrectNoteApp:
             lb.see(j)
             return 'break'
 
-        lb.bind('<Up>', lambda e: _move(-1))
-        lb.bind('<Down>', lambda e: _move(1))
+        lb.bind('<Up>', self._ime_first(lambda e: _move(-1)))
+        lb.bind('<Down>', self._ime_first(lambda e: _move(1)))
 
         # PageUp / PageDown で、まとめて飛ばして選ぶ
         # （候補が多いときに上下キーだけでは遠い・うにさんの指定・
@@ -13178,8 +13284,8 @@ class CorrectNoteApp:
                     break
             return 'break'
 
-        lb.bind('<Prior>', lambda e: _page(-1))
-        lb.bind('<Next>', lambda e: _page(1))
+        lb.bind('<Prior>', self._ime_first(lambda e: _page(-1)))
+        lb.bind('<Next>', self._ime_first(lambda e: _page(1)))
         dd.bind('<Escape>', lambda e: self._close_dropdown())
         # 焦点が外れたら閉じるが、F2 で選んでいる語の記憶は残す
         # （括弧ボタンを押した瞬間もここを通るため。_close_dropdown 参照）

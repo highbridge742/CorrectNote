@@ -776,8 +776,24 @@ def fix_katakana_word(word, store, known_word=False,
     if known_word or not word:
         return None
     typed = katakana_to_hiragana(word)
+    # **短い並び（3〜4字）は脱字だけ疑う**（項目48-IT・うにさんの
+    # 「パコン・パソン・パソコ・キボード・キーード・キーボー は異様」）。
+    # 短い語は同じ長さの別語がいくらでもあるので置換は見ない。
+    # 1字落ちて本来より1字短い形だけを、表の語に戻す。
+    short = False
     if len(typed) < min_length:
-        return None
+        if len(typed) < 3:
+            return None
+        short = True
+        # 短い並びがそれ自体で表の語（ローマ・パコン）なら、本人の語。
+        # `ローマ字入力` の `ローマ` が `ローマン` に伸びた（tests_mock）。
+        try:
+            import oddness as _odd
+            _words = _odd._load()
+            if _words and word in _words:
+                return None
+        except Exception:
+            pass
 
     # 直し先は「種＋覚えた語」。**覚えた語だけを尋ねている関門
     # （is_known_compound など）とは入れ物を分ける**（項目48-BA）。
@@ -804,10 +820,13 @@ def fix_katakana_word(word, store, known_word=False,
     budget = allowed_edits(len(typed))
     best = None          # (距離, 読み)
     second = None
+    ties = []            # best と同じ距離で並んだ読み（best を含む）
     _no_bar = typed.replace('ー', '')
     index = _indexed(store, '_katakana_index_cache', vocab)
     for reading in _distance1_candidates(typed, vocab, index):
         if abs(len(reading) - len(typed)) > budget:
+            continue
+        if short and len(reading) != len(typed) + 1:
             continue
         # 総当たりの前に、表を作らない関門で間引く（項目48-BC）
         if not within_one_edit(typed, reading):
@@ -836,7 +855,11 @@ def fix_katakana_word(word, store, known_word=False,
         #   書き換えられた・2026-08-10）。
         # かな連続の探索にも同じ考えの関門がある
         # （find_similar_readings の「ーの位置は動かさない」）。
-        if reading.replace('ー', '') == _no_bar:
+        # 伸ばし棒だけの違いは揺れ（コンピュータ／コンピューター）なので
+        # 直さない。ただし**短い並びの ー の脱字**（キボード → キーボード）
+        # は揺れではなく落としたもの（項目48-IT・うにさんの指定）。
+        if reading.replace('ー', '') == _no_bar \
+                and not (short and len(reading) == len(typed) + 1):
             continue
         d = edit_distance(typed, reading, limit=budget)
         if d > budget:
@@ -844,15 +867,81 @@ def fix_katakana_word(word, store, known_word=False,
         if best is None or d < best[0]:
             second = best
             best = (d, reading)
+            ties = [reading]
+        elif d == best[0]:
+            ties.append(reading)
+            if second is None or d < second[0]:
+                second = (d, reading)
         elif second is None or d < second[0]:
             second = (d, reading)
     if best is None:
         return None
-    # 同じ距離で並んだら、どちらとも決められないので手を引く。
+    # 同じ距離で並んだら、**拮抗を決める**（項目48-IU・うにさんの
+    # 「拮抗したら何もしないは逆効果。異様であれば最有力の候補に補正する」）。
+    # 決め手は 48-IS と同じ順: 使用実績（回数）→ 一般的さ（同梱の表の
+    # 費用）。それでも並ぶなら手を引く（`キーード`: キーボード 回数3・
+    # 費用13 ／ キーワード 回数1・費用62 → キーボード）。
     if second is not None and second[0] == best[0]:
-        return None
+        chosen = _break_tie(ties, vocab, store)
+        if chosen is None:
+            return None
+        best = (best[0], chosen)
     surface = vocab[best[1]]
     return surface if surface != word else None
+
+
+def _break_tie(readings, vocab, store):
+    """
+    同じ距離で並んだ読みから1つ選ぶ（項目48-IU）。
+    使用実績（語彙の回数）が多いほう → 同梱の表で一般的なほう（費用が
+    小さい）。どちらでも並ぶなら None（触らない）。
+    """
+    def _count(reading):
+        try:
+            return max((int(e.get('count', 0)) for e in store.lookup(reading)),
+                       default=0)
+        except Exception:
+            return 0
+
+    def _cost(reading):
+        try:
+            from corrector import _table_cost
+            c = _table_cost(vocab[reading])
+        except Exception:
+            c = None
+        return c if c is not None else 10 ** 9
+
+    ranked = sorted(readings, key=lambda r: (-_count(r), _cost(r)))
+    if len(ranked) < 2:
+        return ranked[0] if ranked else None
+    a, b = ranked[0], ranked[1]
+    if (_count(a), _cost(a)) == (_count(b), _cost(b)):
+        return None
+    return a
+
+
+def dictionary_single_word(word, tokenize_fn):
+    """
+    そのカタカナの並びが、辞書の**1語**として読めるか（項目48-IT）。
+
+    `dictionary_explains` は `ディスレイ` を `ディス`＋`レイ` と2語に
+    割っても「説明が付く」と言う。うにさんの指定「ディスレイ・ディスプレ
+    は異様」。**1語で読めるなら本人の語**（コールバック・キログラム）、
+    2語以上に割れてしか読めないなら、1手で表の語に届くほうを採る。
+    """
+    if not word or tokenize_fn is None:
+        return False
+    try:
+        toks = [t for t in tokenize_fn(word)]
+    except Exception:
+        return False
+    if len(toks) == 1 and toks[0][0] == word and toks[0][5]:
+        return True
+    try:
+        toks = [t for t in tokenize_fn('1' + word) if t[3] >= 1]
+    except Exception:
+        return False
+    return len(toks) == 1 and toks[0][0] == word and bool(toks[0][5])
 
 
 def is_known_compound(parts, store):

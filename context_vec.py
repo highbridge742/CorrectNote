@@ -89,6 +89,9 @@ class ContextVectorStore:
         # （読むたびに共起カウントが増え、初期値が実際の使用実績より
         #   強くなってしまうため）。
         self.seeded = False
+        # 話題のまとまりの**版**（`seed_context.SEED_VERSION`）。
+        # 保存ファイルに無ければ 0（＝版1までしか入っていない）。
+        self.seed_version = 0
         if path and os.path.exists(path):
             self.load()
 
@@ -106,14 +109,35 @@ class ContextVectorStore:
 
         戻り値: 新たに読み込んだなら True
         """
-        if self.seeded:
-            return False
         try:
-            from seed_context import load_seed_topics
+            from seed_context import (load_seed_topics, SEED_VERSION,
+                                      TOPICS_BY_VERSION)
+        except Exception:
+            return False
+        if self.seeded:
+            # **足したぶんだけ**を読む（項目48-IQ）。版1で種を入れた
+            # 人の文脈には、版2の話題（重い↔動作・改行↔削除 など）が
+            # 無い。無いと、育った共起が誤変換の行から学んだ
+            # `思い↔動作` に押し負けて、正しい `動作が重い` を壊す
+            # （2026-08-22 に実測・2行）。
+            have = self.seed_version or 1
+            if have >= SEED_VERSION:
+                return False
+            try:
+                for v in range(have + 1, SEED_VERSION + 1):
+                    topics = TOPICS_BY_VERSION.get(v)
+                    if topics:
+                        load_seed_topics(self, topics)
+            except Exception:
+                return False
+            self.seed_version = SEED_VERSION
+            return True
+        try:
             load_seed_topics(self)
         except Exception:
             return False
         self.seeded = True
+        self.seed_version = SEED_VERSION
         return True
 
     # ------------------------------------------------------------
@@ -293,6 +317,7 @@ class ContextVectorStore:
         data = {
             'version': 1,
             'seeded': self.seeded,
+            'seed_version': self.seed_version,
             'co': {w: dict(neighbors) for w, neighbors in self._co.items()},
         }
         try:
@@ -320,6 +345,10 @@ class ContextVectorStore:
         self._co = defaultdict(lambda: defaultdict(int))
         self._totals = defaultdict(int)
         self.seeded = bool(data.get('seeded'))
+        try:
+            self.seed_version = int(data.get('seed_version') or 0)
+        except Exception:
+            self.seed_version = 0
         for w, neighbors in co.items():
             if not isinstance(neighbors, dict):
                 continue

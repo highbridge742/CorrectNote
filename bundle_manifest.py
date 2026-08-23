@@ -49,6 +49,10 @@ ITEMS = (
     Item('seed_japanese.txt.gz', 'seed_japanese',
          '正しく書けた語を守る門（項目48-FC）が効かなくなる',
          False),
+    Item('seed_japanese_cost.txt.gz', None,
+         '表記の別読み（仮名＝かな・項目48-IS）が引けず、'
+         '異様な塊をひらがなに開く道が細る',
+         False),
     Item('NOTICE_sudachi.txt', None,
          'SudachiDict（Apache-2.0）の表示が配布物から落ちる',
          False),

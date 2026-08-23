@@ -744,6 +744,26 @@ def run_context_vec_cases():
     check('初期状態で「文章」と「野菜」は近くない',
           seeded.similarity('文章', '野菜'), 0.0)
 
+    # **話題のまとまりの版**（項目48-IQ）。版1で種を入れた人の文脈にも、
+    # 版2で足した話題（重い↔動作・改行↔削除）を**足したぶんだけ**入れる。
+    from seed_context import SEED_VERSION, SEED_TOPICS_V1, load_seed_topics
+    check('新しく種を入れた文脈は今の版になる',
+          seeded.seed_version, SEED_VERSION)
+    old = ContextVectorStore()
+    load_seed_topics(old, SEED_TOPICS_V1)     # 版1の人を作る
+    old.seeded = True
+    old.seed_version = 0                      # 古い保存ファイルには版が無い
+    check('版1の人は「重い」と「動作」が近くない',
+          old.similarity('重い', '動作'), 0.0)
+    check('版1の人には足したぶんが入る', old.ensure_seeded(), True)
+    check('入れたら今の版になる', old.seed_version, SEED_VERSION)
+    check('足したあとは「重い」と「動作」が近い',
+          old.similarity('重い', '動作') > 0.2, True)
+    check('二度は足さない', old.ensure_seeded(), False)
+    check('足したぶんだけなので、版1の話題は重ねて数えない',
+          old.similarity('単語', '文章'),
+          seeded.similarity('単語', '文章'))
+
     # 実機で報告された、候補に雑音が多い2つの場面。
     # 初期状態のまま（何も使い込んでいない）で確かめる。
     noisy = [
@@ -911,10 +931,11 @@ def test_analysis_cache():
     results = [
         {'original': 'たんほの繋がり', 'corrected': 'たんごの繋がり',
          'changed': True, 'details': [('たんほ', 'たんご', '学業・勉強')],
-         'spans': [(0, 3)], 'unsure_spans': [], 'original_spans': [(0, 3)]},
+         'spans': [(0, 3)], 'unsure_spans': [], 'original_spans': [(0, 3)],
+         'odd_spans': []},
         {'original': 'ふつうの行', 'corrected': 'ふつうの行',
          'changed': False, 'details': [], 'spans': [],
-         'unsure_spans': [], 'original_spans': []},
+         'unsure_spans': [], 'original_spans': [], 'odd_spans': [(0, 2)]},
     ]
 
     check('書けた', AC.save(path, fp(), {text: results}), True)

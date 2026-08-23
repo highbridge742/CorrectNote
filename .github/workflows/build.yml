@@ -33,6 +33,14 @@ jobs:
   build-windows:
     needs: test
     runs-on: windows-latest
+    # **画面の文字集合を UTF-8 に固定する**（項目48-IL・2026-08-22）。
+    # GitHub Actions の Windows は cp1252 なので、日本語を `print`
+    # しただけで `UnicodeEncodeError` が出てビルドが止まった。
+    # spec 側でも落ちないようにしたが（`bundle_manifest.print_report`）、
+    # ここを決めておくと**記録が日本語のまま読める**。
+    # `ci_smoke_test.py` の日本語の出力もここで守られる。
+    env:
+      PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
 

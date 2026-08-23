@@ -130,6 +130,17 @@ RIGHT_MIN = 2
 # `名詞:一般` としか言わないため、ここで補う。
 _POSITION_KANJI = set('上下左右前後内外中表裏奥端横縦先元底頭尾')
 
+# **否定の接頭辞**（項目48-IP）。`不一致` `非対応` `未確定` `無関係` の
+# 頭。後ろに付く相手を選ばないので、前の語との相性を問わない。
+# 閉じた類（4字）。
+_NEG_PREFIX = set('不非未無')
+
+# **形・集合を表す1字の名詞**（項目48-IS）。`漢字塊` `文字列` `語群`
+# `上層` `光束` `断片` `集団` のように、どんな名詞の後ろにも付く。
+# 位置名詞と同じ閉じた類。表には1字の語が無いので、これを書かないと
+# `漢字塊` が異様に見え、門を外したあと `漢字会議` に直された（実測）。
+_AGGREGATE_KANJI = set('塊群層列束片団帯')
+
 
 def _load():
     """表を作る（**必要になってから1回だけ**）。"""
@@ -220,6 +231,13 @@ def can_join(a, ap, b, bp):
     # (1) 表の語の中で、その並びを見たことがある
     if (a, b) in _PAIR or (a + b) in words:
         return True
+    # (1') **否定の接頭辞**（不・非・未・無）を頭に持つ語は、
+    #      「A の 不一致」のように何にでも付く（型不一致・色不一致・
+    #      数未確定）。否定の接頭辞は**閉じた文法の類**（4字）であって
+    #      語の一覧ではない（項目48-IP。`型不一致` が正しいのに
+    #      立っていた）。
+    if len(b) >= 2 and b[0] in _NEG_PREFIX and b[1:] in words:
+        return True
     # (6) **名詞＋動詞**。
     #     `順序入れ替え` `直接呼ぶ` は目的語・副詞＋動作でふつうの形。
     #     `差釣れ` が異様なのは、**1字の名詞が動詞に直付き**だから
@@ -262,6 +280,9 @@ def can_join(a, ap, b, bp):
     #       `名詞:一般` としか言わないので、ここで補う。
     if len(a) == 1 and a in _POSITION_KANJI:
         return True
+    # (6-4) **形・集合の1字名詞**は何の後ろにも付く（漢字塊・文字列）
+    if len(b) == 1 and b in _AGGREGATE_KANJI and len(a) >= 2:
+        return True
     # (6') **前が副詞になれる語**＝後ろを修飾する
     #       一番大切・最高品質
     if '副詞可能' in ap:
@@ -280,9 +301,17 @@ def can_join(a, ap, b, bp):
     return False
 
 
-def is_odd_run(text, tokenize_fn):
+# 「する」の活用形（解析が動詞:自立として切る表記）。項目48-IX
+_SURU_FORMS = frozenset(('し', 'する', 'した', 'して', 'します', 'しよう',
+                         'しな', 'すれ', 'しろ', 'せ'))
+
+
+def is_odd_run(text, tokenize_fn, with_spans=False):
     """
     **その塊に「その順ではくっつけない語の並び」があるか**。
+
+    with_spans=True なら (A, B, 始まり, 終わり) を返す（画面で色を
+    付けるため・項目48-IR）。
 
     `tokenize_fn` は `corrector.make_tokenizer` が返す形
     （(表記, 品詞, 読み, 開始, 終了, 読みが確定か) の並び）。
@@ -297,11 +326,21 @@ def is_odd_run(text, tokenize_fn):
         toks = list(tokenize_fn(text))
     except Exception:
         return []
+    # 位置は**解析が言う始まり・終わり**（t[3], t[4]）を使う。表記を
+    # 足し上げると、解析が落とす空白・記号のぶんだけずれて、画面の
+    # 色が隣の字に付く（項目48-IR で実測: 行頭の空白で `素帰任` が
+    # `す／素` に）。無いときだけ足し上げる。
     spans, pos = [], 0
     for t in toks:
         surf = t[0] or ''
-        spans.append((pos, pos + len(surf), t))
-        pos += len(surf)
+        try:
+            s0, e0 = int(t[3]), int(t[4])
+            if not (0 <= s0 <= e0 <= len(text)):
+                raise ValueError
+        except Exception:
+            s0, e0 = pos, pos + len(surf)
+        spans.append((s0, e0, t))
+        pos = e0
     kanji = lambda c: '一' <= c <= '鿿'
     out = []
     for i in range(len(spans) - 1):
@@ -316,13 +355,86 @@ def is_odd_run(text, tokenize_fn):
             continue
         if any(x in bp for x in ('助詞', '助動詞', '記号')):
             continue
+        # **漢字の名詞＋「し／する」の直付き**は異様（項目48-IX・2026-08-23・
+        # うにさんの指定「`田部井号して` が異様と判定できれば」）。
+        # 「N する」と言えるのは動作性名詞（サ変接続）だけ。`号して`
+        # `誤字して` は、号・誤字 が動作ではないのに動詞が直付きしている。
+        # **文法の類で除くもの**: 形容動詞語幹（`安定して`）、`〜化`
+        # （化 がサ変を作る・`無効化して`）、`お／ご＋連用形＋する`
+        # （敬語・`お渡しする`）、副詞にもなる語、数詞。カタカナ語は
+        # 見ない（IPAdic は `ドラッグ` `クリック` を一般名詞と言うが
+        # 外来語は自由にサ変化する。実機メモで 66 行が正しい文だった）。
+        prev_sf = spans[i - 1][2][0] if i > 0 else ''
+        if (a_sf and all(kanji(c) for c in a_sf)
+                and ap.startswith('名詞')
+                and not any(x in ap for x in ('サ変', '形容動詞', '副詞可能',
+                                              '数', '非自立'))
+                and not a_sf.endswith('化')
+                and bp.startswith('動詞')
+                and b_sf in _SURU_FORMS
+                and prev_sf not in ('お', 'ご')
+                # 送り仮名まで含めて表の語（`見做|し`＝見做す）なら語の
+                # 中の切れ目。`号し` だけが表に在っても `田部井号し` は
+                # 無いので、漢字の連続ごと見る（48-IP と同じ `_run_is_word`）
+                and not _run_is_word(text, a_s, b_e)):
+            out.append((a_sf, b_sf, a_s, b_e) if with_spans else (a_sf, b_sf))
+            continue
         # **漢字が境目で隣り合っているときだけ見る**。
         # かなが挟まる形は送り仮名・活用で、別の話（項目48-HN）。
         if not (a_sf and b_sf and kanji(a_sf[-1]) and kanji(b_sf[0])):
             continue
-        if can_join(a_sf, ap, b_sf, bp) is False:
-            out.append((a_sf, b_sf))
+        if can_join(a_sf, ap, b_sf, bp) is not False:
+            continue
+        # **塊まるごとが表の語なら、その中の並びは異様ではない**
+        # （項目48-IP）。解析は `同音異義語` を `同音|異義|語` と
+        # 割るので (同音, 異義) の対だけを見ると表に無いが、
+        # 塊 `同音異義語` そのものは表に在る。送り仮名まで含めて
+        # 語になる形（`見做|す`）も同じ。見るのは漢字の連続と、
+        # その直後のかな2字まで。
+        if _run_is_word(text, a_s, b_e):
+            continue
+        out.append((a_sf, b_sf, a_s, b_e) if with_spans else (a_sf, b_sf))
     return out
+
+
+def odd_spans(text, tokenize_fn):
+    """
+    **異様と見た範囲**（項目48-IR・画面で紫にする）。
+
+    `is_odd_run` の対を、重なる・隣り合うものはつないで (始まり, 終わり)
+    の並びにする。表が無い・解析できないときは []（意見なし）。
+    """
+    spans = []
+    for _a, _b, s, e in is_odd_run(text, tokenize_fn, with_spans=True):
+        if spans and s <= spans[-1][1]:
+            spans[-1] = (spans[-1][0], max(spans[-1][1], e))
+        else:
+            spans.append((s, e))
+    return spans
+
+
+def _run_is_word(text, start, end):
+    """位置 start〜end を含む漢字の連続（＋直後のかな2字まで）が表の語か。"""
+    words = _WORDS
+    if not words:
+        return False
+    kanji = lambda c: '一' <= c <= '鿿'
+    rs, re_ = start, end
+    while rs > 0 and kanji(text[rs - 1]):
+        rs -= 1
+    while re_ < len(text) and kanji(text[re_]):
+        re_ += 1
+    run = text[rs:re_]
+    if run in words:
+        return True
+    tail = ''
+    for ch in text[re_:re_ + 2]:
+        if not ('ぁ' <= ch <= 'ん'):
+            break
+        tail += ch
+        if (run + tail) in words:
+            return True
+    return False
 
 
 if __name__ == '__main__':

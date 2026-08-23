@@ -81,7 +81,12 @@ from tests_mock_words import (
     test_miskeyed_english,
     test_kana_loanword_typo,
     test_char_ngram,
-    test_kana_to_kanji)
+    test_kana_to_kanji,
+    test_oddness_rules,
+    test_odd_rules_48is,
+    test_kana_fix_48it,
+    test_resplit_48iw,
+    test_common_odd_48ix)
 from tests_mock_fix import (
     run_cases,
     run_overcorrection_cases,
@@ -132,7 +137,12 @@ if __name__ == '__main__':
         # --- 半角モードのまま打ってしまった入力 ---
         ('md@i(4l)h', True, '文字入力'),
         ('md[ki)4l)h', True, '文字入力'),   # 半角＋隣接キー誤打
-        ('qyb@kzut@l', True, '単語の繋がり'),   # 複数の語＋助詞
+        # 複数の語＋助詞。**`つながり` はひらがなのまま**（項目48-IO）。
+        # 初期語彙は `つながり`／`繋がり` の2表記を同じ回数で持ち、
+        # 以前は投入時刻のマイクロ秒差で `繋がり` が勝っていた
+        # （Linux だけ。Windows は時計の刻みで同点＝`つながり`）。
+        # 時刻を揃えたので、表の並び順（ひらがなが先）で決まる。
+        ('qyb@kzut@l', True, '単語のつながり'),
         ('^ytyx;ue', True, '変換されない'),
         ('up@uo<5eqyb@t@b@^ytyx;wm', True, 'なぜなら、英単語がご変換されても'),
         ('c4w@r,', True, 'そうですね'),
@@ -302,9 +312,19 @@ if __name__ == '__main__':
     print()
     ok33 = test_samekey_punctuation()
     print()
+    ok34 = test_oddness_rules()
+    print()
+    ok35 = test_odd_rules_48is()
+    print()
+    ok36 = test_kana_fix_48it()
+    print()
+    ok37 = test_resplit_48iw()
+    print()
+    ok38 = test_common_odd_48ix()
+    print()
     print('ALL OK:', ok1 and ok2 and ok3 and ok4 and ok5 and ok6 and ok7
           and ok8 and ok9 and ok10 and ok11 and ok12 and ok13 and ok14
           and ok15 and ok16 and ok17 and ok18 and ok19 and ok20 and ok21
           and ok22 and ok23 and ok24 and ok25 and ok26 and ok27
           and ok28 and ok29 and ok30 and ok31 and ok32
-          and ok33)
+          and ok33 and ok34 and ok35 and ok36 and ok37 and ok38)

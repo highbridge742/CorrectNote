@@ -350,3 +350,28 @@ class IMEReadings:
                 (surface + '\t' + '\t'.join(readings)).encode('utf-8',
                                                               'ignore'))
         return [len(self._pairs), n, mixed]
+
+
+def attach_to_engine(path='ime_readings.json'):
+    """
+    **打った読みを補正エンジンに差す**（項目48-IU）。`app.py` の起動時と
+    同じこと（`kanji_guess.set_ime_readings_provider`）を、**測る道具
+    （memodiff・probe_pairs）にも同じ1行で**やる。道具が差していないと、
+    本体では守られる行（`鍵括弧`）が道具では化けて、読み違える
+    （項目48-IS で実測）。
+
+    戻り値: 差した対の数。ファイルが無ければ None（初期状態＝差さない）。
+    """
+    import os
+    if not os.path.exists(path):
+        return None
+    try:
+        import kanji_guess as _kg
+        ime = IMEReadings(path).load()
+        _kg.set_ime_readings_provider(ime.readings_for)
+        try:
+            return len(ime)
+        except Exception:
+            return -1
+    except Exception:
+        return None

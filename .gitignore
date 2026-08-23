@@ -24,6 +24,9 @@ kanji_shindan.txt
 probe.txt
 rebuild.txt
 
+# Claude Code の入口（個人のフォルダ構成と作業の決まりが書いてある）
+CLAUDE.md
+
 # 開発メモ（個人のメモの実例が引用で入っている）
 #
 # **`SPEC.md` だけでは足りない**（2026-08-20・うにさんの未回答の
@@ -40,6 +43,11 @@ Fableへ伝える変更点_*.md
 続き*.md
 2つの向き_*.md
 総当たりの中身_*.md
+はじめに読む_*.md
+打ってほしい文_*.md
+# 束ねたときの覚え書き（`第*回*.md` は .md しか拾わない）
+README_SNAPSHOT.txt
+README_第*回*.txt
 # （`README.md` と `release_v*.md` は**公開するもの**なので入れない）
 
 # 測るための材料（corpus_build.py が作る。SPEC.md の複製が入る）
@@ -57,3 +65,13 @@ __pycache__/
 build/
 dist/
 *.exe
+
+# 測る道具の控え（実機メモの断片 cases/ が入る・項目48-IV）
+tools_local/
+
+# まだ採用していない版の控え（項目48-DY）。
+# `corrector.py.gtest39` に**補正エンジンの別版**が丸ごと入っている。
+次にやること/
+
+# Claude Code のこの PC 用の設定（個人のフォルダ構成と許可が出る）
+.claude/
