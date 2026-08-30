@@ -23,6 +23,7 @@ ime_readings.json
 kanji_shindan.txt
 probe.txt
 rebuild.txt
+解析の記録.txt
 
 # Claude Code の入口（個人のフォルダ構成と作業の決まりが書いてある）
 CLAUDE.md

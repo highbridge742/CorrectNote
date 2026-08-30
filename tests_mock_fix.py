@@ -598,10 +598,15 @@ def test_attested_candidates():
                          find_known_readings_flex, attested=attested)
     check('メモに書かれている表記が候補に出る',
           '平仮名' in names(c, 'homophone'), True)
+    # 2026-08-27（項目48-KC）から、attested を渡さなくても**同梱の表**
+    # （seed_japanese_cost・読み→表記）から「漢字にする」候補が出る
+    # （うにさんの報告「わずかな・なぜか——平仮名だから候補が出ない。
+    # この場合は漢字変換候補を並べてください」）。前はここが
+    # 「渡さなければ出ない」の見張りだった。
     c0 = build_candidates('ひらがな', 'ひらがな', store,
                           find_known_readings_flex)
-    check('渡さなければ今までどおり',
-          '平仮名' in names(c0), False)
+    check('渡さなくても、表から「漢字にする」候補が出る（項目48-KC）',
+          '平仮名' in names(c0, 'kanji'), True)
 
     r = build_range_candidates([('ひ', 'ひ'), ('ら', 'ら'),
                                 ('が', 'が'), ('な', 'な')],
@@ -1248,13 +1253,20 @@ def test_homophone_conjugated():
     check('送り仮名が長すぎる形は触らない',
           pick('売っため', 'うっため', '売っため ⇒ 打っため'), None)
     check('読みの末尾が送り仮名と合わない形は触らない',
-          pick('売っ', 'うった', '売った文字 ⇒ 打った文字'), None)
+          # 周りの語は設計35（対の表・48-JJ）の手がかり（文字・入力）を
+          # 含まないものにする——含むと表が先に（正しく）直して、
+          # この門の見張りにならない
+          pick('売っ', 'うった', '売った文字 ⇒ 打った文字',
+               around=('天気', '洗剤')), None)
     check('字数の違う語幹へは置き換えない（打ち込っ は候補にならない）',
           (pick('売っ', 'うっ', '売った ⇒ 打ち込った') or (None,))[0],
           '打っ')
     check('栓を切れば経路ごと消える',
+          # こちらも手がかりの無い周りの語で（設計35 は別の設計で、
+          # この栓の外に居る）
           (lambda: (setattr(C, '_CONJ_HOMOPHONE', False),
-                    pick('売っ', 'うっ', '売った文字 ⇒ 打った文字'),
+                    pick('売っ', 'うっ', '売った文字 ⇒ 打った文字',
+                         around=('天気', '洗剤')),
                     setattr(C, '_CONJ_HOMOPHONE', True))[1])(), None)
 
     C._CONJ_HOMOPHONE = _saved

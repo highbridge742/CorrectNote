@@ -1,0 +1,604 @@
+# -*- coding: utf-8 -*-
+# CorrectNote — 誤字補正メモ帳
+# Copyright (C) 2026 Takahashi Yuu
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+"""
+**品詞と活用の文法**（項目48-KS・2026-08-29）。
+
+うにさんの指定（2026-08-29）:
+
+    「文節の末尾が「い」だからイ形容詞、「な」だからナ形容詞、
+      ウ段だから動詞。補助動詞には「て」が付く。
+      名詞を認識したから、うしろに助詞がくる可能性を予測したり、
+      品詞を判定したり、品詞の組み合わせとしての予測など
+      動いていますか？無ければ検討してください。
+      名詞、代名詞、副詞、連体詞、接続詞、感動詞、助詞は
+      文の形が変わりません」
+
+いままで、かな連続の「説明が付くか」（`corrector._kana_run_explained`）
+は**語の表と機能語の表を敷き詰めるだけ**で、**活用を知らなかった**。
+だから
+
+    入り**ます** ・ 震え**ているように** ・ 早**くなったので**
+
+のような**述語の尻尾**（漢字の語幹に続く活用語尾＋助動詞の連なり）が
+「説明できない」になり、**異様の判定に使えなかった**（False の 85% が
+正しい日本語・2026-08-28 の実測）。
+
+ここでは、うにさんの挙げた文法をそのまま**閉じた類**として持つ:
+
+    ・活用語尾の段（い段=連用形・あ段=未然形・え段=仮定形/一段語幹・
+      ウ段=終止連体形・お段+う=意向形・っ/ん=音便）
+    ・助動詞の**接続**（ます は連用形に、ない は未然形に、
+      た/て は音便形に付く）
+    ・**て + 補助動詞**（ている・ておく・てしまう・てもらう…は、
+      て の後ろで動詞がもう一度活用を始める）
+    ・イ形容詞の活用（い・く・くて・かった・ければ・さ・そう）
+    ・語の表からの活用推定——**表の語が「い」で終わればイ形容詞、
+      ウ段で終われば動詞**とみなし、語幹＋活用形も語として認める
+      （わるい → わるかった、もどる → もどった）
+    ・形の変わらない品詞（名詞・代名詞・副詞・連体詞・接続詞・
+      感動詞・助詞）は**表との完全一致**でそのまま置ける
+
+**判定の向き**: この文法は**「説明が付く＝異様ではない」side にだけ**
+使う（許す向き。多めに許しても、正しい文を守る側に倒れるだけ）。
+説明が付かないことは「異様」の**必要条件**であって、単独の証拠には
+しない——`odd_kana_spans` の敷居（長さ・繰り返しの形）と組で使う。
+
+表は増やさない: 語は `oddness` の表（seed_japanese 778,340語）を
+借り、機能語は `corrector` の名簿を借りる。**ここに在るのは
+「つなぎ方」（文法）だけ**で、同じ意味の名簿を2つ作らない（決まり）。
+"""
+
+# 五十音の段（活用語尾に立つもの。ぢ・づ は現代仮名では稀だが含める）
+_DAN_I = 'いきぎしじちぢにひびぴみり'      # 連用形（買い・書き・押し）
+_DAN_A = 'あかがさざただなはばぱまやらわ'   # 未然形（買わ・書か・押さ）
+_DAN_E = 'えけげせぜてでねへべぺめれ'      # 仮定形・一段語幹（書け・見え）
+_DAN_U = 'うくぐすずつづぬふぶぷむゆる'    # 終止・連体形（買う・書く）
+_DAN_O = 'おこごそぞとどのほぼぽもよろ'    # 意向形（買お+う・書こ+う）
+
+# 五段の行（辞書形の末尾 → 未然/連用/仮定/意向の字と音便の字）。
+# 「ウ段だから動詞」——表の語がウ段で終わっていたら、この行で
+# 活用した形も同じ語とみなす（もどる → もどり・もどっ・もどれ）。
+_GODAN_ROW = {
+    'う': ('わ', 'い', 'え', 'お', 'っ'),
+    'く': ('か', 'き', 'け', 'こ', 'い'),
+    'ぐ': ('が', 'ぎ', 'げ', 'ご', 'い'),
+    'す': ('さ', 'し', 'せ', 'そ', ''),
+    'ず': ('ざ', 'じ', 'ぜ', 'ぞ', ''),
+    'つ': ('た', 'ち', 'て', 'と', 'っ'),
+    'づ': ('だ', 'ぢ', 'で', 'ど', 'っ'),
+    'ぬ': ('な', 'に', 'ね', 'の', 'ん'),
+    'ふ': ('は', 'ひ', 'へ', 'ほ', ''),
+    'ぶ': ('ば', 'び', 'べ', 'ぼ', 'ん'),
+    'ぷ': ('ぱ', 'ぴ', 'ぺ', 'ぽ', ''),
+    'む': ('ま', 'み', 'め', 'も', 'ん'),
+    'ゆ': ('', '', '', '', ''),
+    'る': ('ら', 'り', 'れ', 'ろ', 'っ'),
+}
+
+# 敬称（名前の後ろに付く閉じた類）。`うにさんの` を名前と見るため。
+_HONORIFICS = ('さん', 'さま', 'くん', 'ちゃん')
+
+# 助詞は**置ける場所で分ける**（うにさんの「文の間だから助詞」）。
+# 格助詞・係助詞は語のあとに付くが、終助詞（ね・よ・わ…）は
+# **述語が閉じたあと**にしか立てない。1つの名簿（PARTICLES_1CHAR）で
+# どこにでも置くと `わ|くわ|うし|ながら` のような読み方まで通ってしまう
+# （実測: `わくわうし` が説明できてしまい、的を取りこぼした）。
+_CASE_PARTICLES = frozenset('はがをにでとものへやか')
+_FINAL_PARTICLES = frozenset('ねよさなぞぜわかも')
+
+# 名詞の述語（名詞＋だ・です——形の変わらない品詞が述語になる形）
+_NOUN_PRED = (
+    ('だ', 'END'), ('です', 'END'), ('でした', 'END'), ('だった', 'TA'),
+    ('だろう', 'END'), ('でしょう', 'END'), ('なら', 'END'),
+    ('な', 'Bf'),                    # ナ形容詞の連体形（きれいな＋名詞）
+)
+
+# 助詞の追加ぶん（`corrector.PARTICLES_MULTI` に無い閉じた類）
+_EXTRA_PARTICLES = frozenset((
+    'ばかり', 'ぐらい', 'くらい', 'なんて', 'なんか', 'ずつ', 'すら',
+    'やら', 'かな', 'っけ', 'とか', 'って', 'のみ',
+))
+
+# 機能語の追加ぶん（corrector の名簿に無い閉じた類。**ここに足しても
+# 補正の答えは変わらない**——この文法は印の判定にしか使わないため）
+_EXTRA_FUNCS = frozenset((
+    'どちら', 'こちら', 'そちら', 'あちら',      # 指示語の漏れ
+    'してる', 'してた', 'してて',                # ている の縮み（話し言葉）
+    # かなで書く副詞（**副詞＋名詞** は普通の並びなので、語×語の
+    # 「直接つなげない」の外に出す。まず会議から・ほぼ全部）
+    'まず', 'ほぼ', 'ごく', 'おそらく', 'ようやく', 'いったん',
+    'たしかに', 'まさに', 'もともと',
+))
+
+# **1字の語幹を許す基本動詞**（なる・ある・いる・おる・でる・みる・ねる）。
+# 語幹1字の活用推定を全部許すと `ひ|ら|ん`（干る の未然＋ん）のような
+# 読み方で的を取りこぼすので、**閉じた白名簿**にする。
+_BASIC_STEMS_1 = frozenset('なあいおでみね')
+
+# 一段活用でありうる語幹の末尾（い段・え段——見る・食べる）。
+# ウ段など他の段で終わる語幹の「る」は五段（ゆする・かえる…は
+# 語幹末で分かれる。`ゆす|る` を一段と見て `ゆすかりた` を
+# 「語幹＋借りた」と読んでしまった・実測）。
+_ICHIDAN_TAIL = frozenset(_DAN_I + _DAN_E)
+
+_TABLES = None
+
+
+def _load_tables():
+    """機能語の名簿は `corrector` から借りる（1回だけ・循環なし）。"""
+    global _TABLES
+    if _TABLES is not None:
+        return _TABLES
+    import corrector as C
+    try:
+        import oddness as O
+        words = O._load() or frozenset()
+    except Exception:
+        words = frozenset()
+    funcs = (set(C.PARTICLES_MULTI) | set(C.AUXILIARY_TAILS)
+             | set(C.DEMONSTRATIVES) | set(C.FUNCTION_NOUNS)
+             | set(C.BASIC_VERB_FORMS) | set(C.CONNECTIVES)
+             | set(_EXTRA_PARTICLES) | set(_EXTRA_FUNCS)
+             | {'よい', 'いい', 'ない'})
+    funcs = {x for x in funcs if len(x) >= 2}
+    _TABLES = (words, funcs, _CASE_PARTICLES)
+    return _TABLES
+
+
+# --- 活用のオートマトン ---------------------------------------------
+#
+# 状態:
+#   Bf   語の頭に立てる位置（文節の頭・機能語のあと）
+#   Bw   語を置いた直後（**語と語は直接つなげない**・項目48-IS の決まり
+#        のまま。ただし活用する語＝動詞・形容詞は 副詞＋動詞 のように
+#        直接続くので、活用の入口だけは許す）
+#   S    漢字の語幹の直後（活用語尾がここから始まる）
+#   R    連用形のあと（ます・た・て・たい が付ける）
+#   MZ   未然形のあと（ない・ぬ・ん・ず・れる・せる）
+#   E    仮定形・一段語幹のあと（る・れば・ば・ない・られる・ます…）
+#   TSU  促音便（っ）のあと（た・て・たら・たり）
+#   N    撥音便（ん）のあと（だ・で）
+#   TE   て形のあと（**補助動詞がもう一度活用を始める**・GEN を通す）
+#   TA   た形のあと（ら・り・そのまま終わり）
+#   IST  イ形容詞の語幹のあと（い・く・くて・かった・ければ・さ・そう）
+#   SOU  そう（様態）のあと（だ・です・に・な）
+#   END  述語が閉じた（助詞・終助詞・です が付ける）
+#
+# 受け入れ: 連続の終わりに Bf/Bw/END/TA/TE/R/E で立っていること。
+# （MZ・TSU・N・IST・S の途中では終われない——「〜かっ」は語ではない）
+
+_PIECES = {
+    'R': (
+        ('ます', 'END'), ('ました', 'TA'), ('まして', 'TE'),
+        ('ません', 'END'), ('ませんでした', 'END'), ('ましょう', 'END'),
+        ('ますまい', 'END'), ('まい', 'END'),
+        ('た', 'TA'), ('て', 'TE'), ('た', 'IST'),      # たい はイ形容詞
+        ('そう', 'SOU'), ('ながら', 'END'), ('つつ', 'END'),
+        ('なさい', 'END'), ('なさいます', 'END'), ('なさら', 'MZ'),
+        ('なさっ', 'TSU'), ('なさる', 'END'),
+        ('やす', 'IST'), ('にく', 'IST'), ('づら', 'IST'), ('がた', 'IST'),
+        ('ちゃう', 'END'), ('ちゃっ', 'TSU'), ('ちゃい', 'R'),
+        ('じゃう', 'END'), ('じゃっ', 'TSU'),
+    ),
+    'MZ': (
+        ('な', 'IST'), ('ぬ', 'END'), ('ん', 'END'), ('ず', 'END'),
+        ('ずに', 'END'), ('れ', 'E'), ('せ', 'E'), ('んとす', 'END'),
+        ('され', 'E'), ('さ', 'E'),        # 使役・使役受身（待た**され**ます）
+    ),
+    'E': (
+        ('る', 'END'), ('れば', 'END'), ('ば', 'END'), ('ろ', 'END'),
+        ('よ', 'END'), ('よう', 'END'), ('られ', 'E'), ('させ', 'E'),
+        ('な', 'IST'), ('ず', 'END'), ('ずに', 'END'), ('まい', 'END'),
+        ('ん', 'END'), ('んとす', 'END'),
+    ),
+    'TSU': (
+        ('た', 'TA'), ('たら', 'END'), ('たり', 'END'), ('て', 'TE'),
+    ),
+    'N': (
+        ('だ', 'TA'), ('で', 'TE'),
+    ),
+    'TA': (
+        ('ら', 'END'), ('り', 'END'),
+    ),
+    'IST': (
+        ('い', 'END'), ('く', 'Bf'), ('くて', 'TE'), ('かった', 'TA'),
+        ('かったら', 'END'), ('ければ', 'END'), ('かろう', 'END'),
+        ('さ', 'Bw'), ('そう', 'SOU'), ('すぎ', 'E'),
+    ),
+    'SOU': (
+        ('だ', 'END'), ('です', 'END'), ('でした', 'END'),
+        ('に', 'Bf'), ('な', 'Bf'),
+    ),
+    'END': (
+        ('し', 'END'), ('です', 'END'), ('でしょう', 'END'),
+        ('だろう', 'END'), ('まい', 'END'), ('らし', 'IST'),
+        ('みたい', 'END'), ('って', 'END'),
+    ),
+}
+
+# ます・た・て … は連用形にも一段語幹にも付く
+_PIECES['E'] = _PIECES['E'] + _PIECES['R']
+
+# 終助詞は述語のあとにだけ（買った**ね** ○ ／ 語の途中には置かない）
+_PIECES['END'] = _PIECES['END'] + tuple(
+    (c, 'END') for c in sorted(_FINAL_PARTICLES)) + _NOUN_PRED
+
+# 状態からの ε 遷移（字を消費しない）
+_EPS = {
+    'R': ('Bw',),          # 連用中止・名詞化（読み、書き）
+    'E': ('Bw',),          # 一段の連用形（見に行く の 見）
+    'TE': ('Bf',),         # て＋補助動詞は語の表からも引ける（ておきます）
+    'TA': ('END',),
+    'SOU': ('END',),
+    'END': ('Bf',),        # 連体形＋形式名詞（するもの・るとき）
+}
+
+_ACCEPT = frozenset(('Bf', 'Bw', 'END', 'TA', 'TE', 'R', 'E'))
+
+
+def _gen_steps(run, i):
+    """漢字の語幹の直後（S）と て形のあと（TE）で始まる活用語尾。"""
+    c = run[i]
+    out = []
+    if c in _DAN_I:
+        out.append((i + 1, 'R'))
+    if c in _DAN_A:
+        out.append((i + 1, 'MZ'))
+    if c in _DAN_E:
+        out.append((i + 1, 'E'))
+    if c in _DAN_U:
+        out.append((i + 1, 'END'))
+    if c == 'っ':
+        out.append((i + 1, 'TSU'))
+    if c == 'ん':
+        out.append((i + 1, 'N'))
+    if c in _DAN_O and i + 1 < len(run) and run[i + 1] == 'う':
+        out.append((i + 2, 'END'))
+    return out
+
+
+def explain_kana_run(run, after_kanji=False, before_kanji=False,
+                     kanji_stem='', is_word=None):
+    """
+    **かな連続が、語の表＋機能語＋活用の文法で説明できるか。**
+
+    after_kanji:  直前が漢字（活用語尾・送り仮名がここから始まり得る）
+    before_kanji: 直後が漢字（末尾の お/ご は次の語の接頭辞であり得る）
+    kanji_stem:   直前の漢字の連続（`思` ＋ `いがけず` のように、
+                  漢字＋かなでひとつの表の語になる形を引くため）
+    is_word:      語かどうかを判定する関数（None なら表だけ）。
+                  辞書の索引・本人の語彙を足すのに使う（きちんと・
+                  ぴたり は表に無いが辞書には在る普通の語）
+
+    戻り値: True（説明が付く＝異様とは言えない）／False（付かない）。
+    **False は異様の必要条件であって、単独の証拠にしない。**
+    """
+    if not run:
+        return True
+    _tbl_words, funcs, p1 = _load_tables()
+    if not _tbl_words:
+        return True                      # 表が無ければ意見なし
+    if is_word is None:
+        words = _tbl_words
+    else:
+        class _W(object):
+            def __contains__(self, frag):
+                return frag in _tbl_words or bool(is_word(frag))
+        words = _W()
+    if run in words or run in funcs:
+        return True
+    n = len(run)
+    # 末尾の お/ご は、次の語の接頭辞（お待ちください・「なんだお前」の
+    # 切れ端）。直後が漢字でなくても、行やかぎ括弧の切れ目で同じ形が
+    # できる（実測: `なんだお` に印が立ち、48-GL の「出しすぎ」になった）
+    ends = {n}
+    if n >= 3 and run[-1] in 'おご':
+        ends.add(n - 1)
+
+    seen = set()
+    stack = [(0, 'Bf')]
+    if after_kanji:
+        stack.append((0, 'S'))
+        # 漢字の連続＋かなの頭が、表の語（思いがけず・引き継ぎ）
+        if kanji_stem:
+            for k in range(1, min(6, n) + 1):
+                if kanji_stem + run[:k] in words:
+                    stack.append((k, 'Bw'))
+            # 漢字の語幹の動詞・形容詞（動く・早い）を活用させた形
+            for k in range(0, min(4, n)):
+                stem = kanji_stem + run[:k]
+                if stem + 'い' in words and k < n:
+                    stack.append((k, 'IST'))
+                for u, row in _GODAN_ROW.items():
+                    if stem + u not in words or k >= n:
+                        continue
+                    a, i_, e, o, onb = row
+                    c = run[k]
+                    if c == u:
+                        stack.append((k + 1, 'END'))
+                    if c == a:
+                        stack.append((k + 1, 'MZ'))
+                    if c == i_:
+                        stack.append((k + 1, 'R'))
+                    if c == e:
+                        stack.append((k + 1, 'E'))
+                    if onb and c == onb:
+                        stack.append((k + 1, 'TSU' if onb != 'ん' else 'N'))
+                    if c == o and k + 1 < n and run[k + 1] == 'う':
+                        stack.append((k + 2, 'END'))
+                    if u == 'る' and (not ('ぁ' <= stem[-1] <= 'ゖ')
+                                      or stem[-1] in _ICHIDAN_TAIL):
+                        stack.append((k, 'E'))       # 一段（見る・出る）
+    while stack:
+        i, st = stack.pop()
+        if (i, st) in seen:
+            continue
+        seen.add((i, st))
+        if i in ends and st in _ACCEPT:
+            return True
+        if i >= n:
+            continue
+        c = run[i]
+        # ー は前の音の伸び（状態を変えずに読み飛ばす）
+        if c == 'ー':
+            stack.append((i + 1, st))
+            continue
+        # ε 遷移
+        for st2 in _EPS.get(st, ()):
+            stack.append((i, st2))
+        if st in ('S', 'TE'):
+            stack.extend(_gen_steps(run, i))
+            continue
+        if st in _PIECES:
+            for piece, st2 in _PIECES[st]:
+                if run.startswith(piece, i):
+                    stack.append((i + len(piece), st2))
+            continue
+        if st in ('Bf', 'Bw'):
+            # 1字の格助詞（形の変わらない品詞は、表との一致で置ける。
+            # 終助詞は END からだけ——「文の間だから助詞」の場所の決まり）
+            if c in p1:
+                stack.append((i + 1, 'END'))
+            # 名詞の述語（名詞＋だ・です・なら）
+            for piece, st2 in _NOUN_PRED:
+                if run.startswith(piece, i):
+                    stack.append((i + len(piece), st2))
+            # 機能語（2字以上）
+            for ln in range(2, min(12, n - i) + 1):
+                if run[i:i + ln] in funcs:
+                    stack.append((i + ln, 'END'))
+            # 語（**語と語は直接つなげない**——Bw からは置けない）
+            if st == 'Bf':
+                for ln in range(2, min(12, n - i) + 1):
+                    if run[i:i + ln] in words:
+                        stack.append((i + ln, 'Bw'))
+                # 名前＋敬称（うにさん・たろうくん）
+                for k in range(1, min(4, n - i)):
+                    for h in _HONORIFICS:
+                        if run.startswith(h, i + k):
+                            stack.append((i + k + len(h), 'Bw'))
+            # 活用する語の推定: 表の語が「い」で終わればイ形容詞、
+            # ウ段で終われば動詞（Bw からも置ける——副詞＋動詞の形）。
+            # **動詞の語幹は2字以上**（1字の語幹を許すと `ひ|ら|ん` =
+            # 干る の未然＋ん のような読み方で、的を取りこぼした・実測）。
+            # イ形容詞は `よい`（語幹1字）が普通の語なので1字を許す。
+            for ln in range(1, min(11, n - i) + 1):
+                stem = run[i:i + ln]
+                j = i + ln
+                # イ形容詞は文節の頭から（動詞の語幹の直後には立たない
+                # ——`入れ|ちいさい` を許すと的を取りこぼす・実測）
+                if st == 'Bf' and j < n and (stem + 'い') in words:
+                    stack.append((j, 'IST'))
+                if j >= n or (ln < 2 and stem not in _BASIC_STEMS_1):
+                    continue
+                c2 = run[j]
+                for u, row in _GODAN_ROW.items():
+                    if (stem + u) not in words:
+                        continue
+                    a, i_, e, o, onb = row
+                    if c2 == u:
+                        stack.append((j + 1, 'END'))
+                    if c2 == a:
+                        stack.append((j + 1, 'MZ'))
+                    if c2 == i_:
+                        stack.append((j + 1, 'R'))
+                    if c2 == e:
+                        stack.append((j + 1, 'E'))
+                    if onb and c2 == onb:
+                        stack.append((j + 1, 'TSU' if onb != 'ん' else 'N'))
+                    if c2 == o and j + 1 < n and run[j + 1] == 'う':
+                        stack.append((j + 2, 'END'))
+                    if u == 'る' and stem[-1] in _ICHIDAN_TAIL:
+                        stack.append((j, 'E'))
+    return False
+
+
+def _is_hira(c):
+    return 'ぁ' <= c <= 'ゖ' or c == 'ー'
+
+
+def _is_kanji(c):
+    return '一' <= c <= '鿿'
+
+
+def _is_kata(c):
+    return 'ァ' <= c <= 'ヶ'
+
+
+def _exclamation_shape(run):
+    """
+    **擬音・かけ声・伸ばしの形**か（印を立てない側の門）。
+
+    実機メモにはセリフ・鳴き声の材料がある（うほうほ・ふぎゃー・
+    月夜さまーっ・ふぇぇん）。どれも語の表では説明が付かないが、
+    **形そのものが「声」**であって誤字ではない。閉じた形で除く:
+
+      ・2字2回（うほうほ・わうわう——ABAB は補正の道が別に持つ）
+      ・末尾が促音・長音（かくごっ・ふぎゃー——叫び・伸ばし）
+      ・小書きの母音を含む短いもの（くぅーん・ふぇぇん）
+      ・短くて長音を含む（どりーん・すりーぷ）
+    """
+    if len(run) == 4 and run[:2] == run[2:]:
+        return True
+    if run[-1] in 'っー':
+        return True
+    if run.endswith('ーん'):
+        return True                      # どりーん・つんぼよーん
+    if len(run) <= 5 and any(c in 'ぁぃぅぇぉ' for c in run):
+        return True
+    if len(run) <= 4 and 'ー' in run:
+        return True
+    return False
+
+
+def odd_kana_spans(line, dict_index=None, store=None):
+    """
+    **行の中の、説明の付かない ひらがな連続**（項目48-KS の①-a）。
+
+    紫の印にするための位置 [(始まり, 終わり), ...] を返す。
+    敷居（**紫は答えを変えないが、出しすぎは害**・48-GL）:
+
+      ・4字未満は見ない（短い断片は文脈が足りない）
+      ・末尾2字が同じ字・擬音やかけ声の形は見ない（じゅるる・ふぎゃー）
+      ・連続まるごとが**世の中の語の読み**なら黙る（にゅうりょく——
+        かなで書いただけの正しい語。dict_index が居るときだけ引ける）
+      ・語は 表＋辞書の索引＋本人の語彙 から引く（きちんと・ぴたり は
+        表に無いが辞書に在る。本人が学習させた語も語彙で守られる）
+      ・語の表・機能語・活用の文法のどれでも説明が付かないものだけ
+    """
+    if not line:
+        return []
+    out0 = []
+    # **拗音・小書き母音の前は、ひらがな・括弧・行頭に限る**
+    # （項目48-KY・2026-08-29。うにさんの指定「小文字のひとつ前は
+    # 平仮名か、括弧に限ったりしませんか」）。`二ゅ力ミス` の 二ゅ。
+    # **促音 っ は除く**——漢字の語幹の送り仮名（打っ・持っ・戻っ）が
+    # 実機メモに100か所超あって全部正しい形（実測）。長音 ー のあとも
+    # 見ない（ふーっ の類）。
+    for p, c in enumerate(line):
+        if c not in 'ゃゅょぁぃぅぇぉ':
+            continue
+        prev = line[p - 1] if p > 0 else ''
+        if not prev or _is_hira(prev) or prev == 'ー' \
+                or prev in '「『（(［[｛{【〔・　 \t':
+            continue
+        out0.append((p - 1, p + 1))
+
+    def _is_word(frag):
+        if len(frag) < 2:
+            return False
+        if dict_index is not None:
+            try:
+                if dict_index.readings_for_surface(frag):
+                    return True
+            except Exception:
+                pass
+        if store is not None:
+            try:
+                if store.reading_of(frag):
+                    return True
+            except Exception:
+                pass
+        return False
+
+    out = out0
+    n = len(line)
+    i = 0
+    while i < n:
+        if not _is_hira(line[i]):
+            i += 1
+            continue
+        j = i
+        while j < n and _is_hira(line[j]):
+            j += 1
+        run = line[i:j]
+        i0, i = i, j
+        if len(run) < 4:
+            continue
+        if run[-1] == run[-2]:
+            continue                     # じゅるる・じゅるるー
+        if _exclamation_shape(run):
+            continue
+        prev = line[i0 - 1] if i0 > 0 else ''
+        nxt = line[j] if j < n else ''
+        # カタカナの直後も語幹の続き（カシコ**し**・ググ**った**・
+        # サボ**り**——カタカナ語も活用するし、カタカナ＋かなで
+        # 1語の表記もある）
+        after = bool(prev) and (_is_kanji(prev) or _is_kata(prev)
+                                or prev.isdigit() or '０' <= prev <= '９')
+        before = bool(nxt) and _is_kanji(nxt)
+        stem = ''
+        if after and (_is_kanji(prev) or _is_kata(prev)):
+            k = i0
+            same = _is_kanji if _is_kanji(prev) else _is_kata
+            while k > 0 and same(line[k - 1]):
+                k -= 1
+            stem = line[k:i0]
+        try:
+            ok = explain_kana_run(run, after_kanji=after,
+                                  before_kanji=before, kanji_stem=stem,
+                                  is_word=_is_word)
+        except Exception:
+            ok = True
+        if not ok and dict_index is not None:
+            # かなで書いただけの、世の中に在る語（にゅうりょく）
+            try:
+                if dict_index.is_world_reading(run):
+                    ok = True
+            except Exception:
+                pass
+        if not ok:
+            out.append((i0, j))
+    return out
+
+
+def world_covered(text, dict_index):
+    """
+    **世の中の読み（2字以上・刈り込む前）と機能語で、すき間なく
+    敷き詰められるか**（項目48-KV の確かめ・④の物差し）。
+
+    `にゅうりょくみす` ＝ にゅうりょく（入力）＋みす（ミス）→ True。
+    `にゆうりよくみす`（大書き）→ どこも読みにならない → False。
+    dict_index が無ければ False（意見なし＝手は動かない）。
+    """
+    if not text or dict_index is None:
+        return False
+    _w, funcs, p1 = _load_tables()
+    n = len(text)
+    ok = [False] * (n + 1)
+    ok[0] = True
+    for i in range(n):
+        if not ok[i]:
+            continue
+        if text[i] in p1:
+            ok[i + 1] = True
+        for ln in range(2, min(10, n - i) + 1):
+            frag = text[i:i + ln]
+            if frag in funcs:
+                ok[i + ln] = True
+                continue
+            try:
+                if dict_index.is_world_reading(frag):
+                    ok[i + ln] = True
+            except Exception:
+                pass
+    return ok[n]
+
+
+if __name__ == '__main__':
+    print(__doc__)

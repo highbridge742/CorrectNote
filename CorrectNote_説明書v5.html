@@ -104,7 +104,10 @@
     color:var(--muted); font-weight:600; font-size:12px;
     letter-spacing:.04em; text-transform:uppercase;
   }
-  table.keys td.k{ width:190px; }
+  table.keys td.k{ width:250px; }
+  /* 組み合わせ（Ctrl+PageDown など）は途中で折り返さない。
+     折り返すなら「 / 」の位置で。 */
+  table.keys td.k .combo{ white-space:nowrap; }
 
   .callout{
     display:flex; gap:12px; padding:14px 16px; border-radius:8px;
@@ -263,9 +266,24 @@
 
       <h3><span class="dot"></span>色の意味</h3>
       <div class="swatch-row">
-        <span class="swatch"><i style="background:#fdf6f4;border-color:#e9c9c3"></i>補正の候補がある箇所</span>
+        <span class="swatch"><i style="background:#f8cdc1;border-color:#e9c9c3"></i>補正の候補がある箇所</span>
+        <span class="swatch"><i style="background:#e6cbf3"></i>不自然な文字列</span>
         <span class="swatch"><i style="background:#e9eff1"></i>マウスが乗っている語（選び直せる合図）</span>
         <span class="swatch"><i style="background:#ffe9a8"></i>検索で見つかった箇所</span>
+      </div>
+
+      <h3><span class="dot"></span>紫 ― 不自然な文字列</h3>
+      <p>
+        メモ欄の文字が<b>紫</b>で塗られているときは、CorrectNote が補正しようとしたが、
+        補正する文字列を見つけられなかったものです。
+      </p>
+      <p>
+        その場合は必要に応じて、クリックや <span class="kbd">F2</span> で候補から選び直せます（「3. 再変換」）。
+      </p>
+      <div class="callout tip">
+        <div class="icon">🎨</div>
+        <div><p>紫の表示は、表示メニューの
+          <span class="kbd">不自然な文字列を紫で表示</span> でオン・オフを切り替えられます（<b>既定はオン</b>）。</p></div>
       </div>
     </section>
 
@@ -317,7 +335,6 @@
         <li>入力欄を閉じると、書いた内容が自動でコピーされ、他のアプリに貼り付けられます。
           また、その内容はCorrectNote本体のメモ欄にも、カーソルがある位置に挿入されます。</li>
       </ol>
-      <div class="callout tip">
 
       <h3><span class="dot"></span>窓の中でも引用と再変換</h3>
       <p>
@@ -438,13 +455,49 @@
     </section>
 
     <!-- ============================================================ -->
+    <section id="overview">
+      <h2><span class="num">11</span>俯瞰 ― 右ダブルクリック</h2>
+      <p class="sec-intro">長いメモの中で、目当ての場所へ一気に飛ぶための機能です。</p>
+      <p>
+        メモ欄（または補正結果欄）で<b>右ボタンをダブルクリックし、2回目を押したまま保つ</b>と、
+        文字が一時的にとても小さくなり、行間も詰まって、<b>広い範囲が一度に見えます</b>。
+        そのまま<b>マウスを上下に動かすとスクロール</b>します。
+      </p>
+      <ol class="steps">
+        <li>右ボタンをダブルクリックして、2回目を押したままにします。文字が小さくなり、全体が見渡せます。</li>
+        <li>押したままマウスを上下に動かして、行きたい場所を探します。
+          <b>四角い枠</b>が、いまボタンを離したときに画面へ映る範囲を示しています。</li>
+        <li>ボタンを離すと文字の大きさが元に戻り、<b>俯瞰で見ていた行がそのまま画面に残ります</b>。</li>
+      </ol>
+      <div class="callout tip">
+        <div class="icon">🔍</div>
+        <div><p>右ボタンを<b>1回だけ</b>押して離した場合は、これまでどおり候補の一覧が開きます。
+          押したままドラッグすればスクロールです（「10. 余白のドラッグでスクロール」）。</p></div>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
     <section id="edit">
-      <h2><span class="num">11</span>編集の基本機能</h2>
+      <h2><span class="num">12</span>編集の基本機能</h2>
 
       <h3><span class="dot"></span>タブで複数のメモを開く</h3>
       <p>
         ＋ボタンで新しいタブを開き、複数のメモを並行して扱えます。
-        <span class="kbd">Ctrl</span>+<span class="kbd">Tab</span> でタブを順に切り替えられます。
+        タブは<b>ドラッグして並べ替え</b>られます。
+      </p>
+      <p>タブの移動には、次のキーが使えます。上下の段はそれぞれ同じ動きなので、打ちやすいほうを使ってください。</p>
+      <table class="keys">
+        <tr><th>キー</th><th>動作</th></tr>
+        <tr><td class="k"><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">Tab</span></span> /
+          <span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">PageDown</span></span></td><td>次のタブへ</td></tr>
+        <tr><td class="k"><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">Shift</span>+<span class="kbd">Tab</span></span> /
+          <span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">PageUp</span></span></td><td>前のタブへ</td></tr>
+        <tr><td class="k"><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">T</span></span></td><td>新しいタブを開く</td></tr>
+        <tr><td class="k"><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">W</span></span></td><td>いまのタブを閉じる</td></tr>
+      </table>
+      <p>
+        最後のタブで <span class="kbd">Ctrl</span>+<span class="kbd">Tab</span> を押すと先頭のタブへ戻ります
+        （逆向きも同じように回ります）。
       </p>
 
       <h3><span class="dot"></span>自動保存と続きから再開</h3>
@@ -471,7 +524,7 @@
 
     <!-- ============================================================ -->
     <section id="learn">
-      <h2><span class="num">12</span>語彙を教える</h2>
+      <h2><span class="num">13</span>語彙を教える</h2>
       <p class="sec-intro">よく使う専門語や固有名詞をあらかじめ教えておくと、最初からあなたの言葉づかいに合った補正になります。</p>
 
       <h3><span class="dot"></span>語彙を追加する</h3>
@@ -489,7 +542,7 @@
 
     <!-- ============================================================ -->
     <section id="display">
-      <h2><span class="num">13</span>表示の設定</h2>
+      <h2><span class="num">14</span>表示の設定</h2>
       <h3><span class="dot"></span>ダークモード</h3>
       <p>
         表示メニューの <span class="kbd">ダークモード</span> で切り替えられます。
@@ -506,7 +559,7 @@
 
     <!-- ============================================================ -->
     <section id="shortcuts">
-      <h2><span class="num">14</span>ショートカット一覧</h2>
+      <h2><span class="num">15</span>ショートカット一覧</h2>
       <table class="keys">
         <tr><th>キー</th><th>動作</th></tr>
         <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">N</span></td><td>新規</td></tr>
@@ -517,20 +570,23 @@
         <tr><td class="k"><span class="kbd">F3</span> / <span class="kbd">Shift</span>+<span class="kbd">F3</span></td><td>次を検索 / 前を検索</td></tr>
         <tr><td class="k"><span class="kbd">F2</span></td><td>再変換 ― カーソル直前の語の候補を開く（押すたびに左の語へ遡る）</td></tr>
         <tr><td class="k"><span class="kbd">←</span> / <span class="kbd">→</span>（候補一覧が開いているとき）</td><td>再変換の対象の語を前後に移す</td></tr>
-        <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">Tab</span></td><td>タブの切り替え</td></tr>
+        <tr><td class="k"><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">Tab</span></span> / <span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">PageDown</span></span></td><td>次のタブへ</td></tr>
+        <tr><td class="k"><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">Shift</span>+<span class="kbd">Tab</span></span> / <span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">PageUp</span></span></td><td>前のタブへ</td></tr>
+        <tr><td class="k"><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">T</span></span> / <span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">W</span></span></td><td>新しいタブを開く / いまのタブを閉じる</td></tr>
         <tr><td class="k"><span class="kbd">F1</span></td><td>語を拾って引用するモードの切り替え（メモ欄）</td></tr>
         <tr><td class="k"><span class="kbd">=</span>（全角時 <span class="kbd">Shift</span>+<span class="kbd">-</span>）</td><td>同上（メモ欄限定）</td></tr>
         <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">C</span>（選択なし）</td><td>引用モードに入る（選択があるときは通常のコピー）</td></tr>
         <tr><td class="k"><span class="kbd">Esc</span></td><td>引用モードの中止</td></tr>
-        <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">Insert</span></td><td>簡易入力ウィンドウを開く</td></tr>
-        <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">Shift</span>+<span class="kbd">-</span></td><td>同上</td></tr>
+        <tr><td class="k"><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">Insert</span></span> / <span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">Shift</span>+<span class="kbd">-</span></span></td><td>簡易入力ウィンドウを開く</td></tr>
         <tr><td class="k">行番号ダブルクリック</td><td>ブックマークの作成／解除</td></tr>
+        <tr><td class="k">右ダブルクリック（押したまま）</td><td>俯瞰 ― 字を小さくして見渡す（離すと元に戻る）</td></tr>
+        <tr><td class="k">余白を右ドラッグ</td><td>画面のスクロール</td></tr>
       </table>
     </section>
 
     <!-- ============================================================ -->
     <section id="faq">
-      <h2><span class="num">15</span>よくある質問</h2>
+      <h2><span class="num">16</span>よくある質問</h2>
 
       <h3><span class="dot"></span>正しく書いた語が直されてしまいます</h3>
       <p>
@@ -557,7 +613,7 @@
       </p>
     </section>
 
-    <footer>CorrectNote 説明書</footer>
+    <footer>CorrectNote 説明書 v5</footer>
   </main>
 </div>
 

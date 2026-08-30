@@ -143,6 +143,158 @@ def composition_active(hwnd):
         return None
 
 
+def give_own_context(hwnds):
+    """
+    **窓に専用の IME 文脈を持たせる**（項目48-LR・2026-08-30）。
+
+    Windows の IME 文脈（HIMC）は、既定では**スレッドの全部の窓で
+    1つを共有**する。CorrectNote では本体のメモ欄と簡易入力が同じ
+    文脈を使うため、本体の描き直しが caret（＝未変換文字列の表示
+    位置）を引き戻し、簡易入力で打っている未変換の文字が本体側と
+    交互に点滅していた（うにさんの報告。probe_quick_ime3 で
+    0.25〜0.3秒ごとの往復を実測）。
+
+    hwnds: 同じ専用文脈に結び付ける窓の並び。簡易入力では
+        「入力の焦点が向かう包み（wrapper）」と「Text 自身」の両方
+        （IME は焦点の窓の文脈を読み、Tk は Text の窓へ位置を書く。
+          片方だけだと素通りする——学び22）。
+
+    戻り値: 作った HIMC（restore_default_context に渡して片付ける）
+        か None（作れない・Windows 以外）。
+    """
+    if not HAS_SUPPORT or not hwnds:
+        return None
+    try:
+        import ctypes
+        imm = ctypes.windll.imm32
+        # **いまの文脈の「IME が開いているか・変換モード」を先に写し
+        # 取る**。作りたての文脈は IME が閉じた状態で始まるので、
+        # 写さないと、開いた簡易入力でいきなり日本語が打てない
+        # （半角/全角を押し直すことになる）。
+        opened = None
+        conv = ctypes.c_ulong(0)
+        sent = ctypes.c_ulong(0)
+        has_conv = False
+        h0 = imm.ImmGetContext(hwnds[0])
+        if h0:
+            try:
+                opened = imm.ImmGetOpenStatus(h0)
+                has_conv = bool(imm.ImmGetConversionStatus(
+                    h0, ctypes.byref(conv), ctypes.byref(sent)))
+            finally:
+                imm.ImmReleaseContext(hwnds[0], h0)
+        himc = imm.ImmCreateContext()
+        if not himc:
+            return None
+        ok = False
+        for h in hwnds:
+            if h and imm.ImmAssociateContext(h, himc) is not None:
+                ok = True
+        if not ok:
+            imm.ImmDestroyContext(himc)
+            return None
+        try:
+            if has_conv:
+                imm.ImmSetConversionStatus(himc, conv, sent)
+            if opened is not None:
+                imm.ImmSetOpenStatus(himc, opened)
+        except Exception:
+            pass
+        return himc
+    except Exception:
+        return None
+
+
+# ImmAssociateContextEx の「既定の文脈へ戻す」指定（imm.h より）
+IACE_DEFAULT = 0x0010
+
+
+def restore_default_context(hwnds, himc):
+    """
+    専用の文脈を外して既定へ戻し、文脈を捨てる（give_own_context の対）。
+
+    **窓を destroy する前に呼ぶこと**（あとだと hwnd が無効）。
+    失敗しても害は無い（窓ごと消えれば結び付きも消える。
+    文脈が1つ残るだけで、量も増えない）。
+    """
+    if not HAS_SUPPORT or not himc:
+        return
+    try:
+        import ctypes
+        imm = ctypes.windll.imm32
+        for h in hwnds or ():
+            if h:
+                try:
+                    imm.ImmAssociateContextEx(h, None, IACE_DEFAULT)
+                except Exception:
+                    pass
+        imm.ImmDestroyContext(himc)
+    except Exception:
+        pass
+
+
+def set_composition_font(hwnd, face, height_px):
+    """
+    **未変換（変換中）の文字列を、メモ欄と同じ字で描かせる**（項目48-LO）。
+
+    Tk は未変換文字列の**位置**（ImmSetCompositionWindow・CFS_POINT）
+    しか IME に伝えず、**字（ImmSetCompositionFont）は一度も指定して
+    いない**（Tk 8.6 の win/tkWinX.c を確認・2026-08-30）。そのため
+    未変換の文字は IME の既定の字で描かれ、メモ欄より一回り小さく
+    見えることがある（うにさんの報告・2026-08-30「入力して未変換状態の
+    文字が、一回り小さいサイズで表示されることがある」）。
+
+    hwnd:      対象ウィジェットのハンドル（tkinter なら winfo_id()）
+    face:      字体の名前（例 'Yu Mincho'。31字で切る＝LOGFONT の上限）
+    height_px: 字の高さ（**ピクセル**。ポイントではない。負に変換して
+               「文字の高さ」として渡す）
+
+    戻り値: True（設定できた）/ False（IME が拒否）/ None（判定不能）。
+        失敗しても呼び出し側は何もしない（今までどおり IME の既定で
+        描かれるだけ）。
+    """
+    if not HAS_SUPPORT or not hwnd:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class LOGFONTW(ctypes.Structure):
+            _fields_ = [
+                ('lfHeight', wintypes.LONG),
+                ('lfWidth', wintypes.LONG),
+                ('lfEscapement', wintypes.LONG),
+                ('lfOrientation', wintypes.LONG),
+                ('lfWeight', wintypes.LONG),
+                ('lfItalic', ctypes.c_byte),
+                ('lfUnderline', ctypes.c_byte),
+                ('lfStrikeOut', ctypes.c_byte),
+                ('lfCharSet', ctypes.c_byte),
+                ('lfOutPrecision', ctypes.c_byte),
+                ('lfClipPrecision', ctypes.c_byte),
+                ('lfQuality', ctypes.c_byte),
+                ('lfPitchAndFamily', ctypes.c_byte),
+                ('lfFaceName', ctypes.c_wchar * 32),
+            ]
+
+        lf = LOGFONTW()
+        lf.lfHeight = -abs(int(height_px))      # 負=文字の高さで指定
+        lf.lfWeight = 400                       # FW_NORMAL
+        lf.lfCharSet = 1                        # DEFAULT_CHARSET
+        lf.lfQuality = 5                        # CLEARTYPE_QUALITY
+        lf.lfFaceName = str(face or '')[:31]
+        imm = ctypes.windll.imm32
+        himc = imm.ImmGetContext(hwnd)
+        if not himc:
+            return None
+        try:
+            return bool(imm.ImmSetCompositionFontW(himc, ctypes.byref(lf)))
+        finally:
+            imm.ImmReleaseContext(hwnd, himc)
+    except Exception:
+        return None
+
+
 def read_composition(hwnd):
     """
     **変換中／確定した文字列と、その読みを取る**（設計25(甲)）。

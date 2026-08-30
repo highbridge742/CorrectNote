@@ -1480,3 +1480,827 @@ def run_tab_cases():
           (st.remove_tab(0), len(st.tabs), st.tabs[0]['text']),
           (True, 1, ''))
     return all_ok
+
+
+def run_design33_cases():
+    """
+    設計33（1段目）——手で消した補正を「拒否」として学ぶ
+    （`設計33_消した操作を拒否として学ぶ_20260824.md`・2026-08-25）。
+
+    tkinter が無くても回せるよう、消え方の見分け（design33_classify・
+    純粋関数）と、仮の記録の確定（_design33_flush・偽の self で回す）を
+    AST 経由で取り出して確かめる。配線（どこから呼ばれるか）も
+    AST で見張る——**片方だけに置くと、そちらを迂回して素通りする**
+    （学び22）ので、呼び元3つ（打鍵・本文の差し替え・閉じる）を数える。
+    """
+    import ast
+    import types
+
+    print('--- 設計33（消した補正を拒否として学ぶ・1段目） ---')
+    all_ok = True
+
+    def check(label, got, want):
+        nonlocal all_ok
+        ok = (got == want)
+        all_ok = all_ok and ok
+        print(f'{"OK " if ok else "NG "}{label}')
+        if not ok:
+            print(f'      得た値: {got!r}   期待: {want!r}')
+
+    src = open('app.py', encoding='utf-8').read()
+    tree = ast.parse(src)
+
+    # --- 消え方の見分け（純粋関数） ---
+    func = next(n for n in tree.body
+                if isinstance(n, ast.FunctionDef)
+                and n.name == 'design33_classify')
+    ns = {}
+    exec(compile(ast.Module(body=[func], type_ignores=[]), '<f>', 'exec'), ns)
+    classify = ns['design33_classify']
+
+    applied = '今日は間違いだ'
+    spans = ((3, 6, 'fixed', '待ち外'),)
+    check('甲: 消えた範囲＝補正の範囲で後ろが残っている（仮ではない）',
+          classify(applied, spans, '今日はだ'),
+          [('待ち外', '間違い', False)])
+    check('行末の語を消した形は乙（仮）',
+          classify('今日は間違い', spans, '今日は'),
+          [('待ち外', '間違い', True)])
+    check('乙: 消しながら戻った（語ごと後ろが消えた）は仮',
+          classify(applied, spans, '今日'),
+          [('待ち外', '間違い', True)])
+    check('消しの途中（語が半分残っている）は拾わない',
+          classify(applied, spans, '今日は間'), [])
+    check('行がまるごと消えた形は拾わない（段落ごと消しと区別が付かない）',
+          classify(applied, spans, ''), [])
+    check('空白だけ残った形も拾わない', classify(applied, spans, '   '), [])
+    check('文字を足しただけの編集は拾わない',
+          classify(applied, spans, '今日は間違いだな'), [])
+    check('補正の範囲より広く消した形は拾わない（範囲＝補正の範囲だけ）',
+          classify(applied, spans, '今日だ'), [])
+    check('変わっていなければ何も返さない',
+          classify(applied, spans, applied), [])
+    check('F2 の選び直し（chosen）は対象にしない',
+          classify(applied, ((3, 6, 'chosen', '待ち外'),), '今日はだ'), [])
+    check('元の語と補正後が同じ（直していない）span は対象にしない',
+          classify(applied, ((3, 6, 'fixed', '間違い'),), '今日はだ'), [])
+    applied2 = 'あ間違いい相違う'
+    spans2 = ((1, 4, 'fixed', '待ち外'), (5, 7, 'fixed', 'そうと'))
+    check('消しながら戻って2語とも消えたら、両方とも仮で拾う',
+          classify(applied2, spans2, 'あ'),
+          [('待ち外', '間違い', True), ('そうと', '相違', True)])
+    check('前の語だけを狙って消したら、その語だけ甲',
+          classify(applied2, spans2, 'あい相違う'),
+          [('待ち外', '間違い', False)])
+
+    # --- 仮の記録の確定（偽の self で回す） ---
+    app_cls = next(n for n in tree.body
+                   if isinstance(n, ast.ClassDef)
+                   and n.name == 'CorrectNoteApp')
+    methods = {n.name: n for n in app_cls.body
+               if isinstance(n, ast.FunctionDef)}
+    ns2 = {}
+    for name in ('_design33_row_of', '_design33_drop',
+                 '_design33_add', '_design33_flush'):
+        exec(compile(ast.Module(body=[methods[name]], type_ignores=[]),
+                     '<f>', 'exec'), ns2)
+
+    class _FakeEditor:
+        def __init__(self, lines):
+            self.lines = dict(lines)     # row -> text
+            self.marks = {}
+
+        def index(self, mark):
+            return f'{self.marks[mark]}.0'
+
+        def mark_set(self, name, idx):
+            self.marks[name] = int(str(idx).split('.')[0])
+
+        def mark_gravity(self, name, g):
+            pass
+
+        def mark_unset(self, name):
+            self.marks.pop(name, None)
+
+        def get(self, a, b):
+            return self.lines[int(str(a).split('.')[0])]
+
+    class _FakeDecisions:
+        def __init__(self):
+            self.rejected = []
+            self.saved = 0
+
+        def is_rejected(self, o, c):
+            return (o, c) in self.rejected
+
+        def reject(self, o, c):
+            if (o, c) in self.rejected:
+                return False
+            self.rejected.append((o, c))
+            return True
+
+        def save(self):
+            self.saved += 1
+
+    class _FakeApp:
+        _design33_row_of = ns2['_design33_row_of']
+        _design33_drop = ns2['_design33_drop']
+        _design33_add = ns2['_design33_add']
+        _design33_flush = ns2['_design33_flush']
+
+        def __init__(self, lines):
+            self.editor = _FakeEditor(lines)
+            self._d33_pending = []
+            self._d33_mark_seq = 0
+            self.decisions = _FakeDecisions()
+            self.invalidated = 0
+            self._invalidate_analysis_cache = \
+                lambda **kw: setattr(self, 'invalidated', self.invalidated + 1)
+            self.status = types.SimpleNamespace(config=lambda **kw: None)
+
+    s = _FakeApp({2: '今日はだ', 3: 'ほかの行'})
+    s._design33_add(2, '待ち外', '間違い', False)
+    check('仮の記録が置かれる', len(s._d33_pending), 1)
+    s._design33_add(2, '待ち外', '間違い', True)
+    check('同じ組は増えず、甲の証拠（仮ではない）が残る',
+          (len(s._d33_pending), s._d33_pending[0]['provisional']),
+          (1, False))
+    s._design33_flush(2)
+    check('カーソルがその行に居る間は確定しない',
+          (len(s._d33_pending), s.decisions.rejected), (1, []))
+    s._design33_flush(3)
+    check('行から離れたら確定する（reject・save・控えの捨て直し）',
+          (s._d33_pending, s.decisions.rejected,
+           s.decisions.saved, s.invalidated),
+          ([], [('待ち外', '間違い')], 1, 1))
+
+    s2 = _FakeApp({2: 'また間違いと書いた'})
+    s2._design33_add(2, '待ち外', '間違い', True)
+    s2._design33_flush(None)
+    check('行に補正後の形が戻っていれば、確定せずに捨てる'
+          '（Ctrl+Z・打ち直して結局その形にした）',
+          (s2._d33_pending, s2.decisions.rejected), ([], []))
+
+    s3 = _FakeApp({2: '今日はだ'})
+    s3.decisions.rejected.append(('待ち外', '間違い'))
+    s3._design33_add(2, '待ち外', '間違い', False)
+    check('既に拒否済みの組は仮の記録を作らない', s3._d33_pending, [])
+
+    # --- 配線の見張り（学び22: 呼び元を全部数える） ---
+    def calls_in(method_name, callee):
+        fn = methods.get(method_name)
+        if fn is None:
+            return False
+        return any(isinstance(n, ast.Call)
+                   and isinstance(n.func, ast.Attribute)
+                   and n.func.attr == callee
+                   for n in ast.walk(fn))
+
+    check('打鍵（_on_change）から見張りが呼ばれる',
+          calls_in('_on_change', '_design33_watch'), True)
+    check('本文の差し替え（_autofix_reset）で仮の記録を確定する',
+          calls_in('_autofix_reset', '_design33_flush'), True)
+    check('閉じるとき（_on_close）にも確定する',
+          calls_in('_on_close', '_design33_flush'), True)
+    # 「一度伝えた判断は二度と覆らない」（decisions.py）を曲げない——
+    # 確定（flush）以外の場所から reject を呼ばないこと
+    check('見張り（watch）と仮置き（add）は DecisionStore に書かない',
+          (calls_in('_design33_watch', 'reject'),
+           calls_in('_design33_add', 'reject')), (False, False))
+    return all_ok
+
+
+def run_scroll_cache_cases():
+    """
+    **画面の端でスクロールを止めない／解析中のスクロールをその場で出す／
+    タブへ戻ったときに解析し直さない**（項目48-JO・うにさんの報告・
+    2026-08-25）。
+
+        「右クリックドラッグのスクロールを端で止めない。カーソルが
+          画面の上下端に到達しても、そこからマウスを上下に動かしたら
+          スクロールする。**カーソルが端にあったら必ずスクロールする
+          わけではない**」
+        「解析が終わってからタブ移動して戻ってくるとまた解析している」
+        「解析中にスクロールすると、解析が終わるまで補正が反映されない。
+          スクロールしてからタブ移動して戻ってくると、その範囲がすぐ
+          補正反映される」
+
+    画面の要る動きは `probes/probe_edge_scroll.py` /
+    `probes/probe_scroll_paint.py` で見る。ここでは tkinter 無しでも
+    回せるもの——**控えの鍵の作り方**（純粋関数）と**配線**（学び22）を
+    見張る。
+    """
+    import ast
+    import copy
+    import types
+
+    print('--- 端でのスクロール・解析中の反映・タブの控え（48-JO） ---')
+    all_ok = True
+
+    def check(label, got, want):
+        nonlocal all_ok
+        ok = (got == want)
+        all_ok = all_ok and ok
+        print(f'{"OK " if ok else "NG "}{label}')
+        if not ok:
+            print(f'      得た値: {got!r}   期待: {want!r}')
+
+    src = open('app.py', encoding='utf-8').read()
+    tree = ast.parse(src)
+    app_cls = next(n for n in tree.body
+                   if isinstance(n, ast.ClassDef)
+                   and n.name == 'CorrectNoteApp')
+    methods = {n.name: n for n in app_cls.body
+               if isinstance(n, ast.FunctionDef)}
+
+    def take(name, ns):
+        """メソッドを1つ取り出す（飾りは外す。3.9 では staticmethod を
+        そのままでは呼べないため）。"""
+        fn = copy.deepcopy(methods[name])
+        fn.decorator_list = []
+        exec(compile(ast.Module(body=[fn], type_ignores=[]), '<f>', 'exec'),
+             ns)
+        return ns[name]
+
+    # --- 控えの鍵（末尾の空行は数に入れない） ---
+    ns = {}
+    key = take('_analysis_key', ns)
+    check('末尾の空行を落とす', key('あ\nい\n\n\n'), 'あ\nい')
+    check('落とすのは末尾だけ（間の空行は残す）',
+          key('あ\n\nい\n\n'), 'あ\n\nい')
+    check('画面の本文とタブの控えが同じ鍵になる',
+          key('あ\nい' + '\n' * 24) == key('あ\nい'), True)
+    check('空のタブは鍵にならない', key('\n\n\n'), '')
+    check('None でも落ちない', key(None), '')
+
+    # --- 覚える → 使う（末尾の空行の数が変わっても当たる） ---
+    ns2 = dict(ns)
+    for _n in ('_remember_tab_results', '_use_analysis_cache',
+               '_blank_result'):
+        take(_n, ns2)
+
+    class _FakeSettings:
+        def get(self, k, d=None):
+            return 'kana'
+
+    class _Fake:
+        ANALYSIS_CACHE_TABS = 12
+        _analysis_key = staticmethod(ns['_analysis_key'])
+        _blank_result = ns2['_blank_result']
+        _remember_tab_results = ns2['_remember_tab_results']
+        _use_analysis_cache = ns2['_use_analysis_cache']
+
+        def __init__(self):
+            self._analysis_cache = {}
+            self._analyze_text = ''
+            self.line_results = []
+            self.settings = _FakeSettings()
+            self.scheduled = 0
+
+        def _schedule_analysis_chunk(self):
+            self.scheduled += 1
+
+    def _res(lines):
+        return [{'original': l, 'corrected': l, 'changed': False,
+                 'details': [], 'spans': [], 'original_spans': [],
+                 'unsure_spans': []} for l in lines]
+
+    # 末尾に空行が**無い**状態で解析した（メモの下のほうに打った形）
+    typed = 'あ\nい\nう'
+    f = _Fake()
+    f._analyze_text = typed
+    f.line_results = _res(typed.split('\n'))
+    f._remember_tab_results()
+    check('覚えた鍵は空行を落とした形', list(f._analysis_cache), ['あ\nい\nう'])
+    check('覚えたのは空行を除いた行数ぶん',
+          len(f._analysis_cache['あ\nい\nう']), 3)
+
+    # タブから読み直すと末尾に空行が 24 行足される（_pad_blank_lines）
+    padded = typed + '\n' * 24
+    f._analyze_text, f.line_results = '', []
+    got = f._use_analysis_cache(padded, padded.split('\n'))
+    check('空行を足された本文でも控えが当たる', got, True)
+    check('行数は画面の本文に合わせて埋める',
+          len(f.line_results), len(padded.split('\n')))
+    check('埋めたのは空行だけ',
+          [r['original'] for r in f.line_results[3:]] == [''] * 24, True)
+    check('解析の続き（単位の組み立て）は予約されている', f.scheduled, 1)
+
+    # 中身が違えば当たらない
+    f2 = _Fake()
+    f2._analyze_text = typed
+    f2.line_results = _res(typed.split('\n'))
+    f2._remember_tab_results()
+    other = 'あ\nい\nえ' + '\n' * 24
+    check('1文字でも違えば控えは当たらない',
+          f2._use_analysis_cache(other, other.split('\n')), False)
+    f3 = _Fake()
+    f3._analyze_text = typed
+    f3.line_results = _res(typed.split('\n'))
+    f3._remember_tab_results()
+    tail = typed + '\nか' + '\n' * 24
+    check('落とした末尾が空行でなければ当たらない',
+          f3._use_analysis_cache(tail, tail.split('\n')), False)
+
+    # --- 鍵を作るのは1か所だけ（学び22・「決めているのは最初の行」） ---
+    def uses_key(name):
+        fn = methods.get(name)
+        if fn is None:
+            return False
+        return any(isinstance(n, ast.Attribute) and n.attr == '_analysis_key'
+                   for n in ast.walk(fn))
+
+    for _m in ('_remember_tab_results', '_use_analysis_cache',
+               '_invalidate_analysis_cache', '_save_analysis_cache',
+               '_start_background_tabs'):
+        check(f'{_m} は鍵を _analysis_key で作る', uses_key(_m), True)
+
+    # --- 画面が動いたら、並べ替えの有無に関わらず塗る ---
+    view = methods['_after_view_moved']
+    body = view.body
+    idx_paint = idx_moved = None
+    for i, node in enumerate(body):
+        if idx_paint is None and any(
+                isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == '_refresh_after_analysis'
+                for n in ast.walk(node)):
+            idx_paint = i
+        if idx_moved is None and any(
+                isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == '_reprioritise_visible'
+                for n in ast.walk(node)):
+            idx_moved = i
+    check('画面が動いたら塗る道がある', idx_paint is not None, True)
+    check('塗るのは並べ替えより前（並べ替えなくても出す）',
+          idx_paint is not None and idx_moved is not None
+          and idx_paint < idx_moved, True)
+
+    # --- 端で戻す（自動スクロールにはしない） ---
+    def calls_in(name, callee):
+        fn = methods.get(name)
+        if fn is None:
+            return False
+        return any(isinstance(n, ast.Call)
+                   and isinstance(n.func, ast.Attribute)
+                   and n.func.attr == callee
+                   for n in ast.walk(fn))
+
+    check('ドラッグの動きから戻しを呼ぶ',
+          calls_in('_drag_motion', '_edge_warp'), True)
+    # --- UE4 と同じ形（項目48-JQ）: 隠して戻す → 離したら戻して見せる ---
+    check('掴んだらカーソルを隠す',
+          calls_in('_drag_motion', '_scroll_cursor_hide'), True)
+    check('離したらカーソルを戻して見せる',
+          (calls_in('_drag_release', '_restore_pointer'),
+           calls_in('_drag_release', '_scroll_cursor_restore')), (True, True))
+    check('掴み直すときも後始末する（保険）',
+          calls_in('_drag_press', '_scroll_cursor_restore'), True)
+    check('戻せない道具では、カーソルを見せ直す',
+          calls_in('_edge_warp', '_scroll_cursor_restore'), True)
+    warp = methods.get('_edge_warp')
+    check('端に**着く前**に戻す（速く振ったときの取りこぼしを減らす）',
+          warp is not None and any(
+              isinstance(n, ast.Attribute) and n.attr == 'DRAG_WARP_EDGE'
+              for n in ast.walk(warp)), True)
+    check('戻しは画面の端を見て決める',
+          warp is not None and any(
+              isinstance(n, ast.Attribute)
+              and n.attr in ('winfo_pointery', 'winfo_screenheight')
+              for n in ast.walk(warp)), True)
+    check('端に居るだけでは進めない（時計で送らない）',
+          warp is not None and not any(
+              isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+              and n.func.attr in ('after', 'after_idle', '_on_wheel_units')
+              for n in ast.walk(warp)), True)
+    check('戻したぶんはスクロールにしない（warp_to を先に消費する）',
+          any(isinstance(n, ast.Constant) and n.value == 'warp_to'
+              for n in ast.walk(methods['_drag_motion'])), True)
+
+    # --- 2026-08-28 うにさんの追加実装2件 -------------------------
+    # ② 「右ドラッグのスクロールでマウスを素早く動かすと、カーソルが
+    #    表示に戻ることがあります」——隠していたのは**掴んだ欄だけ**
+    #    だった（学び22）。速く振ると戻しが間に合う前に隣の欄・窓の外へ
+    #    出て、そこのカーソルが見える。全部の欄と窓に掛ける。
+    check('カーソル隠しは全部の欄に掛ける（掴んだ欄だけにしない）',
+          calls_in('_scroll_cursor_hide', '_scroll_panes'), True)
+    _panes = methods.get('_scroll_panes')
+    for _nm in ('editor', 'editor_gutter', 'result_view', 'result_gutter',
+                'root'):
+        check(f'隠す欄に {_nm} が入っている',
+              _panes is not None and any(
+                  isinstance(n, ast.Constant) and n.value == _nm
+                  for n in ast.walk(_panes)), True)
+    check('隠した欄は**全部**戻す（1つだけ戻して終わらない）',
+          any(isinstance(n, ast.For) for n in
+              ast.walk(methods['_scroll_cursor_restore'])), True)
+    check('端の戻しは横も欄の中へ収める（外へ戻すとカーソルが見える）',
+          any(isinstance(n, ast.Attribute) and n.attr == 'winfo_width'
+              for n in ast.walk(methods['_edge_warp'])), True)
+
+    # ① 「右クリックをダブルクリックしてそのまま押し続けている間、
+    #    フォントサイズを一時的に5にします。…クリックを離すと元に戻る」
+    check('俯瞰の字の大きさは 5',
+          next((n.value.value for n in tree.body
+                if isinstance(n, ast.Assign)
+                and getattr(n.targets[0], 'id', '') == 'OVERVIEW_FONT_SIZE'),
+               None), 5)
+    check('右ダブルクリックで俯瞰に入る',
+          calls_in('_on_right_double', '_overview_enter'), True)
+    check('入る前に候補一覧を閉じる（1回目の離しで開いていることがある）',
+          calls_in('_on_right_double', '_close_dropdown'), True)
+    check('入るときに字を小さくする',
+          calls_in('_overview_enter', '_overview_fonts'), True)
+    check('入るときにカーソルを隠す（スクロールの掴みと同じ形）',
+          calls_in('_overview_enter', '_scroll_cursor_hide'), True)
+    check('掴みは最初から scroll の型（8画素の判定を待たない）',
+          any(isinstance(n, ast.Constant) and n.value == 'scroll'
+              for n in ast.walk(methods['_overview_enter'])), True)
+    check('字を変えたら行の高さを捨てる（スクロール量が合わなくなる）',
+          any(isinstance(n, ast.Attribute) and n.attr == '_line_h'
+              for n in ast.walk(methods['_overview_fonts'])), True)
+    check('行番号の字も一緒に変える（本文だけだと高さがずれる）',
+          any(isinstance(n, ast.Constant) and n.value == 'editor_gutter'
+              for n in ast.walk(methods['_overview_fonts'])), True)
+    # **出口は1か所**（離しの道は欄ごとに別々・学び22）
+    check('離しは _drag_release 1か所で俯瞰から出す',
+          calls_in('_drag_release', '_overview_exit'), True)
+    check('出るときに字を戻す',
+          calls_in('_overview_exit', '_overview_fonts'), True)
+    # 出たあとも**見ていた行のまま**（行き先を決める道具）。
+    # 置き直しは字を変える側（`_overview_fonts` → `_overview_settle`）に
+    # 在る——入るときも同じ副作用が出るので、片方に書くと迂回する
+    check('字を変えたら、落ち着いてから行を置き直す',
+          calls_in('_overview_fonts', '_overview_settle'), True)
+    check('置き直しは yview で行う',
+          any(isinstance(n, ast.Attribute) and n.attr == 'yview'
+              for n in ast.walk(methods['_overview_settle'])), True)
+    # 補正欄からの逆流の門（`_on_editor_scroll` と対・学び22）。
+    # 字の入れ替えの報せは idle より後にも来るので、`_syncing` だけ
+    # では足りない（probe_overview で実測）
+    check('補正欄の報せは同期中・字の入れ替え中は聞かない',
+          (any(isinstance(n, ast.Attribute) and n.attr == '_syncing'
+               for n in ast.walk(methods['_on_result_scroll'])),
+           any(isinstance(n, ast.Constant) and n.value == '_font_swap'
+               for n in ast.walk(methods['_on_result_scroll']))),
+          (True, True))
+    check('字を入れ替える間は逆流の門を閉じる',
+          any(isinstance(n, ast.Attribute) and n.attr == '_font_swap'
+              for n in ast.walk(methods['_overview_fonts'])), True)
+
+    # --- 2026-08-28・うにさんの報告2度目 ---------------------------
+    # 「右クリックダブルクリックはフォントサイズ5でよいですが、
+    #   **行間をもっと詰めて広い範囲が映るようにします**」
+    _tight = next((n.value for n in tree.body
+                   if isinstance(n, ast.Assign)
+                   and getattr(n.targets[0], 'id', '') == 'OVERVIEW_TIGHT'),
+                  None)
+    _tight_keys = ([k.value for k in _tight.keys]
+                   if isinstance(_tight, ast.Dict) else [])
+    _tight_vals = ([getattr(v, 'value', None) for v in _tight.values]
+                   if isinstance(_tight, ast.Dict) else [])
+    check('俯瞰は行間も詰める（spacing1/2/3 と pady を落とす）',
+          sorted(_tight_keys),
+          ['pady', 'spacing1', 'spacing2', 'spacing3'])
+    check('行と行のあいだの余白は 0 にする',
+          [v for k, v in zip(_tight_keys, _tight_vals)
+           if k.startswith('spacing')], [0, 0, 0])
+    check('字を変えるところで行間も一緒に変える（片方だけにしない）',
+          calls_in('_overview_fonts', '_overview_tighten'), True)
+    check('元の余白はその場で読んで控える（同じ数を2か所に書かない）',
+          any(isinstance(n, ast.Attribute) and n.attr == 'cget'
+              for n in ast.walk(methods['_overview_tighten'])), True)
+    check('二重に控えない（控えが元の値で上書きされない）',
+          any(isinstance(n, ast.Return) for n in
+              ast.walk(methods['_overview_tighten'])), True)
+    check('戻すときは控えを使い切る（pop）',
+          any(isinstance(n, ast.Attribute) and n.attr == 'pop'
+              for n in ast.walk(methods['_overview_tighten'])), True)
+
+    # 行の高さは**実際に描かれている高さ**を読む。ふだんの字
+    # （`EDITOR_FONT`）の linespace を返していたので、俯瞰の間も
+    # 19px のままでドラッグが半分しか送らなかった
+    check('行の高さは dlineinfo（字も行間も込みの本当の高さ）で測る',
+          any(isinstance(n, ast.Attribute) and n.attr == 'dlineinfo'
+              for n in ast.walk(methods['_get_line_height'])), True)
+    check('行の高さの下限は 10 ではない（俯瞰は 9px ほど）',
+          any(isinstance(n, ast.Constant) and n.value == 10
+              for n in ast.walk(methods['_get_line_height'])), False)
+
+    # 「右クリックドラッグスクロールは、分割モードの入力欄なら問題ない
+    #   のですが、**補正欄で実行すると端でカーソルの表示が元に戻ります**。
+    #   補正欄はそもそもカーソルの形が違うので対応漏れかと」
+    #
+    # 補正欄だけ `<Motion>`／`<Leave>` がカーソルの形を書き換える道を
+    # 持っていた。**掴んでいる間は形を変えない**を1か所に置く（学び22）
+    check('カーソルの形を変える道は1か所（_set_pane_cursor）',
+          '_set_pane_cursor' in methods, True)
+    check('掴んでいる間は形を変えない（_scroll_cursor を見る）',
+          any(isinstance(n, ast.Constant) and n.value == '_scroll_cursor'
+              for n in ast.walk(methods['_set_pane_cursor'])), True)
+    for _nm in ('_on_result_motion', '_on_result_leave',
+                '_start_pick_mode', '_end_pick_mode'):
+        check(f'{_nm} はカーソルを直に書き換えない',
+              calls_in(_nm, '_set_pane_cursor'), True)
+    # **できている欄の形を後から書き換える**場所は、隠す側の2つと
+    # `_set_pane_cursor` だけ（作るときの `tk.Button(cursor='hand2')`
+    # は数えない——形が変わらないので迂回にならない）
+    def _reconfigs_cursor(fn):
+        for c in ast.walk(fn):
+            if (isinstance(c, ast.Call)
+                    and isinstance(c.func, ast.Attribute)
+                    and c.func.attr in ('config', 'configure')
+                    and any(k.arg == 'cursor' for k in c.keywords)):
+                return True
+        return False
+
+    check('カーソルを後から書き換えるのは、隠す側と _set_pane_cursor だけ',
+          sorted(nm for nm, fn in methods.items() if _reconfigs_cursor(fn)),
+          ['_scroll_cursor_hide', '_scroll_cursor_restore',
+           '_set_pane_cursor'])
+
+    # --- 2026-08-27（うにさんの報告6件）の見張り ---
+    def refs(name, attr):
+        fn = methods.get(name)
+        if fn is None:
+            return False
+        return any(isinstance(n, ast.Attribute) and n.attr == attr
+                   for n in ast.walk(fn))
+
+    def has_const(name, value):
+        fn = methods.get(name)
+        if fn is None:
+            return False
+        return any(isinstance(n, ast.Constant) and n.value == value
+                   for n in ast.walk(fn))
+
+    # ① 端の戻しの競合——戻す前に並んでいた古い報せは**捨てて待つ**
+    #    （時計ではなく回数。解析の区切りが挟まると間合いが数百msに
+    #    伸びるので、時計の猶予は破綻する——probe_edge_scroll で実測）
+    check('古い報せは捨てて待つ（warp_skip・回数の門）',
+          has_const('_drag_motion', 'warp_skip')
+          and refs('_drag_motion', 'DRAG_WARP_SKIP_MAX'), True)
+    # ② 離したら「戻り先に着いてから」見せる（先に見せると
+    #    移動先で一瞬見えてから飛ぶのが見える）
+    check('離しの見せ直しは戻り先に着いてから',
+          calls_in('_restore_pointer', '_show_cursor_when_settled'), True)
+    check('着かないままでも最後は見せる',
+          calls_in('_show_cursor_when_settled', '_scroll_cursor_restore'),
+          True)
+    # ③ 解析の先端のすぐ先を見ているときも、片付いた行から塗る
+    #    （旗が立ったあとの区切りでも、見えている範囲なら出す）
+    check('区切りの塗りは見えている範囲を確かめて出す',
+          calls_in('_analyze_chunk', '_visible_band'), True)
+    # ④ 学習が控えを捨てても、裏のタブの歩みを立て直す
+    check('控えを捨てたら裏の歩みも立て直す',
+          refs('_invalidate_analysis_cache', '_start_background_tabs'), True)
+    check('裏の歩みは表の解析が済むまで始めない（取り合いの門）',
+          refs('_start_background_tabs', '_analyze_pos')
+          or has_const('_start_background_tabs', '_analyze_pos'), True)
+    # ⑤ F2: 左右キーは捨てない・一覧が閉じていても渡り歩ける
+    #    （2026-08-27 の2度目の報告で「印を使い切る」形から変えた）
+    check('左右キーの離しでは F2 の記憶を捨てない',
+          (has_const('_on_change', 'Left'),
+           has_const('_on_change', 'Right')), (True, True))
+    check('一覧が閉じていても左右キーで渡り歩く',
+          calls_in('_on_f2_range_move', '_f2_move'), True)
+    # ⑤b 左右キーの行き先に薄い色（f2_next）
+    check('選んだとき・伸び縮みしたときに行き先を塗り直す',
+          (calls_in('_show_unit_candidates', '_paint_f2_neighbors'),
+           calls_in('_on_f2_range_resize', '_paint_f2_neighbors')),
+          (True, True))
+    check('行き先の先読みは渡り歩きと同じ規則（_f2_next_stop）',
+          calls_in('_f2_peek', '_f2_next_stop'), True)
+    check('記憶を捨てるとき薄い色も消す',
+          has_const('_clear_f2_target', 'f2_next'), True)
+    # ⑥ F2: 調整した範囲の終わりの次の文字から次の範囲へ
+    check('右キーは調整済みの範囲から作る',
+          calls_in('_f2_move', '_f2_resized_next'), True)
+    check('範囲は make_range_unit で作る（ドラッグ選択と同じ道）',
+          '_f2_resized_next' in methods
+          and any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                  and n.func.id == 'make_range_unit'
+                  for n in ast.walk(methods['_f2_resized_next'])), True)
+    # ⑦ 最大化はタスクバーを隠さない（▢ と OS の両方の道・学び22）
+    check('▢ の最大化で作業領域へ収める',
+          calls_in('_toggle_maximized', '_clamp_zoom_to_workarea'), True)
+    check('OS からの最大化も <Configure> で収める',
+          calls_in('_on_resize', '_clamp_zoom_to_workarea'), True)
+
+    # --- 2026-08-27 の2度目の報告の見張り ---
+    # ①' 戻しは**その場で**動かす（Tk の warp は idle まで遅れるので、
+    #     実機のドラッグ中は間に合わない——だからプローブは通るのに
+    #     実機で再発した）
+    check('戻しは _warp_pointer（端でも離しでも・学び22）',
+          (calls_in('_edge_warp', '_warp_pointer'),
+           calls_in('_restore_pointer', '_warp_pointer')), (True, True))
+    check('Windows では SetCursorPos（同期）で動かす',
+          refs('_warp_pointer', 'SetCursorPos'), True)
+    # ③' 裏の歩みは、触っていない間まとめて進める
+    check('裏の歩みは一歩の形（_bg_step_once）を回す',
+          calls_in('_bg_step', '_bg_step_once'), True)
+    check('触っていない間の判定（ANALYZE_BG_IDLE_MS）を見る',
+          refs('_bg_step', 'ANALYZE_BG_IDLE_MS'), True)
+    # ⑦' 最大化は枠の太さを実測して、中身を作業領域にぴったり収める
+    check('収め直しは枠の太さを実測する（GetClientRect）',
+          refs('_clamp_zoom_to_workarea', 'GetClientRect'), True)
+
+    # --- 2026-08-30 の報告（項目48-MA）---
+    # 「上の端へのドラッグで最大化 → タスクバーから最小化 → もう一度
+    #   押すと、**タスクバーが隠れる**」。最小化の間は `<Configure>` が
+    #   届かないので「最大化していない→している」の変わり目が来ず、
+    #   1回きりの門を通れなかった。**変わり目を数えるのをやめ**、
+    #   収まっていればすぐ帰る形にした（何度呼んでもよい）。
+    check('変わり目の控え（_was_zoomed）はもう使わない（48-MA）',
+          '_was_zoomed' in src, False)
+    check('収まっていればすぐ帰る（何度呼んでも安い）',
+          refs('_clamp_zoom_to_workarea', 'state')
+          and 'return      # もう収まっている' in src, True)
+    check('最小化から戻ったときも掛ける（<Map>・学び22）',
+          "'<Map>'" in src
+          and '_clamp_zoom_to_workarea' in src.split("'<Map>'")[1][:120],
+          True)
+
+    # --- 2026-08-30 の報告（項目48-MB）---
+    # 「解析中、タブキーの空白が伸びたり縮んだりしています」。
+    # `_paint_whitespace` が**先に印を剥がしてから**組み直しており、
+    # 組む途中の `display lineend`（`_wrap_edge_columns`）が Tk に
+    # 画面を作り直させるので、**剥がれた姿が描かれていた**。
+    # 直しは「**先に組む → 前と同じなら触らない**」。
+    _ws = ast.get_source_segment(src, methods['_paint_whitespace']) or ''
+    _strip = _ws.find('tag_remove')
+    _build = _ws.find('_wrap_edge_columns')
+    check('印を剥がすのは、組み終わったあと（48-MB）',
+          _strip > _build > 0, True)
+    check('前と同じなら塗り直さない（見比べを持つ）',
+          '_ws_paint_sig' in _ws, True)
+    check('タブの止まりも、前と同じなら敷き直さない',
+          '_ws_stop_sig' in (ast.get_source_segment(
+              src, methods['_paint_line_tab_stops']) or ''), True)
+
+    # --- 2026-08-27 の3度目の報告の見張り（項目48-KD）---
+    # ①'' 動かされた量は**実カーソル位置**で数える（報せの座標は
+    #     戻しの前の古いものかもしれない。速いドラッグでは戻り先
+    #     ±60px の照合が実際の動きだけで破れる）
+    check('動かされた量は実位置で数える（winfo_pointery）',
+          refs('_drag_motion', 'winfo_pointery'), True)
+    check('同期の戻し（SetCursorPos）は握手を置かない',
+          has_const('_edge_warp', 'sync'), True)
+    # ⑤c 行き先の先読みは、実際の一覧と**同じ組み立て**で
+    #     「開くか」を数える（候補の出ない語はその奥へ）
+    check('先読みも一覧も同じ組み立て（_editor_dropdown_items）',
+          (calls_in('_f2_peek', '_editor_dropdown_items'),
+           calls_in('_open_editor_dropdown', '_editor_dropdown_items')),
+          (True, True))
+
+    return all_ok
+
+
+def run_icon_cases():
+    """
+    **アプリのアイコンの配線**（項目48-JR・うにさんの指定
+    「ノートまたは書く媒体に対して補正されて入っていくイメージ」）。
+
+    アイコンは**4か所に置かないと片方だけ効く**（学び22）:
+
+        クラスの絵       `app.py` の `_apply_window_icon`
+                         （Tk の `iconphoto` / `iconbitmap`）
+        **窓そのもの**   `_set_window_icons_win32`（`WM_SETICON`。
+                         **Alt+Tab はここを見る**・項目48-LY）
+        exe そのもの     `correctnote.spec` / `kana_memo.spec` の `icon=`
+        exe への同梱     `bundle_manifest.py` の名簿
+
+    絵そのものが見えるかは `probes/probe_icon.py`（xvfb で
+    `_NET_WM_ICON` を読む）と `tools_local/probe_icon_win.py`
+    （Windows の実機で `WM_GETICON` を聞く）。ここでは**配線**だけを
+    見張る。
+    """
+    import ast
+    import os
+
+    print('--- アプリのアイコンの配線（項目48-JR） ---')
+    all_ok = True
+
+    def check(label, got, want):
+        nonlocal all_ok
+        ok = (got == want)
+        all_ok = all_ok and ok
+        print(f'{"OK " if ok else "NG "}{label}')
+        if not ok:
+            print(f'      得た値: {got!r}   期待: {want!r}')
+
+    src = open('app.py', encoding='utf-8').read()
+    tree = ast.parse(src)
+    top = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                and isinstance(node.targets[0], ast.Name) \
+                and isinstance(node.value, ast.Constant):
+            top[node.targets[0].id] = node.value.value
+    check('絵の名前を app.py が持っている',
+          (top.get('ICON_ICO'), top.get('ICON_PNG')),
+          ('correctnote.ico', 'correctnote.png'))
+
+    app_cls = next(n for n in tree.body
+                   if isinstance(n, ast.ClassDef) and n.name == 'CorrectNoteApp')
+    methods = {n.name: n for n in app_cls.body
+               if isinstance(n, ast.FunctionDef)}
+    fn = methods.get('_apply_window_icon')
+    check('窓にアイコンを付ける道がある', fn is not None, True)
+
+    def calls(node, name):
+        return node is not None and any(
+            isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and n.func.attr == name for n in ast.walk(node))
+
+    def uses(node, name):
+        return node is not None and any(
+            (isinstance(n, ast.Name) and n.id == name)
+            or (isinstance(n, ast.Attribute) and n.attr == name)
+            for n in ast.walk(node))
+
+    check('PNG と .ico の両方を試す（片方だけだと羽根に戻る場所が残る）',
+          (calls(fn, 'iconphoto'), calls(fn, 'iconbitmap')), (True, True))
+    check('同梱物として読む（app_dir ではなく bundled_path）',
+          (uses(fn, 'bundled_path'), uses(fn, 'app_dir')), (True, False))
+    check('PhotoImage を握る（捨てると絵が消える）',
+          uses(fn, '_icon_image'), True)
+    check('起動時に呼ばれる',
+          calls(methods.get('__init__'), '_apply_window_icon'), True)
+
+    # --- 窓そのものの絵（Alt+Tab が見るほう・項目48-LY） ---
+    # うにさんの報告（2026-08-30）「Alt+Tab でウインドウ選択時に、
+    # アプリアイコンが出てこない」。Tk の iconphoto / iconbitmap は
+    # Windows では**クラスの絵**しか置かず、窓に聞く WM_GETICON は
+    # 0 のままだった（tools_local/probe_icon_win.py で実測）。
+    win_fn = methods.get('_set_window_icons_win32')
+    check('窓そのものに絵を付ける道がある（48-LY）', win_fn is not None, True)
+    win_src = ast.get_source_segment(src, win_fn) if win_fn else ''
+    check('WM_SETICON を送る', 'WM_SETICON' in (win_src or ''), True)
+    check('.ico から寸法を指定して読む（256 を縮めた眠い絵にしない）',
+          ('LoadImageW' in (win_src or ''),
+           'SM_CXICON' in (win_src or '')), (True, True))
+    check('大小の両方を置く',
+          ('ICON_BIG' in (win_src or ''),
+           'ICON_SMALL' in (win_src or '')), (True, True))
+    check('アイコンの控えを握る（捨てると Windows が絵を失う）',
+          uses(win_fn, '_win_icon_big'), True)
+    check('_apply_window_icon から呼ばれる',
+          calls(fn, '_set_window_icons_win32'), True)
+    # **簡易入力の窓にも掛ける**（学び22——片方だけに置くと迂回する）
+    check('簡易入力の窓にも掛ける',
+          calls(methods.get('_open_quick_capture'),
+                '_set_window_icons_win32'), True)
+
+    # --- 絵の中身（項目48-LY・矢を落とした） ---
+    # うにさんの指定（2026-08-30）「アプリアイコンの右側にある矢印を
+    # 消して、その分ノートを大きくする」。**描く道具はただ1つ**なので、
+    # そこに矢が戻っていないかだけ見る。
+    # **道具は公開リポジトリに入らない**（`tools_local/` は .gitignore）。
+    # 無い場所（CI・配布した一式）では**この1件だけ飛ばす**——
+    # 有るのに失敗するのと、無いから測れないのは別（学び56。
+    # まっさらなフォルダで回して気付いた・2026-08-30）。
+    _icon_tool = os.path.join('tools_local', 'make_icon.py')
+    if os.path.exists(_icon_tool):
+        icon_src = open(_icon_tool, encoding='utf-8').read()
+        check('絵を描く道具に矢は残っていない（48-LY）',
+              'def arrow(' in icon_src, False)
+    else:
+        print('-- 絵を描く道具は無い（tools_local/）。この1件は飛ばす')
+
+    # `.ico` に小さい寸法まで入っている（タスクバーは 16px を使う）。
+    # Pillow を使わずにヘッダだけ読む（アプリ側は Pillow に依存しない）。
+    with open('correctnote.ico', 'rb') as f:
+        head = f.read(6)
+        n = int.from_bytes(head[4:6], 'little')
+        sizes = set()
+        for _ in range(n):
+            e = f.read(16)
+            sizes.add((e[0] or 256, e[1] or 256))
+    check('.ico に 16〜256px が入っている',
+          {(16, 16), (24, 24), (32, 32), (48, 48),
+           (64, 64), (128, 128), (256, 256)} <= sizes, True)
+
+    main_fn = next((n for n in tree.body
+                    if isinstance(n, ast.FunctionDef) and n.name == 'main'),
+                   None)
+    check('タスクバーの名札を、窓を作る前に名乗る',
+          main_fn is not None and any(
+              isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+              and n.func.id == '_set_app_user_model_id'
+              for n in ast.walk(main_fn)), True)
+
+    # --- 同梱の名簿（bundle_manifest.py ただ1つ） ---
+    import bundle_manifest
+    names = set(bundle_manifest.NAMES)
+    check('名簿に .ico と .png が載っている',
+          {'correctnote.ico', 'correctnote.png'} <= names, True)
+
+    # --- exe そのものの絵（spec は2つとも） ---
+    for spec_name in ('correctnote.spec', 'kana_memo.spec'):
+        if not os.path.exists(spec_name):
+            check(f'{spec_name} が在る', False, True)
+            continue
+        text = open(spec_name, encoding='utf-8').read()
+        check(f'{spec_name} が exe に絵を付ける',
+              "icon='correctnote.ico'" in text, True)
+    return all_ok

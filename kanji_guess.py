@@ -636,6 +636,27 @@ def find_mixed_kana_runs(line, max_head=3):
                     and not (j < n and (_is_kanji(line[j])
                                         or _is_katakana(line[j])))):
                 runs.append((s, j, line[s:j]))
+        # --- い': ひらがな頭＋漢字1文字（項目48-LS・2026-08-30） ---
+        # かな地（かな打ちでの補正 の 打ち が 地 に化けた形）。
+        # い と同じ締まり（頭の前は行頭・記号・非日本語、後ろは語の
+        # 切れ目）で、漢字が1文字だけの形。trailing の口は頭の歩みが
+        # 「助詞かもしれない字」（か・な・や…）で止まるので、かな地・
+        # やん後 はどの列挙にも乗っていなかった。直すかどうかは
+        # corrector 側の解決器（as-is との拮抗・並記の裏付け）が決める。
+        if not (i + 1 < n and (_is_kanji(line[i + 1])
+                               or _is_katakana(line[i + 1]))):
+            s = i
+            while (s > 0 and i - s < max_head
+                   and _is_hiragana(line[s - 1])):
+                s -= 1
+            if (i - s >= 2
+                    and not (s > 0 and (_is_kanji(line[s - 1])
+                                        or _is_katakana(line[s - 1])
+                                        or _is_hiragana(line[s - 1])))):
+                j = i + 1
+                if not (j < n and _is_hiragana(line[j])
+                        and line[j] not in _BOUNDARY_KANA):
+                    runs.append((s, j, line[s:j]))
         # --- い: ひらがな頭＋漢字2文字 ---
         if (i + 1 < n and _is_kanji(line[i + 1])
                 and not (i + 2 < n and _is_kanji(line[i + 2]))
@@ -742,6 +763,77 @@ def reading_combos(text, dict_index=None, max_combos=MAX_COMBOS,
     return [r for r, _rank in reading_combos_with_rank(text, dict_index,
                                                         max_combos,
                                                         next_char)]
+
+
+def _okurigana_after(text, i, next_char):
+    """
+    その漢字の**すぐ後ろに続く平仮名**（送り仮名になりうる並び）。
+
+    塊の中に在ればそれを、塊の最後の字なら `next_char` を見る
+    （`_drop_okurigana_readings` と同じ見方）。無ければ ''。
+    """
+    if i + 1 < len(text):
+        run = ''
+        for c in text[i + 1:]:
+            if not _is_hiragana(c):
+                break
+            run += c
+        return run
+    if next_char and _is_hiragana(next_char):
+        return next_char
+    return ''
+
+
+def _trim_okurigana_from_readings(text, i, readings, next_char):
+    """
+    **送り仮名が続く漢字の読みが、その送り仮名で終わっているなら、
+    送り仮名ぶんを削る**（項目48-KP・2026-08-28）。
+
+    引き継ぎ H2（Opus・2026-08-27）が「**読みを作るところで直すのが
+    本筋**」と名指ししていた根:
+
+        `替` の音訓に `かえ` が在り、本文の送り仮名 `え` と繋ぐと
+        **`きりかええじ`（え が二重）** ができる。48-KH/KI は
+        「この塊は正しい」と先に言って**迂回した**だけで、
+        **二重になる読みを作ること自体は直していない**。
+
+    同じ形は `込(こみ)＋み` にも在る（`見込みが` → みこみみ）。
+    **削るのは、送り仮名と実際に重なっているぶんだけ**——読みの
+    お尻が、後ろに続く平仮名の頭と一致する長さ。
+
+        替 かえ ＋ え   → か（え が重なる）
+        込 こみ ＋ み   → こ
+        替 かえ ＋ えて → か（えて の頭 え だけ重なる）
+
+    **読みが丸ごと消える形は削らない**（`野`＝の に助詞 `の` が
+    続く、`荷`＝に に `に` が続く——送り仮名ではなく助詞で、
+    削ると読みが空になる）。
+
+    `_drop_okurigana_readings`（送り仮名が**無い**ときに、送り仮名が
+    要る読みを外す）と対になる。**あちらは無いとき・こちらは在るとき**で、
+    どちらも `reading_combos_with_rank` と `_ime_segment_combos` の
+    両方に掛ける（学び22——片方だけに置くと、そちらを迂回する）。
+    """
+    run = _okurigana_after(text, i, next_char)
+    if not run:
+        return readings
+    out = []
+    for r in readings:
+        cut = 0
+        for k in range(min(len(r) - 1, len(run)), 0, -1):
+            if r[-k:] == run[:k]:
+                cut = k
+                break
+        out.append(r[:-cut] if cut else r)
+    # 削った結果、同じ読みが並ぶことがある（こみ・ごみ → こ・ご は
+    # 別だが、表によっては重なる）。**順は保ったまま**重複を落とす。
+    seen = set()
+    got = []
+    for r in out:
+        if r and r not in seen:
+            seen.add(r)
+            got.append(r)
+    return got or readings
 
 
 def _drop_okurigana_readings(text, i, ch, readings, next_char):
@@ -884,6 +976,7 @@ def reading_combos_with_rank(text, dict_index=None, max_combos=MAX_COMBOS,
             # 対の中に覆われていれば、組み立ては作れている（48-HB）。
             return _with_ime_readings(known, segs)
         rs = _drop_okurigana_readings(text, i, ch, rs, next_char)
+        rs = _trim_okurigana_from_readings(text, i, rs, next_char)
         per_char.append(rs[:3])
 
     combos = [('', 0, 0)]
@@ -1029,6 +1122,7 @@ def _ime_segment_combos(text, dict_index=None, next_char=None):
         rs = readings_for_char(ch, dict_index)
         if rs:
             rs = _drop_okurigana_readings(text, i, ch, rs, next_char)
+            rs = _trim_okurigana_from_readings(text, i, rs, next_char)
             dst = states.setdefault(i + 1, [])
             for idx, r in enumerate(rs[:3]):
                 for prefix, rank, used in cur:

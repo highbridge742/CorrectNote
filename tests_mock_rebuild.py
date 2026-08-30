@@ -1052,6 +1052,13 @@ def run_rebuild_cases():
           if not ime_watch.HAS_SUPPORT else None, None)
     from settings import Settings, DEFAULTS
     check('自動判定は既定でオン', DEFAULTS.get('input_method_auto'), True)
+    # 自動反映の既定（うにさんの指定・2026-08-30・項目48-LX）。
+    # 統合表示と簡易入力の**両方**がオン。片方だけ落ちると
+    # 「簡易入力だけ直らない」に戻るので、見張りをここに置く。
+    check('統合表示の自動反映は既定でオン',
+          DEFAULTS.get('unified_autofix'), True)
+    check('簡易入力の自動反映は既定でオン（48-LX）',
+          DEFAULTS.get('quick_autofix'), True)
 
     # 5-i. 語の区切りが取れない行でも、色は補正箇所だけに付く
     from units import build_suspect_units as _bsu

@@ -21,7 +21,7 @@
   初回起動時に自動投入される。
 - **同梱物の名簿は `bundle_manifest.py` ただ1つ**（項目48-GS）。
   ここに一覧を書き写さない。**書き写した瞬間に、いつかずれる。**
-  実際、このファイルには**説明書（CorrectNote_説明書v4.html）が
+  実際、このファイルには**説明書（CorrectNote_説明書v5.html）が
   入っておらず**、CI が作った exe だけ説明書を持っていなかった。
   名簿を1つにして、その取りこぼしごと直した。
 """
@@ -90,4 +90,8 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    # exe そのものの絵（項目48-JR）。**Windows は `.ico` だけ**。
+    # 窓のアイコンは別（app.py の `_apply_window_icon`）——
+    # 片方だけだと、そちらを迂回して羽根に戻る（学び22）。
+    icon='correctnote.ico',
 )

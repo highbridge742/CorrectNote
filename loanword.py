@@ -1798,6 +1798,75 @@ def known_english_spelling(word, store):
     return known
 
 
+_ACRONYM_RE = None
+
+# 略語の種（項目48-LW・AI の判断で書き下した閉じた名簿・2026-08-30）。
+# 英語の学びは6字からなので、よく使う短い略語の**正しい綴り**を
+# ここで持つ（直し先にも「触らない側」にも使う）。増やすのは測ってから。
+_ACRONYM_SEED = ('URL', 'IME', 'API', 'PDF', 'CSV', 'PNG', 'JSON',
+                 'HTML', 'CPU', 'EXE')
+
+
+def find_miskeyed_acronym(line, store):
+    """
+    **大文字だけの略語の打ち違い**（項目48-LW・2026-08-30 21回目）。
+
+        YRLは → URLは   （Y と U は QWERTY の隣）
+
+    英語の道の下限（MIN_ENGLISH_LENGTH=6）には届かない短い略語を、
+    狭い門で直す:
+      - **大文字3〜5字だけ**の並びで、前後に英数字が続かない
+      - そのままでは知らない綴り（種にも本人の控えにも無い）
+      - **1字だけ隣のキー（QWERTY）に替える**と、本人が書いてきた
+        既知の略語（英語の控えに実績2以上・大文字表記）になる
+      - 直し先が**ただ1つ**（2つ以上は紛れ＝触らない）
+
+    戻り値: [(開始, 終了, 直した表記), ...]
+    """
+    global _ACRONYM_RE
+    if _ACRONYM_RE is None:
+        import re as _re
+        _ACRONYM_RE = _re.compile(r'[A-Z]{3,5}')
+    out = []
+    vocab = _english_targets(store)
+    if not vocab:
+        return out
+    seeds = _english_seed_all()
+    for m in _ACRONYM_RE.finditer(line):
+        s, e = m.start(), m.end()
+        # 境目は**半角の英数字**だけを見る（`は` も isalnum() が真に
+        # なるので、Unicode で見ると YRLは が弾かれる・実測）
+        if s > 0 and line[s - 1].isascii() and line[s - 1].isalnum():
+            continue
+        if e < len(line) and line[e].isascii() and line[e].isalnum():
+            continue
+        word = m.group(0)
+        key = word.lower()
+        if word in _ACRONYM_SEED or key in seeds \
+                or _english_count(store, key) >= 1:
+            continue        # 知っている綴りは正しい。触らない
+        hits = set()
+        for i, ch in enumerate(key):
+            for alt in _QWERTY_POS:
+                if not _qwerty_near(ch, alt):
+                    continue
+                cand = key[:i] + alt + key[i + 1:]
+                if cand == key:
+                    continue
+                # 直し先: 略語の種、または本人の控えの大文字の略語
+                # （実績2以上）
+                if cand.upper() in _ACRONYM_SEED:
+                    hits.add(cand.upper())
+                    continue
+                if cand in vocab and _english_count(store, cand) >= 2:
+                    surface = vocab[cand]
+                    if surface == surface.upper():
+                        hits.add(surface)
+        if len(hits) == 1:
+            out.append((s, e, next(iter(hits))))
+    return out
+
+
 def find_miskeyed_english(line, store):
     """
     英字の並びに**かなのキーの記号**が紛れた形を見つけて直す。
@@ -1867,6 +1936,23 @@ def katakana_for_hiragana_typo(reading, store, min_length=MIN_LENGTH):
     # か→カ で保たれるので通り、`とどらっぐ → ドラッグ` は と→ド で
     # 変わるので落ちる。
     if hiragana_to_katakana(reading)[0] != fixed[0]:
+        return None
+    # **語の尻も食わない**（項目48-LP・2026-08-30 に踏んだ）。
+    #
+    #     すくろーるご → スクロール    （末尾の ご ＝ 語/後 の読み）
+    #     たぶい       → タブ          （末尾の い ＝ 移動 の頭）
+    #
+    # 末尾の1字を**削って**当てる形は、48-LC で禁じた「縁の削除は
+    # 語の切り詰め」と同じ手——消した字が次の語（接尾・送り仮名）
+    # だったとき、その語ごと失われる。
+    #
+    # 削ってよい尻は、**日本語の語の頭に立てない字**（ん・ー・小書き）
+    # だけ。それらは次の語の頭ではありえないので、余分な打鍵と
+    # 言い切れる（`かーそるん → カーソル` は今までどおり直る）。
+    # `かーそね → カーソル` は ね→ル の**置換**で長さが保たれるので
+    # この門は関係なく通る。
+    if reading[-1] not in 'んーゃゅょぁぃぅぇぉっ' \
+            and hiragana_to_katakana(reading[:-1]) == fixed:
         return None
     return fixed
 

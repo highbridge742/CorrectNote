@@ -346,6 +346,64 @@ def build_candidates(surface, reading, store, find_readings,
         for cand in verb_stem_candidates(reading):
             push(cand, reading, 'homophone')
 
+        # --- 1.5 平仮名の語を漢字にした形（kind='kanji'・項目48-KC）---
+        #
+        # うにさんの報告（2026-08-27）:「F2 で、なぜか候補が出ない
+        # 単語があります。『わずかな』『なぜか』——平仮名だからの
+        # ようですね。この場合は漢字変換候補を並べてください」。
+        #
+        # `わずかな` は 僅か＋な、`なぜか` は 何故＋か のように
+        # **語幹だけが辞書に載る**形が多く、全体の読みの一致（上の
+        # 同音）では届かない。頭から長い順に「表記が引ける切り方」を
+        # 試し、残りの送り・助詞をそのまま付ける（IME の変換と同じ形）。
+        # 表記の出どころは 語彙 → 辞書索引 → **同梱の表**
+        # （`table_surfaces_for_reading`。索引は費用4000で刈ってあり
+        # `何故`・`平仮名` を持たないが、表はその外側も持つ）。
+        #
+        # **残せる尾は1字まで**（丸ごと か、頭 len-1 字＋尾1字だけ）。
+        # 尾を長く許すと、活用の塊に同音の内容語がはまって雑音になる
+        # （`されること → 去れること`・`してください → 仕手ください`・
+        # `について → 似ついて`。実測・2026-08-27）。尾1字なら
+        # `僅かな`・`何故か`・`確かに` は残り、雑音は全部消える。
+        _hira = lambda ch: 'ぁ' <= ch <= 'ゖ' or ch == 'ー'
+        _kan = lambda ch: '一' <= ch <= '鿿'
+        if surface and all(_hira(ch) for ch in surface) and len(surface) >= 2:
+            try:
+                from corrector import table_surfaces_for_reading as _tsr
+            except Exception:
+                _tsr = lambda _r: []
+            n_kanji = 0
+            for k in range(len(surface), len(surface) - 2, -1):
+                if k < 2:
+                    break
+                if n_kanji >= 4:
+                    break
+                head, tail = surface[:k], surface[k:]
+                convs = []
+                for e in store.lookup(head)[:2]:
+                    convs.append(e['surface'])
+                if dict_index is not None:
+                    for s in dict_index.surfaces_for_reading(head)[:3]:
+                        if s not in convs:
+                            convs.append(s)
+                for s in _tsr(head)[:3]:
+                    if s not in convs:
+                        convs.append(s)
+                for s in convs:
+                    if n_kanji >= 4:
+                        break
+                    if s == head or not any(_kan(c) for c in s):
+                        continue        # 変換になっていない
+                    # 尾が残るのに、変換の頭が**い段のかな**で終わる形は
+                    # 活用の途中（連用形）に同音をはめただけ
+                    # （`について → 似つい＋て`）。語の変換ではないので捨てる。
+                    if tail and s[-1:] in 'いきしちにひみりぎじぢびぴ':
+                        continue
+                    before = len(out)
+                    push(s + tail, surface, 'kanji')
+                    if len(out) > before:
+                        n_kanji += 1
+
         # --- 2. 打ち間違いで届く範囲の語 ---
         # 隣接キー・脱字・押しすぎ・順序間違いをまとめて扱う探索を流用する。
         try:
@@ -742,6 +800,60 @@ def build_range_candidates(segments, store, find_readings,
                               dict_index=dict_index, **kwargs),
              ('homophone',))
 
+    # 1.5周目: **読みを、語の境目で切り直す**（項目48-JU・2026-08-26）。
+    #
+    # 同音異義語の探索は「その読み**全体で1語**」しか見つけられない。
+    # だから `にかいせき` から `解析` には届いても、**助詞をまたいだ**
+    # `に解析` には**構造上どうやっても届かない**（うにさんの的
+    # 「切り替え時二階席が走っていて ⇒ 切り替え時に解析が走っていて」）。
+    # 読みの DP（`kana_to_kanji_where_possible`）は同じ読みを
+    # 「語彙の語で進める道」に沿って切り直すので、そこに届く。
+    #
+    # **自動では開かない。** 同じ DP をトークンの並びに当てると、
+    # 実機メモ1,342行で**2,431か所**が別の形に書き換わる
+    # （元の画像→もとの画像・別の表記→べつの表記。項目48-JU §2）。
+    # ここは**候補＝申し出**なので答えは1行も変わらない——
+    # 「判断がつかないものは触らない（色を付けて知らせるだけ）」
+    # の一つ手前、**選べるようにするだけ**の場所。
+    #
+    # 名前を `recut` にしたのは、`resplit` が**もう別の意味で使われて
+    # いる**ため（設計32・項目48-IW「違和感の範囲を左端から要素で
+    # 割り直す」）。同じ言葉に2つの意味を持たせない。
+    #
+    # 門は3つだけ。**元と違う**こと、**DP が実際に何か変換した**こと
+    # （`よはく` のように読みのまま返る＝切り直せていないものは
+    #  下の「かな表記」と同じもので、ここに出す意味がない）、
+    # そして**漢字かカタカナを含む**こと。
+    # この3つで、正しく書けた語はほとんど自分自身に戻る（実測）。
+    #
+    # **この道にしか置けない。** 単語ひとつの右クリック
+    # （`build_candidates`）には区分が1つしか無く、切り直す境目が
+    # そもそも存在しない（学び22 の「全部の道に掛ける」は、
+    # 掛けられる道が1本しかないときの形）。
+    try:
+        from halfwidth import kana_to_kanji_where_possible as _recut
+    except Exception:
+        _recut = None
+    if _recut is not None:
+        for combo in combos[:4]:
+            if not combo or len(combo) < 2:
+                continue
+            try:
+                cut = _recut(combo, store)
+            except Exception:
+                continue
+            if (not cut or cut == combo or cut == surface_all
+                    or cut in seen):
+                continue
+            if not any('一' <= c <= '鿿' or _is_katakana(c)
+                       for c in cut):
+                continue
+            seen.add(cut)
+            out.append({'surface': cut, 'reading': combo,
+                        'kind': 'recut'})
+            if len([c for c in out if c['kind'] == 'recut']) >= 2:
+                break
+
     # 2周目: 確定した読み（先頭の組み合わせ）だけ、
     # 重い打ち間違い探索とかな表記も掛ける。
     if combos:
@@ -815,7 +927,11 @@ def build_range_candidates(segments, store, find_readings,
             ctx_scores = {}
 
     def _rank(c):
-        kind_rank = {'homophone': 0, 'typo': 1, 'kana': 2}.get(c['kind'], 9)
+        # 区切り直し（recut）は**打ち間違いの推測より上**。
+        # 読みを1文字も変えずに境目だけ動かした形なので、
+        # 編集距離で当てた候補より証拠が固い（項目48-JU）。
+        kind_rank = {'homophone': 0, 'kanji': 1, 'recut': 2,
+                     'typo': 3, 'kana': 4}.get(c['kind'], 9)
         keeps_tail = 0 if (o_tail and c['surface'].endswith(o_tail)) else 1
         # スコアは高いほど上に出したいので符号を反転する
         ctx = -ctx_scores.get(c['surface'], 0.0)
@@ -825,13 +941,26 @@ def build_range_candidates(segments, store, find_readings,
     return out
 
 
-KIND_LABELS = {
-    'homophone': '同音',
-    'typo': '打ち間違い',
-    'kana': 'かな',
-    'symbol': '記号の言い換え',
-    'samekey': '同じキーの文字',
-}
+# **候補の見出しは、ここが最初の行**（項目48-JU・2026-08-26）。
+#
+# 並び順と見出しの文字はここだけに書く。`app.py` の3つのメニュー
+# （補正欄・メモ欄・簡易入力）は**この表を回す**。前は3か所に
+# 同じ組を書き写していて、種類を1つ足したら**3か所とも直さないと
+# 黙って落ちる**形だった（学び22「片方だけに置くと迂回される」）。
+#
+# 順は**証拠の固い順**。同音（読みが同じ1語）→ 区切り直し（読みは
+# そのままで境目だけ動かした）→ 打ち間違い（編集距離の推測）→ かな。
+MENU_KINDS = (
+    ('samekey', '同じキーの文字'),
+    ('symbol', '記号の言い換え'),
+    ('homophone', '同音の語'),
+    ('kanji', '漢字にする'),
+    ('recut', '区切り直し'),
+    ('typo', '打ち間違いの可能性'),
+    ('kana', 'かな表記'),
+)
+
+KIND_LABELS = dict(MENU_KINDS)
 
 
 # ============================================================

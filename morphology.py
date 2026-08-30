@@ -298,7 +298,7 @@ def _compose_across_one(out, table):
     return True
 
 
-def normalize_marks(text, swap_across=False):
+def normalize_marks(text, swap_across=False, dropped=None):
     """
     分離した濁点・半濁点を前の文字と合成する。
 
@@ -307,6 +307,11 @@ def normalize_marks(text, swap_across=False):
         既定は False。**落としたほうで補正が届かなかったときだけ**
         呼び出し側が True で呼び直す（学び38: 許可は、候補を絞る
         前ではなく、決まってから掛ける）。
+    dropped: 名簿を渡すと、**落とした印の位置**（元の text での
+        添字）をそこへ入れる。設計39（場違いな濁点・項目48-JP）が
+        入口の判定に使う。**「落とす」の決まりはこの関数だけが
+        持つ**——同じ判定を別の場所で書き直すと、片方だけ直して
+        素通りする（学び22）。
 
     かな入力では濁点が独立したキーなので、
     「たんこ゛」のように濁点だけが残ることがある。
@@ -329,7 +334,7 @@ def normalize_marks(text, swap_across=False):
     if not text:
         return text
     out = []
-    for ch in text:
+    for i, ch in enumerate(text):
         if ch in DAKUTEN_MARKS:
             if out:
                 composed = _DAKUTEN_COMPOSE.get(out[-1])
@@ -343,6 +348,8 @@ def normalize_marks(text, swap_across=False):
                 if swap_across and _compose_across_one(out,
                                                        _DAKUTEN_COMPOSE):
                     continue
+                if dropped is not None:
+                    dropped.append(i)
                 continue    # かなの後ろの合成できない濁点は誤打
             out.append(ch)              # 行頭の濁点。残す
             continue
@@ -366,6 +373,8 @@ def normalize_marks(text, swap_across=False):
                 if swap_across and _compose_across_one(
                         out, _HANDAKUTEN_COMPOSE):
                     continue
+                if dropped is not None:
+                    dropped.append(i)
                 continue
             out.append(ch)              # 行頭の半濁点。残す
             continue
@@ -416,7 +425,14 @@ def _tokenize_janome(line):
 
         parts = t.part_of_speech.split(',')
         pos_major = parts[0] if parts else '*'
-        pos_sub = parts[1] if len(parts) > 1 else ''
+        # 細分類は3段まで運ぶ（項目48-JL・2026-08-25）。
+        # 「固有名詞」だけでは**姓か名か**が分からず、うにさんの指定
+        # 「苗字を登録することで、続く後ろを名前と保護するべき」が
+        # 組めない（janome は未知語も固有名詞と推測するので、
+        # 大分類だけを頼ると本物の異様まで黙る・項目48-JG）。
+        # `固有名詞:人名:姓` の形。既存の読み手は `in` と
+        # `split(':')[1]` なのでそのまま通る。
+        pos_sub = ':'.join(p for p in parts[1:4] if p and p != '*')
 
         reading = getattr(t, 'reading', '*')
         has_reading = (reading != '*' and reading != '')

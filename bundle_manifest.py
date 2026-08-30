@@ -37,7 +37,7 @@ from collections import namedtuple
 Item = namedtuple('Item', 'name module why required')
 
 ITEMS = (
-    Item('CorrectNote_説明書v4.html', None,
+    Item('CorrectNote_説明書v5.html', None,
          'メニューの「説明書をHTMLで展開」が出せなくなる',
          True),
     Item('familiarity.json', 'familiarity',
@@ -56,6 +56,16 @@ ITEMS = (
     Item('NOTICE_sudachi.txt', None,
          'SudachiDict（Apache-2.0）の表示が配布物から落ちる',
          False),
+    # アイコン（項目48-JR）。**2つとも要る**——`.ico` は Windows の
+    # 窓とタスクバー（`iconbitmap`）、`.png` は `iconphoto`（Tk は
+    # `.ico` を PhotoImage で読めない）。exe そのものの絵は
+    # `correctnote.spec` / `kana_memo.spec` の `icon=` が別に持つ。
+    Item('correctnote.ico', None,
+         '窓とタスクバーのアイコンが Tk の羽根に戻る（Windows）',
+         True),
+    Item('correctnote.png', None,
+         '`iconphoto` の逃げ道が無くなる（`.ico` が使えない環境で羽根に戻る）',
+         True),
 )
 
 # 使う側が name だけ欲しいとき

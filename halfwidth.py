@@ -114,6 +114,56 @@ def halfwidth_to_kana(text):
     return ''.join(out), converted, target
 
 
+# **同じ文字を出す2つのキー**（設計45・項目48-KB・2026-08-27）。
+#
+# 日本語キーボードには 0x5C（`\`）を出すキーが**2つ**ある——
+# **ろ**（右 Shift の左）と **ー**（BackSpace の左・¥）。半角のまま
+# 打つとどちらも同じ文字になるので、`\` は ろ とも ー とも読める。
+# 表（`HALFWIDTH_TO_KANA`）は ろ を既定にしているが、それだけだと
+# `rh\\.`（すくろーる＝**スクロール**）が すくろろる になって届かない
+# （うにさんの正解メモ・実装方針5「ー系の穴と同根」）。
+AMBIGUOUS_KEYS = {'\\': ('ろ', 'ー')}
+
+
+def halfwidth_to_kana_variants(text, cap=8):
+    """
+    `\\` を **ー と読む側**の変換も並べる（既定の形＝全部 ろ は含まない）。
+
+    `halfwidth_to_kana` は入力1文字につき出力1文字なので、
+    位置がそのまま使える。曖昧なキーが多すぎる行（2^n > cap）は
+    諦めて空を返す（そういう行は式・罫線の類）。
+    """
+    spots = [i for i, ch in enumerate(text) if ch in AMBIGUOUS_KEYS]
+    if not spots or 2 ** len(spots) > cap:
+        return []
+    base, _, _ = halfwidth_to_kana(text)
+    if len(base) != len(text):
+        return []                   # 1文字→1かなの前提が崩れている
+    out = []
+    n = len(spots)
+    for mask in range(1, 2 ** n):
+        chars = list(base)
+        for k in range(n):
+            if (mask >> k) & 1:
+                chars[spots[k]] = 'ー'
+        out.append(''.join(chars))
+    return out
+
+
+def _hira_to_kata(s):
+    return ''.join(chr(ord(c) + 0x60) if 'ぁ' <= c <= 'ゖ' else c
+                   for c in s)
+
+
+def _in_katakana_table(word):
+    """同梱のカタカナ語の表（seed_katakana・回数を見ない）に在るか。"""
+    try:
+        import seed_katakana
+        return word in seed_katakana.KATAKANA_WORDS
+    except Exception:
+        return False
+
+
 # 式・識別子で「語」と「語／数」を繋ぐ記号。
 #
 # **かな配列でよく打つキーは入れない。** かな入力の列に必ず現れる
@@ -292,7 +342,10 @@ def looks_like_halfwidth_input(text, min_len=4):
     # 「**after」「**（response,」のような形で紛れ込むため。
     # ローマ字のべた打ち（mojinyuuryoku 等）はここで断っても、
     # この後の correct_romaji が受け持つので取りこぼしにならない。
-    _core = text.strip('*"\'`,.:;!?()[]{}<>~=+|/\\-—…　（）「」『』【】')
+    # `\` は剥がさない（設計45・項目48-KB）——ろ／ー のかなキーそのもの
+    # なので、句読点ではない。剥がすと `rh\\.` の芯が `rh` になり、
+    # 「小文字の英字だけ」としてここで弾かれていた。
+    _core = text.strip('*"\'`,.:;!?()[]{}<>~=+|/-—…　（）「」『』【】')
     if _core and _core.isascii() and _core.isalpha() and _core.islower():
         return False
 
@@ -377,7 +430,7 @@ def _digits_after_letters(text, n_letters):
     return False
 
 
-def correct_halfwidth(text, store, find_readings, max_dist=1.6):
+def correct_halfwidth(text, store, find_readings, max_dist=1.6, judge=None):
     """
     半角モードのまま打ってしまった文字列を、かなに戻して補正する。
 
@@ -450,7 +503,28 @@ def correct_halfwidth(text, store, find_readings, max_dist=1.6):
         # 「ひらがなのまま入力した」という意図を読み取れない。
         # そこで語彙にある表記が分かる範囲で漢字・カタカナに変換する
         # （もじにゅうりょく → 文字入力）。
-        return kana_to_kanji_where_possible(kana, store)
+        return kana_to_kanji_where_possible(kana, store, judge=judge)
+
+    # --- 同じ文字を出す2つのキー（設計45・項目48-KB）---
+    # `\` は ろ／ー のどちらのキーでもある。既定（全部 ろ）で読めない
+    # とき、ー と読んだ形が**同梱のカタカナ語の表にただ1つ**当たるなら、
+    # それを採る（`rh\\.` → すくろーる → **スクロール**）。
+    # 証拠は回数を見ない閉じた表——初期語彙の実績（スクロールは1）に
+    # 頼らないので、初期状態でも立つ。2つ以上当たるなら決めない
+    # （異様判定の立っていない場面の門は「ただ1つのときだけ採る」）。
+    if '\\' in text:
+        hits = []
+        for v in halfwidth_to_kana_variants(text):
+            try:
+                from morphology import normalize_marks as _nm
+                v = _nm(v)
+            except Exception:
+                pass
+            kat = _hira_to_kata(v)
+            if _in_katakana_table(kat) and kat not in hits:
+                hits.append(kat)
+        if len(hits) == 1:
+            return hits[0]
 
     # --- 訂正を伴う場合 ---
     # 半角モードでも隣のキーを押し間違えるので、
@@ -481,7 +555,8 @@ def correct_halfwidth(text, store, find_readings, max_dist=1.6):
         if abs(len(cand_reading) - len(kana)) > 1:
             continue
         if makes_sense_as_japanese(cand_reading, store):
-            return kana_to_kanji_where_possible(cand_reading, store)
+            return kana_to_kanji_where_possible(cand_reading, store,
+                                                judge=judge)
 
     return None
 
@@ -623,7 +698,8 @@ def romaji_to_kana(text):
     return ''.join(out), converted, target
 
 
-def correct_romaji(text, store, find_readings, max_dist=1.6, min_len=4):
+def correct_romaji(text, store, find_readings, max_dist=1.6, min_len=4,
+                   judge=None):
     """
     ローマ字のまま打ってしまった文字列を、かなに戻して補正する。
 
@@ -682,7 +758,7 @@ def correct_romaji(text, store, find_readings, max_dist=1.6, min_len=4):
     # （before→'べfおれ'、window→'wいんどw'）。ここに来るのは
     # 「たまたま最後までローマ字として読めた」ものだけ。
     if entries or makes_sense_as_japanese(kana, store, min_ratio=1.0):
-        return kana_to_kanji_where_possible(kana, store)
+        return kana_to_kanji_where_possible(kana, store, judge=judge)
 
     # 訂正を伴う場合は、英単語が偶然かなの語に化けないよう厳しくする
     if len(kana) < 6:
@@ -694,7 +770,8 @@ def correct_romaji(text, store, find_readings, max_dist=1.6, min_len=4):
         if abs(len(cand_reading) - len(kana)) > 1:
             continue
         if makes_sense_as_japanese(cand_reading, store):
-            return kana_to_kanji_where_possible(cand_reading, store)
+            return kana_to_kanji_where_possible(cand_reading, store,
+                                                judge=judge)
 
     return None
 
@@ -740,7 +817,7 @@ def kana_to_halfwidth(text):
 
 
 def correct_kana_typed_as_romaji(text, store, find_readings, max_dist=1.6,
-                                 min_len=6):
+                                 min_len=6, judge=None):
     """
     ローマ字入力のつもりで、かな入力モードのまま打ってしまった文字列を直す。
 
@@ -779,7 +856,7 @@ def correct_kana_typed_as_romaji(text, store, find_readings, max_dist=1.6,
     # 読み直した結果が、語彙にある語であること
     if [e for e in store.lookup(kana) if e['count'] >= 2] \
             or makes_sense_as_japanese(kana, store):
-        return kana_to_kanji_where_possible(kana, store)
+        return kana_to_kanji_where_possible(kana, store, judge=judge)
 
     found = find_readings(kana, store, max_dist=max_dist, max_edits=2)
     for cand_reading, cost, edits in found:
@@ -788,7 +865,8 @@ def correct_kana_typed_as_romaji(text, store, find_readings, max_dist=1.6,
         if abs(len(cand_reading) - len(kana)) > 1:
             continue
         if makes_sense_as_japanese(cand_reading, store):
-            return kana_to_kanji_where_possible(cand_reading, store)
+            return kana_to_kanji_where_possible(cand_reading, store,
+                                                judge=judge)
 
     return None
 
@@ -855,7 +933,8 @@ def normalize_zenkaku_input(text):
     return ''.join(out)
 
 
-def correct_zenkaku_input(text, store, find_readings, max_dist=1.6):
+def correct_zenkaku_input(text, store, find_readings, max_dist=1.6,
+                          judge=None):
     """
     全角で入ってしまった入力を、半角に戻してから補正する。
 
@@ -867,10 +946,11 @@ def correct_zenkaku_input(text, store, find_readings, max_dist=1.6):
     if not half or half == text:
         return None
     # 半角に戻せたら、通常の半角入力として補正する
-    fixed = correct_halfwidth(half, store, find_readings, max_dist)
+    fixed = correct_halfwidth(half, store, find_readings, max_dist,
+                              judge=judge)
     if fixed:
         return fixed
-    return correct_romaji(half, store, find_readings, max_dist)
+    return correct_romaji(half, store, find_readings, max_dist, judge=judge)
 
 
 # ============================================================
@@ -964,8 +1044,70 @@ def makes_sense_as_japanese(kana, store, min_ratio=0.6, min_content_len=3):
     return content_len >= min_content_len
 
 
+# **語の直後にだけ付く、閉じた文法の接尾**（項目48-JE・2026-08-25）。
+# うにさんの正解メモ `tepga(4 ⇒ 解析中`。`ちゅう` は語彙に表記が無く
+# （1字漢字は20字だけ・`更新したファイル_Opus_20260824.md` §1-5(イ)）、
+# 仮に在っても下の「1文字の表記を採らない」門で落ちる。
+# そこで**漢字2字以上に変換できた語の直後**に限り、この表の読みを
+# 変換する。48-HU「1字を根拠に動かない」とはぶつからない——あちらは
+# 「1字の語の**数えた証拠**を根拠にしない」であって、ここは回数を
+# 一切見ない**閉じた文法の類**（位置名詞・否定接頭辞と同じ扱い）。
+# **載せ過ぎだけが危ない**（48-ID・第2便の `読=とう` の教訓）ので、
+# 3かな以上で読みが実質1つに決まるものだけ。広げるときは1つずつ測る。
+_BOUND_SUFFIX = {
+    'ちゅう': '中',     # 進行・範囲の「〜中」（解析中・変換中・作業中）
+}
+
+# 接尾の直後として自然な区切り（この字が続くときだけ変換する。
+# ひらがなが続く形は語の途中かもしれない——`ちゅうい`＝注意）
+_AFTER_SUFFIX_OK = frozenset('にでのをはもがとへやかね、。')
+
+
+def _convert_bound_suffix(text, pieces):
+    """
+    変換できた漢字語の直後の `_BOUND_SUFFIX` を表記にする。
+
+    pieces: (かな始, かな終, 出力始, 出力終, 表記 or None) の並び
+            （`kana_to_kanji_where_possible._solve` が作る）。
+    戻り値: (変換後の文字列, [(置き換えた範囲), ...])
+    """
+    kanji = lambda c: '一' <= c <= '鿿'
+    spots = []
+    for ks, ke, os_, oe, surface in pieces:
+        if not surface or len(surface) < 2 \
+                or not all(kanji(c) for c in surface):
+            continue
+        for reading, out in _BOUND_SUFFIX.items():
+            n = len(reading)
+            if not text.startswith(reading, oe):
+                continue
+            after = text[oe + n:oe + n + 1]
+            if after and ('ぁ' <= after <= 'ゖ') \
+                    and after not in _AFTER_SUFFIX_OK:
+                continue            # ひらがなが続く＝語の途中かもしれない
+            # その範囲が**変換されていないかな**であること
+            # （別の語の表記の中を書き換えない）
+            if any(sf is not None and not (e2 <= oe or s2 >= oe + n)
+                   for _k1, _k2, s2, e2, sf in pieces):
+                continue
+            spots.append((oe, oe + n, out))
+            break
+    if not spots:
+        return text, []
+    spots.sort()
+    parts, spans, pos, shift = [], [], 0, 0
+    for s, e, out in spots:
+        parts.append(text[pos:s])
+        spans.append((s + shift, s + shift + len(out)))
+        parts.append(out)
+        shift += len(out) - (e - s)
+        pos = e
+    parts.append(text[pos:])
+    return ''.join(parts), spans
+
+
 def kana_to_kanji_where_possible(kana, store, min_word_len=2,
-                                 max_word_len=12):
+                                 max_word_len=12, judge=None):
     """
     かな列を、語彙にある表記に置き換えられる範囲だけ置き換える。
 
@@ -979,6 +1121,20 @@ def kana_to_kanji_where_possible(kana, store, min_word_len=2,
     語彙に無い部分（助詞や未登録語）はひらがなのまま残す。
     「たんごのつながり」→「単語のつながり」
     「もじにゅうりょく」→「文字入力」
+
+    judge: 候補を裁く口（項目48-JC・2026-08-25。うにさんの指定
+    「**異様ならさらに次の変換候補を追ってもらいます**」・2026-08-24）。
+    candidate（変換後の文字列）を受け取り、**異様と見た範囲**
+    [(始まり, 終わり), ...] を返す（空なら異様ではない）。
+    異様なら、その範囲に重なった**表記の変換を封じて**組み直し、
+    異様でない最初の1本を採る（最大4本まで追う）。
+    None（既定）ならこれまでどおり最善の1本を返す。
+
+    この区切りは**被覆した文字数だけ**を最大化していて、使用実績を
+    見ていない（`買い(30)+脊柱(2) 7/7` が `解析(608) 4/7` に勝つ）。
+    費用や回数で割り直す道は、うにさんの指定
+    「回数や履歴は、同音異義語にだけ使う」（2026-08-24）で消えた。
+    **1本を賢く組むのではなく、裁いて次を追う**（同 (4)）。
 
     戻り値: 変換後の文字列
     """
@@ -997,60 +1153,125 @@ def kana_to_kanji_where_possible(kana, store, min_word_len=2,
         'では', 'には', 'とは', 'かも', 'なら', 'ながら', 'ければ',
     }
 
-    # dp[i] = (位置iまでに覆えた文字数, 1つ前の位置, 使った表記 or None)
-    # None は「1文字そのまま」を意味する。
-    NEG = -1
-    best_covered = [NEG] * (n + 1)
-    back = [None] * (n + 1)
-    best_covered[0] = 0
+    def _solve(banned):
+        """
+        区切りを1本組む。banned は封じた語の区間 {(始まり, 終わり)}——
+        封じた区間は「語彙の語で進む」道ごと使えない（被覆に数えない）
+        ので、経路そのものが別の区切りへ落ちる。
 
-    for i in range(n):
-        if best_covered[i] == NEG:
-            continue
-        # 説明できない1文字として進む（表記変換なし）
-        cand = best_covered[i]
-        if cand > best_covered[i + 1]:
-            best_covered[i + 1] = cand
-            back[i + 1] = (i, kana[i], None)
+        戻り値: (変換後の文字列,
+                 [(かなの始, かなの終, 出力の始, 出力の終, 表記 or None)])
+        """
+        # dp[i] = (位置iまでに覆えた文字数, 1つ前の位置, 使った表記 or None)
+        # None は「1文字そのまま」を意味する。
+        NEG = -1
+        best_covered = [NEG] * (n + 1)
+        back = [None] * (n + 1)
+        best_covered[0] = 0
 
-        # 機能語で進む（表記変換なし、ひらがなのまま）
-        for w in FILLERS:
-            if kana.startswith(w, i):
-                j = i + len(w)
-                cand = best_covered[i] + len(w)
+        for i in range(n):
+            if best_covered[i] == NEG:
+                continue
+            # 説明できない1文字として進む（表記変換なし）
+            cand = best_covered[i]
+            if cand > best_covered[i + 1]:
+                best_covered[i + 1] = cand
+                back[i + 1] = (i, kana[i], None)
+
+            # 機能語で進む（表記変換なし、ひらがなのまま）
+            for w in FILLERS:
+                if kana.startswith(w, i):
+                    j = i + len(w)
+                    cand = best_covered[i] + len(w)
+                    if cand > best_covered[j]:
+                        best_covered[j] = cand
+                        back[j] = (i, w, None)
+
+            # 語彙にある語で進む（表記があれば変換する）
+            upper = min(max_word_len, n - i)
+            for length in range(min_word_len, upper + 1):
+                j = i + length
+                if (i, j) in banned:
+                    continue
+                sub = kana[i:i + length]
+                entries = [e for e in store.lookup(sub) if e['count'] >= 2]
+                if not entries:
+                    continue
+                # 表記が1文字だけの候補は避ける。
+                # 「した」→「下」のように、活用形の一部が
+                # たまたま無関係な単漢字の読みと一致することがあり、
+                # 半角入力の変換は文脈を見て判断できないため、
+                # 誤って別の意味の語に化けるリスクが高い。
+                # 2文字以上の候補があればそちらを使い、
+                # 無ければひらがなのまま（変換しない）を選ぶ。
+                multi_char = [e for e in entries if len(e['surface']) >= 2]
+                surface = multi_char[0]['surface'] if multi_char else None
+                cand = best_covered[i] + length
                 if cand > best_covered[j]:
                     best_covered[j] = cand
-                    back[j] = (i, w, None)
+                    back[j] = (i, sub, surface)
 
-        # 語彙にある語で進む（表記があれば変換する）
-        upper = min(max_word_len, n - i)
-        for length in range(min_word_len, upper + 1):
-            sub = kana[i:i + length]
-            entries = [e for e in store.lookup(sub) if e['count'] >= 2]
-            if not entries:
-                continue
-            # 表記が1文字だけの候補は避ける。
-            # 「した」→「下」のように、活用形の一部が
-            # たまたま無関係な単漢字の読みと一致することがあり、
-            # 半角入力の変換は文脈を見て判断できないため、
-            # 誤って別の意味の語に化けるリスクが高い。
-            # 2文字以上の候補があればそちらを使い、
-            # 無ければひらがなのまま（変換しない）を選ぶ。
-            multi_char = [e for e in entries if len(e['surface']) >= 2]
-            surface = multi_char[0]['surface'] if multi_char else None
-            j = i + length
-            cand = best_covered[i] + length
-            if cand > best_covered[j]:
-                best_covered[j] = cand
-                back[j] = (i, sub, surface)
+        # 経路をたどって組み立てる（出力の位置も一緒に控える——
+        # judge が返す範囲を、封じる語の区間へ引き当てるため）
+        pos = n
+        rev = []
+        while pos > 0 and back[pos] is not None:
+            prev, original, surface = back[pos]
+            rev.append((prev, pos, surface if surface else original,
+                        surface))
+            pos = prev
+        rev.reverse()
+        out = []
+        pieces = []
+        at = 0
+        for ks, ke, piece, surface in rev:
+            out.append(piece)
+            pieces.append((ks, ke, at, at + len(piece), surface))
+            at += len(piece)
+        return ''.join(out), pieces
 
-    # 経路をたどって組み立てる
-    out = []
-    pos = n
-    pieces = []
-    while pos > 0 and back[pos] is not None:
-        prev, original, surface = back[pos]
-        pieces.append(surface if surface else original)
-        pos = prev
-    pieces.reverse()
-    return ''.join(pieces)
+    def _finish(text, pieces):
+        # 変換できた語の直後の閉じた接尾（ちゅう → 中・項目48-JE）。
+        # 変換が異様さを生んだら（judge が範囲を返したら）置かずに戻す。
+        new, spans = _convert_bound_suffix(text, pieces)
+        if new == text:
+            return text
+        if judge is not None:
+            try:
+                odd = judge(new)
+            except Exception:
+                odd = []
+            if any(not (e2 <= s or s2 >= e)
+                   for s2, e2 in spans for s, e in odd):
+                return text
+        return new
+
+    text, pieces = _solve(frozenset())
+    if judge is None:
+        return _finish(text, pieces)
+
+    # --- 裁いて、駄目なら次の候補を追う（項目48-JC）---
+    # 「候補を出す → 異様さで裁く → 駄目なら次を追う」（うにさんの
+    # 指定 (4)・2026-08-24）。異様の範囲に重なった**表記の変換**を
+    # 封じて組み直す。封じる語が無い（変換していない所が異様）なら、
+    # この道からは何も言えないのでそのまま返す。
+    banned = set()
+    for _ in range(3):
+        try:
+            odd = judge(text)
+        except Exception:
+            odd = []
+        if not odd:
+            break
+        newly = {(ks, ke) for ks, ke, os_, oe, surface in pieces
+                 if surface is not None
+                 and any(not (oe <= s or os_ >= e) for s, e in odd)}
+        newly -= banned
+        if not newly:
+            break
+        banned |= newly
+        text2, pieces2 = _solve(banned)
+        if text2 == text:
+            break
+        text, pieces = text2, pieces2
+    return _finish(text, pieces)

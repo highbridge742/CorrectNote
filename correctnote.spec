@@ -91,4 +91,8 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    # exe そのものの絵（項目48-JR）。**Windows は `.ico` だけ**。
+    # 窓のアイコンは別（app.py の `_apply_window_icon`）——
+    # 片方だけだと、そちらを迂回して羽根に戻る（学び22）。
+    icon='correctnote.ico',
 )

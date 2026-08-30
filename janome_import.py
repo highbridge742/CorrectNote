@@ -30,6 +30,7 @@ janome は辞書を sysdic/ 以下に Python モジュールとして持って�
 """
 
 import importlib
+import os
 
 try:
     from janome.tokenizer import Tokenizer
@@ -122,6 +123,100 @@ _SYMBOLS = set('・。、「」『』【】〔〕（）()[]{}〜~―—‐/\\＼
 # 日常の熟語がごっそり落ちていた（2026-08-10）。
 KANJI2_COST_LIMIT = 5600
 
+
+def is_okurigana_noun(surface, pos, sub_pos=None):
+    """
+    **漢字2つ以上＋送り仮名で終わる名詞**か（項目48-KG・2026-08-27）。
+
+    `引き継ぎ` `組み合わせ` `読み込み` `締め切り` `呼び出し` の族
+    ——動詞の名詞化。**形だけで決まる閉じた類**である。
+
+    うにさんの指定（2026-08-27）:「**初期にあるべきです**」
+    （`引き継ぎ` が初期語彙に無く、`引き月資料 ⇒ 引き継ぎ資料` が
+      組めなかった）。
+
+    ### 落ちていたのは門ではなく**枠**だった（実測）
+
+        `引き継ぎ` のコストは 5575。`名詞:一般` の枠（38%＝6,080語）は
+        **コスト 3,657 で尽きている**ので、`GENERAL_COST_LIMIT` を
+        緩めても届かない。
+
+    ### この族では**コスト順が有害**（実測）
+
+        コスト順の上位 = 新聞の交ぜ書き
+          投てき(4467) 抜てき 感ぷく 把そく 抽せん 愛がん 憂もん …
+        `familiarity`（書籍の重み）を足すと**もっと悪くなる**
+          投てき 397位 → **41位**／抜てき 406位 → **50位**
+
+    ### **形で割れる**
+
+        「漢字2つ以上＋送り仮名で終わる」に絞ると **4,493語**で、
+        **交ぜ書きが1つも入らない**（交ぜ書きは漢字1字＋かな）:
+          大好き 問い合わせ 組み合わせ 引き上げ 手渡し 持ち込み
+          切り捨て 呼び出し 組み立て 割り込み 締め切り 売り上げ …
+
+    ### だから**丸ごと入れる**（コスト順で切らない）
+
+        族のコストは1,500位あたりから **5,622 で平坦**——IPAdic が
+        頻度を持たない語の既定値なので、**そこから先を順位で切ることに
+        意味が無い**。切るなら形で切る。
+
+    ### 一度は壊した。**正の判定（項目48-KH）を先に入れて解けた**
+
+    最初に測ったとき、**実機メモで 設計42 の的を壊した**:
+
+        5:37  切り替え時に解析が走っていて → **切り返しに解析が走っていて**
+
+    `切り返し`（きりかえし・実績1）が語彙に入ると、**芯の再構築**が
+    読み `きりかええじ`（`替` の音訓 **かえ** と本文の送り仮名 `え` が
+    繋がって え が二重になったもの）を「読めない」と見て、費用1.0で
+    `きりかえし` に寄せていた。**正しい読みの側は自分で断れている**
+    （`きりかえじ` では「読める並びを覆すほど自然にならない・差5044」）。
+
+    うにさんの指摘（2026-08-27）——「**切り替え時、が自然な文字列と
+    判定されないことが問題です。これを正しいとする分析をします**」。
+    そこで **項目48-KH の正の判定**（名詞＋副詞可能の接尾＝
+    できあがった形なので触らない）を先に入れた。**それで解けた。**
+
+    ### 測った（きれいな写しどうし・同じ標本・2026-08-27）
+
+        初期語彙 **16,287 → 17,090**（+803）
+        readcheck kana 1831/1566/**87**  ← **どちらも同値**
+        fpcheck 0／seedcheck 38/40・壊し0／probe_pairs 単独28・化け0
+        **実機メモ memodiff 全行 差なし**（設計42 の的も残った）
+
+        ※ 前に「直った +53／化けた −10」と書いたのは**標本の取り違え**。
+          `exclude_kg.tsv` を渡した回と渡さない回を比べていた。
+          readcheck の題材は語彙から作るので、**足した語を除く**
+          ようにそろえないと数字は比べられない。
+    """
+    if pos != '名詞':
+        return False
+    if sub_pos and sub_pos in EXCLUDE_SUB_POS:
+        return False
+    if not surface or len(surface) < 3:
+        return False
+    if not ('一' <= surface[0] <= '鿿'):
+        return False
+    if not ('ぁ' <= surface[-1] <= 'ゟ'):
+        return False
+    if sum(1 for c in surface if '一' <= c <= '鿿') < 2:
+        return False
+    # **送り仮名を全部書く形だけ**（＝漢字が2つ続けて並ばない）。
+    # 2026-08-27 に測って足した門。**省いた形を入れると壊れる**:
+    #     切返し（＝切り返し）が入ると、設計42 の的
+    #       `切り替え時二階席が走っていて ⇒ 切り替え時に解析が走っていて`
+    #     が **`切返しに解析が走っていて`** に化けた
+    #     仕上がり が入ると `単語のつあがり ⇒ 単語のつながり` が
+    #     **`単語のしあがり`** に化けた
+    # 省いた形（切返し・引継ぎ・払戻し・立上り）は新聞・法令の書き方で、
+    # メモではふつう書かない。**送り仮名を書く形だけが、日常の書き方**。
+    for i, c in enumerate(surface[:-1]):
+        if '一' <= c <= '鿿' and '一' <= surface[i + 1] <= '鿿':
+            return False
+    return True
+
+
 # 以前ここに置いていた地名の接尾語・地形の漢字の一覧
 # （_LONG_PLACE_SUFFIXES / _SHORT_PLACE_SUFFIXES / _GEO_TAIL_KANJI）は
 # 2026-08-10 に取り除いた。品詞が読めていなかったせいで固有名詞の
@@ -171,6 +266,11 @@ def _should_exclude(surface, pos, sub_pos, sub_sub_pos, cost):
         if cost > KANJI2_COST_LIMIT:
             return True
 
+    # **形で選べる族は、コストで切らない**（項目48-KG。
+    # `is_okurigana_noun` の説明に、なぜコスト順が使えないかを書いた）
+    if is_okurigana_noun(surface, pos, sub_pos):
+        return False
+
     # コストが高い語（使用頻度が低い）を除外
     if cost > GENERAL_COST_LIMIT:
         return True
@@ -199,12 +299,29 @@ def _apply_quota(candidates, limit):
 
     candidates: (コスト, 表記, 読み, 品詞, 品詞細分類) をコスト昇順で
     """
+    # **形で選べる族は枠の外で、丸ごと採る**（項目48-KG・2026-08-27）。
+    # コスト順に意味が無い族なので、順位で切らない
+    # （`is_okurigana_noun` の説明）。枠 `limit` は**コスト順で採る
+    # ぶんの上限**であって、語彙全体の上限ではなくなった。
+    picked = []
+    taken = set()
+    rest = []
+    for c in candidates:
+        if is_okurigana_noun(c[1], c[3], c[4]):
+            picked.append(c)
+            taken.add(id(c))
+        else:
+            rest.append(c)
+    candidates = rest
+
     buckets = {}
     for c in candidates:
         buckets.setdefault(_quota_bucket(c[3], c[4]), []).append(c)
 
-    picked = []
-    taken = set()
+    # 形で採ったぶんは枠の外。ここから下は**コスト順で採るぶん**だけを
+    # `limit` で数える（項目48-KG）。
+    n_shape = len(picked)
+
     for i, (_p, _s, share) in enumerate(IMPORT_QUOTA):
         room = int(limit * share)
         for c in buckets.get(i, ())[:room]:
@@ -212,16 +329,16 @@ def _apply_quota(candidates, limit):
             taken.add(id(c))
 
     # 枠を使いきれなかったぶんは、コスト順の続きで埋める
-    if len(picked) < limit:
+    if len(picked) - n_shape < limit:
         for c in candidates:
-            if len(picked) >= limit:
+            if len(picked) - n_shape >= limit:
                 break
             if id(c) not in taken:
                 picked.append(c)
                 taken.add(id(c))
 
     picked.sort(key=lambda c: c[0])
-    return picked[:limit]
+    return picked[:n_shape + limit]
 
 
 def accept_entry(surface, pos, sub_pos, sub_sub_pos, cost):

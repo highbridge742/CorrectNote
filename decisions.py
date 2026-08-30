@@ -125,6 +125,29 @@ class DecisionStore:
     def is_protected(self, word):
         return word in self._protected
 
+    def left_alone_texts(self):
+        """
+        **「もう直さない」と決められた文字列**（2026-08-28・
+        うにさんの指定「候補の一番下から、もう直さないと選択学習
+        したものは、**紫の色がつかないように**して」）。
+
+        候補一覧のいちばん下の2つが、どちらもこの意味になる:
+
+            「この補正は不要（X のまま）」   → reject（X のまま）
+            「「X」は今後直さない」          → protect
+
+        **紫は「異様だと判定した」という印**（CLAUDE.md ★★）なので、
+        うにさんが「これでよい」と決めた文字列に立て続けるのは、
+        判定としても間違っている。**決めた側が上**。
+
+        使うのは `corrector._odd_spans_for_line`。
+        """
+        out = set(self._protected)
+        for original, _corrected in self._rejected:
+            if original:
+                out.add(original)
+        return out
+
     def is_rejected(self, original, corrected):
         return (original, corrected) in self._rejected
 
