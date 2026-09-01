@@ -109,7 +109,7 @@ print('=' * 70)
 tokenize_fn = C.make_tokenizer(store)
 for text in TEST_CASES:
     print(f'[{text}]')
-    for surface, pos, reading, start, end, has_reading in tokenize_fn(text):
+    for surface, pos, reading, start, end, has_reading, *_ in tokenize_fn(text):
         print(f'  {surface!r:14s} pos={pos:20s} reading={reading!r:12s} '
               f'辞書にある={has_reading}')
     print()

@@ -69,7 +69,8 @@ from tests_mock_ui import (
     run_tab_cases,
     run_design33_cases,
     run_scroll_cache_cases,
-    run_icon_cases)
+    run_icon_cases,
+    run_explain_cases)
 from tests_mock_memory import (
     run_choice_cases,
     run_decision_cases,
@@ -130,7 +131,41 @@ from tests_mock_words import (
     test_zero_edge_48lm,
     test_gloss_guards_48ln,
     test_fp_guards_48lp,
-    test_compose_48lu)
+    test_compose_48lu,
+    test_span_over_space_48mf,
+    test_u_insert_compose_48mg,
+    test_honorific_prefix_48mh,
+    test_free_suffix_intact_48me,
+    test_kango_convert_48mi,
+    test_one_hand_length_48mj,
+    test_conversion_anchor_48mk,
+    test_split_at_wo_48mn,
+    test_kango_stem_48mp,
+    test_on_shape_48mq,
+    test_purple_false_positives_48mr,
+    test_split_at_no_48ms,
+    test_mark_span_reopen_48mv,
+    test_assemble_after_hand_48mw,
+    test_small_yoon_slip_48mx,
+    test_anchor_not_at_head_48my,
+    test_noun_compound_48na,
+    test_renyou_one_char_48nc,
+    test_assemble_on_main_path_48mz,
+    test_stable_across_launches_48ne,
+    test_convert_after_core_48nf,
+    test_whole_word_floor_48ng,
+    test_romaji_cost_wiring_48nj,
+    test_open_odd_single_kanji_48nk,
+    test_na_stem_48nm_48nn,
+    test_ime_record_not_over_assemble_48np,
+    test_ime_record_is_not_a_gate_48nq,
+    test_adverb_ni_dangling_48nr_48ns,
+    test_infl_connection_48nt,
+    test_known_kanji_tail_core_48nu,
+    test_compound_words_48nv_48nw,
+    test_logical_pos_rules_48nx_48ny,
+    test_chunk_near_by_method_48oa,
+    test_naadj_two_faces_48nm2)
 from tests_mock_fix import (
     run_cases,
     run_overcorrection_cases,
@@ -427,6 +462,41 @@ if __name__ == '__main__':
     ok80 = test_gloss_guards_48ln()
     ok81 = test_fp_guards_48lp()
     ok82 = test_compose_48lu()
+    ok83 = run_explain_cases()
+    ok84 = test_span_over_space_48mf()
+    ok85 = test_u_insert_compose_48mg()
+    ok86 = test_honorific_prefix_48mh()
+    ok87 = test_free_suffix_intact_48me()
+    ok88 = test_kango_convert_48mi()
+    ok89 = test_one_hand_length_48mj()
+    ok90 = test_conversion_anchor_48mk()
+    ok91 = test_split_at_wo_48mn()
+    ok92 = test_kango_stem_48mp()
+    ok93 = test_on_shape_48mq()
+    ok94 = test_purple_false_positives_48mr()
+    ok95 = test_split_at_no_48ms()
+    ok96 = test_mark_span_reopen_48mv()
+    ok97 = test_assemble_after_hand_48mw()
+    ok98 = test_small_yoon_slip_48mx()
+    ok99 = test_anchor_not_at_head_48my()
+    ok100 = test_noun_compound_48na()
+    ok101 = test_renyou_one_char_48nc()
+    ok102 = test_assemble_on_main_path_48mz()
+    ok103 = test_stable_across_launches_48ne()
+    ok104 = test_convert_after_core_48nf()
+    ok105 = test_whole_word_floor_48ng()
+    ok106 = test_romaji_cost_wiring_48nj()
+    ok107 = test_open_odd_single_kanji_48nk()
+    ok108 = test_na_stem_48nm_48nn()
+    ok109 = test_ime_record_not_over_assemble_48np()
+    ok110 = test_ime_record_is_not_a_gate_48nq()
+    ok111 = test_adverb_ni_dangling_48nr_48ns()
+    ok112 = test_infl_connection_48nt()
+    ok113 = test_known_kanji_tail_core_48nu()
+    ok114 = test_compound_words_48nv_48nw()
+    ok115 = test_logical_pos_rules_48nx_48ny()
+    ok116 = test_chunk_near_by_method_48oa()
+    ok117 = test_naadj_two_faces_48nm2()
     print()
     print('ALL OK:', ok1 and ok2 and ok3 and ok4 and ok5 and ok6 and ok7
           and ok8 and ok9 and ok10 and ok11 and ok12 and ok13 and ok14
@@ -437,4 +507,4 @@ if __name__ == '__main__':
           and ok39 and ok40 and ok41 and ok42 and ok43 and ok44 and ok45
           and ok46 and ok47 and ok48 and ok49 and ok50 and ok51 and ok52
           and ok53 and ok54 and ok55 and ok56 and ok57 and ok58 and ok59
-          and ok60 and ok61 and ok62 and ok63 and ok64 and ok65 and ok66 and ok67 and ok68 and ok69 and ok70 and ok71 and ok72 and ok73 and ok74 and ok75 and ok76 and ok77 and ok78 and ok79 and ok80 and ok81 and ok82)
+          and ok60 and ok61 and ok62 and ok63 and ok64 and ok65 and ok66 and ok67 and ok68 and ok69 and ok70 and ok71 and ok72 and ok73 and ok74 and ok75 and ok76 and ok77 and ok78 and ok79 and ok80 and ok81 and ok82 and ok83 and ok84 and ok85 and ok86 and ok87 and ok88 and ok89 and ok90 and ok91 and ok92 and ok93 and ok94 and ok95 and ok96 and ok97 and ok98 and ok99 and ok100 and ok101 and ok102 and ok103 and ok104 and ok105 and ok106 and ok107 and ok108 and ok109 and ok110 and ok111 and ok112 and ok113 and ok114 and ok115 and ok116 and ok117)

@@ -49,6 +49,25 @@ from settings import (Settings, effective_hotkeys,
                       INPUT_METHOD_LABELS, INPUT_KANA, INPUT_ROMAJI)
 from hotkeys import GlobalHotkeys, HOTKEY_LABELS
 from ime_readings import IMEReadings, is_kana_reading as ime_readings_kana
+# 候補一覧のいちばん下に出す説明（項目48-MD・2026-08-31）。
+# **画面に出す言葉を作るだけ**——補正の答えには触らない。
+import explain
+
+#: 候補一覧のいちばん下に足す説明の見出し（項目48-MD）。
+#: **決めているのはこの2行**——`_make_dropdown` が「ここから下は
+#: 説明」を知るのにも使う（項目48-ML）ので、書き写さないこと。
+ANALYSIS_HEAD_POS = '－ 品詞判定 －'
+ANALYSIS_HEAD_WHY = '－ 補正根拠 －'
+
+#: 候補一覧に一度に見せる行数（項目48-ML）。
+#: `DROPDOWN_ROWS` はこれまでどおり 16。**説明（品詞判定・補正根拠）が
+#: 付いているときは、その分だけ伸ばす**——説明は**いちばん下**に足すので、
+#: 16 で切ると候補の多い語では画面の外へ出る。しかも上下キーは
+#: 選べない行（見出し）を飛ばすので、**キーボードでは届かない**。
+#: `DROPDOWN_ROWS_MAX` は伸ばしすぎの止め（画面からはみ出さないため）。
+#: 実測（実機メモ400行・説明を出した状態）: **いちばん多い語で 21 項目**。
+DROPDOWN_ROWS = 16
+DROPDOWN_ROWS_MAX = 26
 import corrector
 
 
@@ -208,7 +227,7 @@ APP_TITLE = 'CorrectNote'
 # 「判断に迷った箇所」から**「不自然な文字列」**へ入れ替え（既定オン・
 # 補正が入った範囲には付けない）、**かな書きのアルファベット読みを
 # 英字に直す**（`エフ2 → F2`）、スクロール後の反映（項目48-IZ〜）。
-APP_VERSION = '1.3.0'
+APP_VERSION = '1.4.0'
 
 # 同梱する説明書のファイル名。exe の中に入れて持ち歩き、
 # 初回起動時に exe と同じフォルダへ書き出す
@@ -216,7 +235,7 @@ APP_VERSION = '1.3.0'
 # **説明書の版を上げたら、この名前も一緒に変えること。**
 # 名前が変わったことを合図に、書き出し済みの印を無視して
 # 新しい版を書き出す（_extract_manual）。
-MANUAL_FILENAME = 'CorrectNote_説明書v5.html'
+MANUAL_FILENAME = 'CorrectNote_説明書v6.html'
 
 
 def map_column(original, corrected, col):
@@ -4053,6 +4072,7 @@ class CorrectNoteApp:
         self._apply_tab_stops()      # タブの止まり（項目48-LG）
         self._schedule_whitespace_paint(delay=1)
         self._quick_units = []     # 行ごとの単位（build_suspect_units の結果）
+        self._quick_results = []   # 行ごとの補正結果（項目48-MD の根拠）
         self._quick_drag = None
 
         text.bind('<KeyRelease>', self._on_quick_change)
@@ -4611,6 +4631,12 @@ class CorrectNoteApp:
                     text_widget.tag_add(
                         'suspect', f'{row}.{u["start"]}', f'{row}.{u["end"]}')
 
+        # 候補一覧の「－ 補正根拠 －」が読む（項目48-MD）。
+        # **簡易入力の行は本体と別**なので、あちらの控え
+        # （`self.line_results`）を引くと別の行の理由が付く。
+        # **自動反映で下から抜ける前に**置いておくこと。
+        self._quick_results = _results
+
         # 補正を欄の中へ自動で反映（項目48-LR・表示メニューで切替）。
         # 書き換えたら、色付けと単位を新しい文字で作り直すため
         # もう一度だけ解析へ回る（直した文は変わらないので収まる。
@@ -5089,6 +5115,20 @@ class CorrectNoteApp:
                 items.append((f'  {c["surface"]}',
                               lambda u=unit, r=row, c=c:
                               self._quick_choose_word(r, u, c)))
+
+        # **いちばん下に説明**（項目48-MD）。簡易入力の欄には
+        # 打った文字がそのまま出ているので、行はこの欄から取る。
+        _src, _why = None, None
+        try:
+            _src = self._quick_text.get(f'{row}.0', f'{row}.end')
+        except Exception:
+            _src = None
+        try:
+            _why = (self._quick_results[row - 1] or {}).get('odd_reasons')
+        except Exception:
+            _why = None
+        items.extend(self._analysis_items(row, unit, src_line=_src,
+                                          recorded=_why))
 
         if len(items) <= 1:
             self.status.config(
@@ -5828,6 +5868,26 @@ class CorrectNoteApp:
             label='見えない空白（半角・全角・タブ）を表示',
             variable=self.show_whitespace_var,
             command=self._on_toggle_show_whitespace,
+            selectcolor=ACCENT)
+        # **補正候補に品詞の判定を出す**（項目48-MD・うにさんの指定・
+        # 2026-08-31。**既定オフ**）。オンのときは、候補が1つも
+        # 無い語でも一覧を開く（「－ 品詞判定 －」だけが見える）。
+        # **なかなか進まない開発を分析するため**の窓。
+        self.show_pos_info_var = tk.BooleanVar(
+            value=self.settings.get('show_pos_info'))
+        m_view.add_checkbutton(
+            label='補正候補に品詞の判定を表示する',
+            variable=self.show_pos_info_var,
+            command=self._on_toggle_show_pos_info,
+            selectcolor=ACCENT)
+        # **そのひとつ下**（うにさんの指定の並びのまま）。
+        # 「－ 品詞判定 －」の下に「－ 補正根拠 －」を足す。
+        self.show_reason_info_var = tk.BooleanVar(
+            value=self.settings.get('show_reason_info'))
+        m_view.add_checkbutton(
+            label='補正候補に根拠を表示する',
+            variable=self.show_reason_info_var,
+            command=self._on_toggle_show_reason_info,
             selectcolor=ACCENT)
         m_view.add_separator()
         self.dark_mode_var = tk.BooleanVar(
@@ -6620,6 +6680,50 @@ class CorrectNoteApp:
         except Exception:
             pass
         self._refresh_after_analysis(learn=False)
+
+    def _on_toggle_show_pos_info(self):
+        """
+        表示メニュー「補正候補に品詞の判定を表示する」の切り替え
+        （項目48-MD・2026-08-31）。
+
+        **解析はやり直さない。** これは候補一覧の中身だけを変える
+        設定で、補正の答えには何の影響も無い。開いている一覧は
+        閉じる（開いたままだと、切り替えの前の中身が残る）。
+        """
+        try:
+            self.settings.set('show_pos_info',
+                              bool(self.show_pos_info_var.get()))
+            self.settings.save()
+        except Exception:
+            pass
+        self._close_dropdown()
+        self.status.config(
+            text=('補正候補に品詞の判定を表示します'
+                  if self.show_pos_info_var.get()
+                  else '補正候補の品詞の判定を表示しません'))
+
+    def _on_toggle_show_reason_info(self):
+        """
+        表示メニュー「補正候補に根拠を表示する」の切り替え
+        （項目48-MD・2026-08-31）。
+
+        「－ 品詞判定 －」の下に並べるものなので、品詞の判定が
+        オフのままだと出す場所が無い。**そのときは一緒に上げる**
+        （メニューを押したのに何も変わらない、を作らない）。
+        """
+        on = bool(self.show_reason_info_var.get())
+        try:
+            self.settings.set('show_reason_info', on)
+            if on and not self.settings.get('show_pos_info'):
+                self.settings.set('show_pos_info', True)
+                self.show_pos_info_var.set(True)
+            self.settings.save()
+        except Exception:
+            pass
+        self._close_dropdown()
+        self.status.config(
+            text=('補正候補に根拠を表示します' if on
+                  else '補正候補の根拠を表示しません'))
 
     def _toggle_bookmark(self, line):
         """
@@ -8268,6 +8372,39 @@ class CorrectNoteApp:
         cache[key] = got
         return got
 
+    @staticmethod
+    def _tags_still_there(w, probes):
+        """
+        **「前と同じ」と言う前に、その印がまだ本当に付いているか**
+        （項目48-MO・2026-08-31。うにさんの報告「右のタブスペースが
+        短いままでした。解析は済んでいます。ただこのあと最小化や
+        戻したり、何かしたら正しいタブスペース幅に直りました」）。
+
+        48-MB で入れた「**前と同じなら指1本触れない**」（点滅止め）は、
+        **印が残っていること**を前提にしていた。ところが**補正欄は
+        解析のたびに中身を作り直す**（`delete('1.0','end')` →
+        `insert`）ので、**そこで印が全部消える**。作り直した中身が
+        前と同じ字なら、次の塗りは「前と同じ」と言って**何も敷かない**
+        ——タブの止まりも空白の印も、補正欄にだけ付かないまま残る。
+
+        窓を動かすと見える行の範囲（lo/hi）が変わって控えが外れるので、
+        「最小化して戻したら直った」。**塗りの側は正しく、控えの側が
+        嘘をついていた。**
+
+        **誰が中身を作り直したかを追いかけない**（学び22——書き手を
+        数え上げると、いつか1つ漏れる）。**印が在るかをその場で
+        確かめる**ほうが、書き手が増えても壊れない。
+
+        probes: [(タグの名前, 位置), ...]（1〜2個で足りる）
+        """
+        for tag, index in probes:
+            try:
+                if tag not in w.tag_names(index):
+                    return False
+            except Exception:
+                return False
+        return True
+
     def _paint_line_tab_stops(self, w, lo, hi):
         """
         見えている範囲の行に、行ごとのタブの止まりを敷く。
@@ -8295,7 +8432,13 @@ class CorrectNoteApp:
                 want[li] = ('ws_stops_' + '_'.join(map(str, stops)), stops)
             sig = (lo, hi, tuple(sorted(
                 (li, v[0]) for li, v in want.items())))
-            if prevs.get(str(w)) == sig:
+            # **敷いてあることを確かめてから**「前と同じ」と言う
+            # （項目48-MO）。補正欄は解析のたびに中身を作り直すので、
+            # 控えだけを見ると「敷いてある」と嘘をつく。
+            if prevs.get(str(w)) == sig and (
+                    not want or self._tags_still_there(
+                        w, [(v[0], f'{li}.0')
+                            for li, v in list(want.items())[:1]])):
                 return              # もう敷いてある。触らない
             prevs[str(w)] = sig
             if len(reg) > 500:      # 増えすぎたらタグごと捨てる
@@ -8463,7 +8606,12 @@ class CorrectNoteApp:
             sig = (on, lo, hi, w.winfo_width(), str(w.cget('font')),
                    text, tuple(sorted((t, tuple(v))
                                       for t, v in batch.items())))
-            if sigs.get(str(w)) == sig:
+            # 同じ確かめを、空白の印にも（項目48-MO）。**同じ理由**で
+            # 同じことが起きる——片方だけ直すと、そちらを迂回する。
+            if sigs.get(str(w)) == sig and (
+                    not batch or self._tags_still_there(
+                        w, [(t, v[0]) for t, v in
+                            list(batch.items())[:1]])):
                 continue
             sigs[str(w)] = sig
             try:
@@ -14120,7 +14268,11 @@ class CorrectNoteApp:
             pass
         if not cyc or getattr(self, '_f2_focus_target', None) is None:
             return
-        bg = ('#4a3a1e' if self.settings.get('dark_mode') else '#ffeed6')
+        # **もっと薄く**（うにさんの指定・2026-08-31）。地色との明るさの
+        # 差を**およそ半分**にした（ダーク 18.9 → 10.1／ライト 15.1 → 8.1）。
+        # 選んでいる範囲（`f2_focus`・53.0／34.0）との差が開くので、
+        # 「いまここ」と「次はここ」が取り違えにくくなる。
+        bg = ('#393225' if self.settings.get('dark_mode') else '#fff6e8')
         try:
             widget.tag_configure('f2_next', background=bg)
             # 選択そのもの（f2_focus）が重なったら、濃いほうを見せる
@@ -14548,6 +14700,9 @@ class CorrectNoteApp:
             unit = make_range_unit(line_text, units, new_start, new_end)
             if unit is None:
                 return 'break'
+            # **Shift+左右で作り替えた範囲**という印（項目48-MD）。
+            # 語の切れ目に揃っていないので、品詞は名乗らない。
+            unit['resized'] = True
             self._show_quick_unit_candidates(row, unit)
             return 'break'
 
@@ -14558,6 +14713,7 @@ class CorrectNoteApp:
         unit = make_range_unit(line_text, units, new_start, new_end)
         if unit is None:
             return 'break'
+        unit['resized'] = True        # 項目48-MD（上と同じ印）
         self._show_unit_candidates(row, unit, widget,
                                    cyc.get('unified'), units)
         return 'break'
@@ -14894,6 +15050,134 @@ class CorrectNoteApp:
                 push(kanji, 'homophone')
         return out
 
+    # ------------------------------------------------------------
+    # 候補一覧のいちばん下の説明（項目48-MD・うにさんの指定・2026-08-31）
+    # ------------------------------------------------------------
+    #
+    #   「メニューに『補正候補に品詞の判定を表示する』を追加し、
+    #     デフォルトオフ。オンにすると、候補欄の一番下に
+    #     『－ 品詞判定 －』の項目が増え、選択範囲の単語が何の品詞に
+    #     判定されたか（名詞や動詞など。活用変化しているものはその形で
+    #     書く。イ形容詞やナ形容詞など）を書く。（…）
+    #     メニューのさらにそのひとつ下に『補正候補に根拠を表示する』を
+    #     追加し、デフォルトオフ。『－ 品詞判定 －』の下に
+    #     『－ 補正根拠 －』を増やし、3行の内容を入れる」
+    #
+    #   「上2件は、**なかなか進まない開発を分析するために役立てる**」
+    #
+    # **候補一覧は3つある**（補正欄・メモ欄／統合・簡易入力）。
+    # 同じ組み立てを3回書くと、いつか食い違う（48-GN の教え）ので、
+    # ここ1か所で作って3か所から呼ぶ。**足すのはいちばん下**。
+
+    def _analysis_tokenizer(self):
+        """説明のための語の割り方（エンジンが見ているのと同じもの）。"""
+        fn = getattr(self.store, '_tokenize_fn', None)
+        if fn is None:
+            try:
+                fn = corrector.make_tokenizer(self.store)
+                self.store._tokenize_fn = fn
+            except Exception:
+                return None
+        return fn
+
+    @staticmethod
+    def _analysis_pair(unit):
+        """
+        その単位の「**打った文字 → 直した文字**」を取り出す。
+
+        `detail` は3つの一覧のどれでも `(打った, 直した, 種別)` の
+        並び（`corrector` が積む形）。補正欄では `unit['text']` が
+        直したあと、メモ欄では打ったまま——**どちらでも detail の
+        並びは同じ**なので、そこだけを見る。
+        """
+        d = unit.get('detail')
+        if d and len(d) >= 2 and d[0] and d[1]:
+            return d[0], d[1]
+        base = unit.get('base') or ''
+        text = unit.get('text') or ''
+        if unit.get('kind') == 'chosen' and base and base != text:
+            return base, text
+        return text, ''
+
+    def _analysis_items(self, row, unit, src_line=None, pair=None,
+                        recorded=None):
+        """
+        候補一覧のいちばん下に足す説明の行（項目48-MD）。
+
+        「補正候補に品詞の判定を表示する」がオフなら **[]**——
+        既定はオフなので、**何も足さない＝今までと同じ画面**。
+
+        row / src_line は「違和感の正体」を測り直すための行の文脈。
+        src_line を渡さなければ、その行の解析結果から**打った側の
+        行**（`original`）を引く（補正欄には直した文が出ているので、
+        そのまま測ると打った文の異様さが見えない）。
+
+        recorded: その行の `odd_reasons`（エンジンが控えた理由）。
+            **簡易入力の欄は本体と行が別**なので、あちらは自分の
+            控えを渡すこと（`self.line_results` を引くと別の行の
+            理由が付く）。
+        """
+        try:
+            if not self.settings.get('show_pos_info'):
+                return []
+        except Exception:
+            return []
+
+        items = [(ANALYSIS_HEAD_POS, None)]
+        # **Shift+左右で範囲を変えたときは「判定できません」**
+        # （うにさんの指定）。切れ目に揃っていない範囲の品詞を
+        # 名乗るのは、判定ではなく当てずっぽうになる。
+        if unit.get('resized'):
+            items.append(('  判定できません', None))
+        else:
+            fn = self._analysis_tokenizer()
+            try:
+                lines = explain.pos_lines(unit.get('text') or '', fn)
+            except Exception:
+                lines = [explain.UNKNOWN_POS]
+            for ln in lines:
+                items.append((f'  {ln}', None))
+
+        try:
+            if not self.settings.get('show_reason_info'):
+                return items
+        except Exception:
+            return items
+
+        typed, fixed = pair if pair is not None else self._analysis_pair(unit)
+        # **補正根拠は、補正した単語にだけ**（うにさんの指定・2026-08-31）:
+        # 「補正根拠の項目は、補正した単語にだけ表示して、そうでない
+        #   ものは**項目ごと省きます**」。
+        # 直していない語に「補正はしていない（印だけ）」と書いても、
+        # 見出しの分だけ一覧が伸びるだけで何も分からない。
+        # Shift+左右で作り替えた範囲も、そこに補正は無いので同じ。
+        if unit.get('resized') or not fixed or fixed == typed:
+            return items
+        # **エンジンが控えた「なぜ異様と見たか」**（項目48-MD）。
+        # 在るならそれを使う——判定を立てた当人の言葉なので、
+        # 画面で測り直すと食い違う（48-GN）。
+        if recorded is None and src_line is None:
+            try:
+                _res = self.line_results[row - 1] or {}
+                recorded = _res.get('odd_reasons')
+                src_line = _res.get('original')
+            except Exception:
+                pass
+        items.append((ANALYSIS_HEAD_WHY, None))
+        try:
+            fn = self._analysis_tokenizer()
+            rows = explain.reason_lines(
+                typed, fixed, unit=unit, line=src_line or '',
+                input_method=self.settings.get('input_method'),
+                tokenize_fn=fn, store=self.store,
+                dict_index=self.dict_index, choices=self.choices,
+                recorded=recorded)
+        except Exception:
+            rows = [explain.NO_ODD_REASON, explain.NO_HAND_REASON]
+        for ln in rows:
+            items.append((f'  {ln}', None))
+        return items
+
     def _editor_dropdown_items(self, row, unit, units_in_row=None):
         """
         メモ欄の候補一覧の**中身**を組み立てる（開かずに）。
@@ -15044,6 +15328,16 @@ class CorrectNoteApp:
                 items.append((f'  {c["surface"]}',
                               lambda u=unit, r=row, c=c:
                               self._editor_choose_word(r, u, c)))
+
+        # **いちばん下に説明**（項目48-MD）。既定オフなので、
+        # 何も足さない＝今までと同じ一覧。
+        # 統合表示で自動反映したあとは `detail` が付いていない
+        # （本文がもう直った形）ので、控え（`_auto`）から
+        # 「打った文字 → 直した文字」を渡す。
+        _pair = None
+        if _auto is not None and _auto[3]:
+            _pair = (_auto[3], _now)
+        items.extend(self._analysis_items(row, unit, pair=_pair))
         return items
 
     def _open_editor_dropdown(self, event, row, unit, units_in_row=None):
@@ -15479,6 +15773,10 @@ class CorrectNoteApp:
             items.append((f'  「{original}」は今後直さない',
                           lambda o=original: self._protect_word(o)))
 
+        # **いちばん下に説明**（項目48-MD）。オンのときは
+        # 候補が1つも無い語でも一覧を開く（下の門より前に足す）。
+        items.extend(self._analysis_items(row, unit))
+
         if len(items) <= 1:
             self.status.config(
                 text=f'「{unit["text"]}」の候補は見つかりませんでした')
@@ -15525,11 +15823,27 @@ class CorrectNoteApp:
                     w += 1
             return w
 
-        width = max(20, max(_disp_width(t) for t, _ in items) + 3)
+        # **横に広がりすぎないようにする**（項目48-MD）。
+        # 説明（品詞判定・補正根拠）は長い行になることがあり、
+        # そのまま幅にすると一覧が画面をはみ出す。上限を切っても
+        # 中身は消えない（見切れるだけ・上下の選び方も変わらない）。
+        width = max(20, min(80, max(_disp_width(t) for t, _ in items) + 3))
+        # **いちばん下の説明は、必ず見えるところに置く**（項目48-ML・
+        # 2026-08-31。うにさんの画面「品詞判定が出ないものがあります」）。
+        # 説明は一覧の**いちばん下**に足すので、これまでの16行で切ると
+        # 候補の多い語（`やん` は21項目）では**外に出て、しかも上下キーは
+        # 見出しを飛ばすので届かない**。説明が在るぶんだけ伸ばす。
+        rows = min(len(items), DROPDOWN_ROWS)
+        for _i, (_t, _cb) in enumerate(items):
+            if _t == ANALYSIS_HEAD_POS:
+                rows = min(len(items),
+                           max(rows, DROPDOWN_ROWS + (len(items) - _i)),
+                           DROPDOWN_ROWS_MAX)
+                break
         lb = tk.Listbox(dd, bg=PANEL, fg=INK, relief='flat',
                         font=('Yu Gothic UI', 10), activestyle='none',
                         selectbackground=EDITOR_SEL_BG, selectforeground=INK,
-                        width=width, height=min(len(items), 16),
+                        width=width, height=rows,
                         exportselection=False)
         lb.pack(padx=1, pady=1)
         for label, cb in items:

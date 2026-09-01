@@ -37,7 +37,7 @@ from collections import namedtuple
 Item = namedtuple('Item', 'name module why required')
 
 ITEMS = (
-    Item('CorrectNote_説明書v5.html', None,
+    Item('CorrectNote_説明書v6.html', None,
          'メニューの「説明書をHTMLで展開」が出せなくなる',
          True),
     Item('familiarity.json', 'familiarity',

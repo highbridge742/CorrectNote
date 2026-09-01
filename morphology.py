@@ -183,10 +183,10 @@ class Token:
     """形態素1つ分。janome の有無にかかわらず同じ形で扱えるようにする。"""
 
     __slots__ = ('surface', 'pos', 'base_form', 'reading', 'start', 'end',
-                 'has_reading', 'pos_sub')
+                 'has_reading', 'pos_sub', 'infl_form')
 
     def __init__(self, surface, pos, base_form, reading, start, end,
-                 has_reading=True, pos_sub=''):
+                 has_reading=True, pos_sub='', infl_form=''):
         self.surface = surface        # 表記
         self.pos = pos                # 品詞（大分類）
         self.pos_sub = pos_sub        # 品詞（細分類）。接尾・非自立の判定に使う
@@ -194,6 +194,11 @@ class Token:
         self.reading = reading        # 読み（ひらがなに直したもの）
         self.start = start            # 行内の開始位置
         self.end = end                # 行内の終了位置
+        # **活用形**（連用形・連用タ接続…。2026-08-31・うにさんの指定
+        # 「活用変化しているものはその形で書く」）。**画面の説明に
+        # しか使わない**——補正の判断はここを見ない（見はじめると、
+        # janome の有無で答えが変わる）。janome が無いときは ''。
+        self.infl_form = infl_form
         # janome が辞書から読みを引けたか。
         # 引けなかった語は辞書に無い＝誤字の可能性がある。
         self.has_reading = has_reading
@@ -439,6 +444,10 @@ def _tokenize_janome(line):
         if not has_reading:
             reading = surface
 
+        infl = getattr(t, 'infl_form', '') or ''
+        if infl == '*':
+            infl = ''
+
         tokens.append(Token(
             surface=surface,
             pos=pos_major,
@@ -448,6 +457,7 @@ def _tokenize_janome(line):
             end=end,
             has_reading=has_reading,
             pos_sub=pos_sub,
+            infl_form=infl,
         ))
     return tokens
 

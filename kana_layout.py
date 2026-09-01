@@ -529,8 +529,49 @@ def phonetic_candidates(char):
 import functools
 
 
+# --- 項目48-NJ: **ローマ字入力のときは、ローマ字のキーで測る**
+#     （試し・2026-09-01。既定は off）------------------------------
+#
+# この関数は**かなキー配列の距離**だけで候補を集めている。
+# ローマ字入力の人にとっては別のキー配列なのに:
+#
+#     や → た   かな **99.0**（無関係）／ ローマ字 ya→ta は **隣**
+#     や → か   かな **1.0**（隣）    ／ ローマ字 ya→ka は 隣ではない
+#
+# 実測（`readcheck romaji 600 --adjacent`・項目48-NI で材料を作り、
+# `tools_local/probe_rom2.py` で数えた・初期状態）:
+#
+#     **ローマ字では隣キー1打・かなでは遠い**行  **275**
+#       正解の読みが 1位 105 ／ 2〜3位 76 ／ **4位以下 94**
+#       正解の読みの費用は **181件が 2.0〜3.0**（＝遠い置換の値段）
+#       例: じんどく → じんそく（費用 2.2・**12位**）。
+#           1位は しんどく（0.4・かなで隣）
+#
+# **費用は下げるだけ**（かなで近い組はそのまま）。上げると今までの
+# 直りが落ちるので。
+_ROMAJI_SUB_NEAR = 0.5      # ローマ字で1字が隣のキー
+_ROMAJI_SUB_SAME = 0.0      # 同じ綴り
+
+
+@functools.lru_cache(maxsize=4)
+def _romaji_pairs():
+    """かな同士で、**ローマ字の綴りが1字違い・その1字が隣のキー**の組。"""
+    from corrector import _KANA_TO_ROMAJI, _qwerty_adjacent
+    out = {}
+    items = [(k, r) for k, r in _KANA_TO_ROMAJI.items() if r]
+    for a, ra in items:
+        for b, rb in items:
+            if a == b or len(ra) != len(rb):
+                continue
+            diff = [(x, y) for x, y in zip(ra, rb) if x != y]
+            if len(diff) == 1 and _qwerty_adjacent(diff[0][0], diff[0][1]):
+                out.setdefault(a, {})[b] = _ROMAJI_SUB_NEAR
+    return out
+
+
 @functools.lru_cache(maxsize=512)
-def nearby_candidates(char, max_dist=1.6, include_phonetic=True):
+def nearby_candidates(char, max_dist=1.6, include_phonetic=True,
+                      input_method=None):
     """
     ある文字について、押し間違えた可能性のある候補を近い順に返す。
     戻り値: [(候補文字, 距離), ...]  自分自身を距離0で含む。
@@ -550,10 +591,43 @@ def nearby_candidates(char, max_dist=1.6, include_phonetic=True):
         return [(char, 0.0)]
 
     scored = {}
-    for c in ALL_KANA:
-        d = kana_key_distance(char, c)
-        if d <= max_dist:
-            scored[c] = d
+    # **ローマ字入力では、かな配列の隣接は見ない**（項目48-NJ・
+    # うにさんの指定・2026-09-01）:
+    #
+    #     「ローマ字入力はローマ字の隣接キーを見てください。
+    #       かな入力の隣接は見ません。」
+    #
+    # 最初は「かなの距離に**足す**」形で作って、育ちの数字が下がる
+    # ので見送っていた。**足すのではなく、置き換える**のが指定。
+    # 打った人はローマ字の配列しか触っていないのだから、かなの
+    # 配列で近いこと（`や`と`か`）は**その人にとって根拠ではない**。
+    _rom = (input_method == 'romaji' and _romaji_cost_on())
+    if _rom:
+        try:
+            for c, d in _romaji_pairs().get(char, {}).items():
+                if d <= max_dist:
+                    scored[c] = d
+            # **同じキーの変わり者は、どちらの入力方式でも残す**——
+            # 小書き（Shift の押し忘れ）と濁点・半濁点は**キー配列の
+            # 話ではない**（ローマ字でも `ya`/`xya`・`ka`/`ga` という
+            # 綴りの違いとして同じだけ起きる）。`adjacent_slip` も
+            # 入力方式を問わずこの2つを通している——**同じ判定を
+            # 道ごとに書き分けない**（48-GN）。
+            for c in (SMALL_KANA_PAIR.get(char),
+                      _same_key_kana(char)):
+                if c and c != char:
+                    scored.setdefault(c, 0.3)
+            for c, base in SMALL_KANA_PAIR.items():
+                if base == char:
+                    scored.setdefault(c, 0.3)
+        except Exception:
+            _rom = False
+    if not _rom:
+        for c in ALL_KANA:
+            d = kana_key_distance(char, c)
+            if d <= max_dist:
+                scored[c] = d
+    scored.setdefault(char, 0.0)
 
     if include_phonetic:
         for c, d in phonetic_candidates(char):
@@ -563,6 +637,25 @@ def nearby_candidates(char, max_dist=1.6, include_phonetic=True):
 
     result = sorted(scored.items(), key=lambda x: x[1])
     return result
+
+
+def _same_key_kana(ch):
+    """濁点・半濁点を外した／付けた相手（同じキー）。項目48-NJ。"""
+    base = DAKUTEN_BASE.get(ch)
+    if base and base != ch:
+        return base
+    for k, v in DAKUTEN_BASE.items():
+        if v == ch and k != ch:
+            return k
+    return None
+
+
+def _romaji_cost_on():
+    """**測るための切り替え口**（項目48-NJ）。**既定は on**。
+
+    `CN_ROMAJI_COST=0` で、かな配列だけの昔の形に戻せる。
+    """
+    return os.environ.get('CN_ROMAJI_COST', '1') != '0'
 
 
 @functools.lru_cache(maxsize=8)

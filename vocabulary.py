@@ -424,7 +424,7 @@ _FLEX_CACHE_LIMIT = 4000
 
 
 def find_known_readings_flex(typed, store, max_dist=1.6, max_edits=2,
-                             beam_width=600):
+                             beam_width=600, input_method=None):
     """
     誤打された可能性のあるかな列 typed について、
     語彙ストアに存在する読みへ復元できる候補を探す。
@@ -443,14 +443,17 @@ def find_known_readings_flex(typed, store, max_dist=1.6, max_edits=2,
         vocab_size = len(store._by_reading)
     except Exception:
         vocab_size = -1
-    key = (typed, vocab_size, max_dist, max_edits, beam_width)
+    # **入力方式も鍵に入れる**（項目48-NJ）。同じ読みでも、
+    # かな入力とローマ字入力では「近いキー」が違う。
+    key = (typed, vocab_size, max_dist, max_edits, beam_width,
+           input_method)
     cached = _FLEX_CACHE.get(key)
     if cached is not None:
         return cached
 
     result = _find_known_readings_flex_uncached(
         typed, store, max_dist=max_dist, max_edits=max_edits,
-        beam_width=beam_width)
+        beam_width=beam_width, input_method=input_method)
 
     if len(_FLEX_CACHE) >= _FLEX_CACHE_LIMIT:
         _FLEX_CACHE.clear()
@@ -459,7 +462,8 @@ def find_known_readings_flex(typed, store, max_dist=1.6, max_edits=2,
 
 
 def _find_known_readings_flex_uncached(typed, store, max_dist=1.6,
-                                       max_edits=2, beam_width=600):
+                                       max_edits=2, beam_width=600,
+                                       input_method=None):
     """
     誤打された可能性のあるかな列 typed について、
     語彙ストアに存在する読みへ復元できる候補を探す。
@@ -532,7 +536,9 @@ def _find_known_readings_flex_uncached(typed, store, max_dist=1.6,
             # --- 通常の1文字対応（一致 or 置換） ---
             if pos < n:
                 ch = typed[pos]
-                for cand_char, d in nearby_candidates(ch, max_dist=max_dist):
+                for cand_char, d in nearby_candidates(
+                        ch, max_dist=max_dist,
+                        input_method=input_method):
                     nxt = kids.get(cand_char)
                     if nxt is None:
                         continue

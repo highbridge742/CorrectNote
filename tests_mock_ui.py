@@ -2133,9 +2133,29 @@ def run_scroll_cache_cases():
           _strip > _build > 0, True)
     check('前と同じなら塗り直さない（見比べを持つ）',
           '_ws_paint_sig' in _ws, True)
+    _st = ast.get_source_segment(src, methods['_paint_line_tab_stops']) or ''
     check('タブの止まりも、前と同じなら敷き直さない',
-          '_ws_stop_sig' in (ast.get_source_segment(
-              src, methods['_paint_line_tab_stops']) or ''), True)
+          '_ws_stop_sig' in _st, True)
+
+    # --- 2026-08-31 の報告（項目48-MO）---
+    # 「右のタブスペースが短いままでした。解析は済んでいます。
+    #   ただこのあと最小化や戻したり、何かしたら正しいタブスペース幅に
+    #   直りました」
+    # 48-MB の「前と同じなら触らない」は**印が残っていること**を
+    # 前提にしていた。**補正欄は解析のたびに中身を作り直す**
+    # （`delete('1.0','end')` → `insert`）ので、そこで印が全部消える。
+    # 作り直した中身が前と同じ字なら、次の塗りは「前と同じ」と言って
+    # **何も敷かない**。窓を動かすと lo/hi が変わって控えが外れるので
+    # 「最小化して戻したら直った」。
+    check('「前と同じ」と言う前に、印が在るかを確かめる道具がある',
+          '_tags_still_there' in methods, True)
+    check('タブの止まり: 控えだけで帰らない（48-MO）',
+          '_tags_still_there' in _st, True)
+    check('空白の印: 同じ確かめを掛けている（片方だけにしない・学び22）',
+          '_tags_still_there' in _ws, True)
+    # 確かめは**控えが合っているときだけ**（毎回引くと重い）
+    check('確かめるのは、控えが合っているときだけ',
+          _st.index('_ws_stop_sig') < _st.index('_tags_still_there'), True)
 
     # --- 2026-08-27 の3度目の報告の見張り（項目48-KD）---
     # ①'' 動かされた量は**実カーソル位置**で数える（報せの座標は
@@ -2303,4 +2323,327 @@ def run_icon_cases():
         text = open(spec_name, encoding='utf-8').read()
         check(f'{spec_name} が exe に絵を付ける',
               "icon='correctnote.ico'" in text, True)
+    return all_ok
+
+def run_explain_cases():
+    """
+    **候補一覧の「－ 品詞判定 －」「－ 補正根拠 －」**（項目48-MD・
+    うにさんの指定・2026-08-31）。
+
+        「メニューに『補正候補に品詞の判定を表示する』を追加し、
+          デフォルトオフ。（…）このメニューがオンになると、
+          まったく候補がない単語に対しても補正候補を出し、その場合は
+          『－ 品詞判定 －』の項目だけが見える。
+          Shift + 左右で範囲を変えた場合は『判定できません』と表示する」
+
+    ここで見張るのは **4つ**:
+
+      ① `explain.py` の言葉（janome の無いここでは、渡した
+         `tokenize_fn` の品詞だけで組み立てる道を通る）
+      ② **画面との配線**——候補一覧は3つある（補正欄・メモ欄・
+         簡易入力）ので、**3つとも**説明を足しているか。
+         足す場所が「候補が無ければ開かない」門より**前**か
+         （学び22「片方だけに置くと、そちらを迂回する」）
+      ③ 既定が**両方オフ**か（うにさんの指定）
+      ④ 紫の理由が**解析の控えを通り抜ける**か
+    """
+    import ast
+    import explain
+
+    print('--- 候補一覧の品詞判定と補正根拠（項目48-MD） ---')
+    all_ok = True
+
+    def check(label, got, want):
+        nonlocal all_ok
+        ok = (got == want)
+        all_ok = all_ok and ok
+        print(f'{"OK " if ok else "NG "}{label}')
+        if not ok:
+            print(f'      得た値: {got!r}   期待: {want!r}')
+
+    # --- ① 言葉 ------------------------------------------------
+    # 品詞は「大分類:細分類」でも「大分類」だけでも読めること。
+    check('イ形容詞と呼ぶ（janome は「形容詞」）',
+          explain.pos_name('形容詞:自立', '早い', '基本形', '早い'),
+          'イ形容詞・終止形')
+    check('ナ形容詞の語幹と呼ぶ（janome は「名詞,形容動詞語幹」）',
+          explain.pos_name('名詞:形容動詞語幹', 'きれい'), 'ナ形容詞の語幹')
+    check('活用している形は、その形で書く',
+          explain.pos_name('動詞:自立', '走っ', '連用タ接続', '走る'),
+          '動詞・連用形（た接続）／原形 走る')
+    check('形の変わらない品詞は、そのまま',
+          (explain.pos_name('名詞'), explain.pos_name('連体詞'),
+           explain.pos_name('接続詞'), explain.pos_name('感動詞')),
+          ('名詞', '連体詞', '接続詞', '感動詞'))
+    check('姓と名を分けて出す（項目48-JL の細分類）',
+          explain.pos_name('名詞:固有名詞:人名:姓', '柚須'),
+          '固有名詞（人名・姓）')
+    check('辞書に読みが無いことは必ず添える',
+          explain.pos_name('名詞:一般', 'ゅうりょじ', has_reading=False),
+          '名詞（辞書に無い語）')
+    check('品詞が立たなければ、そう言う',
+          explain.pos_name(''), '判定できません')
+
+    def tok(line):
+        """janome の無い環境でも回せる、作り物の割り方。"""
+        table = {'貸す': '動詞:自立', '九': '名詞:数', '人': '名詞:接尾'}
+        out = []
+        for w, p in table.items():
+            i = line.find(w)
+            if i >= 0:
+                out.append((w, p, '', i, i + len(w), True))
+        out.sort(key=lambda t: t[3])
+        return out or [(line, '名詞:一般', '', 0, len(line), True)]
+
+    check('割れた語は1語ずつ1行（丸めない）',
+          explain.pos_lines('貸す九人', tok),
+          ['貸す ＝ 動詞', '九 ＝ 数詞', '人 ＝ 接尾辞'])
+
+    # --- 打鍵の型（うにさんの挙げた言葉のとおりに） --------------
+    check('隣接キーへ補正',
+          explain.hand_labels('おくゆくこてい', 'おくゆきこてい', 'kana'),
+          ['隣接キーへ補正'])
+    check('隣接キーの巻き込みを補正',
+          explain.hand_labels('もみとにもどります', 'もとにもどります',
+                              'kana'),
+          ['隣接キーの巻き込みを補正'])
+    check('文字の順序を補正（入れ替えは1手・Damerau）',
+          explain.hand_labels('そももそ', 'そもそも', 'kana'),
+          ['文字の順序を補正'])
+    check('脱字を補正',
+          explain.hand_labels('しゅうりょじ', 'しゅうりょうじ', 'kana'),
+          ['脱字を補正'])
+    check('重複した打鍵を補正',
+          explain.hand_labels('てんんか', 'てんか', 'kana'),
+          ['重複した打鍵を補正'])
+    check('Shift の押し忘れ（小書き）を補正',
+          explain.hand_labels('にゆうりよくみす', 'にゅうりょくみす', 'kana'),
+          ['Shift の押し忘れ（小書き）を補正'])
+    check('濁点・半濁点を補正',
+          explain.hand_labels('つつぎ', 'つづき', 'kana'),
+          ['濁点・半濁点を補正'])
+    check('手が多すぎるときは数だけ言う',
+          explain.hand_labels('あいうえおかきくけこ', 'なにぬねのはひふへほ',
+                              'kana'),
+          ['読みを組み直して補正（10か所）'])
+    check('同じものなら手は無い', explain.hand_labels('あい', 'あい'), [])
+
+    # --- エンジンが控えた理由が在れば、それを使う（測り直さない）---
+    check('控えた理由をそのまま出す',
+          explain.odd_reason('好き任', line='好き任', start=0, end=3,
+                             recorded=[(0, 3, 'これが理由')]),
+          'これが理由')
+    check('狭いほうの理由を採る（広い印は隣を巻き込む）',
+          explain.odd_reason('任', line='好き任', start=2, end=3,
+                             recorded=[(0, 3, 'ひろい'), (2, 3, 'せまい')]),
+          'せまい')
+    check('重ならない控えは使わない',
+          explain.odd_reason('好き', line='好き任', start=0, end=2,
+                             recorded=[(2, 3, 'よその理由')]),
+          explain.NO_ODD_REASON)
+
+    # 3行の並び（学習が効いていなければ2行）
+    rows = explain.reason_lines('好き任', '確認', line='好き任', start=0,
+                                end=3, recorded=[(0, 3, 'これが理由')])
+    check('根拠は 理由 → した内容 の順', rows[0], 'これが理由')
+    check('学習が効いていなければ3行目は出さない', len(rows), 2)
+    check('直したのに判定が立っていなければ、はっきり書く',
+          explain.reason_lines('あいう', 'あいえ')[0],
+          '異様だという判定は立っていない（補正は別の道から届いた）')
+    check('補正が無ければ「印だけ」',
+          explain.reason_lines('あいう', '')[1], '補正はしていない（印だけ）')
+
+    class _Choices:
+        def lookup(self, base, prev, next_):
+            return '確認' if base == '好き任' else None
+
+    rows = explain.reason_lines('好き任', '確認', choices=_Choices())
+    check('選び直しで直ったものには「学習による選び直し」',
+          rows[-1], '学習による選び直し')
+
+    # --- ②' `_analysis_items` を、作り物のアプリで直に回す --------
+    #   tkinter は要らない（設定・語彙・単位だけを渡す）。
+    import app as _app
+
+    class _Settings(dict):
+        def get(self, k, d=None):
+            return dict.get(self, k, d)
+
+    class _Store(object):
+        _tokenize_fn = staticmethod(lambda line: [])
+
+        def reading_of(self, _s):
+            return None
+
+        def lookup(self, _r):
+            return []
+
+    def _fake_items(corrected):
+        me = _app.CorrectNoteApp.__new__(_app.CorrectNoteApp)
+        me.settings = _Settings({'show_pos_info': True,
+                                 'show_reason_info': True,
+                                 'input_method': 'kana'})
+        me.store = _Store()
+        me.dict_index = None
+        me.choices = None
+        me.line_results = []
+        unit = {'text': '確認', 'base': '確認', 'kind': 'plain',
+                'detail': (('かくにん', '確認', 'かな入力')
+                           if corrected else None),
+                'prev': '', 'next': ''}
+        return _app.CorrectNoteApp._analysis_items(me, 1, unit)
+
+    # --- ② 画面との配線 ----------------------------------------
+    src = open('app.py', encoding='utf-8').read()
+    tree = ast.parse(src)
+    app_cls = next((n for n in tree.body
+                    if isinstance(n, ast.ClassDef)
+                    and n.name == 'CorrectNoteApp'), None)
+    funcs = {n.name: n for n in (app_cls.body if app_cls else [])
+             if isinstance(n, ast.FunctionDef)}
+
+    check('説明を組み立てるのは1か所（_analysis_items）',
+          '_analysis_items' in funcs, True)
+
+    def calls_analysis(name):
+        fn = funcs.get(name)
+        if fn is None:
+            return None
+        return any(isinstance(n, ast.Call)
+                   and isinstance(n.func, ast.Attribute)
+                   and n.func.attr == '_analysis_items'
+                   for n in ast.walk(fn))
+
+    for name in ('_open_dropdown', '_editor_dropdown_items',
+                 '_open_quick_dropdown'):
+        check(f'{name} が説明を足す（3つとも・学び22）',
+              calls_analysis(name), True)
+
+    def before_gate(name):
+        """説明を足すのが「候補が無ければ開かない」門より前か。"""
+        fn = funcs.get(name)
+        if fn is None:
+            return None
+        add = gate = None
+        for n in ast.walk(fn):
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
+                    and n.func.attr == '_analysis_items':
+                add = n.lineno if add is None else min(add, n.lineno)
+            if isinstance(n, ast.Compare) and isinstance(n.left, ast.Call) \
+                    and isinstance(n.left.func, ast.Name) \
+                    and n.left.func.id == 'len':
+                gate = n.lineno if gate is None else min(gate, n.lineno)
+        if add is None or gate is None:
+            return None
+        return add < gate
+
+    for name in ('_open_dropdown', '_open_quick_dropdown'):
+        check(f'{name}: 候補ゼロでも開くよう、門より前に足す',
+              before_gate(name), True)
+
+    check('Shift+左右で作り替えた範囲に印を付ける（2か所とも）',
+          src.count("unit['resized'] = True"), 2)
+
+    # --- 項目48-ML: **いちばん下の説明が、見える行の外へ出ない** ---
+    # うにさんの画面「品詞判定が出ないものがあります」。一覧は
+    # 16行で切られていて、候補の多い語（`やん` は21項目）では説明が
+    # 外へ出ていた。**しかも上下キーは見出しを飛ばすので届かない。**
+    ns = {}
+    for name in ('DROPDOWN_ROWS', 'DROPDOWN_ROWS_MAX'):
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and len(node.targets) == 1                     and getattr(node.targets[0], 'id', None) == name:
+                ns[name] = node.value.value
+    check('見せる行数を1か所で決めている',
+          sorted(ns), ['DROPDOWN_ROWS', 'DROPDOWN_ROWS_MAX'])
+    check('これまでの16行は変えていない', ns.get('DROPDOWN_ROWS'), 16)
+
+    def _rows(n_items, head_at=None):
+        """`_make_dropdown` の高さの決め方（同じ式をここで回す）。"""
+        rows = min(n_items, ns['DROPDOWN_ROWS'])
+        if head_at is not None:
+            rows = min(n_items,
+                       max(rows, ns['DROPDOWN_ROWS'] + (n_items - head_at)),
+                       ns['DROPDOWN_ROWS_MAX'])
+        return rows
+
+    check('説明が無ければ、今までどおり16行で切る', _rows(30), 16)
+    check('説明が無ければ、少ない項目はそのまま', _rows(6), 6)
+    # うにさんの画面の `やん`（21項目・説明は17行目＝添字16から）
+    check('やん（21項目）は全部見える', _rows(21, 16), 21)
+    check('繋がり（19項目）も全部見える', _rows(19, 14), 19)
+    check('項目が多すぎるときは、説明ぶんだけ伸ばして止める',
+          _rows(60, 54), ns['DROPDOWN_ROWS'] + 6)
+    check('説明が長くても、伸ばしすぎない（上限で止まる）',
+          _rows(60, 40), ns['DROPDOWN_ROWS_MAX'])
+    check('高さの式が `_make_dropdown` に在る',
+          'rows = min(len(items), DROPDOWN_ROWS)' in src, True)
+
+    # --- 項目48-MM: **補正根拠は、補正した単語にだけ** ---
+    #   うにさんの指定（2026-08-31）「補正根拠の項目は、補正した単語に
+    #   だけ表示して、そうでないものは**項目ごと省きます**」
+    check('直していない語には見出しごと出さない',
+          '補正根拠は、補正した単語にだけ' in src, True)
+    check('その門は「－ 補正根拠 －」を足すより前に在る',
+          src.index("if unit.get('resized') or not fixed or fixed == typed:")
+          < src.index('items.append((ANALYSIS_HEAD_WHY, None))'), True)
+    # 直していない語の `_analysis_items` は、**品詞判定だけ**を返す
+    # （`explain.reason_lines` は道具のために言葉を持ったままでよい）
+    check('直していない語の説明は品詞判定だけ',
+          [t for t, _cb in _fake_items(corrected=False)
+           if t.startswith('－')], ['－ 品詞判定 －'])
+    check('直した語には根拠も付く',
+          [t for t, _cb in _fake_items(corrected=True)
+           if t.startswith('－')], ['－ 品詞判定 －', '－ 補正根拠 －'])
+
+    # --- F2 の行き先の色（**もっと薄く**・うにさんの指定・2026-08-31）---
+    def _lum(h):
+        h = h.lstrip('#')
+        r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+    import re as _re
+    fn_next = funcs.get('_paint_f2_neighbors')
+    body = ast.get_source_segment(src, fn_next) if fn_next else ''
+    got = _re.findall(r"'(#[0-9a-f]{6})'", body or '')
+    check('行き先の色を1か所で決めている（ダークとライトの2つ）',
+          len(got), 2)
+    if len(got) == 2:
+        dark, light = got
+        # 選んでいる範囲（`f2_focus` ＝ #7a5a2b / #ffd9a0）より
+        # **うんと薄い**こと。地色はダーク #25292d・ライト #ffffff。
+        check('ダーク: 行き先は選択の1/3より薄い',
+              _lum(dark) - _lum('#25292d')
+              < (_lum('#7a5a2b') - _lum('#25292d')) / 3, True)
+        check('ライト: 行き先は選択の1/3より薄い',
+              _lum('#ffffff') - _lum(light)
+              < (_lum('#ffffff') - _lum('#ffd9a0')) / 3, True)
+        check('それでも地色と同じではない（見えなくならない）',
+              dark != '#25292d' and light != '#ffffff', True)
+
+    check('見出しの文字列は1か所で決めている',
+          src.count("ANALYSIS_HEAD_POS = ") == 1
+          and src.count("'－ 品詞判定 －'") == 1, True)
+    check('印が付いた範囲は「判定できません」',
+          "items.append(('  判定できません', None))" in src, True)
+
+    for label in ('補正候補に品詞の判定を表示する', '補正候補に根拠を表示する'):
+        check(f'表示メニューに「{label}」がある',
+              f"label='{label}'" in src, True)
+
+    # --- ③ 既定は両方オフ ---------------------------------------
+    import tempfile
+    import os as _os
+    from settings import Settings
+    s = Settings(_os.path.join(tempfile.mkdtemp(), 'settings.json'))
+    check('品詞判定の既定はオフ', s.get('show_pos_info'), False)
+    check('補正根拠の既定はオフ', s.get('show_reason_info'), False)
+
+    # --- ④ 理由は控えを通り抜ける -------------------------------
+    import analysis_cache as AC
+    packed = AC._pack({'original': 'あ', 'corrected': 'あ',
+                       'odd_reasons': [(0, 1, 'わけ')]})
+    check('紫の理由が解析の控えを通り抜ける',
+          AC._unpack(packed).get('odd_reasons'), [(0, 1, 'わけ')])
+    check('理由の無い古い控えでも落ちない',
+          AC._unpack({'o': 'あ', 'c': 'あ'}).get('odd_reasons'), [])
     return all_ok

@@ -932,10 +932,13 @@ def test_analysis_cache():
         {'original': 'たんほの繋がり', 'corrected': 'たんごの繋がり',
          'changed': True, 'details': [('たんほ', 'たんご', '学業・勉強')],
          'spans': [(0, 3)], 'unsure_spans': [], 'original_spans': [(0, 3)],
-         'odd_spans': []},
+         # 紫の理由（項目48-MD）も控えを通り抜けること
+         'odd_spans': [], 'odd_reasons': []},
         {'original': 'ふつうの行', 'corrected': 'ふつうの行',
          'changed': False, 'details': [], 'spans': [],
-         'unsure_spans': [], 'original_spans': [], 'odd_spans': [(0, 2)]},
+         'unsure_spans': [], 'original_spans': [], 'odd_spans': [(0, 2)],
+         'odd_reasons': [(0, 2, '品詞として識別できない（かなの並びに'
+                                '説明が付かない）')]},
     ]
 
     check('書けた', AC.save(path, fp(), {text: results}), True)

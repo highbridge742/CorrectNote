@@ -477,7 +477,8 @@ def run_regression_cases(store):
     def known_tokenize(line):
         """実在語として認識できている前提のトークナイザ。"""
         toks = mock_tokenize(line)
-        return [(s, p, r, st, en, True) for s, p, r, st, en, _k in toks]
+        return [(s, p, r, st, en, True)
+                for s, p, r, st, en, _k, *_ in toks]
 
     pairs = [
         ('性格改善', ['正確な作業']),

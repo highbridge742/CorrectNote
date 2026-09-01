@@ -272,6 +272,30 @@ def _gen_steps(run, i):
     return out
 
 
+def _looks_verb(word, words):
+    """
+    その表記は**用言（動詞）の形**か（項目48-MR・2026-08-31）。
+
+    表に品詞は無いので、**活用の形**で見る:
+
+        一段   `入れ` → `入れる` が表に在る
+        五段   `書き` → い段を言い切りへ戻した `書く` が表に在る
+
+    `全て` はどちらでもない（`全てる` も `全つ` も無い）ので、
+    用言ではない。**閉じた活用の表だけで決まる**——語を並べた表を
+    足すわけではない。
+    """
+    if not word:
+        return False
+    if word + 'る' in words:
+        return True                      # 一段（入れ→入れる・見→見る）
+    tail = word[-1]
+    for u, row in _GODAN_ROW.items():
+        if row[1] and row[1] == tail and word[:-1] + u in words:
+            return True                  # 五段の連用形（書き→書く）
+    return False
+
+
 def explain_kana_run(run, after_kanji=False, before_kanji=False,
                      kanji_stem='', is_word=None):
     """
@@ -314,11 +338,29 @@ def explain_kana_run(run, after_kanji=False, before_kanji=False,
     stack = [(0, 'Bf')]
     if after_kanji:
         stack.append((0, 'S'))
-        # 漢字の連続＋かなの頭が、表の語（思いがけず・引き継ぎ）
+        # 漢字の連続＋かなの頭が、表の語（思いがけず・引き継ぎ）。
+        # **用言でなければ、その先は「文節の頭」として扱う**
+        # （`Bf`・項目48-MR・2026-08-31）。「語と語を直接つなげない」の
+        # 決まりは `たん|あご` `すき|にん` のような**かなだけの並び**を
+        # 止めるためのもので、ここは**漢字が語の切れ目を保証している**:
+        #
+        #     全**て**ひらがなであり → 全て（漢字＋送り仮名）で1語が
+        #                             閉じたあとの `ひらがな` は新しい語
+        #
+        # `Bw` のままだと `全て` のあとに語が置けず、うにさんの画面の
+        # 誤検知（`てひらがなであり` に紫）になっていた。
+        #
+        # **用言（動詞）の形のときは `Bw` のまま**——連用形の直後は
+        # 複合動詞の場所で、そこに語を置けるようにすると
+        # `入れ|ちいさい`（`入れていない` の壊れた形）まで説明が
+        # 付いてしまい、**本物の異様を取りこぼす**（実測。この形は
+        # 下のイ形容詞の枝でも同じ理由で断っている）。
         if kanji_stem:
             for k in range(1, min(6, n) + 1):
-                if kanji_stem + run[:k] in words:
-                    stack.append((k, 'Bw'))
+                w0 = kanji_stem + run[:k]
+                if w0 not in words:
+                    continue
+                stack.append((k, 'Bw' if _looks_verb(w0, words) else 'Bf'))
             # 漢字の語幹の動詞・形容詞（動く・早い）を活用させた形
             for k in range(0, min(4, n)):
                 stem = kanji_stem + run[:k]
