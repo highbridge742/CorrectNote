@@ -1,0 +1,1591 @@
+越	えっ:on えつ:on こし:kun りこし:kun
+直	すぐ:kun ただ:kun ちょっ:on っすぐ:kun
+物	いもの:kun ぶっ:on みもの:kun りもの:kun
+楽	かく:on がく:on がっ:on らっ:on
+隠	いん:on おん:on かくし:kun
+質	しち:on しっ:on ち:on
+請	しょう:on しん:on せい:on
+誦	しゅ:on しょう:on す:on
+童	とう:on どう:on わらわ:kun
+砂	さ:on さご:kun しゃ:on
+目	つめ:kun ま:on もっ:on
+盛	しょう:on せい:on もり:kun
+殺	さい:on さっ:on せっ:on
+柔	しゅう:on じゅう:on にゅう:on
+望	ほう:on ぼう:on もう:on
+暴	ばく:on ほう:on ぼう:on
+手	す:on って:kun つで:kun
+従	しゅう:on しょう:on じゅう:on
+執	しっ:on しつ:on しゅう:on
+叉	さ:on しゃ:on つまた:kun
+出	しゅっ:on たし:kun りだし:kun
+入	じゅ:on にっ:on りいれ:kun
+借	しゃ:on しゃく:on しゃっ:on
+伐	はつ:on ばっ:on ばつ:on
+仰	きょう:on ぎょう:on こう:on
+鼻	ひ:on び:on
+黙	もく:on もっ:on
+黄	おう:on こう:on
+鹿	か:on かの:kun
+鬱	うっ:on うつ:on
+駁	はく:on ばく:on
+養	よう:on ようじょ:kun
+飭	しょく:on ちょく:on
+風	かざ:kun ふ:on
+顔	かん:on がん:on
+頭	つがしら:kun と:on
+須	しゅ:on す:on
+靱	しん:on じん:on
+靭	しん:on じん:on
+雨	あま:kun さめ:kun
+雅	か:on が:on
+雀	から:kun じゃく:on
+闊	かっ:on かつ:on
+鏤	る:on ろう:on
+酒	き:on さか:kun
+還	かん:on げん:on
+遣	けん:on つかい:kun
+遡	さく:on そ:on
+達	たっ:on だる:kun
+逢	あい:on ほう:on
+逆	ぎゃっ:on さか:kun
+迎	けい:on げい:on
+輓	はん:on ばん:on
+較	かく:on こう:on
+赤	せっ:on っか:kun
+贈	そう:on ぞう:on
+賁	ひ:on ふん:on
+豎	しゅ:on じゅ:on
+譲	しょう:on じょう:on
+謁	えっ:on えつ:on
+謀	ほう:on ぼう:on
+諱	い:on き:on
+諦	たい:on てい:on
+読	ど:on どっ:on
+説	せい:on せっ:on
+詰	きっ:on きつ:on
+詣	けい:on もうで:kun
+角	すみ:kun つかど:kun
+覆	ふく:on ふっ:on
+血	けっ:on けつ:on
+虐	きゃく:on ぎゃく:on
+薄	はく:on はっ:on
+蕪	ふ:on ぶ:on
+蔗	しゃ:on しょ:on
+蔑	へつ:on べっ:on
+葉	っぱ:kun つば:kun
+華	か:on け:on
+芽	か:on のめ:kun
+花	きゃ:on のはな:kun
+腹	ふく:on ふっ:on
+罵	は:on ば:on
+置	おき:on きおき:kun
+缺	けっ:on けつ:on
+織	しき:on しょく:on
+縫	ぬい:on ほう:on
+締	てい:on りしまり:kun
+緑	りょっ:on ろく:on
+綴	てい:on てつ:on
+続	ぞっ:on つづき:kun
+絶	せつ:on ぜつ:on
+納	なっ:on のう:on
+紊	びん:on ぶん:on
+籠	こ:on ろう:on
+簇	そう:on ぞく:on
+篭	こ:on ろう:on
+築	ちっ:on つき:on
+節	せち:on せっ:on
+笑	え:on しょう:on
+竹	ちく:on つだけ:kun
+立	りっ:on りゅう:on
+竄	さん:on ざん:on
+穏	おん:on のん:on
+積	せっ:on つみ:kun
+稲	いな:kun ほ:on
+稠	ちゅう:on ちょう:on
+稟	ひん:on りん:on
+稀	き:on け:on
+祓	はつ:on ふつ:on
+碍	がい:on け:on
+硝	がら:kun しょう:on
+瞥	へつ:on べっ:on
+白	っしろ:kun はっ:on
+疾	しっ:on しつ:on
+生	あい:on ふ:on
+甚	しん:on じん:on
+玩	かん:on がん:on
+献	けん:on こん:on
+牧	ほく:on ぼく:on
+漸	せん:on ぜん:on
+漁	きょ:on ぎょ:on
+滓	さい:on し:on
+滑	かっ:on こっ:on
+滌	しょう:on てき:on
+滅	め:on めっ:on
+溯	さく:on そ:on
+溢	いっ:on いつ:on
+湿	しっ:on しつ:on
+浄	しょう:on じょう:on
+洞	とう:on どう:on
+沈	じん:on ちん:on
+殿	てん:on でん:on
+死	しに:kun りじに:kun
+樸	ほく:on ぼく:on
+朴	ほく:on ぼく:on
+末	くすえ:kun まっ:on
+月	がっ:on げっ:on
+曠	あら:kun こう:on
+曝	はく:on ばく:on
+暢	ちょう:on のん:on
+時	し:on と:on
+昵	しつ:on じっ:on
+日	した:kun にっ:on
+方	くえ:kun けがた:kun
+斯	か:on し:on
+敏	ひん:on びん:on
+擬	き:on ぎ:on
+撹	かく:on こう:on
+撲	ほく:on ぼく:on
+播	は:on はん:on
+撫	ふ:on ぶ:on
+撞	しゅ:on どう:on
+撒	さっ:on さん:on
+摘	てき:on てっ:on
+摂	せっ:on せつ:on
+揚	あげ:kun よう:on
+描	ひょう:on びょう:on
+掘	くっ:on くつ:on
+授	しゅ:on じゅ:on
+捺	なっ:on なつ:on
+指	さし:kun つゆび:kun
+拱	きょう:on こう:on
+括	かっ:on かつ:on
+拉	ら:on らっ:on
+抹	まっ:on まつ:on
+抜	はつ:on ばっ:on
+払	けはらい:kun ふっ:on
+截	さい:on せつ:on
+憫	ひん:on びん:on
+憑	つき:on ひょう:on
+慙	さん:on ざん:on
+惰	た:on だ:on
+惨	さん:on ざん:on
+惟	い:on ゆい:on
+悟	こ:on ご:on
+恵	え:on けい:on
+息	そく:on むす:kun
+怒	と:on ど:on
+忙	ほう:on ぼう:on
+循	しゅん:on じゅん:on
+強	こわ:kun ごう:on
+延	えん:on りのべ:kun
+幸	さい:on ゆき:on
+幕	はく:on ばく:on
+常	しょう:on じょう:on
+屈	くっ:on くつ:on
+尽	しん:on じん:on
+就	しゅ:on しゅう:on
+導	とう:on どう:on
+富	ふ:on ふう:on
+寂	しゃく:on じゃく:on
+宿	しゅく:on ふつか:kun
+妓	き:on こ:on
+妄	ぼう:on もう:on
+如	い:on にょ:on
+奴	と:on ど:on
+女	にょう:on め:on
+奉	ぶ:on ほう:on
+夫	ふ:on ふう:on
+売	しうり:kun ちうり:kun
+壊	え:on かい:on
+墨	ほく:on ぼく:on
+増	ま:on まし:kun
+塞	さい:on そく:on
+堪	かん:on たん:on
+埋	うめ:kun まい:on
+垢	く:on こ:on
+坐	さ:on ざ:on
+嗣	いし:kun し:on
+喫	きっ:on きつ:on
+含	かん:on がん:on
+吟	きん:on ぎん:on
+后	こ:on こう:on
+合	かっ:on が:on
+叢	そう:on むら:kun
+却	きゃく:on きゃっ:on
+包	ほう:on んぽう:kun
+募	ほ:on ぼ:on
+剰	しょう:on じょう:on
+剖	ほう:on ぼう:on
+切	きり:kun せっ:on
+凡	ほん:on ぼん:on
+冒	ほう:on ぼう:on
+冊	さっ:on そう:on
+六	りく:on ろっ:on
+児	つご:kun に:on
+兌	た:on だ:on
+充	しゅう:on じゅう:on
+傑	けっ:on けつ:on
+傍	ぼう:on わき:on
+偽	き:on ぎ:on
+侍	し:on じ:on
+佚	いっ:on いつ:on
+似	し:on ね:on
+伴	はん:on ばん:on
+京	きょう:on けい:on
+亡	ほう:on ぼう:on
+互	こ:on ご:on
+上	しょう:on りあげ:kun
+龜	き:on
+鼾	かん:on
+鼎	てい:on
+黯	あん:on
+黛	たい:on
+黒	っくろ:kun
+麾	き:on
+麻	ま:on
+麗	れい:on
+鹸	けん:on
+鹵	ろ:on
+鶴	かく:on
+鶏	けい:on
+鵞	が:on
+鵄	し:on
+鳴	めい:on
+鳩	きゅう:on
+鯨	げい:on
+鮑	ほう:on
+魯	ろ:on
+魚	み:on
+魔	ひ:on
+魄	はく:on
+魂	こん:on
+鬼	き:on
+髄	つい:on
+骸	かい:on
+骨	こっ:on
+驩	かん:on
+驥	き:on
+驚	きょう:on
+驀	ばく:on
+騰	とう:on
+騒	そう:on
+駆	く:on
+馴	じゅん:on
+馳	ち:on
+馭	きょ:on
+馘	かく:on
+饑	き:on
+饌	せん:on
+餬	こ:on
+餞	せん:on
+餐	さん:on
+餌	し:on
+飾	しょく:on
+飽	ほう:on
+飯	はん:on
+飢	き:on
+食	しょっ:on
+飄	ひょう:on
+颱	たい:on
+顫	せん:on
+顧	こ:on
+顛	てん:on
+顕	けん:on
+頽	たい:on
+頤	い:on
+頗	は:on
+頓	とん:on
+頑	がん:on
+頃	けい:on
+頂	ちょう:on
+響	きょう:on
+音	いん:on
+韓	かん:on
+鞜	とう:on
+靴	か:on
+革	かく:on
+靡	ひ:on
+青	っさお:kun
+霧	む:on
+霜	そう:on
+霊	りょう:on
+震	しん:on
+雹	ひょう:on
+雷	らい:on
+雪	せっ:on
+雑	ざっ:on
+雇	こ:on
+隷	れい:on
+隣	りん:on
+障	しょう:on
+隘	あい:on
+隆	りゅう:on
+隅	くう:on
+陸	りっ:on
+陳	ちん:on
+陪	ばい:on
+陥	かん:on
+陞	しょう:on
+陋	ろう:on
+附	ぶ:on
+阿	あ:on
+阻	そ:on
+闡	せん:on
+闘	とう:on
+闖	ちん:on
+闕	けつ:on
+闇	あん:on
+閲	えつ:on
+閣	かく:on
+閃	せん:on
+鑿	さく:on
+鑽	さん:on
+鏡	かね:kun
+鏖	おう:on
+鎮	ちん:on
+鎖	さ:on
+鍾	しょう:on
+鍵	けん:on
+鍛	たん:on
+鍍	と:on
+錯	しゃく:on
+錮	こ:on
+錬	れん:on
+錨	ひょう:on
+錦	きん:on
+錘	すい:on
+錐	すい:on
+鋳	ちゅう:on
+鋪	ほ:on
+鋒	ほう:on
+鋏	きょう:on
+銚	ちょう:on
+銓	せん:on
+鉢	はつ:on
+鉛	えん:on
+鉄	てっ:on
+鈞	きん:on
+針	しん:on
+釘	てい:on
+金	かな:kun
+釈	しゃく:on
+醸	じょう:on
+醵	きょ:on
+醤	しょう:on
+醜	しゅう:on
+醒	せい:on
+醇	じゅん:on
+醂	りん:on
+酵	こう:on
+酬	しゅう:on
+酔	すい:on
+酉	のとり:kun
+鄭	てい:on
+鄙	ひ:on
+郷	きょう:on
+郵	ゆう:on
+郭	かく:on
+郊	こう:on
+邦	ほう:on
+邏	ら:on
+邁	まい:on
+邀	よう:on
+遺	ゆい:on
+遷	せん:on
+遵	じゅん:on
+遮	しゃ:on
+遭	そう:on
+適	てっ:on
+遥	よう:on
+遠	えん:on
+遜	そん:on
+遏	あつ:on
+遊	ゆ:on
+遁	とん:on
+逡	しゅん:on
+速	そっ:on
+逞	てい:on
+逝	せい:on
+逓	てい:on
+逑	きゅう:on
+逐	ちく:on
+逃	とう:on
+迸	へい:on
+迷	めい:on
+述	じゅっ:on
+迭	てつ:on
+迅	じん:on
+迂	う:on
+辺	へ:on
+辱	しょく:on
+辰	しん:on
+辣	らつ:on
+辟	へき:on
+辛	しん:on
+轟	ごう:on
+轄	かつ:on
+輾	てん:on
+輻	ふく:on
+輸	ゆ:on
+輯	しゅう:on
+輩	はい:on
+輝	き:on
+輜	し:on
+輛	りょう:on
+輔	ほ:on
+輌	りょう:on
+輊	ち:on
+軟	なん:on
+軌	き:on
+躬	きゅう:on
+身	つみ:kun
+躁	そう:on
+蹴	しゅう:on
+蹠	しょ:on
+蹟	せき:on
+踞	きょ:on
+踏	とう:on
+践	せん:on
+跳	ちょう:on
+路	うじ:kun
+跪	き:on
+距	きょ:on
+跛	は:on
+足	つあし:kun
+趨	すう:on
+趣	しゅ:on
+起	っき:kun
+赴	ふ:on
+赭	しゃ:on
+赦	しゃ:on
+贋	がん:on
+購	こう:on
+賠	ばい:on
+賜	し:on
+賓	ひん:on
+賎	せん:on
+貿	ぼう:on
+貼	ちょう:on
+貸	たい:on
+貯	ちょ:on
+貪	どん:on
+貢	こう:on
+負	おい:on
+貞	てい:on
+貌	ほう:on
+象	しょう:on
+豊	ほう:on
+豆	す:on
+豁	かつ:on
+讚	さん:on
+讒	ざん:on
+讐	しゅう:on
+讎	しゅう:on
+譴	けん:on
+譚	たん:on
+證	しょう:on
+謹	きん:on
+謳	おう:on
+謫	たっ:on
+謡	よう:on
+謙	けん:on
+謐	ひつ:on
+謄	とう:on
+諺	けん:on
+諸	もろ:kun
+諷	ふう:on
+諳	あん:on
+諮	し:on
+諭	ゆ:on
+諧	かい:on
+諜	ちょう:on
+諚	しょう:on
+諌	かん:on
+誹	ひ:on
+誰	すい:on
+誨	かい:on
+誣	ぶ:on
+誘	ゆう:on
+誓	せい:on
+誇	こ:on
+誅	ちゅう:on
+詳	しょう:on
+詠	よみ:kun
+詔	しょう:on
+詐	さ:on
+註	ちゅう:on
+訳	いわけ:kun
+訥	とつ:on
+訣	けつ:on
+訟	しょう:on
+訛	か:on
+訊	じん:on
+触	しょく:on
+解	げ:on
+覿	てき:on
+覲	きん:on
+覚	かく:on
+見	ちみ:kun
+襲	しゅう:on
+褫	ち:on
+褪	たい:on
+褒	ほう:on
+褊	へん:on
+裸	ら:on
+裨	ひ:on
+裡	り:on
+裕	ゆう:on
+裂	れつ:on
+被	かむり:kun
+袖	しゅう:on
+袒	たん:on
+袂	へい:on
+衾	きん:on
+衷	ちゅう:on
+衰	すい:on
+衣	き:on
+衝	しょう:on
+衛	えい:on
+衙	か:on
+衒	げん:on
+衍	えん:on
+衆	しゅ:on
+蠢	しゅん:on
+蠕	ぜん:on
+蟄	ちっ:on
+融	ゆう:on
+蝸	か:on
+蝟	い:on
+蝕	しょく:on
+蝉	せん:on
+蜂	ほう:on
+蛮	はん:on
+蛇	だ:on
+蚕	さん:on
+虔	けん:on
+虎	こ:on
+蘖	けつ:on
+蘊	うん:on
+蘇	そ:on
+藉	しゃ:on
+薬	やっ:on
+薫	くん:on
+薨	こう:on
+薦	せん:on
+薙	ち:on
+薑	か:on
+蕭	しょう:on
+蕩	とう:on
+蕃	はん:on
+蔟	そく:on
+蓄	ちく:on
+蒼	そう:on
+蒸	じょう:on
+蒙	もう:on
+蒐	しゅう:on
+葦	い:on
+葛	かっ:on
+落	らっ:on
+菓	か:on
+莫	ばく:on
+荷	か:on
+茫	ぼう:on
+茎	けい:on
+茂	も:on
+苛	か:on
+芻	すう:on
+芳	ほう:on
+芟	さん:on
+芒	ぼう:on
+艷	えん:on
+艶	えん:on
+色	しき:on
+艱	かん:on
+艤	ぎ:on
+舶	はく:on
+舵	た:on
+般	はん:on
+舟	ふな:kun
+舞	ふ:on
+舘	かん:on
+舗	ほ:on
+興	こう:on
+臼	きゅう:on
+至	し:on
+臘	ろう:on
+臓	そう:on
+臍	さい:on
+臂	ひ:on
+膺	よう:on
+膨	ぼう:on
+膠	こう:on
+膝	しっ:on
+膏	こう:on
+膊	はく:on
+腿	たい:on
+腰	よう:on
+腔	こう:on
+腐	ふ:on
+脣	しん:on
+脚	きゃ:on
+脇	わけ:kun
+脆	ぜい:on
+脅	きょう:on
+脂	し:on
+胸	きょう:on
+胡	う:on
+胞	ほう:on
+胎	たい:on
+背	はい:on
+肴	こう:on
+肱	こう:on
+肯	こう:on
+肩	けん:on
+肥	ひ:on
+肛	こう:on
+肖	しょう:on
+肉	にっ:on
+肆	し:on
+聴	ちょう:on
+聳	しょう:on
+聰	そう:on
+聡	そう:on
+聚	しゅう:on
+聖	せい:on
+聊	りょう:on
+耽	たん:on
+耘	うん:on
+耗	もう:on
+耄	もう:on
+耀	よう:on
+翻	ほん:on
+翰	かん:on
+翫	かん:on
+翔	しょう:on
+翅	し:on
+翁	おう:on
+羽	う:on
+羸	るい:on
+羊	よう:on
+羈	き:on
+羅	ら:on
+罹	り:on
+罷	ひ:on
+纜	らん:on
+纏	てん:on
+纂	さん:on
+繹	えき:on
+繰	そう:on
+繭	けん:on
+繞	しょう:on
+繙	はん:on
+繕	せん:on
+繍	しゅう:on
+繊	せん:on
+績	せき:on
+縷	る:on
+縮	しゅく:on
+縦	しょう:on
+縊	い:on
+緻	ち:on
+緩	かん:on
+編	あみ:kun
+緘	かん:on
+緒	しょ:on
+綽	しゃく:on
+綻	たん:on
+維	い:on
+絹	けん:on
+絵	かい:on
+絮	じょ:on
+絞	こう:on
+組	つぐみ:kun
+絃	けん:on
+紹	しょう:on
+紳	しん:on
+細	さい:on
+紮	さつ:on
+紫	し:on
+紛	ふん:on
+紘	こう:on
+紐	ちゅう:on
+紆	う:on
+紅	こう:on
+糾	きゅう:on
+糺	きゅう:on
+糧	りょう:on
+糊	こ:on
+精	しょう:on
+粧	しょう:on
+粛	しゅく:on
+籤	せん:on
+籟	らい:on
+籌	ちゅう:on
+簡	けん:on
+簒	さん:on
+篦	べら:kun
+篤	とく:on
+篆	てん:on
+箝	かん:on
+箚	さつ:on
+算	しざん:kun
+箇	こ:on
+筆	ひっ:on
+笨	ほん:on
+竿	かん:on
+競	きょう:on
+竣	しゅん:on
+窺	き:on
+窯	よう:on
+窟	くつ:on
+窓	そう:on
+窒	ちっ:on
+窃	せっ:on
+穿	せん:on
+穴	けっ:on
+穎	えい:on
+穂	すい:on
+穀	こく:on
+稼	か:on
+種	くさ:kun
+稚	ち:on
+程	てい:on
+秤	ひょう:on
+租	そ:on
+禽	きん:on
+禦	きょ:on
+祿	ろく:on
+祥	しょう:on
+祠	し:on
+神	にがみ:kun
+祝	しゅう:on
+祚	そ:on
+祗	し:on
+祈	き:on
+祀	し:on
+礼	らい:on
+示	し:on
+礙	け:on
+礎	そ:on
+磐	はん:on
+磊	らい:on
+碇	てい:on
+硼	ほう:on
+硯	けん:on
+硅	けい:on
+砿	こう:on
+砕	さい:on
+矯	きょう:on
+矮	わい:on
+瞳	どう:on
+瞰	かん:on
+瞭	りょう:on
+瞬	しゅん:on
+瞠	どう:on
+瞞	まん:on
+瞑	めい:on
+睹	と:on
+睦	ほく:on
+睡	すい:on
+着	ちゃっ:on
+眸	ほう:on
+眠	みん:on
+眉	ひ:on
+省	せい:on
+盲	もう:on
+盪	とう:on
+盞	さん:on
+盃	はい:on
+皮	ひ:on
+皙	せき:on
+皓	こう:on
+百	もも:kun
+登	と:on
+発	ほつ:on
+癲	てん:on
+癒	ゆ:on
+療	りょう:on
+瘻	ろう:on
+痴	ち:on
+痩	そう:on
+痢	り:on
+痘	とう:on
+痒	よう:on
+疹	しん:on
+疲	ひ:on
+疏	そ:on
+疎	そ:on
+疋	ひき:on
+略	りゃっ:on
+畢	ひっ:on
+畜	ちく:on
+留	りゅう:on
+畏	い:on
+申	しん:on
+甲	っこう:kun
+用	にょう:on
+甦	こう:on
+瓦	が:on
+瓢	ひょう:on
+瓜	か:on
+璽	し:on
+璧	へき:on
+瑣	さ:on
+琢	たく:on
+珪	けい:on
+王	のう:on
+率	そっ:on
+獰	どう:on
+獪	かい:on
+猿	えん:on
+猶	ゆう:on
+猪	ちょ:on
+猥	わい:on
+猜	さい:on
+狼	ろう:on
+狷	けん:on
+独	どっ:on
+狩	しゅ:on
+狡	こう:on
+狙	そ:on
+狐	こ:on
+犠	ぎ:on
+牽	けん:on
+特	とっ:on
+牘	とく:on
+牒	ちょう:on
+爾	じ:on
+爽	そう:on
+爺	し:on
+父	し:on
+爛	らん:on
+燦	さん:on
+燥	そう:on
+燈	とう:on
+熟	じゅっ:on
+熔	よう:on
+熄	そく:on
+煽	せん:on
+照	しょう:on
+煥	かん:on
+煙	えん:on
+煎	せん:on
+煉	れん:on
+焦	しょう:on
+焔	えん:on
+烽	ほう:on
+烟	えん:on
+烈	れつ:on
+点	て:on
+炯	けい:on
+炭	たん:on
+炙	しゃ:on
+炊	すい:on
+災	さい:on
+灼	しゃく:on
+灰	かい:on
+瀰	び:on
+瀑	はく:on
+瀉	しゃ:on
+濾	ろ:on
+濯	たく:on
+濫	らん:on
+濃	のう:on
+濁	たく:on
+激	げっ:on
+澄	ちょう:on
+潸	さん:on
+潰	かい:on
+潮	ちょう:on
+潔	けつ:on
+潅	かん:on
+漿	しょう:on
+漕	そう:on
+漏	ろう:on
+漂	ひょう:on
+滲	しん:on
+滞	たい:on
+滄	そう:on
+溺	でき:on
+溶	よう:on
+溝	こう:on
+溜	りゅう:on
+湯	とう:on
+湮	いん:on
+湧	ゆう:on
+渾	こん:on
+測	そっ:on
+渦	か:on
+渥	あく:on
+渡	わたり:kun
+渠	きょ:on
+渙	かん:on
+渋	しゅう:on
+渉	しょう:on
+渇	かっ:on
+添	てん:on
+混	こん:on
+淵	えん:on
+深	み:on
+淫	いん:on
+淪	りん:on
+淡	たん:on
+淑	しゅく:on
+涯	かい:on
+涜	とく:on
+涙	るい:on
+涕	てい:on
+涌	ゆう:on
+浸	しん:on
+海	うな:kun
+浮	ふ:on
+浪	ろう:on
+浣	かん:on
+浜	ひん:on
+浅	せん:on
+活	かっ:on
+洒	しゃ:on
+泳	えい:on
+泰	たい:on
+泣	きゅう:on
+泡	ほう:on
+泌	ひ:on
+泉	せん:on
+泄	せつ:on
+沿	えん:on
+沼	しょう:on
+河	か:on
+沮	そ:on
+沐	もく:on
+沃	よう:on
+汽	き:on
+汲	きゅう:on
+汞	こう:on
+汚	お:on
+汗	かん:on
+汎	はん:on
+汁	しゅう:on
+永	えい:on
+氷	ひょう:on
+毫	こう:on
+母	は:on
+毅	き:on
+毀	き:on
+殻	かく:on
+殴	おう:on
+殲	せん:on
+殊	しゅ:on
+殉	じゅん:on
+歿	ほつ:on
+歳	とせ:kun
+歪	わい:on
+歎	たん:on
+款	かん:on
+欲	よっ:on
+欧	おう:on
+欣	きん:on
+欠	けっ:on
+欒	らん:on
+檀	だん:on
+橋	つはし:kun
+模	ほ:on
+標	ひょう:on
+榜	ほう:on
+楚	そ:on
+楊	よう:on
+椏	つまた:kun
+植	うえ:kun
+棲	せい:on
+森	しん:on
+棋	き:on
+梯	てい:on
+梟	きょう:on
+梗	こう:on
+梓	し:on
+梅	はい:on
+桟	さん:on
+桐	とう:on
+栽	さい:on
+格	こう:on
+校	きょう:on
+栄	え:on
+柿	し:on
+柳	りゅう:on
+柱	ちゅう:on
+柄	へい:on
+枯	こ:on
+枢	すう:on
+枝	し:on
+果	くだ:kun
+析	せき:on
+枉	おう:on
+束	つつか:kun
+杜	と:on
+杖	しょう:on
+李	り:on
+朽	きゅう:on
+机	き:on
+朶	た:on
+木	も:on
+期	こ:on
+朔	さく:on
+朋	ほう:on
+曹	そう:on
+曳	えい:on
+曲	きょっ:on
+暮	ほ:on
+暫	ざん:on
+暗	っくら:kun
+暑	しょ:on
+暇	か:on
+暁	きょう:on
+智	ち:on
+晶	しょう:on
+晰	せき:on
+晨	しん:on
+晤	こ:on
+昨	さっ:on
+昧	まい:on
+春	とう:on
+星	せい:on
+昔	せき:on
+昏	こん:on
+明	りあけ:kun
+昌	しょう:on
+昇	しょう:on
+昂	こう:on
+旱	かん:on
+旭	きょっ:on
+旨	し:on
+既	き:on
+旒	りゅう:on
+斬	ざん:on
+斥	せき:on
+斡	あっ:on
+斟	しん:on
+斜	しゃ:on
+斛	こく:on
+斎	さい:on
+文	も:on
+斃	へい:on
+敷	ふ:on
+敲	こう:on
+敢	かん:on
+救	きゅう:on
+攬	らん:on
+攪	かく:on
+攘	しょう:on
+攀	はん:on
+擾	じょう:on
+擱	かく:on
+擡	たい:on
+擅	せん:on
+撥	はつ:on
+撤	てっ:on
+撚	ねん:on
+撓	とう:on
+摸	も:on
+摯	し:on
+摧	さい:on
+搾	さく:on
+携	けい:on
+搭	とう:on
+搗	つき:on
+搏	はく:on
+揺	よう:on
+揣	し:on
+握	あく:on
+揖	ゆう:on
+提	てい:on
+揆	き:on
+掲	けい:on
+措	そ:on
+掩	えん:on
+控	こう:on
+探	たん:on
+掠	りゃく:on
+掌	しょう:on
+掃	そう:on
+捻	ねん:on
+捷	しょう:on
+据	すえ:kun
+捨	しゃ:on
+捧	ほう:on
+捜	そう:on
+捗	ちょく:on
+捕	ほ:on
+捐	えん:on
+捏	ねつ:on
+挿	そう:on
+挽	ばん:on
+挫	ざ:on
+挑	ちょう:on
+按	あん:on
+挂	けい:on
+拾	しゅう:on
+拷	ごう:on
+拮	きっ:on
+拡	かく:on
+拠	きょ:on
+招	しょう:on
+拙	せつ:on
+拘	こう:on
+拓	たく:on
+拒	きょ:on
+拐	かい:on
+拈	ねん:on
+抽	ちゅう:on
+抵	てい:on
+抱	ほう:on
+披	ひ:on
+折	せっ:on
+抑	よく:on
+把	は:on
+抄	しょう:on
+承	しょう:on
+扼	やく:on
+扶	ふ:on
+扱	りあつかい:kun
+扣	こう:on
+扞	かん:on
+打	ちょう:on
+扇	せん:on
+所	そ:on
+戴	たい:on
+戯	き:on
+戮	りく:on
+戡	かん:on
+戟	けき:on
+懾	しょう:on
+懼	く:on
+懸	け:on
+懲	ちょう:on
+懦	だ:on
+憾	かん:on
+憶	おく:on
+憲	けん:on
+憩	けい:on
+憤	ふん:on
+憐	れん:on
+憊	はい:on
+憂	ゆう:on
+慴	しょう:on
+慳	けん:on
+慮	りょ:on
+慨	かい:on
+慧	けい:on
+慣	かん:on
+慢	まん:on
+慕	ほ:on
+慈	し:on
+慄	りつ:on
+愧	き:on
+愎	ふく:on
+愍	ひん:on
+愉	ゆ:on
+愁	しゅう:on
+惹	じゃっ:on
+惧	く:on
+惜	せき:on
+惑	わく:on
+悼	とう:on
+悸	き:on
+悶	もん:on
+悲	ひ:on
+悩	のう:on
+患	かん:on
+悛	しゅん:on
+悖	はい:on
+悍	かん:on
+悋	りん:on
+悉	しつ:on
+恰	かっ:on
+恭	きょう:on
+恫	どう:on
+恨	こん:on
+恣	し:on
+恢	かい:on
+恙	よう:on
+恒	こう:on
+恐	きょう:on
+恋	れん:on
+恃	し:on
+怪	け:on
+急	いそぎ:kun
+怠	たい:on
+忽	こつ:on
+応	のう:on
+忘	ぼう:on
+徹	てつ:on
+徳	とっ:on
+律	りち:on
+徊	かい:on
+径	けい:on
+徂	そ:on
+征	そ:on
+影	えい:on
+彰	しょう:on
+彫	ちょう:on
+彩	さい:on
+当	っとう:kun
+彎	わん:on
+弼	ひつ:on
+弱	じゃっ:on
+弟	てい:on
+弛	し:on
+弘	ぐ:on
+弑	しい:on
+弋	よく:on
+廻	ね:on
+建	たて:kun
+廷	てい:on
+廬	ろ:on
+廓	かく:on
+廉	れん:on
+廈	か:on
+庸	よう:on
+庭	てい:on
+度	たく:on
+庇	ひ:on
+幾	き:on
+幽	ゆう:on
+幻	げん:on
+年	とせ:kun
+干	かん:on
+幣	へい:on
+幇	ほう:on
+幅	の:on
+幀	てい:on
+帳	いちょう:kun
+帥	すい:on
+帖	ちょう:on
+帑	と:on
+希	け:on
+帆	はん:on
+布	ふ:on
+巷	こう:on
+巴	つどもえ:kun
+巳	し:on
+已	い:on
+己	こ:on
+巧	こう:on
+工	く:on
+巣	そう:on
+嶼	しょ:on
+嶺	ね:on
+嶮	けん:on
+嵌	かん:on
+崩	ほう:on
+崇	すう:on
+峻	しゅん:on
+峡	きょう:on
+峠	し:on
+峙	し:on
+岳	かく:on
+岩	がん:on
+岐	き:on
+屹	きつ:on
+屯	とん:on
+履	り:on
+屡	る:on
+屠	と:on
+屎	し:on
+屍	し:on
+屋	んや:kun
+屁	ひ:on
+尠	せん:on
+尚	しょう:on
+尖	せん:on
+尋	じん:on
+尊	そん:on
+尉	い:on
+専	せん:on
+寿	しゅ:on
+寡	か:on
+寝	しん:on
+寛	かん:on
+寇	こう:on
+密	みっ:on
+寄	よせ:kun
+家	きや:kun
+宵	しょう:on
+宰	さい:on
+宥	ゆう:on
+客	きゃっ:on
+宝	ほう:on
+宕	とう:on
+宏	こう:on
+宇	う:on
+孺	じゅ:on
+學	かく:on
+孵	ふ:on
+孫	そん:on
+孔	こう:on
+子	つご:kun
+嬰	えい:on
+嫡	ちゃく:on
+嫌	けん:on
+嫉	しっ:on
+媾	こう:on
+媚	ひ:on
+媒	ばい:on
+婿	せい:on
+婉	えん:on
+娼	しょう:on
+娩	へん:on
+姿	し:on
+姻	いん:on
+姫	き:on
+姜	か:on
+姓	しょう:on
+姉	し:on
+妻	さい:on
+妨	ぼう:on
+妥	だ:on
+妖	よう:on
+妊	にん:on
+好	よし:kun
+奸	かん:on
+奮	ふん:on
+奪	だっ:on
+奨	しょう:on
+奥	おう:on
+奢	しゃ:on
+奠	てん:on
+套	とう:on
+奔	ほん:on
+夾	きょう:on
+失	しっ:on
+夭	よう:on
+夢	む:on
+外	と:on
+夕	せき:on
+声	こわ:kun
+壮	そう:on
+壟	ろう:on
+壌	しょう:on
+壁	へき:on
+墾	こん:on
+墜	つい:on
+境	けい:on
+填	てん:on
+塗	と:on
+塊	かい:on
+場	ちば:kun
+堤	てい:on
+堙	いん:on
+堕	だ:on
+堆	たい:on
+培	はい:on
+埠	ふ:on
+埒	らつ:on
+垂	すい:on
+坦	たん:on
+坑	こう:on
+坏	つき:on
+均	きん:on
+圭	けい:on
+圧	あっ:on
+土	と:on
+国	のくに:kun
+固	こ:on
+図	しず:kun
+嚢	のう:on
+嚇	かく:on
+嚆	こう:on
+噴	ふん:on
+噬	せい:on
+噌	そ:on
+嘲	ちょう:on
+嘯	しょう:on
+嘉	か:on
+嘆	たん:on
+嗾	そう:on
+嗜	し:on
+喰	くろう:kun
+喪	そう:on
+喧	けん:on
+喝	かっ:on
+喚	かん:on
+喙	かい:on
+喊	かん:on
+喉	こう:on
+喃	なん:on
+啖	たん:on
+唾	だ:on
+唱	しょう:on
+唯	ゆい:on
+唐	から:kun
+唇	しん:on
+唆	さ:on
+哺	ほ:on
+哲	てつ:on
+哭	こく:on
+哨	しょう:on
+哀	あい:on
+命	めい:on
+呪	じゅ:on
+呑	のん:on
+呉	ご:on
+呂	ろ:on
+吻	ふん:on
+吹	すい:on
+吸	きゅう:on
+向	なた:kun
+吐	と:on
+吏	り:on
+司	し:on
+右	ゆう:on
+叱	しっ:on
+台	たい:on
+召	しょう:on
+叫	きょう:on
+叩	こう:on
+句	けく:on
+口	つくち:kun
+叡	えい:on
+叛	はん:on
+収	しゅう:on
+及	きゅう:on
+厳	こん:on
+厭	えん:on
+厚	こう:on
+厄	やっ:on
+即	そっ:on
+印	しいん:kun
+占	せん:on
+卜	ぼっ:on
+博	ばく:on
+卓	たっ:on
+卒	そっ:on
+卑	ひ:on
+千	し:on
+十	じっ:on
+匿	とく:on
+匹	ひっ:on
+匪	ひ:on
+匡	きょう:on
+匠	しょう:on
+北	ほっ:on
+勾	こう:on
+勧	かん:on
+勤	きん:on
+勅	ちょく:on
+勃	ぼっ:on
+勁	けい:on
+劾	かい:on
+励	れい:on
+劫	ごう:on
+努	ど:on
+劣	れっ:on
+力	りっ:on
+劃	かく:on
+剿	そう:on
+創	そう:on
+剴	がい:on
+副	ふっ:on
+剪	せん:on
+剥	はく:on
+剔	てき:on
+剋	こく:on
+剃	てい:on
+刻	こっ:on
+刷	さっ:on
+到	とう:on
+刮	かつ:on
+刎	ふん:on
+分	わけ:kun
+刃	しん:on
+函	かん:on
+凹	おう:on
+凱	がい:on
+几	き:on
+凝	ぎょう:on
+凍	とう:on
+凌	りょう:on
+凋	ちょう:on
+冽	れつ:on
+冶	や:on
+冦	こう:on
+冤	えん:on
+冗	じょう:on
+冀	き:on
+兵	ひょう:on
+兎	と:on
+克	こく:on
+先	くさき:kun
+兇	きょう:on
+允	いん:on
+儘	まま:kun
+儒	しゅ:on
+僭	せん:on
+僚	りょう:on
+僅	きん:on
+傾	けい:on
+傷	しょう:on
+傲	ごう:on
+傭	よう:on
+催	さい:on
+傘	さん:on
+傅	ふ:on
+偸	ちゅう:on
+偵	てい:on
+健	けな:kun
+偉	い:on
+倹	けん:on
+倪	けい:on
+倣	ほう:on
+倚	い:on
+倉	そう:on
+俸	ほう:on
+俳	はい:on
+俯	ふ:on
+修	しゅ:on
+俚	り:on
+俗	ぞっ:on
+促	そく:on
+係	けい:on
+侮	ふ:on
+依	え:on
+使	つかい:kun
+佻	ちょう:on
+併	へい:on
+佩	はい:on
+佞	ねい:on
+佇	ちょ:on
+伺	し:on
+伝	てん:on
+伏	ふし:kun
+仲	ちゅう:on
+仮	か:on
+仞	しん:on
+仙	せん:on
+仕	じ:on
+仏	ぶっ:on
+今	こ:on
+仄	そく:on
+仁	し:on
+人	とも:kun
+享	きょう:on
+亢	こう:on
+些	さ:on
+云	ぬん:on
+二	じ:on
+争	そう:on
+乾	かん:on
+乳	ち:on
+九	ここの:kun
+乖	かい:on
+乏	ほう:on
+乎	こ:on
+丹	たん:on
+丸	んまる:kun
+並	へい:on
+丘	きゅう:on
+世	きよ:kun
+与	よ:on
+三	しゃ:on
+丈	しょう:on
+七	しっ:on
+丁	てい:on

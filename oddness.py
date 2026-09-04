@@ -336,7 +336,64 @@ def naadj_stem_bare(a, ap, b, bp):
     return a in _NAADJ_STEM_ONLY
 
 
-def can_join(a, ap, b, bp):
+#: **疑問の代名詞**（項目48-OX・2026-09-03）。閉じた表。
+#: 名詞の直後に置けるのは「は・を・が が落ちた形」だから
+_QUESTION_PRONOUNS = frozenset((
+    '何', 'なに', 'なん', '誰', 'だれ', 'どこ', 'いつ', 'どれ',
+    'どっち', 'どちら', 'どなた', 'いくつ', 'いくら',
+))
+
+
+def _hira(text):
+    """カタカナの読みを ひらがな に（項目48-OV）。読めなければ空。"""
+    if not text:
+        return ''
+    try:
+        from morphology import katakana_to_hiragana
+        return katakana_to_hiragana(text)
+    except Exception:
+        return text
+
+
+def _kun_noun_1(a, ap, a_reading):
+    """
+    **1字の名詞で、解析が訓読みで読んでいる**か（項目48-OV・2026-09-03）。
+
+    水（みず）・手（て）・目（め）・家（いえ）・車（くるま）・
+    力（ちから）・技（わざ）——**それだけで立つ和語の名詞**。
+    こういう1字の名詞は `水飲む`・`手洗う` のように**格助詞が落ちた
+    口語**でふつうに動詞に直付きする（うにさんの検討・2026-09-03）。
+
+    **音読みの1字は入れない**（本＝ほん・駅＝えき・差＝さ）。
+    `差釣れ`（48-HT の的）が異様のまま残ることが要る。
+    音読みの1字を通すかは**別に測る**（引き継ぎの次の段）。
+
+    読みが取れない・表が読めないときは False（今までどおり）。
+    """
+    if len(a) != 1 or not ('一' <= a <= '鿿'):
+        return False
+    if not ap.startswith('名詞:一般'):
+        return False
+    if not a_reading:
+        return False
+    try:
+        import kanji_onkun as _ok
+        if not _ok.available():
+            return False
+        return _ok.kind_of(a, a_reading) == 'kun'
+    except Exception:
+        return False
+
+
+#: **接尾どうしでも並べる組**（項目48-KZ(G)・2026-09-03）。
+#: 実機メモ2,144行を走査して残った誤爆は `語系`（セム語系）だけ
+#: ——ほかの3つ（次号・語派・強勢）は `a+b` が表の語なので自動で外れる。
+_SUFFIX_PAIR_OK = frozenset((
+    ('語', '系'),
+))
+
+
+def can_join(a, ap, b, bp, a_reading=''):
     """
     **A の後ろに B がその順でくっつけるか**。
 
@@ -417,7 +474,19 @@ def can_join(a, ap, b, bp):
     if bp.startswith('動詞') or bp.startswith('形容詞'):
         if len(a) >= 2 or _adverbial(ap):
             return True
+        # **1字の訓読みの名詞＋動詞は、格助詞の落ちた口語**
+        # （項目48-OV・2026-09-03）。`水飲む`＝水**を**飲む・
+        # `家帰る`＝家**に**帰る。`差釣れ`（音読み）は残る
+        if _kun_noun_1(a, ap, a_reading):
+            return True
         return (a + b) in words
+    # (6') **名詞＋疑問の代名詞**（項目48-OX・2026-09-03）。
+    #      `昼ご飯**何**にする` は「昼ご飯**は** 何にする」の
+    #      **は が落ちた形**（助詞の省略の族・うにさんの検討）。
+    #      **閉じた表**——人称の代名詞（彼・私・それ）は入れない
+    #      （`ご飯彼` は異様のまま）
+    if '代名詞' in bp and b in _QUESTION_PRONOUNS:
+        return True
     # --- ここから **くっつき方の型** で見る（項目48-HT）---------
     # うにさんの問い（2026-08-21）:
     #   「**添付とは言葉として何の分類で、画像は何の分類ですか？**」
@@ -536,16 +605,17 @@ _HEAD_PARTICLES = frozenset('もをへにが')
 _U_DAN_KZ = frozenset('うくぐすずつづぬふぶぷむゆる')
 
 
-def _is_unknown_fragment(surf, known):
+def _is_unknown_fragment(surf, known, dict_index=None, kata_split=False):
     """
     **辞書に無い断片**か（項目48-JG・2026-08-25）。
 
     解析が読みを立てられなかったトークンのうち、
       ・小書きのかな1字（`ゅ`——単独では音にならない字）
       ・ひらがな2字以上（擬態語の形 `〜と` は除く。ぱちりと）
-      ・カタカナ2〜4字で、**一般的な語の表に無い**もの
+      ・カタカナ2〜4字で、**世の中の語ではない**もの
         （`アプリ` `アイコン` は辞書（IPAdic・2007年ごろ）に無いだけの
-          普通の語。`general_words.py`＝AI が焼いた表・版つき が守る）
+          普通の語。判定は `_katakana_word_known` ただ1つ・項目48-OY——
+          AI の表・外来語の表・**同梱の費用の表**・**索引の読み**の4つ）
     を断片とみなす。戻り値: '' か 断片の種類。
     """
     if known or not surf:
@@ -559,12 +629,11 @@ def _is_unknown_fragment(surf, known):
         return 'かな断片'
     kata = all('ァ' <= c <= 'ヶ' or c == 'ー' for c in surf)
     if 2 <= len(surf) <= 4 and kata:
-        try:
-            from general_words import is_general
-            if is_general(surf):
-                return ''
-        except Exception:
-            pass
+        # **世の中の語かどうかは1か所で決める**（項目48-OY・48-GN）。
+        # ただし**カタカナの連なりの途中で切れている**なら、
+        # 世の中の語でも「1語を割った跡」（項目48-OY'）
+        if not kata_split and _katakana_word_known(surf, dict_index):
+            return ''
         return 'カタカナ断片'
     return ''
 
@@ -604,7 +673,215 @@ def in_reading_gloss(text, p):
     return bool(is_reading_gloss(text, j + 1))
 
 
-def is_odd_run(text, tokenize_fn, with_spans=False):
+def _katakana_word_known(surf, dict_index=None):
+    """
+    その**カタカナ語が、世の中に在る**か（項目48-OR・2026-09-03／
+    **出どころを増やした 48-OY・同日**）。
+
+    `クリック` `ドラッグ` `スクロール` は在る。`リュク` `カミス` は無い。
+
+    **出どころは4つ**（どれか1つでも在れば「世の中の語」。名簿は
+    増やすだけで、消さない）:
+
+        `general_words.is_general`            AI が焼いた表・版つき
+        `loanword._katakana_seed_all`         同梱の外来語 9,094 語
+        **`corrector._table_cost`**           同梱の費用の表（SudachiDict 由来）
+        **`dict_index.is_world_reading`**     刈り込む前の読み
+
+    **48-OY で後ろの2つを足した**（2026-09-03）。外来語の表は
+    9,094 語しか無く、**短い日常語が抜けていた**——`ブレ`・`プレイ`・
+    `タブ`・`ミス`・`メモ`・`ズレ`・`ブレイク` は載っていないのに、
+    `出力ブレ`・`プレイ動画` に紫が立っていた。
+    費用の表は `リュク`・`カミス` を持たないので、**断片は断片のまま**。
+
+    どれも読めなければ **True**（意見なし＝守る側）。
+    """
+    if not surf or len(surf) < 2:
+        return False
+    if not all('ァ' <= c <= 'ヶ' or c == 'ー' for c in surf):
+        return False
+    try:
+        from general_words import is_general
+        if is_general(surf):
+            return True
+    except Exception:
+        pass
+    try:
+        import corrector as _C
+        if _C._table_cost(surf) is not None:
+            return True
+    except Exception:
+        pass
+    if dict_index is not None:
+        try:
+            from morphology import katakana_to_hiragana as _h
+            if dict_index.is_world_reading(_h(surf)):
+                return True
+        except Exception:
+            pass
+    try:
+        from loanword import _katakana_seed_all
+        from morphology import katakana_to_hiragana
+        return katakana_to_hiragana(surf) in (_katakana_seed_all() or {})
+    except Exception:
+        return True             # 表が読めない＝意見なし（守る側）
+
+
+def _proper_noun_is_trusted(t, store, dict_index):
+    """
+    **その固有名詞は信用してよいか**（項目48-OR・2026-09-03・
+    うにさんの指定「**人名や地名判定になるとそこから先に進まない。
+    それらの判定はもっと後の段階で処理するべき**」）。
+
+    ①（異様か判定する）では、固有名詞を**特別扱いしない**。
+    解析が「これは人名／地名です」と言っただけで黙るから、
+    `右田でブルクリック` に印が立たなかった（`右田`＝地域・
+    `ブル`＝人名:姓 と読まれる）。**守るのは「本人の語」と
+    「登録した姓」**で、そこは④（決める）で今までどおり守る
+    （`_is_whole_proper_noun`・48-JL）。
+
+    信用してよいのは4つ（**どれか1つでも当たれば今までどおり**）:
+
+        (1) **本人の語彙に実績2以上**（育ちの 高橋・柚須）
+        (2) **漢字だけで書かれた姓**——48-JL「苗字を登録することで、
+            続く後ろを名前と保護する」の持ち場。**カタカナの姓は
+            数えない**（`ブル` を人名:姓 と読むのは解析の当て推量で、
+            日本語の姓としては書かれていない）
+        (3) **カタカナは、人名でなければ信用する**（ドイツ＝地域:国・
+            トヨタ＝組織。表記が固定していて当てずっぽうにならない）。
+            **人名は、世の中のカタカナ語の表に在るときだけ**
+            （IPAdic の人名は数が多く、`ブル`＝ダブル の千切れ まで
+              「人名:姓」に化ける）
+        (4) **読みが世の中に在る**（同音の普通語が在る）——
+            索引は固有名詞を外して作ってあるので、ここが立つのは
+            「その読みで書かれる普通の語が別に在る」ときだけ
+
+    `store` も `dict_index` も無ければ **True**（意見なし＝今までどおり）。
+    **そもそも落としてよい形か**は `_proper_noun_downgradable` が
+    先に見る（ひらがなだけ／カタカナの連なりの端）。
+    """
+    if store is None and dict_index is None:
+        return True
+    surf = t[0] or ''
+    if not surf:
+        return True
+    kata = all('ァ' <= c <= 'ヶ' or c == 'ー' for c in surf)
+    rd = ''
+    try:
+        from morphology import katakana_to_hiragana
+        rd = katakana_to_hiragana(t[2] or '') if len(t) > 2 else ''
+    except Exception:
+        rd = ''
+    if not rd or not all('ぁ' <= c <= 'ゖ' or c == 'ー' for c in rd):
+        return True             # 読みが取れない＝意見なし
+    # (1) 本人の語彙に実績2以上
+    if store is not None:
+        try:
+            if any(e.get('surface') == surf
+                   and (e.get('count', 0) or 0) >= 2
+                   for e in store.lookup(rd)):
+                return True
+        except Exception:
+            return True
+    pos = (t[1] or '') if len(t) > 1 else ''
+    if kata:
+        # (3) カタカナの固有名詞
+        #   ・**人名以外**（地域・国・組織）は今までどおり信用する。
+        #     `ドイツ`（地域:国）・`トヨタ`（組織）は表記が固定して
+        #     いて、解析の当てずっぽうにならない。
+        #     **測って受け止めた門**——ここを外したら
+        #     `ドイツ語 → 同一かたり` を作った（実機メモ1行・2026-09-03）
+        #   ・**人名**は、世の中のカタカナ語の表に在るときだけ信用する。
+        #     IPAdic の人名は数が多く、`ブル`（＝ダブル の千切れ）の
+        #     ような断片まで「人名:姓」に化ける
+        # **人名は信用しない**（`_proper_noun_downgradable` が
+        # 「カタカナの連なりの途中」に絞ってあるので、そこに立つ
+        # 人名は**1つのカタカナ語を割った跡**）。
+        # **48-OY で世の中の表を広げたので、`ブル` も「在る語」に
+        # なった**——`_katakana_word_known` で裁くと
+        # `右田でブルクリック` が届かなくなる。**門1つに任せる**
+        return '人名' not in pos
+    # (2) 漢字だけの姓
+    if '姓' in pos and all('一' <= c <= '鿿' for c in surf):
+        return True
+    # (4) 同音の普通語が在る
+    if dict_index is not None:
+        try:
+            if dict_index.is_world_reading(rd):
+                return True
+        except Exception:
+            return True
+    return False
+
+
+def _kata_run_continues(toks, i):
+    """
+    位置 i のトークンの**隣にもカタカナが続いているか**（項目48-OR）。
+
+    カタカナの連なりの**途中**で `固有名詞:人名` が現れるのは、
+    **解析が1つのカタカナ語を割った跡**（`ブル|クリック`）。
+    連なりの端に立つカタカナ語（`縦|シュー|という`）は、
+    書いた人がそう書いた語なので触らない。
+    """
+    def _kata(c):
+        return 'ァ' <= c <= 'ヶ' or c == 'ー'
+    prev = (toks[i - 1][0] or '') if i > 0 else ''
+    nxt = (toks[i + 1][0] or '') if i + 1 < len(toks) else ''
+    return bool((prev and _kata(prev[-1])) or (nxt and _kata(nxt[0])))
+
+
+def downgraded_tokens(toks, store=None, dict_index=None):
+    """
+    **信用できない固有名詞の「読みが立った」を落とした並び**を返す
+    （項目48-OR・2026-09-03）。**判定はここ1つ**——`is_odd_run` と、
+    印を受け取って開く側（`corrector._reopen_mixed_run_fixes` の
+    断片の見立て）が**同じ並びを見る**ようにするため（学び22——
+    片方だけに置くと、印は立つのに断片と数えられない、が起きる）。
+
+    `store` も `dict_index` も無ければ**そのまま返す**（意見なし）。
+    t[6]（活用形・48-NT）は落とさない。
+    """
+    if store is None and dict_index is None:
+        return list(toks)
+    out = []
+    for i, t in enumerate(toks):
+        if (len(t) > 5 and t[5] and '固有名詞' in (t[1] or '')
+                and _proper_noun_downgradable(toks, i)
+                and not _proper_noun_is_trusted(t, store, dict_index)):
+            t = tuple(t[:5]) + (False,) + tuple(t[6:])
+        out.append(t)
+    return out
+
+
+def _proper_noun_downgradable(toks, i):
+    """
+    **その固有名詞は、そもそも落としてよい形か**（項目48-OR・
+    2026-09-03。**測って足した門**——紫の全行検品で出た誤検知2種を
+    そのまま外す形にした）。
+
+        ・**ひらがなだけの固有名詞は落とさない**
+          `ひらがなを漢字にしたり` を janome は
+          `ひ|ら|が|**なを**(人名:名)|漢字` と割る。ここを断片に
+          数えると、**正しい文に紫が立つ**（実機メモ2行）。
+          ひらがなは助詞・送り仮名が混ざる字種なので、断片として
+          数えない（48-MV「ひらがなを含む印は開かない」と同じ理由）
+        ・**カタカナは、連なりの途中に立つときだけ**落とす
+          `ブル|クリック` は**1つのカタカナ語を割った跡**だが、
+          `縦|シュー|という` の `シュー` は書いた人がそう書いた語
+          （実機メモ1行）
+    """
+    surf = (toks[i][0] or '') if i < len(toks) else ''
+    if not surf:
+        return False
+    if all('ぁ' <= c <= 'ゖ' or c == 'ー' for c in surf):
+        return False
+    if all('ァ' <= c <= 'ヶ' or c == 'ー' for c in surf):
+        return _kata_run_continues(toks, i)
+    return True
+
+
+def is_odd_run(text, tokenize_fn, with_spans=False,
+               store=None, dict_index=None):
     """
     **その塊に「その順ではくっつけない語の並び」があるか**。
 
@@ -614,6 +891,10 @@ def is_odd_run(text, tokenize_fn, with_spans=False):
     `tokenize_fn` は `corrector.make_tokenizer` が返す形
     （(表記, 品詞, 読み, 開始, 終了, 読みが確定か) の並び）。
     解析できない・表が無いときは **[]**（意見なし）。
+
+    `store` / `dict_index` を渡すと、**信用できない固有名詞**の
+    「読みが立った」を落とす（項目48-OR）。渡さなければ今までどおり
+    （検査のモックや janome の無い環境は落とさない）。
 
     戻り値: くっつけない並びの一覧（例 `[('野外', '文章')]`）。
     **空でも「正しい」という意味ではない。**
@@ -628,6 +909,16 @@ def is_odd_run(text, tokenize_fn, with_spans=False):
     # 足し上げると、解析が落とす空白・記号のぶんだけずれて、画面の
     # 色が隣の字に付く（項目48-IR で実測: 行頭の空白で `素帰任` が
     # `す／素` に）。無いときだけ足し上げる。
+    # **信用できない固有名詞は「読みの立たない語」として扱う**
+    # （項目48-OR・2026-09-03）。**落とすのは `downgraded_tokens`
+    # ただ1つ**——`_plain_noun` の `_NOUN_NG` から固有名詞を外すのでは
+    # ない（外すと 48-NA が 高橋佑 を「名詞どうし」と見て黙る。
+    # 判定の順を変えるのではなく、**信じてよい固有名詞かどうか**を
+    # 1か所で決める）。
+    toks = downgraded_tokens(toks, store, dict_index)
+    #: 対のループで**隣を見る**ために、並びをそのまま持っておく
+    #: （項目48-OY'。カタカナの連なりの途中かどうか）
+    _tok_list = list(toks)
     spans, pos = [], 0
     for t in toks:
         surf = t[0] or ''
@@ -723,9 +1014,17 @@ def is_odd_run(text, tokenize_fn, with_spans=False):
         if (ap.startswith('形容詞') and a_sf.endswith('い')
                 and bp.startswith('助動詞') and b_sf == 'だ'):
             _kz = True
-        # (C) **感動詞に助詞は付かない**（はいを）。括弧ごしは
-        #     位置が切れるのでここへ来ない
-        elif ap.startswith('感動詞') and bp.startswith('助詞'):
+        # (C) **感動詞に付けないのは「格助詞」だけ**（はい**を**・
+        #     ありがとう**に**）。括弧ごしは位置が切れるのでここへ来ない。
+        #
+        #     **2026-09-03 に絞った**（項目48-OW）。「助詞は付かない」と
+        #     一律に書いていたので、**接続助詞まで止めていた**——
+        #     `すみません**が**…`（janome は接続助詞と読む・実測）・
+        #     `ごめん**けど**` は正しい日本語。
+        #     置けないのは**格を示す助詞**（感動詞は文の成分にならない）で、
+        #     接続助詞・終助詞・係助詞は置ける
+        #     （すみませんが・はい**は**？・いや**ね**）
+        elif ap.startswith('感動詞') and '格助詞' in bp:
             _kz = True
         # (D) **格助詞は連続しない**（をに・がを）。から・へ だけは
         #     2つ目を取れる（ここ**からが**本番・駅**へと**向かう）
@@ -758,6 +1057,23 @@ def is_odd_run(text, tokenize_fn, with_spans=False):
         if (ap.startswith('形容詞') and a_sf
                 and all(kanji(c) for c in a_sf)
                 and b_sf == 'て' and '接続助詞' in bp):
+            _kz = True
+        # (G) **接尾に接尾は付かない**（項目48-KZ(G)・2026-09-03・
+        #     うにさんの画面 `簡易**流力**`）。接尾は**語に付く**もので、
+        #     接尾どうしが並ぶ形は語ではない。
+        #
+        #     実機メモ2,144行で「名詞:接尾 が2つ続く」組は **23種**あるが、
+        #     **`名詞:接尾:一般` どうし**に絞ると **5種**に落ち、さらに
+        #     **`a+b` が表の語でない**を足すと **2種**（`流力`＝的 と
+        #     `語系`）だけになる（実測）。**閉じた表に書くのは `語系` 1語**。
+        #     fpcheck の材料（1,500文）では 0件。
+        #
+        #     `流力` は**行の中でだけ**この形になる（塊単体で解析すると
+        #     `流` が動詞になる）ので、測るときは必ず行で測ること。
+        if ('名詞:接尾:一般' in ap and '名詞:接尾:一般' in bp
+                and (a_sf, b_sf) not in _SUFFIX_PAIR_OK
+                and (a_sf + b_sf) not in (_load() or ())
+                and not _run_is_word(text, a_s, b_e)):
             _kz = True
         if _kz:
             out.append((a_sf, b_sf, a_s, b_e) if with_spans
@@ -792,10 +1108,21 @@ def is_odd_run(text, tokenize_fn, with_spans=False):
         # `general_words.py` の表が守る）。
         a_known = bool(a[5]) if len(a) > 5 else True
         b_known = bool(b[5]) if len(b) > 5 else True
+        # **カタカナの連なりの途中で切れているトークンは、世の中の語
+        # でも「1語を割った跡」**（項目48-OY'・2026-09-03）。
+        # 48-OY で世の中の表を広げたら `ブル` も「在る語」になり、
+        # `右田で**ブル|クリック**` の印が消えた。**カタカナの連なりは
+        # ふつう1語**なので、途中で切れていること自体が跡になる。
+        # `出力|ブレ`・`プレイ|動画`・`縦|シュー` は**連なりの端**
+        # （相手が漢字）なので、ここには当たらない
+        _a_split = _kata_run_continues(_tok_list, i)
+        _b_split = _kata_run_continues(_tok_list, i + 1)
         _frag_hit = False
         for _fk, _other, _op, _o_known in (
-                (_is_unknown_fragment(a_sf, a_known), b_sf, bp, b_known),
-                (_is_unknown_fragment(b_sf, b_known), a_sf, ap, a_known)):
+                (_is_unknown_fragment(a_sf, a_known, dict_index, _a_split),
+                 b_sf, bp, b_known),
+                (_is_unknown_fragment(b_sf, b_known, dict_index, _b_split),
+                 a_sf, ap, a_known)):
             if not _fk:
                 continue
             if not _o_known:
@@ -803,8 +1130,17 @@ def is_odd_run(text, tokenize_fn, with_spans=False):
                                 # janome の無い環境の簡易分割は全トークンが
                                 # 「読み立たず」になるので、これが無いと
                                 # 普通のかなにまで印が立つ（tests_mock で踏んだ）
-            if not (_other and kanji(_other[0])):
+            if not (_other and (kanji(_other[0])
+                                or _katakana_word_known(_other,
+                                                        dict_index))):
                 continue        # 相手は漢字始まり（擬音・かな崩しの壁）
+                                # **または、世の中のカタカナ語**
+                                # （項目48-OR・2026-09-03）。この壁は
+                                # 擬音・かな崩し（ぴよピヨ・きゅいー）を
+                                # 止めるためのもので、**相手が表に在る
+                                # カタカナ語なら崩れではなく内容語**
+                                # ——漢字始まりの語と同じ資格。
+                                # `ブル｜クリック` が立つのはこの枝
             if not (_op.startswith('名詞') or _op.startswith('動詞')):
                 continue
             if _op.startswith('動詞') and _fk == 'カタカナ断片':
@@ -818,8 +1154,8 @@ def is_odd_run(text, tokenize_fn, with_spans=False):
         # 語の頭が千切れた印であって、擬音・かな崩し（ぴよピヨ）は
         # 小書きで終わらないので立たない）。
         if not _frag_hit:
-            _a_fk = _is_unknown_fragment(a_sf, a_known)
-            _b_fk = _is_unknown_fragment(b_sf, b_known)
+            _a_fk = _is_unknown_fragment(a_sf, a_known, dict_index)
+            _b_fk = _is_unknown_fragment(b_sf, b_known, dict_index)
             if (_a_fk and a_sf and a_sf[-1] in _SMALL_KANA
                     and _b_fk == 'カタカナ断片'):
                 _frag_hit = True
@@ -919,8 +1255,10 @@ def is_odd_run(text, tokenize_fn, with_spans=False):
             if '固有名詞' in ap and a_known \
                     and '固有名詞' in bp and b_known:
                 continue
-            # **漢字が境目で隣り合っている形**（元からの道・48-HN）
-            if can_join(a_sf, ap, b_sf, bp) is not False:
+            # **漢字が境目で隣り合っている形**（元からの道・48-HN）。
+            # **A の読みも渡す**（項目48-OV。1字の名詞が訓読みかを見る）
+            if can_join(a_sf, ap, b_sf, bp,
+                        _hira(a[2] if len(a) > 2 else '')) is not False:
                 continue
         else:
             # **動詞の連用形＋名詞**（項目48-JC・2026-08-25。うにさんの指定
@@ -1360,7 +1698,8 @@ def adverb_ni_dangling(spans, i):
     return True
 
 
-def odd_spans(text, tokenize_fn, reasons_out=None):
+def odd_spans(text, tokenize_fn, reasons_out=None,
+              store=None, dict_index=None):
     """
     **異様と見た範囲**（項目48-IR・画面で紫にする）。
 
@@ -1374,7 +1713,8 @@ def odd_spans(text, tokenize_fn, reasons_out=None):
     渡さなければ何もしない（**答えは1文字も変わらない**）。
     """
     spans = []
-    for _a, _b, s, e in is_odd_run(text, tokenize_fn, with_spans=True):
+    for _a, _b, s, e in is_odd_run(text, tokenize_fn, with_spans=True,
+                                   store=store, dict_index=dict_index):
         if reasons_out is not None:
             reasons_out.append((s, e, f'「{_a}」と「{_b}」は続けて置けない'))
         if spans and s <= spans[-1][1]:

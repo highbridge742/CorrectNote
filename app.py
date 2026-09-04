@@ -227,7 +227,7 @@ APP_TITLE = 'CorrectNote'
 # 「判断に迷った箇所」から**「不自然な文字列」**へ入れ替え（既定オン・
 # 補正が入った範囲には付けない）、**かな書きのアルファベット読みを
 # 英字に直す**（`エフ2 → F2`）、スクロール後の反映（項目48-IZ〜）。
-APP_VERSION = '1.4.0'
+APP_VERSION = '1.5.0'
 
 # 同梱する説明書のファイル名。exe の中に入れて持ち歩き、
 # 初回起動時に exe と同じフォルダへ書き出す
@@ -235,7 +235,19 @@ APP_VERSION = '1.4.0'
 # **説明書の版を上げたら、この名前も一緒に変えること。**
 # 名前が変わったことを合図に、書き出し済みの印を無視して
 # 新しい版を書き出す（_extract_manual）。
-MANUAL_FILENAME = 'CorrectNote_説明書v6.html'
+#: **説明書のファイル名には版を入れない**（項目48-OE・2026-09-02・
+#: うにさんの指定「**更新のたびに説明書が増えるので、末尾の v6 を取り、
+#: アプリのバージョンが更新されたことを検知したら説明書を更新する形に
+#: 変更する**」）。
+#:
+#: v5・v6 のように名前へ版を入れていたのは、「書き出した印を名前で
+#: 残す」造りだったから——名前が変わらないと手元の HTML が
+#: 入れ替わらなかった。**印をアプリの版（`APP_VERSION`）で残せば、
+#: 名前は固定でよい**。古い `CorrectNote_説明書v*.html` は、
+#: 書き出すときにこちらで片付ける（増えていく元）。
+MANUAL_FILENAME = 'CorrectNote_説明書.html'
+#: 名前に版が入っていた頃の説明書（片付ける相手）
+MANUAL_OLD_GLOB = 'CorrectNote_説明書v*.html'
 
 
 def map_column(original, corrected, col):
@@ -1615,11 +1627,15 @@ class CorrectNoteApp:
         同梱の説明書を app_dir()（exe と同じフォルダ）へ書き出す。
 
         force=False（初回起動時）は、まだ書き出していないときだけ
-        行う。書き出した印は設定に**ファイル名で**残すので、
-        説明書の版が上がって名前が変われば、次の起動で新しい版が
-        書き出される。ユーザーが自分で消したものを勝手に戻さない
-        よう、印が残っていれば何もしない（メニューから force=True
-        で明示的に書き出せる）。
+        行う。書き出した印は設定に **`APP_VERSION` で**残すので、
+        **アプリの版が上がれば、次の起動で新しい説明書に
+        入れ替わる**（項目48-OE）。ユーザーが自分で消したものを
+        勝手に戻さないよう、印が残っていれば何もしない
+        （メニューから force=True で明示的に書き出せる）。
+
+        あわせて、**名前に版が入っていた頃の説明書**
+        （`CorrectNote_説明書v5.html` など）を片付ける
+        ——うにさんの「更新のたびに説明書が増える」への答え。
 
         戻り値: 書き出した（またはすでにある）説明書のパス。
             同梱もされておらず、フォルダにも無ければ None。
@@ -1638,15 +1654,31 @@ class CorrectNoteApp:
         if src is None:
             return dst if os.path.exists(dst) else None
         if not force:
-            if self.settings.get('manual_extracted') == MANUAL_FILENAME:
+            if self.settings.get('manual_extracted') == APP_VERSION:
                 return dst if os.path.exists(dst) else None
         try:
             import shutil
             shutil.copyfile(src, dst)
         except Exception:
             return dst if os.path.exists(dst) else None
+        # **名前に版が入っていた頃の説明書を片付ける**（項目48-OE）。
+        # 消すのは**この造りが自分で書き出した形**だけ
+        # （`CorrectNote_説明書v<数字>.html`）。
         try:
-            self.settings.set('manual_extracted', MANUAL_FILENAME)
+            import glob as _glob
+            import re as _re
+            for _old in _glob.glob(os.path.join(app_dir(),
+                                                MANUAL_OLD_GLOB)):
+                if _re.fullmatch(r'CorrectNote_説明書v\d+\.html',
+                                 os.path.basename(_old)):
+                    try:
+                        os.remove(_old)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        try:
+            self.settings.set('manual_extracted', APP_VERSION)
             self.settings.save()
         except Exception:
             pass    # 印が残せなくても動作には支障がない
@@ -4836,11 +4868,22 @@ class CorrectNoteApp:
 
         # 縦幅は実際の表示行数（折り返しぶんも含む）を数えて決める。
         # 幅や wrap を変えた直後は再計算前のことがあるので、先に確定させる。
+        #
+        # **生の count を int() に掛けてはいけない**（2026-09-04・実機の
+        # 「改行しても窓が縦に伸びないことがある」の原因）。この環境の
+        # Python 3.9 では count は 1要素のタプル `(21,)` を返すので、
+        # int() が毎回 TypeError になり、**折り返しを数える道は一度も
+        # 動いていなかった**（下の except で論理行数に落ちるため、
+        # 折り返しの無い行では症状が出ず、長い行が折り返された窓でだけ
+        # 高さが足りなくなる）。型ゆれを受ける関数が同じクラスに既に
+        # 在る（`_displaylines_between`・学び7）ので、そちらを通す
+        # （学び22——片方だけに置くと、そちらを迂回する）。
         try:
             text_widget.update_idletasks()
-            n_display = int(text_widget.count('1.0', 'end', 'displaylines')
-                            or 1)
         except Exception:
+            pass
+        n_display = self._displaylines_between(text_widget, '1.0', 'end')
+        if n_display <= 0:
             n_display = len(lines)
         n_lines = max(self.QUICK_MIN_LINES,
                       min(n_display, self.QUICK_MAX_LINES))
@@ -6298,6 +6341,19 @@ class CorrectNoteApp:
         self.editor.bind('<Control-a>', self._on_select_all)
         self.editor.bind('<Control-A>', self._on_select_all)
         self.editor.bind('<<SelectAll>>', self._on_select_all)
+
+        # **Shift+スペースで行の中身を選ぶ／Ctrl+スペースで
+        # ブックマークを付け外しする**（項目48-OD・2026-09-02・
+        # うにさんの指定）。どちらも**空白は入れない**（'break'）。
+        # 補正欄（`result_view`）でも同じに使える——行番号を
+        # クリックして選ぶのと同じで、片方で押せばもう片方にも効く。
+        for _w in (self.editor, self.result_view):
+            try:
+                _w.bind('<Shift-space>', self._on_select_line_text)
+                _w.bind('<Control-space>', self._on_toggle_bookmark_key)
+            except Exception:
+                pass
+
         for _w in (self.result_view,):
             try:
                 _w.bind('<Control-a>', self._on_select_all)
@@ -6707,16 +6763,15 @@ class CorrectNoteApp:
         表示メニュー「補正候補に根拠を表示する」の切り替え
         （項目48-MD・2026-08-31）。
 
-        「－ 品詞判定 －」の下に並べるものなので、品詞の判定が
-        オフのままだと出す場所が無い。**そのときは一緒に上げる**
-        （メニューを押したのに何も変わらない、を作らない）。
+        **品詞の判定とは別々**（項目48-OC・2026-09-02・うにさんの
+        指摘で直した）。もとは「根拠を上げたら品詞も一緒に上げる」
+        にしていたが、そのあと**品詞だけ下げると根拠も消えて**いた
+        ——押したメニューと違うものが効くのは分かりにくい。
+        いまは**押したものだけ**が変わる。
         """
         on = bool(self.show_reason_info_var.get())
         try:
             self.settings.set('show_reason_info', on)
-            if on and not self.settings.get('show_pos_info'):
-                self.settings.set('show_pos_info', True)
-                self.show_pos_info_var.set(True)
             self.settings.save()
         except Exception:
             pass
@@ -6724,6 +6779,96 @@ class CorrectNoteApp:
         self.status.config(
             text=('補正候補に根拠を表示します' if on
                   else '補正候補の根拠を表示しません'))
+
+    def _on_select_line_text(self, event=None):
+        """
+        **Shift+スペース——その行の中身を選ぶ**（項目48-OD・2026-09-02・
+        うにさんの指定「Shift+スペースで、行内を選択できるようにします」）。
+
+        **改行は含めない。** 行番号のクリックで選ぶ形（`_select_lines`）は
+        次の行の頭までを選ぶので、コピーすると改行が付いてくる。
+        こちらは**行の中身だけ**なので、そのまま貼り直せる。
+
+        既にその行の中身をちょうど選んでいるなら、**前後の空白を
+        除いた中身**へ狭める（2回押すと引き締まる）。
+        """
+        w = event.widget if event is not None else self.target
+        try:
+            row = int(w.index('insert').split('.')[0])
+            head, tail = f'{row}.0', f'{row}.end'
+            text = w.get(head, tail)
+        except Exception:
+            return 'break'
+        if not text:
+            self.status.config(text='この行は空です')
+            return 'break'
+        # いま選んでいる範囲
+        try:
+            cur = (w.index('sel.first'), w.index('sel.last'))
+        except Exception:
+            cur = None
+        s_off = len(text) - len(text.lstrip(' 	　'))
+        e_off = len(text.rstrip(' 	　'))
+        tight = (f'{row}.{s_off}', f'{row}.{e_off}')
+        if cur == (w.index(head), w.index(tail)) and e_off > s_off                 and (s_off, e_off) != (0, len(text)):
+            a, b = tight
+            msg = f'{row} 行目の中身（前後の空白を除く）を選びました'
+        else:
+            a, b = head, tail
+            msg = f'{row} 行目を選びました（改行は含みません）'
+        try:
+            w.tag_remove('sel', '1.0', 'end')
+            w.tag_add('sel', a, b)
+            w.mark_set('insert', b)
+            w.see(b)
+        except Exception:
+            return 'break'
+        self.status.config(text=msg)
+        return 'break'
+
+    def _on_toggle_bookmark_key(self, event=None):
+        """
+        **Ctrl+スペース——選んでいる行のブックマークを付け外しする**
+        （項目48-OD・2026-09-02・うにさんの指定）。
+
+        選んでいる範囲が複数行にまたがるなら**まとめて**扱う——
+        **全部に付いていれば全部外し、そうでなければ全部に付ける**
+        （半端な状態から押したときに「揃う」ほうへ動かす）。
+        選んでいなければ、カーソルの在る行だけ。
+        """
+        w = event.widget if event is not None else self.target
+        try:
+            a = int(w.index('sel.first').split('.')[0])
+            b = int(w.index('sel.last').split('.')[0])
+            # 選択の終わりが行頭ちょうどなら、その行は含めない
+            if w.index('sel.last').split('.')[1] == '0' and b > a:
+                b -= 1
+        except Exception:
+            try:
+                a = b = int(w.index('insert').split('.')[0])
+            except Exception:
+                return 'break'
+        rows = list(range(min(a, b), max(a, b) + 1))
+        if not rows:
+            return 'break'
+        if all(r in self.bookmarks for r in rows):
+            for r in rows:
+                self.bookmarks.discard(r)
+            msg = (f'{rows[0]} 行目のブックマークを外しました' if len(rows) == 1
+                   else f'{len(rows)} 行のブックマークを外しました')
+        else:
+            for r in rows:
+                self.bookmarks.add(r)
+            msg = (f'{rows[0]} 行目にブックマークを付けました' if len(rows) == 1
+                   else f'{len(rows)} 行にブックマークを付けました')
+        try:
+            self.editor_gutter.redraw()
+            self.result_gutter.redraw()
+        except Exception:
+            pass
+        self.status.config(text=msg)
+        self._schedule_session_save()
+        return 'break'
 
     def _toggle_bookmark(self, line):
         """
@@ -15117,31 +15262,47 @@ class CorrectNoteApp:
             控えを渡すこと（`self.line_results` を引くと別の行の
             理由が付く）。
         """
+        # **2つの設定は別々**（項目48-OC・2026-09-02・うにさんの指摘
+        # 「**メニューで品詞をオフ、根拠をオンにした場合、根拠が
+        # 出ません**」）。もとは「品詞がオフなら何も出さない」で
+        # 早く帰っていたので、**根拠だけを見たい人が何も見られなかった**。
+        # 根拠は品詞の下に並べる形だが、**上が無ければ根拠から始めれば
+        # よい**だけで、上に依存する理由は無い。
         try:
-            if not self.settings.get('show_pos_info'):
-                return []
+            _pos_on = bool(self.settings.get('show_pos_info'))
+            _why_on = bool(self.settings.get('show_reason_info'))
         except Exception:
             return []
+        if not (_pos_on or _why_on):
+            return []
 
-        items = [(ANALYSIS_HEAD_POS, None)]
-        # **Shift+左右で範囲を変えたときは「判定できません」**
-        # （うにさんの指定）。切れ目に揃っていない範囲の品詞を
-        # 名乗るのは、判定ではなく当てずっぽうになる。
-        if unit.get('resized'):
-            items.append(('  判定できません', None))
-        else:
-            fn = self._analysis_tokenizer()
-            try:
-                lines = explain.pos_lines(unit.get('text') or '', fn)
-            except Exception:
-                lines = [explain.UNKNOWN_POS]
-            for ln in lines:
-                items.append((f'  {ln}', None))
+        items = []
+        if _pos_on:
+            items.append((ANALYSIS_HEAD_POS, None))
+            # **Shift+左右で範囲を変えたときは「判定できません」**
+            # （うにさんの指定）。切れ目に揃っていない範囲の品詞を
+            # 名乗るのは、判定ではなく当てずっぽうになる。
+            if unit.get('resized'):
+                items.append(('  判定できません', None))
+            else:
+                fn = self._analysis_tokenizer()
+                try:
+                    # store＝カタカナ語のかな書きの言い切り／
+                    # pos_hint＝1字の助詞を行の文脈の品詞で言う
+                    # （どちらも項目48-PW・2026-09-04）
+                    lines = explain.pos_lines(
+                        unit.get('text') or '', fn, store=self.store,
+                        pos_hint=unit.get('pos') or '',
+                        infl_hint=unit.get('infl') or '',
+                        # 行の解析が手を加えずに1語と見たか（48-QC）
+                        atomic_hint=bool(unit.get('atomic')),
+                        known_hint=bool(unit.get('known')))
+                except Exception:
+                    lines = [explain.UNKNOWN_POS]
+                for ln in lines:
+                    items.append((f'  {ln}', None))
 
-        try:
-            if not self.settings.get('show_reason_info'):
-                return items
-        except Exception:
+        if not _why_on:
             return items
 
         typed, fixed = pair if pair is not None else self._analysis_pair(unit)
@@ -15835,10 +15996,20 @@ class CorrectNoteApp:
         # 見出しを飛ばすので届かない**。説明が在るぶんだけ伸ばす。
         rows = min(len(items), DROPDOWN_ROWS)
         for _i, (_t, _cb) in enumerate(items):
-            if _t == ANALYSIS_HEAD_POS:
-                rows = min(len(items),
-                           max(rows, DROPDOWN_ROWS + (len(items) - _i)),
-                           DROPDOWN_ROWS_MAX)
+            if _t in (ANALYSIS_HEAD_POS, ANALYSIS_HEAD_WHY):
+                # **説明の塊ぜんぶが見える高さにする**（項目48-QB・
+                # 2026-09-04）。以前の「16 ＋ 説明の行数」は、説明の
+                # 見出しが**16行目より下から始まる**（候補が16件を
+                # 超える）語では足りない——実機の `たぶい` は候補18行
+                # ＋品詞判定4行＝22項目に対して 16+4=20 行となり、
+                # `い ＝ 名詞` と ※の注記の**2行が画面の外**に出ていた
+                # （うにさんの画面・2026-09-04）。見出しがどこから
+                # 始まっても下端（説明）まで入る高さ＝項目の総数
+                # （上限は今までどおり ROWS_MAX）。品詞判定がオフで
+                # 根拠だけオンのとき（項目48-OC）は見出しが
+                # ANALYSIS_HEAD_WHY から始まるので、そちらも見る
+                # （HEAD_POS だけ見ると根拠が切れたまま伸びない）。
+                rows = min(len(items), DROPDOWN_ROWS_MAX)
                 break
         lb = tk.Listbox(dd, bg=PANEL, fg=INK, relief='flat',
                         font=('Yu Gothic UI', 10), activestyle='none',

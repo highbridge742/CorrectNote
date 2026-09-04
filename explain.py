@@ -92,7 +92,14 @@ _NOUN_SUB = {
     '数': '数詞',
     'サ変接続': '名詞（サ変）',
     '形容動詞語幹': 'ナ形容詞の語幹',
-    'ナイ形容詞語幹': 'イ形容詞の語幹',
+    # **`ナイ形容詞語幹` は「ない と続く名詞」**（項目48-QD・2026-09-04）。
+    # IPAdic のこの札は `問題ない`・`間違いない`・`仕方ない` のように
+    # **ない を伴ってイ形容詞のふるまいをする名詞**に付く。
+    # `問題` そのものは**名詞**であって、イ形容詞の語幹ではない
+    # （`問題い` とは言えない。`赤い` の `赤` とは別物）。
+    # 実機メモでは 問題×24・間違い×7・違い・まちがい・仕方 の
+    # 35 か所が「イ形容詞の語幹」と出ていた。
+    'ナイ形容詞語幹': '名詞（「ない」に続く）',
     '副詞可能': '名詞（副詞にもなる）',
     '接尾': '接尾辞',
     '非自立': '名詞（非自立）',
@@ -110,6 +117,22 @@ _PROPER = {
     '一般': '固有名詞',
 }
 _PROPER_3 = {'姓': '姓', '名': '名', '一般': '', '国': '国名'}
+
+# 接尾辞の下の段（項目48-QD・2026-09-04）。実機メモに出るのはこの9つ。
+# `本`（助数詞）と `書`（一般）と `的`（ナ形容詞を作る）は付き方が
+# 違う——48-PQ（`スクロール語 → 後`）のような判断を読むときに、
+# ここが分かれていないと追えない。
+_SUFFIX_SUB = {
+    '一般': '接尾辞',
+    '助数詞': '接尾辞（助数詞）',
+    '副詞可能': '接尾辞（副詞にもなる）',
+    '形容動詞語幹': '接尾辞（ナ形容詞を作る）',
+    'サ変接続': '接尾辞（サ変）',
+    '人名': '接尾辞（人名に付く）',
+    '地域': '接尾辞（地名に付く）',
+    '助動詞語幹': '接尾辞（助動詞の語幹）',
+    '特殊': '接尾辞（特殊）',
+}
 
 # 助詞の細分類
 _PARTICLE_SUB = {
@@ -156,6 +179,66 @@ _INFL = {
 # 品詞が立たなかったときの言葉
 UNKNOWN_POS = '判定できません'
 
+# **基底のかな ＋ 小書きのかな で「1拍」になる組**（項目48-QE・
+# 2026-09-04）。解析がこの2字の**あいだ**で切ったなら、その切り方は
+# 拍の内側を割っている——**日本語の音として成り立たない**ので、
+# そこから引いた品詞はどれも当て推量になる。
+#
+#   しゅるい  → `し ＝ 動詞・連用形／原形 する ／ ゅるい ＝ 断片`
+#               `し` を「する の連用形」と**言い切っている**が、
+#               `しゅ` は1拍で、`し` はその半分でしかない
+#
+# **`っ`（促音）は入れない。** `って`・`っけ`・`っす` は辞書に在る語で、
+# **小書きで始まってよい唯一の例外**（入れると `直しませんでしたっけ`
+# の `っけ ＝ 助詞（終助詞）`・`往って` の `って ＝ 助詞（格助詞）` を
+# 壊す・実測）。**`ヵ`／`ヶ` も入れない**（`ヶ月` は接尾辞）。
+def _mora_pairs():
+    out = set()
+    for b in 'きぎしじちぢにひびぴみりふゔてで':
+        for s in 'ゃゅょ':
+            out.add(b + s)
+    out |= {
+        'ふぁ', 'ふぃ', 'ふぇ', 'ふぉ',
+        'うぃ', 'うぇ', 'うぉ',
+        'ゔぁ', 'ゔぃ', 'ゔぇ', 'ゔぉ',
+        'てぃ', 'でぃ', 'とぅ', 'どぅ',
+        'つぁ', 'つぃ', 'つぇ', 'つぉ',
+        'しぇ', 'じぇ', 'ちぇ',
+        'くぁ', 'くぃ', 'くぇ', 'くぉ', 'ぐぁ',
+        'すぃ', 'ずぃ', 'いぇ',
+        'くゎ', 'ぐゎ',
+    }
+    return frozenset(out)
+
+
+_MORA_PAIR = _mora_pairs()
+
+#: 語の頭に立てない小書き（`っ`・`ヵ`・`ヶ` は**わざと外してある**）
+_SMALL_NOT_HEAD = 'ぁぃぅぇぉゃゅょゎァィゥェォャュョヮ'
+
+
+def _to_hira(c):
+    """カタカナ1字をひらがなに落とす（それ以外はそのまま）。"""
+    return chr(ord(c) - 0x60) if 'ァ' <= c <= 'ヶ' and c != 'ー' else c
+
+
+def _mora_cut(toks):
+    """
+    **語の切れ目が、1拍の内側に入っているか**（項目48-QE）。
+
+    入っていれば (添字, その1拍) を返す。無ければ None。
+    """
+    for k in range(1, len(toks)):
+        head = toks[k][0]
+        prev = toks[k - 1][0]
+        if not head or not prev or head[0] not in _SMALL_NOT_HEAD:
+            continue
+        pair = _to_hira(prev[-1]) + _to_hira(head[0])
+        if pair in _MORA_PAIR:
+            return k, prev[-1] + head[0]
+    return None
+
+
 
 def _major_and_sub(pos):
     """
@@ -170,6 +253,17 @@ def _major_and_sub(pos):
     return parts[0], parts[1:]
 
 
+def _no_word_chars(s):
+    """かな・漢字・英字を1つも含まない（＝数字と記号だけ）か。"""
+    for c in s:
+        if ('ぁ' <= c <= 'ゖ' or 'ァ' <= c <= 'ヺ' or c == 'ー'
+                or '一' <= c <= '鿿'
+                or 'a' <= c <= 'z' or 'A' <= c <= 'Z'
+                or 'ａ' <= c <= 'ｚ' or 'Ａ' <= c <= 'Ｚ'):
+            return False
+    return True
+
+
 def pos_name(pos, surface='', infl_form='', base_form='',
              has_reading=True):
     """
@@ -180,6 +274,38 @@ def pos_name(pos, surface='', infl_form='', base_form='',
     infl_form: janome の活用形（`morphology.Token.infl_form`）。
          無ければ活用の話は書かない。
     """
+    # **長音記号は品詞ではない**（項目48-PW・2026-09-04・うにさんの
+    # 報告「`かー` の判定も変」——janome は独立した `ー` を
+    # `名詞:固有名詞` と当て推量する。前の字と合わせて1拍の記号で
+    # あって、固有名詞と呼ぶのは判定ではない）。
+    if surface and all(c == 'ー' for c in surface):
+        return '長音（前の字と合わせて1拍）'
+    # **小書きで始まる語は無い**（同・「頭に小文字が来るのも変」）。
+    # 解析がそう切ったなら、それは**語の途中で切れた断片**（48-OI と
+    # 同じ根拠）。janome の当て推量（名詞:一般）を名乗らせない。
+    if (surface and surface[0] in 'ぁぃぅぇぉゃゅょっゎァィゥェォャュョッヮ'
+            and not has_reading):
+        return f'断片（小書き `{surface[0]}` で始まる——語の頭に立たない）'
+    # **英字の並びを「組織名」と名乗らない**（項目48-QD・2026-09-04）。
+    # janome は知らないアルファベットの並びを**片端から
+    # `名詞:固有名詞:組織`** と当て推量する。実機メモでは 742 か所が
+    # これで、中身は `ja`・`F`・`s`・`the`・`Ctrl`・`Shift`・`https`・
+    # `py`・`and`・`to` ——**組織名は1つも無い**。
+    # 読みが取れていない（＝解析が知らない）英字の並びに限って、
+    # 当て推量の札を名乗らせず、**分かっている事実だけ**を言う。
+    # 読みが取れている英字（辞書に在る語）は今までどおり。
+    if (surface and not has_reading
+            and all('a' <= c <= 'z' or 'A' <= c <= 'Z' for c in surface)):
+        return '英字（解析は品詞を言えない）'
+    # **数字と記号は「読みが無い」を根拠にしない**（項目48-QD）。
+    # 読みが取れないのは当たり前で、「辞書に無い語」の証拠ではない。
+    # `://` や `.` のような**記号だけの並び**を janome は
+    # `名詞:サ変接続` と当て推量する——記号は記号と言う。
+    if surface and _no_word_chars(surface):
+        if not has_reading and not any(c.isdigit() for c in surface):
+            return '記号'
+        has_reading = True      # 数字に「辞書に無い語」とは書かない
+
     major, subs = _major_and_sub(pos)
     if not major:
         return UNKNOWN_POS
@@ -193,6 +319,10 @@ def pos_name(pos, surface='', infl_form='', base_form='',
             deep = _PROPER_3.get(subs[2] if len(subs) > 2 else '', '')
             label = f'固有名詞（{kind}・{deep}）' if deep \
                 else f'固有名詞（{kind}）' if kind != '固有名詞' else '固有名詞'
+        elif sub1 == '接尾':
+            # **どんな接尾辞かまで言う**（項目48-QD・2026-09-04）
+            label = _SUFFIX_SUB.get(subs[1] if len(subs) > 1 else '',
+                                    '接尾辞')
         else:
             label = _NOUN_SUB.get(sub1, '名詞')
     elif major == '形容詞':
@@ -291,7 +421,11 @@ def _tokens_for(text, tokenize_fn=None):
         try:
             # 語彙の育ちで答えが変わる道（janome 無しの簡易分割は
             # `store.lookup` を見る）なので、**控えない**。
-            return [(t[0], t[1] or '', '', '', bool(t[5]))
+            # **活用形（7つ目・48-NT）は落とさない**（項目48-PW——
+            # 落とすと「動詞の終止形＋名詞」の注記がこの道でだけ
+            # 黙る・学び22）。
+            return [(t[0], t[1] or '',
+                     (t[6] if len(t) > 6 else '') or '', '', bool(t[5]))
                     for t in tokenize_fn(text)]
         except Exception:
             pass
@@ -305,7 +439,8 @@ def _remember(text, tokens):
     return tokens
 
 
-def pos_lines(text, tokenize_fn=None):
+def pos_lines(text, tokenize_fn=None, store=None, pos_hint=None,
+              infl_hint='', atomic_hint=False, known_hint=True):
     """
     **選んだ範囲の品詞**（「－ 品詞判定 －」の中身）を行の一覧で返す。
 
@@ -314,18 +449,147 @@ def pos_lines(text, tokenize_fn=None):
     （`にゅうりょくみす` が `に｜ゅうりょくみす` に割れているのは、
     紫が立たない理由そのもの）。1行にまとめないのは、候補一覧の
     幅がその1行の長さで決まるから（`_make_dropdown`）。
+
+    **判定が変なときは、変だと言う**（項目48-PW・2026-09-04・
+    うにさんの指定「品詞の判定を見れば見るほど変なので、品詞判定を
+    よく見て、細かく見て修正をしていってください」）:
+      ・かなの範囲がまるごと**カタカナ語のかな書き**なら、バラバラの
+        当て推量の鎖（`か＝助詞／ー＝固有名詞／そる＝動詞`）ではなく
+        その1行で言い切る（判定は `loanword.katakana_for_hiragana`
+        ただ1つ・48-GN。store が要るので、渡されたときだけ）
+      ・**動詞の終止形に名詞が直付き**（`たぶ＝動詞・終止形／
+        い＝名詞`）なら、48-PL と同じ述語で「つながりが異様」と
+        書き添える——分析の鎖を見せたうえで、正しい並びではないと
+        伝える（★★「異様であると認識しているのかが重要」の表示版）
     """
     text = text or ''
     if not text.strip():
         return [UNKNOWN_POS]
+    # **1字の助詞は、行の文脈の品詞で言う**（項目48-PW・2026-09-04）。
+    # この関数は範囲の文字列だけを解析し直すので、`が`・`で` を単独で
+    # 掛けると janome は文頭の「接続詞」（だが・それで の類）と
+    # 当て推量する。単位は行を解析したときの品詞（`pos`）を持って
+    # いるので、**1字のときはそちらが正しい**（呼び手が渡したとき）。
+    if pos_hint and len(text) == 1:
+        return [pos_name(pos_hint, text, infl_hint or '',
+                         has_reading=known_hint)]
+    # **行の解析が「1語」と見た範囲は、その品詞を名乗る**（項目48-QC・
+    # 2026-09-04）。上の1字の門と同じ理由を、**長さではなく事実**で
+    # 言い直したもの——この関数は範囲の文字列**だけ**を割り直すので、
+    # 文の中では起きなかった分かれ方を画面に出していた:
+    #
+    #     日間   行では 名詞:接尾:助数詞（7日間 の 日間）
+    #            画面は `日 ＝ 固有名詞（地名・国名） ／ 間 ＝ 接尾辞`
+    #     かな   行では 名詞:一般（31 か所）
+    #            画面は `か ＝ 助詞（副助詞） ／ な ＝ 助詞（終助詞）`
+    #     ない   行では 助動詞（できない の ない・53 か所）
+    #            画面は `イ形容詞・終止形`
+    #     よう   行では 名詞:非自立:助動詞語幹（36 か所）
+    #            画面は `感動詞`
+    #
+    # **文脈のある側が正しい。** 単独で割り直したほうは当て推量。
+    # `atomic_hint` は「行の解析が**手を加えずに**1語と見た」——
+    # まとめた単位（`のよう`＝の＋よう・`します`＝し＋ます）や、
+    # 前処理が作った語（`きゃー`＋`っ`）では False になるので、
+    # 鎖の表示はそのまま残る（あれは本当に鎖）。
+    # `known_hint` は「解析がその語の読みを言えた」——言えない塊
+    # （`にゅうりょくみす`）は、当て推量の品詞を名乗るより、
+    # 割り直した鎖のほうが分析の材料になるので今までどおり。
+    #
+    # 実測（実機メモの単位 5,471 種）: **1,117 種・4,555 か所**の
+    # 判定が変わり、**悪くなったものは1つも無い**
+    # （`tools_local/probe_pos_survey.py` の全種突き合わせ）。
+    if pos_hint and atomic_hint and known_hint:
+        # **原形は落とさない**（`押し` を見て `押す` だと分かるように）。
+        # 単位は原形を持っていないので、割り直した側から借りる——
+        # ただし**割り直しても1語で、大分類が一致するとき**だけ
+        # （`押し` が行では 名詞 のとき、単独の解析が言う 原形 押す を
+        #   添えると、名詞に動詞の原形が付いて食い違う）。
+        _base = ''
+        _one = _tokens_for(text, tokenize_fn)
+        if (len(_one) == 1 and _one[0][0] == text
+                and _major_and_sub(_one[0][1])[0]
+                == _major_and_sub(pos_hint)[0]):
+            _base = _one[0][3] or ''
+        return [pos_name(pos_hint, text, infl_hint or '', _base,
+                         has_reading=known_hint)]
     toks = _tokens_for(text, tokenize_fn)
     if not toks:
         return [UNKNOWN_POS]
+    if (store is not None and len(toks) >= 2 and len(text) >= 4
+            and all('ぁ' <= c <= 'ゖ' or c == 'ー' for c in text)):
+        try:
+            from loanword import katakana_for_hiragana as _k4h
+            kata = _k4h(text, store, min_length=4)
+        except Exception:
+            kata = None
+        if kata:
+            return [f'カタカナ語（{kata}）のかな書き']
     if len(toks) == 1:
         surface, pos, infl, base, has_reading = toks[0]
         return [pos_name(pos, surface, infl, base, has_reading)]
-    return [f'{surface} ＝ {pos_name(pos, surface, infl, base, hr)}'
-            for surface, pos, infl, base, hr in toks]
+    lines = [f'{surface} ＝ {pos_name(pos, surface, infl, base, hr)}'
+             for surface, pos, infl, base, hr in toks]
+    # **1拍の内側で切れた割り方からは、品詞を言わない**（項目48-QE・
+    # 2026-09-04・うにさんの指定「頭に小文字が来るのも変」の根っこ）。
+    #
+    # 48-PW は**切られた側**（`ゅるい`）に「断片」と書くところまで
+    # 進めた。だが**切った側**（`し`）は「動詞・連用形／原形 する」と
+    # 言い切ったままだった——`しゅ` は1拍で、`し` はその半分でしかない。
+    # **半分の音に品詞は無い。** 切れ目が拍の内側にあると分かった時点で、
+    # その割り方から引いた品詞は**全部**当て推量になる。
+    #
+    #     しゅるい  旧 `し ＝ 動詞・連用形／原形 する ／ ゅるい ＝ 断片`
+    #               新 `判定できません（`しゅ` は1拍——語の途中で
+    #                   切れています）`
+    #
+    # かなだけの範囲は1行に言い直す。漢字や記号を含む範囲は**取り
+    # 過ぎない**——割れた2語ぶんだけを繋いで言い直し、ほかの語の行は
+    # そのまま残す（`外しょつする` の `する` は正しい判定なので消さない）。
+    _mc = _mora_cut(toks)
+    if _mc is not None:
+        _k, _mora = _mc
+        _note = f'{UNKNOWN_POS}（`{_mora}` は1拍——語の途中で切れています）'
+        if all('ぁ' <= c <= 'ゖ' or 'ァ' <= c <= 'ヺ' or c == 'ー'
+               for c in text):
+            lines = [_note]
+        else:
+            _joined = toks[_k - 1][0] + toks[_k][0]
+            lines = (lines[:_k - 1] + [f'{_joined} ＝ {_note}']
+                     + lines[_k + 1:])
+    try:
+        if _mc is not None:
+            raise ValueError        # 成り立たない割り方に注記は付けない
+        from corrector import _verb_noun_pair as _vnp
+        for k in range(1, len(toks)):
+            if _vnp(toks[k - 1][1], toks[k - 1][2], toks[k][1]):
+                lines.append('※ 品詞のつながりが異様'
+                             '（動詞の終止形に名詞が直付き）')
+                break
+    except Exception:
+        pass
+    # **まるごとで語彙に在る読みなら、そう言い添える**（項目48-PW）。
+    # `かいせき` を単独で解析すると `かいせ＝動詞・未然形／き＝助動詞`
+    # のような当て推量の鎖になるが、本人の語彙は `かいせき` を
+    # 1つの読み（解析）として持っている。鎖だけ見せると「聞かない
+    # 分かれ方」が判定に見えてしまう（うにさんの「見れば見るほど変」）。
+    # **動詞・助動詞を含む鎖には出さない**——`される`（さ＋れる）・
+    # `かいせき`（かいせ＋き）は形のうえでは正しい活用の鎖なので、
+    # 「当て推量」と言い切れない（`される` に付けて検品で出た→
+    # 受け止めた）。出すのは**名詞・助詞だけの鎖**（`こてい`＝こ＋てい・
+    # `かだい`＝か＋だい・`かくにん`＝かく＋に＋ん）——活用しない
+    # 品詞だけの並びが、たまたま1語の読みと同じ長さで割れている形。
+    if (store is not None and len(text) >= 3
+            and all('ぁ' <= c <= 'ゖ' or c == 'ー' for c in text)
+            and not any((p or '').split(':')[0] in ('動詞', '助動詞')
+                        for _s, p, _i, _b, _h in toks)):
+        try:
+            if store.has_reading(text):
+                lines.append('※ まるごとでは語彙に在る読み'
+                             '（上の分かれ方は解析の当て推量）')
+        except Exception:
+            pass
+    return lines
 
 
 def pos_label(text, tokenize_fn=None):

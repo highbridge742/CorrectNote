@@ -41,10 +41,15 @@ import os
 
 try:
     from janome_import import (iter_janome_entries, HAS_JANOME,
-                               _should_exclude, EXCLUDE_SUB_POS)
+                               _should_exclude, EXCLUDE_SUB_POS,
+                               KANJI2_COST_LIMIT, is_two_kanji_noun)
 except Exception:
     HAS_JANOME = False
     EXCLUDE_SUB_POS = ()
+    KANJI2_COST_LIMIT = 5600
+
+    def is_two_kanji_noun(surface, pos, sub_pos=None):
+        return False
 
     def iter_janome_entries(min_len=1, max_len=8):
         return iter(())
@@ -87,6 +92,12 @@ _INDEX_COST_LIMIT = 4000
 
 def _should_prune(surface, pos, sub_pos, sub_sub_pos, cost):
     """候補索引に入れるかどうかの判定。地名・人名・難語をまとめて弾く。"""
+    # **漢字2字の名詞は KANJI2_COST_LIMIT（5600）まで索引に持つ**
+    # （項目48-OJ・2026-09-02）。`_should_exclude` は 4500 で切るので
+    # 先に見る。族の決まりは `janome_import.is_two_kanji_noun` ただ1つ。
+    if (cost is not None and cost <= KANJI2_COST_LIMIT
+            and is_two_kanji_noun(surface, pos, sub_pos)):
+        return False
     if _should_exclude(surface, pos, sub_pos, sub_sub_pos, cost):
         return True
     if cost is not None and cost > _INDEX_COST_LIMIT:
@@ -95,7 +106,7 @@ def _should_prune(surface, pos, sub_pos, sub_sub_pos, cost):
 
 
 # キャッシュの形式が変わったら数字を上げる（古い索引を作り直させる）
-CACHE_VERSION = 5
+CACHE_VERSION = 7
 # 索引として最低限あるべき読みの数。これを下回るものは
 # 作りかけ・壊れた索引とみなして作り直す。
 # （空の索引が保存されると、候補が一切出ないのに
@@ -128,6 +139,12 @@ class DictIndex:
         # **ふつうの語まで「知らない」**ことになる。
         # 「その並びは世の中の語か」を答えるためだけの集合。
         self._world = None         # {reading, ...}（刈り込まない）
+        # **帯**（項目48-OJ・2026-09-02）: 2字漢語の帯（5600まで）のうち、
+        # 従来の刈り込み（4000・_should_exclude）なら索引に無かった表記。
+        # reading -> {surface, ...}。**①が立っていない道には見せない**
+        # （`surfaces_for_reading(..., band=False)`）——造語の道が
+        # `未提示 → 未定時`（未定 は帯）を作った（実測）
+        self._band = None
 
     @property
     def ready(self):
@@ -155,11 +172,22 @@ class DictIndex:
     # ------------------------------------------------------------
     # 引く
     # ------------------------------------------------------------
-    def surfaces_for_reading(self, reading, limit=_MAX_SURFACES):
-        """この読みを持つ表記の一覧（一般的な語から順に）。"""
+    def surfaces_for_reading(self, reading, limit=_MAX_SURFACES, band=True):
+        """この読みを持つ表記の一覧（一般的な語から順に）。
+
+        `band=False` なら**帯**（2字漢語の 4000〜5600・項目48-OJ）の表記を
+        除く＝従来の索引と同じ顔ぶれ。**①（異様判定）が立っていない道**
+        （造語の compose・48-MI の「ただ1つ」・(い) の辞書の先頭）はこちら。
+        帯を見るのは `corrector._index_face`（①のあと）と F2 の候補。
+        """
         if not self.ready or not reading:
             return []
-        return list(self._by_reading.get(reading, ()))[:limit]
+        got = list(self._by_reading.get(reading, ()))
+        if not band and self._band:
+            _b = self._band.get(reading)
+            if _b:
+                got = [s for s in got if s not in _b]
+        return got[:limit]
 
     def is_world_reading(self, reading):
         """
@@ -208,6 +236,7 @@ class DictIndex:
         by_reading = {}
         by_surface = {}
         world = set()
+        band = {}
         n = 0
         for surface, reading, pos, sub_pos, sub_sub_pos, cost in \
                 iter_janome_entries(min_len=1, max_len=8):
@@ -224,6 +253,10 @@ class DictIndex:
                 world.add(reading)
             if _should_prune(surface, pos, sub_pos, sub_sub_pos, cost):
                 continue
+            # 帯の印（従来の刈り込みなら落ちていた2字漢語・項目48-OJ）
+            if (_should_exclude(surface, pos, sub_pos, sub_sub_pos, cost)
+                    or (cost is not None and cost > _INDEX_COST_LIMIT)):
+                band.setdefault(reading, set()).add(surface)
             by_reading.setdefault(reading, []).append((cost, surface))
             # 表記からの逆引きは、ドラッグ範囲に現れる短い語
             # （時・層・売っ など）にしか使わない。
@@ -234,8 +267,18 @@ class DictIndex:
             if progress and n % 50000 == 0:
                 progress(n)
 
+        # **同じ読みの表記は 段（kango_tier・AI の判断）→ コスト の順**
+        # （項目48-OJ）。IPAdic のコストは新聞由来で 過大 < 課題・
+        # 高率 < 効率 になるので、コストだけでは先頭が日常語にならない。
+        try:
+            import kango_tier as _kt
+            _tier = _kt.tier
+        except Exception:
+            def _tier(_s):
+                return 3
+
         def _dedup_sorted(pairs, limit):
-            pairs.sort()
+            pairs.sort(key=lambda cv: (_tier(cv[1]), cv[0], cv[1]))
             out, seen = [], set()
             for _cost, v in pairs:
                 if v in seen:
@@ -251,6 +294,7 @@ class DictIndex:
         self._by_surface = {s: _dedup_sorted(v, _MAX_READINGS)
                             for s, v in by_surface.items()}
         self._world = world
+        self._band = band
 
     # ------------------------------------------------------------
     # キャッシュ
@@ -268,7 +312,9 @@ class DictIndex:
                 json.dump({'version': CACHE_VERSION,
                            'by_reading': self._by_reading,
                            'by_surface': self._by_surface,
-                           'world': sorted(self._world or ())},
+                           'world': sorted(self._world or ()),
+                           'band': {r: sorted(v) for r, v
+                                    in (self._band or {}).items()}},
                           f, ensure_ascii=False)
             os.replace(tmp, self.cache_path)
         except Exception:
@@ -290,6 +336,8 @@ class DictIndex:
             self._by_reading = by_reading
             self._by_surface = by_surface
             self._world = set(data.get('world') or ())
+            self._band = {r: set(v) for r, v
+                          in (data.get('band') or {}).items()}
             return True
         except Exception:
             return False

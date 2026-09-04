@@ -124,6 +124,33 @@ _SYMBOLS = set('・。、「」『』【】〔〕（）()[]{}〜~―—‐/\\＼
 KANJI2_COST_LIMIT = 5600
 
 
+def is_two_kanji_noun(surface, pos, sub_pos=None):
+    """
+    **漢字2字の名詞**か（項目48-OJ・2026-09-02）。
+
+    `dict_index` が索引に入れる帯を決めるのに使う——**この族は
+    `KANJI2_COST_LIMIT`（5600）まで索引に持つ**。`_should_exclude` の
+    KANJI2 の門は「5600 を超える2字漢語を弾く」ためのものだったが、
+    先に `GENERAL_COST_LIMIT`（4500）で切られて **4500〜5600 の帯には
+    一度も届いていなかった**（項目48-OF）。課題5329・効率5462・
+    単語5564・巨大4845 が**どこからも見つからない**のはそのせい。
+
+    **語彙（`count`＝本人が使った回数）には入れない。** 2026-09-02 に
+    測った——この族 12,482 語を語彙に入れると、**全部の道が
+    「知っている語」として読む**ので readcheck の化けが +22、実機メモで
+    `手動補正 → 主導性`・`各種補正 → 馘首性`・`動かしたら → 動かしたはら`
+    （項目48-OJ の記録）。索引（世の中の語）に持ち、順位は
+    `kango_tier`（AI の判断）で付ける。
+    """
+    if pos != '名詞':
+        return False
+    if sub_pos and sub_pos in EXCLUDE_SUB_POS:
+        return False
+    if not surface or len(surface) != 2:
+        return False
+    return all('一' <= c <= '鿿' for c in surface)
+
+
 def is_okurigana_noun(surface, pos, sub_pos=None):
     """
     **漢字2つ以上＋送り仮名で終わる名詞**か（項目48-KG・2026-08-27）。

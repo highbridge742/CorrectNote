@@ -1120,6 +1120,27 @@ def run_drag_scroll_cases():
     check('例外が出ても 0 を返して止まらない',
           count_lines(_FakeText(RuntimeError()), '1.0', '1.5'), 0)
 
+    # --- 簡易入力の縦幅も、同じ受け皿を通す（2026-09-04） ---
+    # `_adjust_quick_size` が生の count('1.0','end','displaylines') を
+    # int() に掛けていて、この環境（Python 3.9）ではタプルが返るため
+    # 毎回 TypeError → 論理行数への退避になっていた。折り返しのある
+    # 窓で「改行しても縦に伸びない」（実機の報告・2026-09-04）の原因。
+    # 見張り: _adjust_quick_size は _displaylines_between を通し、
+    # 生の count('…','displaylines') を直に呼ばないこと（学び22）。
+    func8 = next(i for i in cls_node.body
+                 if isinstance(i, ast.FunctionDef)
+                 and i.name == '_adjust_quick_size')
+    _calls8 = [n for n in ast.walk(func8) if isinstance(n, ast.Call)]
+    check('簡易入力の縦幅は型ゆれの受け皿を通す',
+          any(isinstance(c.func, ast.Attribute)
+              and c.func.attr == '_displaylines_between'
+              for c in _calls8), True)
+    check('簡易入力の縦幅が生の count を呼んでいない',
+          any(isinstance(c.func, ast.Attribute) and c.func.attr == 'count'
+              and any(isinstance(a, ast.Constant)
+                      and a.value == 'displaylines' for a in c.args)
+              for c in _calls8), False)
+
     # --- キー名を指定した束縛は、IME の取り違えの受け皿を黙らせる ---
     # （項目48-IN・2026-08-22）。Tk は同じ欄に <KeyPress> と <Delete> の
     # 両方があると、keysym=Delete の打鍵では <Delete> だけを呼ぶ。
@@ -2379,8 +2400,32 @@ def run_explain_cases():
           explain.pos_name('名詞:固有名詞:人名:姓', '柚須'),
           '固有名詞（人名・姓）')
     check('辞書に読みが無いことは必ず添える',
-          explain.pos_name('名詞:一般', 'ゅうりょじ', has_reading=False),
+          explain.pos_name('名詞:一般', 'たんほ', has_reading=False),
           '名詞（辞書に無い語）')
+    # --- 項目48-PW（品詞判定の変な言い方を直す・2026-09-04） ---
+    # うにさんの指定「品詞の判定を見れば見るほど変なので、品詞判定を
+    # よく見て、細かく見て修正をしていってください」。
+    check('小書きで始まる読みの無い語は「断片」と言う（ょじえかくらん）',
+          explain.pos_name('名詞:一般', 'ょじえかくらん', has_reading=False),
+          '断片（小書き `ょ` で始まる——語の頭に立たない）')
+    check('独立した ー は固有名詞ではなく長音（かー の判定も変、の直し）',
+          explain.pos_name('名詞:固有名詞:一般', 'ー', has_reading=False),
+          '長音（前の字と合わせて1拍）')
+    check('1字の助詞は行の文脈の品詞で言う（が を単独で解析し直さない）',
+          explain.pos_lines('が', None, pos_hint='助詞:格助詞:一般'),
+          ['助詞（格助詞）'])
+    check('活用形のヒントも効く（た ＝ 助動詞・終止形）',
+          explain.pos_lines('た', None, pos_hint='助動詞',
+                            infl_hint='基本形'),
+          ['助動詞・終止形'])
+
+    def tok_vn(line):
+        """動詞終止形＋名詞の直付き（たぶ|い）を返す作り物の割り方。"""
+        return [('たぶ', '動詞:自立', 'タブ', 0, 2, True, '基本形'),
+                ('い', '名詞:一般', 'イ', 2, 3, True, '')]
+    check('動詞の終止形に名詞が直付きなら「つながりが異様」と書き添える',
+          explain.pos_lines('たぶい', tok_vn)[-1],
+          '※ 品詞のつながりが異様（動詞の終止形に名詞が直付き）')
     check('品詞が立たなければ、そう言う',
           explain.pos_name(''), '判定できません')
 
@@ -2646,4 +2691,480 @@ def run_explain_cases():
           AC._unpack(packed).get('odd_reasons'), [(0, 1, 'わけ')])
     check('理由の無い古い控えでも落ちない',
           AC._unpack({'o': 'あ', 'c': 'あ'}).get('odd_reasons'), [])
+    return all_ok
+
+
+def test_menu_and_keys_48oc_48od_48oe():
+    """
+    **v1.4.0 のあとの3件**（うにさんの指定・2026-09-02）。
+
+    ### 48-OC 品詞をオフ・根拠をオンにすると、根拠が出なかった
+
+        「**メニューで品詞をオフ、根拠をオンにした場合、根拠が
+          出ません**」
+
+    `_analysis_items` が「品詞がオフなら **[]**」で早く帰っていた。
+    根拠は品詞の下に並べる形だが、**上が無ければ根拠から始めれば
+    よい**だけで、上に依存する理由は無い。あわせて「根拠を上げたら
+    品詞も一緒に上げる」もやめた——**押したメニューと違うものが
+    効くのは分かりにくい**。
+
+    ### 48-OD Shift+スペース／Ctrl+スペース
+
+        「Shift+スペースで、行内を選択できるようにします」
+        「Ctrl+スペースで、選択行のブックマークをオンオフします」
+
+    行内の選択は**改行を含めない**（行番号のクリックで選ぶ形は
+    次の行の頭までを選ぶので、コピーに改行が付いてくる）。
+    ブックマークは複数行にまたがるとき**全部に付いていれば全部外し、
+    そうでなければ全部に付ける**（揃うほうへ動かす）。
+
+    ### 48-OE 説明書の名前から版を外す
+
+        「更新のたびに説明書が増えるので、末尾の v6 を取り、
+          アプリのバージョンが更新されたことを検知したら説明書を
+          更新する形に変更する」
+
+    書き出した印を**ファイル名**で残していたので、名前に版が
+    要った。印を **`APP_VERSION`** で残せば名前は固定でよい。
+    古い `CorrectNote_説明書v<数字>.html` は書き出しのときに片付ける。
+    """
+    all_ok = True
+
+    def check(label, got, want):
+        nonlocal all_ok
+        ok = (got == want)
+        all_ok = all_ok and ok
+        print(f'{"OK " if ok else "NG "}{label}')
+        if not ok:
+            print(f'      得た値: {got!r}   期待: {want!r}')
+
+    src = open('app.py', encoding='utf-8').read()
+
+    print('--- 項目48-OC（品詞と根拠は別々） ---')
+    check('2つの設定を別々に読む',
+          "_pos_on = bool(self.settings.get('show_pos_info'))" in src
+          and "_why_on = bool(self.settings.get('show_reason_info'))" in src,
+          True)
+    check('**どちらもオフのときだけ空で帰る**',
+          'if not (_pos_on or _why_on):' in src, True)
+    check('品詞はオンのときだけ組む', 'if _pos_on:' in src, True)
+    check('根拠がオフならそこで帰る', 'if not _why_on:' in src, True)
+    check('**根拠を上げても品詞は上げない**（押したものだけ効く）',
+          "self.settings.set('show_pos_info', True)" in src, False)
+
+    print('--- 項目48-OD（Shift+スペース／Ctrl+スペース） ---')
+    check('Shift+スペースを束縛している',
+          "_w.bind('<Shift-space>', self._on_select_line_text)" in src, True)
+    check('Ctrl+スペースを束縛している',
+          "_w.bind('<Control-space>', self._on_toggle_bookmark_key)"
+          in src, True)
+    check('**メモ欄と補正欄の両方に掛けている**（学び22）',
+          'for _w in (self.editor, self.result_view):' in src, True)
+    check('行の中身を選ぶ処理が在る',
+          'def _on_select_line_text(self, event=None):' in src, True)
+    check('**改行を含めない**（行の end まで）',
+          "head, tail = f'{row}.0', f'{row}.end'" in src, True)
+    check('ブックマークの切り替え処理が在る',
+          'def _on_toggle_bookmark_key(self, event=None):' in src, True)
+    check('**全部付いていれば全部外す**',
+          'if all(r in self.bookmarks for r in rows):' in src, True)
+    check('空白は入れない（break を返す）',
+          src.count("        return 'break'") >= 2, True)
+
+    print('--- 項目48-OE（説明書は版で検知） ---')
+    import app as A
+    check('名前に版が入っていない',
+          A.MANUAL_FILENAME, 'CorrectNote_説明書.html')
+    check('片付ける相手の形が在る',
+          A.MANUAL_OLD_GLOB, 'CorrectNote_説明書v*.html')
+    check('**印は APP_VERSION で残す**',
+          "self.settings.set('manual_extracted', APP_VERSION)" in src, True)
+    check('**印も APP_VERSION で見る**',
+          "if self.settings.get('manual_extracted') == APP_VERSION:"
+          in src, True)
+    check('古い説明書を片付ける（数字の形だけ）',
+          "r'CorrectNote_説明書v\d+\.html'" in src, True)
+    import os
+    check('説明書のファイルが在る',
+          os.path.exists('CorrectNote_説明書.html'), True)
+    check('古い名前は残っていない',
+          any(f.startswith('CorrectNote_説明書v')
+              for f in os.listdir('.')), False)
+    return all_ok
+
+
+def test_small_kana_head_units_48oi():
+    """
+    **小書きで始まる単位は、左の語に繋ぐ**（項目48-OI・2026-09-02・
+    うにさんの観察）:
+
+        「F2の範囲を見ると、**小文字の頭で区切ることが多い**ですね。」
+
+    解析が実際にそう切っていた（実測）:
+
+        に | **ゅ**うりゅく        き | **ょ**じえかくらん
+        ゆり | **ょ**うくみす
+
+    拗音の小書き（ゃゅょ）・小書き母音（ぁぃぅぇぉ）・促音（っ）・
+    長音（ー）は**前の字と合わせて1拍**なので、**語の頭に立てない**。
+    補正の道には既にこの守りが在る（`corrector._SMALL_KANA_HEADS`
+    ——窓の切り出しと芯の切り出しの2か所）のに、**F2 の単位を作る側に
+    掛かっていなかった**（学び22）。
+
+    表は `corrector._SMALL_KANA_HEADS` ただ1つを借りる（48-GN）。
+    位置は**前の語の始まりから後ろの語の終わりまで**——画面の色と
+    選択がここに乗るので、ずれると印が隣の字に付く。
+
+    補正の答えは1文字も変わらない（初期 readcheck 1949/99・
+    fpcheck 0・seedcheck 39/40 壊し0 —— 全部据え置き）。
+    """
+    all_ok = True
+
+    def check(label, got, want):
+        nonlocal all_ok
+        ok = (got == want)
+        all_ok = all_ok and ok
+        print(f'{"OK " if ok else "NG "}{label}')
+        if not ok:
+            print(f'      得た値: {got!r}   期待: {want!r}')
+
+    import units as U
+
+    def t(sf, pos, start):
+        return (sf, pos, sf, start, start + len(sf), True)
+
+    print('--- 項目48-OI（小書きで始まる単位は左に繋ぐ） ---')
+    got = U._merge_small_kana_heads([t('に', '助詞', 0),
+                                     t('ゅうりゅく', '名詞', 1)])
+    check('に|ゅうりゅく → にゅうりゅく ひとつ',
+          [g[0] for g in got], ['にゅうりゅく'])
+    check('位置は前の頭から後ろの尻まで', (got[0][3], got[0][4]), (0, 6))
+    check('品詞は後ろの語のもの（中身のある側）', got[0][1], '名詞')
+
+    got = U._merge_small_kana_heads([t('き', '動詞', 0),
+                                     t('ょじえかくらん', '名詞', 1)])
+    check('き|ょじえかくらん → ひとつ', [g[0] for g in got],
+          ['きょじえかくらん'])
+
+    got = U._merge_small_kana_heads([t('コーヒー', '名詞', 0),
+                                     t('を', '助詞', 4),
+                                     t('飲む', '動詞', 5)])
+    check('ふつうの並びは触らない', [g[0] for g in got],
+          ['コーヒー', 'を', '飲む'])
+
+    got = U._merge_small_kana_heads([t('あ', '名詞', 0),
+                                     t('っ', '名詞', 5)])
+    check('**くっついていなければ繋がない**（あいだに空白）',
+          [g[0] for g in got], ['あ', 'っ'])
+
+    got = U._merge_small_kana_heads([t('カ', '名詞', 0),
+                                     t('ッター', '名詞', 1)])
+    check('カタカナの小書きも見る', [g[0] for g in got], ['カッター'])
+
+    src = open('units.py', encoding='utf-8').read()
+    check('表は corrector のものを借りる（2つ作らない）',
+          'from corrector import _SMALL_KANA_HEADS as _SMALL' in src, True)
+    check('単位を組む前に掛けている',
+          'tokens = _merge_small_kana_heads(tokens)' in src, True)
+    return all_ok
+
+
+def test_refit_broken_units_48pv():
+    """
+    **壊れたかなの連なりの単位を、エンジンの知識で切り直す**
+    （項目48-PV・2026-09-04・うにさんの報告4件——たぶいごうして・
+    つつぎをはなす・きょじえかくらん・はしでかーそるの）。
+    """
+    all_ok = True
+
+    def check(label, got, want):
+        nonlocal all_ok
+        ok = (got == want)
+        all_ok = all_ok and ok
+        print(f'{"OK " if ok else "NG "}{label}')
+        if not ok:
+            print(f'      得た値: {got!r}   期待: {want!r}')
+
+    import units as U
+
+    def t(sf, pos, start, known=True, infl=''):
+        return (sf, pos, sf if known else '', start, start + len(sf),
+                known, infl)
+
+    def one_tok(s):
+        """部分の解析の代わり（連結が合えばそのまま1語）。"""
+        return [(s, '名詞:一般', s, 0, len(s), True, '')]
+
+    print('--- 項目48-PV(A)（読みの立たない塊の中の を で切る） ---')
+    got = U._refit_split_wo([t('つつ', '助詞:接続助詞', 0),
+                             t('ぎをはなす', '名詞:一般', 2, known=False)],
+                            one_tok)
+    check('つつ|ぎをはなす → つつぎ|を|はなす',
+          [g[0] for g in got], ['つつぎ', 'を', 'はなす'])
+    check('位置が繋がっている',
+          [(g[3], g[4]) for g in got], [(0, 3), (3, 4), (4, 7)])
+    got = U._refit_split_wo([t('かき', '名詞', 0), t('を', '助詞', 2),
+                             t('たべた', '動詞', 3)], one_tok)
+    check('正しい並び（読みが立つ）は触らない',
+          [g[0] for g in got], ['かき', 'を', 'たべた'])
+
+    print('--- 項目48-PV(C)（断片を隣と繋いで既知語に） ---')
+    known = {'かーそる'}.__contains__
+    got = U._refit_join_known([t('はし', '名詞:一般', 0),
+                               t('で', '助詞:格助詞', 2),
+                               t('かー', '名詞:一般', 3, known=False),
+                               t('そる', '動詞:自立', 5),
+                               t('の', '助詞:終助詞', 7)], known)
+    check('かー|そる → かーそる（本人の語彙に在る読み）',
+          [g[0] for g in got], ['はし', 'で', 'かーそる', 'の'])
+    check('繋いだ単位は読みが立つ扱い', got[2][5], True)
+    got = U._refit_join_known([t('まる', '名詞', 0),
+                               t('で', '助詞:格助詞', 2)],
+                              {'まるで'}.__contains__)
+    check('読みの立つ並びは繋がない（本物の助詞を飲まない）',
+          [g[0] for g in got], ['まる', 'で'])
+
+    print('--- 項目48-PV(C\')（長い塊から右端の既知語を切り出す） ---')
+    got = U._refit_extract_known(
+        [t('きょじえかくらん', '名詞:一般', 0, known=False)],
+        {'かくらん'}.__contains__)
+    check('きょじえかくらん → きょじえ|かくらん',
+          [g[0] for g in got], ['きょじえ', 'かくらん'])
+    got = U._refit_extract_known(
+        [t('ぷらねたりうむ', '名詞:一般', 0, known=False)],
+        {'ぷらねたりうむ', 'たりうむ'}.__contains__)
+    check('塊それ自体が既知語なら切り出さない（ぷらねたりうむ）',
+          [g[0] for g in got], ['ぷらねたりうむ'])
+    got = U._refit_extract_known(
+        [t('よいしょーー', '名詞:一般', 0, known=False)],
+        {'よいしょ', 'しょーー'}.__contains__)
+    check('末尾の ー を除いて既知語なら切り出さない（伸ばしの形）',
+          [g[0] for g in got], ['よいしょーー'])
+    got = U._refit_extract_known(
+        [t('にゅうりよくみす', '名詞:一般', 0, known=False)],
+        {'くみす'}.__contains__)
+    check('3字の浅い当たりでは切らない（くみす）',
+          [g[0] for g in got], ['にゅうりよくみす'])
+
+    print('--- 項目48-PV(B)（壊れた連なりの末尾を「末尾にくる言葉」で） ---')
+    got = U._refit_run_tail([t('たぶ', '動詞:自立', 0, infl='基本形'),
+                             t('い', '名詞:一般', 2),
+                             t('ごうし', '名詞:サ変接続', 3),
+                             t('て', '助詞:格助詞:連語', 6)], one_tok)
+    check('たぶ|い|ごうし|て → たぶ|い|ごう|して',
+          [g[0] for g in got], ['たぶ', 'い', 'ごう', 'して'])
+    check('位置が繋がっている',
+          [(g[3], g[4]) for g in got],
+          [(0, 2), (2, 3), (3, 5), (5, 7)])
+    got = U._refit_run_tail([t('おもい', '動詞:自立', 0, infl='連用形'),
+                             t('まして', '助動詞', 3)], one_tok)
+    check('壊れていない連なりは触らない（おもい|まして）',
+          [g[0] for g in got], ['おもい', 'まして'])
+
+    src = open('units.py', encoding='utf-8').read()
+    check('両方の道に掛けている（学び22）',
+          src.count('tokens = _refit_broken_kana_units('
+                    'tokens, tokenize_fn, known_kana_word)'), 2)
+    check('異様の述語は corrector の1本を借りる（48-GN）',
+          'from corrector import _verb_noun_pair as _vnp' in src, True)
+    return all_ok
+
+
+def test_unit_reading_and_rows_20260904():
+    """
+    **単位まとめの読みの引き継ぎ（項目48-QA）と、候補一覧の高さ
+    （項目48-QB）**（2026-09-04・うにさんの画面 `たぶい` の候補一覧）。
+
+    48-QA: `_merge_stem_with_tail` が text/base だけ伸ばして
+        **reading を語幹のまま**にしていた——`たぶい` の候補が全部
+        `たぶ` の話（同音の語 タブ・かな表記 たぶ）になり、
+        `見ています` の読みが `み` のままだった。
+    48-QB: 一覧の高さ「16＋説明の行数」は、説明の見出しが16行目より
+        下から始まる語（候補が16件超）で足りない——`たぶい` は
+        品詞判定の下2行（`い ＝ 名詞` と ※の注記）が画面の外に出た。
+        根拠だけオン（48-OC）のときは全く伸びなかった。
+    """
+    all_ok = True
+
+    def check(label, got, want):
+        nonlocal all_ok
+        ok = (got == want)
+        all_ok = all_ok and ok
+        print(f'{"OK " if ok else "NG "}{label}')
+        if not ok:
+            print(f'      得た値: {got!r}   期待: {want!r}')
+
+    import units as U
+
+    def mk(text, reading, pos='', start=0, functional=None):
+        return {'text': text, 'base': text, 'reading': reading,
+                'pos': pos, 'kind': 'plain', 'detail': None,
+                'chosen_hint': None, 'functional': functional,
+                'start': start, 'end': start + len(text),
+                'prev': '', 'next': ''}
+
+    print('--- 項目48-QA（語幹＋尾の単位は、読みも繋ぐ） ---')
+    got = U._merge_stem_with_tail(
+        [mk('見', 'み', pos='動詞:自立'),
+         mk('ています', 'ています', start=1, functional=True)])
+    check('見｜ています → 見ています', [g['text'] for g in got],
+          ['見ています'])
+    check('読みが みています になる', got[0]['reading'], 'みています')
+    got = U._merge_stem_with_tail(
+        [mk('たぶ', 'たぶ', pos='動詞:自立'),
+         mk('い', '', start=2, functional=True)])
+    check('尾の読みが無ければ文字そのもの（たぶ＋い）',
+          got[0]['reading'], 'たぶい')
+    got = U._merge_stem_with_tail(
+        [mk('見', '', pos='動詞:自立'),
+         mk('ています', 'ています', start=1, functional=True)])
+    check('語幹の読みが立たないなら、読みは名乗らない',
+          got[0]['reading'], '')
+
+    print('--- 項目48-QB（説明の塊ぜんぶが見える高さ） ---')
+    src = open('app.py', encoding='utf-8').read()
+    check('見出しは品詞判定と補正根拠の両方を見る（48-OC の続き）',
+          'if _t in (ANALYSIS_HEAD_POS, ANALYSIS_HEAD_WHY):' in src, True)
+    check('「16＋説明の行数」の足りない式は残っていない',
+          'DROPDOWN_ROWS + (len(items) - _i)' in src, False)
+    check('高さは項目の総数（上限 ROWS_MAX）',
+          'rows = min(len(items), DROPDOWN_ROWS_MAX)' in src, True)
+    return all_ok
+
+
+def test_pos_from_row_context_48qc_48qd():
+    """
+    **品詞判定は、行の解析が1語と見た範囲ではその品詞を名乗る**
+    （項目48-QC）と、**当て推量の札を名乗らせない**（項目48-QD）。
+    2026-09-04・うにさんの指定「品詞の判定を見れば見るほど変」。
+    """
+    all_ok = True
+
+    def check(label, got, want):
+        nonlocal all_ok
+        ok = (got == want)
+        all_ok = all_ok and ok
+        print(f'{"OK " if ok else "NG "}{label}')
+        if not ok:
+            print(f'      得た値: {got!r}   期待: {want!r}')
+
+    import explain
+    import units as U
+
+    def tok(text):
+        """割り直すと鎖になるもの（画面に出ていた当て推量）。"""
+        table = {
+            'かな': [('か', '助詞:副助詞', 'カ', 0, 1, True, ''),
+                     ('な', '助詞:終助詞', 'ナ', 1, 2, True, '')],
+            '日間': [('日', '名詞:固有名詞:地域:国', 'ニチ', 0, 1, True, ''),
+                     ('間', '名詞:接尾:一般', 'カン', 1, 2, True, '')],
+            '押し': [('押し', '動詞:自立', 'オシ', 0, 2, True, '連用形')],
+        }
+        return table.get(text, [(text, '名詞:一般', text, 0, len(text),
+                                 True, '')])
+
+    print('--- 項目48-QC（行の解析が1語と見た範囲は、その品詞で言う） ---')
+    check('かな は 名詞（か＋な の鎖にしない）',
+          explain.pos_lines('かな', tok, pos_hint='名詞:一般',
+                            atomic_hint=True, known_hint=True),
+          ['名詞'])
+    check('まとめた単位（atomic でない）は鎖のまま',
+          explain.pos_lines('かな', tok, pos_hint='名詞:一般',
+                            atomic_hint=False, known_hint=True),
+          ['か ＝ 助詞（副助詞）', 'な ＝ 助詞（終助詞）'])
+    check('読みが立たない塊（known でない）も鎖のまま',
+          explain.pos_lines('かな', tok, pos_hint='名詞:一般',
+                            atomic_hint=True, known_hint=False),
+          ['か ＝ 助詞（副助詞）', 'な ＝ 助詞（終助詞）'])
+    # **原形は janome の道でしか取れない**——`_tokens_for` の代わりの道
+    # （`tokenize_fn`）は原形を持たないので、ここ（janome 無し）では
+    # 原形の付かない形が正しい。原形そのものの言い方は `pos_name` で、
+    # 借りる条件は下の見張りで確かめる。
+    check('janome 無しの道では原形が取れない（付けずに言い切る）',
+          explain.pos_lines('押し', tok, pos_hint='動詞:自立',
+                            infl_hint='連用形',
+                            atomic_hint=True, known_hint=True),
+          ['動詞・連用形'])
+    check('原形の言い方（活用して形が変わっているときだけ添える）',
+          (explain.pos_name('動詞:自立', '押し', '連用形', '押す'),
+           explain.pos_name('動詞:自立', '押す', '基本形', '押す')),
+          ('動詞・連用形／原形 押す', '動詞・終止形'))
+    check('大分類が食い違うなら原形は添えない（行では名詞の 押し）',
+          explain.pos_lines('押し', tok, pos_hint='名詞:一般',
+                            atomic_hint=True, known_hint=True),
+          ['名詞'])
+    esrc = open('explain.py', encoding='utf-8').read()
+    check('原形を借りるのは「1語に割れて大分類が一致」のときだけ',
+          ('_one = _tokens_for(text, tokenize_fn)' in esrc
+           and '== _major_and_sub(pos_hint)[0]):' in esrc), True)
+
+    print('--- 項目48-QD（当て推量の札を名乗らせない） ---')
+    check('ナイ形容詞語幹 は「イ形容詞の語幹」ではない（問題・間違い）',
+          explain.pos_name('名詞:ナイ形容詞語幹', '問題'),
+          '名詞（「ない」に続く）')
+    check('読みの立たない英字を「組織名」と呼ばない（the・Ctrl・https）',
+          explain.pos_name('名詞:固有名詞:組織', 'Ctrl', has_reading=False),
+          '英字（解析は品詞を言えない）')
+    check('読みが立つ英字は今までどおり',
+          explain.pos_name('名詞:一般', 'PC', has_reading=True), '名詞')
+    check('記号だけの並びは記号（`://` を 名詞（サ変）と言わない）',
+          explain.pos_name('名詞:サ変接続', '://', has_reading=False), '記号')
+    check('数字に「辞書に無い語」とは書かない',
+          explain.pos_name('名詞:数', '30', has_reading=False), '数詞')
+    check('接尾辞は下の段まで言う（助数詞・ナ形容詞を作る）',
+          (explain.pos_name('名詞:接尾:助数詞', '本'),
+           explain.pos_name('名詞:接尾:形容動詞語幹', '的'),
+           explain.pos_name('名詞:接尾:一般', '書')),
+          ('接尾辞（助数詞）', '接尾辞（ナ形容詞を作る）', '接尾辞'))
+
+    print('--- 項目48-QE（1拍の内側で切れた割り方からは品詞を言わない） ---')
+    def tok2(text):
+        """janome が実際にこう割っていたもの（画面に出ていた形）。"""
+        table = {
+            'しゅるい': [('し', '動詞:自立', 'シ', 0, 1, True, '連用形'),
+                         ('ゅるい', '名詞:一般', '', 1, 4, False, '')],
+            '外しょつする': [('外し', '動詞:自立', 'ハズシ', 0, 2, True, '連用形'),
+                             ('ょつ', '名詞:一般', '', 2, 4, False, ''),
+                             ('する', '動詞:自立', 'スル', 4, 6, True, '基本形')],
+        }
+        return table.get(text, [(text, '名詞:一般', text, 0, len(text),
+                                 True, '')])
+
+    check('しゅるい は「し ＝ 動詞」と言わない',
+          explain.pos_lines('しゅるい', tok2),
+          ['判定できません（`しゅ` は1拍——語の途中で切れています）'])
+    check('漢字を含むときは、割れた2語ぶんだけ言い直す（する は残す）',
+          explain.pos_lines('外しょつする', tok2),
+          ['外しょつ ＝ 判定できません（`しょ` は1拍——語の途中で切れています）',
+           'する ＝ 動詞・終止形'])
+    check('促音は1拍の組に入れない（`っけ`・`って` は語）',
+          (explain._mora_cut([('でし',), ('た',)]),
+           explain._mora_cut([('往っ',), ('て',)]),
+           explain._mora_cut([('きゃー',), ('っ',)])),
+          (None, None, None))
+    check('`ヶ`・`ヵ` も入れない（`ヶ月` は接尾辞）',
+          explain._mora_cut([('1',), ('ヶ月',)]), None)
+    check('拍を作らない小書き（とぉ・たぁ）は触らない',
+          (explain._mora_cut([('ちょっと',), ('ぉ',)]),
+           explain._mora_cut([('あいた',), ('ぁ',)])),
+          (None, None))
+    check('カタカナでも1拍は1拍（シュ）',
+          explain._mora_cut([('シ',), ('ュー',)]), (1, 'シュ'))
+    check('成り立たない割り方に「つながりが異様」は付けない',
+          any('つながりが異様' in x
+              for x in explain.pos_lines('しゅるい', tok2)),
+          False)
+
+    print('--- 学び22（単位を作る道は2本ある。両方が品詞を運ぶこと） ---')
+    src = open('units.py', encoding='utf-8').read()
+    check('前処理の前の姿を、両方の道で控えている',
+          src.count('_raw_spans = {(_t[3], _t[4], _t[0]) for _t in tokens}'),
+          2)
+    check('まとめた単位は3か所とも atomic を落とす',
+          src.count("head['atomic'] = False"), 3)
+    check('build_line_units の emit も品詞を運ぶ',
+          ("def emit(shown, base, reading, kind, detail, prev, next_,\n"
+           "             pos='', infl='', atomic=False, known=False):") in src,
+          True)
     return all_ok

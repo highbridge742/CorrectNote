@@ -68,7 +68,26 @@ dist/
 *.exe
 
 # 測る道具の控え（実機メモの断片 cases/ が入る・項目48-IV）
-tools_local/
+#
+# **例外を1つだけ開ける**（2026-09-03・うにさんの決定 D2）:
+# `tools_local/kango_tier_src/` は **2字漢語の段（kango_tier.json）を
+# 焼くときの材料と、AI の判断そのもの**（項目48-OJ）——
+# chunk_XX.txt（16）＋ tiers_XX.json（16）＋ fam_5600.tsv・1.2MB。
+# 中身は**同梱の辞書から採った語**と**その段の判定**だけで、
+# うにさんのメモは1行も入っていない（確かめた）。
+# **同梱物 `kango_tier.json` がどう作られたかの出どころ**なので公開する。
+#
+# 除外は `tools_local/*`（1階層だけ）に書く——`tools_local/` と
+# 書くと git がフォルダごと降りないので、下の `!` が効かない。
+#
+# **例外をもう1つ**（2026-09-03・項目48-PD）:
+# `tools_local/reading_patterns_src/` は **読みの型の表
+# （reading_patterns.json）と音訓表の穴埋め**の材料と判定
+# ——jubako/yuto/kunkun/fills.txt ＋ review_*.json・132KB。
+# こちらも同梱の辞書から採った語とその判定だけ（確かめた）。
+tools_local/*
+!tools_local/kango_tier_src/
+!tools_local/reading_patterns_src/
 
 # 引き継ぎ後に読まない書類を寄せた先（`archive_docs.bat` が作る）。
 # 中身は根元から**移しただけ**なので、根元と同じ理由で公開しない。

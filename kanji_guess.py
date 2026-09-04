@@ -927,6 +927,173 @@ def ime_readings_for(text):
     return [r for r in (got or ()) if r and isinstance(r, str)]
 
 
+#: 音訓の型で足す点（項目48-PC）。**門ではなく順位**。
+#:
+#: **読み方が何通りかあって、どれが良いかは測って決める**（CN_PAT_RANK）:
+#:
+#:   'a'   塊まるごとで見る。音音 +0 ／ 表に在る混読み +1 ／
+#:         表に無い混読み +2（Fable の指示書のまま）
+#:   'b'   塊まるごと。**表に在る語は表の型を先頭に**（+0）・
+#:         表と違う型は +2。表に無い語は 音音 +0／混読み +2
+#:         （うにさんの言葉「そこに一致する単語はそのルールで読み、
+#:           一致しないものは音音読みで分析する」のまま）
+#:   'ap'  **隣り合う漢字の対ごと**に 'a' を当てて足す
+#:   'bp'  **対ごと**に 'b' を当てて足す
+#:   '0'   切る（今までどおり）
+#:
+#: **対ごとが要る理由**（実測・2026-09-03）: ②が呼ばれる塊は
+#: 実機メモで 2,113 種あるが、**ちょうど2字の漢字はそのうち3種**
+#: （のべ 5,270 回のうち 5 回）しかない。塊は「漢字とカタカナの
+#: 連なり」で切られるので、**塊まるごとを表に当てても口を出せない**。
+#: 表（2字の語）が効くのは、**塊の中の隣り合う2字**を見たときだけ。
+_PATTERN_MODE = (__import__('os').environ.get('CN_PAT_RANK') or 'apr').lower()
+_PATTERN_ADD_KNOWN = 1
+_PATTERN_ADD_UNKNOWN = 2
+
+
+#: 「その漢字2字は世の中の語か」の控え（同じ組を何度も引かない）。
+_PAIR_IS_WORD = {}
+
+
+def _pair_is_word(_ok, pair):
+    """
+    その漢字2字は、**世の中に在る語**か（項目48-PC）。
+
+    **読みの型（重箱・湯桶・訓訓）は「語」の性質**なので、語でない
+    切れ目に点を付けても意味がない。塊の中を2字ずつ滑らせると、
+    `保存先` から `存先`・`一番下` から `番下`・`入力見` から `力見`
+    のような**語の境目をまたいだ組**が出る——実測で、そこに点を
+    付けると `ほぞんさき → ほぞんせん`・`いちばんした → いちばんか`
+    のように**正しい訓読みを落としていた**。
+
+    出どころは2つだけ（**名簿を増やさない**）——同梱の費用の表
+    （`corrector._table_cost`・SudachiDict 由来）と、読みの型の表そのもの
+    （`reading_patterns.json` の1,057語のうち45語は費用の表に無い）。
+    """
+    got = _PAIR_IS_WORD.get(pair)
+    if got is not None:
+        return got
+    out = _ok.pattern_of(pair) is not None
+    if not out:
+        try:
+            import corrector as _c
+            out = _c._table_cost(pair) is not None
+        except Exception:
+            out = False
+    if len(_PAIR_IS_WORD) > 20000:
+        _PAIR_IS_WORD.clear()
+    _PAIR_IS_WORD[pair] = out
+    return out
+
+
+#: 「その漢字2字の、世の中での読み」の控え。
+_PAIR_READINGS = {}
+
+
+def _pair_readings(pair):
+    """
+    同梱の表（`seed_japanese_cost`）が知っている、その2字の**読み**
+    （項目48-PC・2026-09-03）。知らなければ空。
+
+    **型（重箱・湯桶）より、読みそのもののほうが強い。** 型は音訓表の
+    印から推すので `'?'` の穴でぶれる（`相手` の `あい` は印が `'?'` で
+    形は音読み——表が「訓訓」と言っても、組み立て側が訓を作れない）。
+    表が読みを持っているなら、**それに合うかどうかを直に聞く**。
+
+        背中 ['せなか']            → せなか +0 ／ はいちゅう +2
+        入力 ['にゅうりょく']      → にゅうりょく +0 ／ いりょく +2
+        仮名 ['かな','がな','かめい','けみょう']
+                                   → **どれも +0**（読みが何通りもある語に、
+                                     型は何も言えない。`送り仮名` を
+                                     `送り仮名` のまま残すのはここ）
+    """
+    got = _PAIR_READINGS.get(pair)
+    if got is not None:
+        return got
+    try:
+        import corrector as _c
+        got = tuple(_c._table_readings_for_surface(pair) or ())
+    except Exception:
+        got = ()
+    if len(_PAIR_READINGS) > 20000:
+        _PAIR_READINGS.clear()
+    _PAIR_READINGS[pair] = got
+    return got
+
+
+def _pair_penalty(_ok, pair, kinds, mode, reading=''):
+    """漢字2字とその音訓の並びから、足す点を返す（項目48-PC）。"""
+    if not _pair_is_word(_ok, pair):
+        return 0                      # 語でない切れ目は、何も言わない
+    # **表が読みを知っているなら、それが答え**（型より強い・上の説明）。
+    # 連濁・音便（学校＝がっこう）は1字ずつの読みでは組めないので、
+    # その語の組み合わせは**全部**外れて同じ点になる＝順は変わらない。
+    if reading and 'r' in mode:
+        known = _pair_readings(pair)
+        if known:
+            return 0 if reading in known else _PATTERN_ADD_UNKNOWN
+    listed = _ok.pattern_of(pair)
+    name = _ok.pattern_name(kinds)
+    if mode.startswith('b') and listed:
+        # 表に在る語は、**表の型が先頭**（うにさんの言葉のまま）
+        return 0 if name == listed else _PATTERN_ADD_UNKNOWN
+    if kinds[0] == 'on' and kinds[1] == 'on':
+        return 0
+    if listed and name == listed:
+        return _PATTERN_ADD_KNOWN
+    return _PATTERN_ADD_UNKNOWN
+
+
+def _pattern_penalty(text, parts):
+    """
+    その読みの組み立ての**音訓の型**から、rank に足す点を返す
+    （項目48-PC・2026-09-03・うにさんの提案）。
+
+    > 「漢字の重箱読み、湯桶読みの一覧を作っておいて、そこに一致する
+    >   単語はそのルールで読み、一致しないものは音音読みで分析する」
+
+    **門にはしない**（`kanji_onkun.mixed_reading` の注記・
+    `pattern_of` の説明）。落とすと `素帰任 → 確認`（すきにん）・
+    `待ち外 → 間違い`（まちがい）・`田部井号して`（たぶい）が死ぬ
+    ——**どれも混読みが的**。だから**下げるだけ**にする。
+
+    parts: `text` の1字ずつに当てた読み（`text` と同じ長さ）。
+    漢字でない字（かな・記号）は型を見ない。**漢字が2つ以上ある
+    ときだけ**効く——1字の訓読み（`本`＝ほん／もと）は混読みでは
+    ないので、点を付ける相手ではない。
+    """
+    mode = _PATTERN_MODE
+    if mode in ('0', 'off', 'no'):
+        return 0
+    try:
+        import kanji_onkun as _ok
+    except Exception:
+        return 0
+    kinds = [(ch, _ok.on_or_kun(ch, r)) for ch, r in zip(text, parts)
+             if _is_kanji(ch)]
+    if len(kinds) < 2:
+        return 0
+    if 'p' in mode:
+        # **隣り合う漢字の対ごと**。表（2字の語）が口を出せる唯一の形
+        total = 0
+        for i in range(len(text) - 1):
+            a, b = text[i], text[i + 1]
+            if not (_is_kanji(a) and _is_kanji(b)):
+                continue
+            total += _pair_penalty(_ok, a + b,
+                                   (_ok.on_or_kun(a, parts[i]),
+                                    _ok.on_or_kun(b, parts[i + 1])), mode,
+                                   parts[i] + parts[i + 1])
+        return total
+    # 塊まるごと。表は**2字の語**だけなので、口を出せるのは2字の塊だけ
+    if len(text) == 2 and len(kinds) == 2:
+        return _pair_penalty(_ok, text, (kinds[0][1], kinds[1][1]), mode,
+                             ''.join(parts))
+    if all(k == 'on' for _c, k in kinds):
+        return 0
+    return _PATTERN_ADD_UNKNOWN
+
+
 def reading_combos_with_rank(text, dict_index=None, max_combos=MAX_COMBOS,
                              next_char=None):
     """
@@ -979,18 +1146,22 @@ def reading_combos_with_rank(text, dict_index=None, max_combos=MAX_COMBOS,
         rs = _trim_okurigana_from_readings(text, i, rs, next_char)
         per_char.append(rs[:3])
 
-    combos = [('', 0, 0)]
+    combos = [('', 0, 0, ())]
     for rs in per_char:
         new = []
-        for prefix, prank, pchanged in combos:
+        for prefix, prank, pchanged, pparts in combos:
             for idx, r in enumerate(rs):
                 new.append((prefix + r, prank + idx,
-                           pchanged + (1 if idx > 0 else 0)))
+                           pchanged + (1 if idx > 0 else 0),
+                           pparts + (r,)))
                 if len(new) >= max_combos:
                     break
             if len(new) >= max_combos:
                 break
         combos = new
+    # **音訓の型で順位を付ける**（項目48-PC）。足すだけ・消さない。
+    combos = [(prefix, prank + _pattern_penalty(text, parts), pchanged)
+              for prefix, prank, pchanged, parts in combos]
     # 確からしい順に並べる。
     #   1. rank（各漢字の読みの一般的さの合計）が小さい順
     #   2. 同じ rank なら、一般的でない読みを使った文字数が

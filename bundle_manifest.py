@@ -30,14 +30,16 @@ import sys
 from collections import namedtuple
 
 # name     ファイル名（exe の中では '.' 直下＝ sys._MEIPASS 直下に置く）
-# module   「読めているか」を聞ける相手（`available()` を持つ）。無ければ None
+# module   「読めているか」を聞ける相手（`available()` を持つ）。無ければ None。
+#          **1つのモジュールが表を2つ読むとき**は `'モジュール:関数'` と書く
+#          （`kanji_onkun` は音訓表と読みの型の表の2つを読む・項目48-PD）
 # why      **入っていないと何が起きるか**。静かに効かなくなるものばかりなので、
 #          報告にそのまま出す
 # required 手元のビルドで、無ければ**赤くする**もの
 Item = namedtuple('Item', 'name module why required')
 
 ITEMS = (
-    Item('CorrectNote_説明書v6.html', None,
+    Item('CorrectNote_説明書.html', None,
          'メニューの「説明書をHTMLで展開」が出せなくなる',
          True),
     Item('familiarity.json', 'familiarity',
@@ -45,6 +47,14 @@ ITEMS = (
          False),
     Item('kanji_onkun.json', 'kanji_onkun',
          '漢字から読みを推す道が細る',
+         False),
+    Item('kango_tier.json', 'kango_tier',
+         '2字漢語の「一般的さの段」（項目48-OJ）が読めず、索引の並びがコスト順に'
+         '戻り、課題・効率・参考 のような語彙に無い基本語が直し先になれない',
+         False),
+    Item('reading_patterns.json', 'kanji_onkun:patterns_available',
+         '2字の語の読みの型（重箱・湯桶・訓訓・項目48-PD）が読めず、'
+         '漢字を読みに開くときの順位が「音音を先に」だけに戻る',
          False),
     Item('seed_japanese.txt.gz', 'seed_japanese',
          '正しく書けた語を守る門（項目48-FC）が効かなくなる',

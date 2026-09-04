@@ -209,3 +209,105 @@ def mixed_reading(kinds):
     """
     seen = {k for k in kinds if k in ('on', 'kun')}
     return len(seen) > 1
+
+
+# --------------------------------------------------------------------
+#  **重箱読み・湯桶読み・訓訓読みの表**（項目48-PD・2026-09-03）
+# --------------------------------------------------------------------
+#
+# うにさんの提案（2026-09-03）:
+#
+# > 「漢字の重箱読み、湯桶読みの一覧を作っておいて、そこに一致する
+# >   単語はそのルールで読み、一致しないものは音音読みで分析する」
+#
+# 下見（`tools_local/probe_reading_patterns.py`）で、2字の漢字の名詞
+# 15,897語（IPAdic・コスト5600まで）を音訓の印と音読みの形の決まり
+# （`is_on_shape`・項目48-MQ）で分けると:
+#
+#     音音 **13,071（82%）** ／ 訓訓 715 ／ 湯桶 528 ／ 重箱 397 ／
+#     割れない 1,186
+#
+# **音音が既定でよい**（うにさんの見立てどおり）。混ざる型は閉じた表に
+# 収まる大きさ。ただし機械の分けかたには印のノイズが混じる
+# （簡単・政権 が「重箱」、温度・漢語 が「湯桶」に落ちる）ので、
+# **AI が検品した**（Claude Fable 5.1・2026-09-03・1,640語）:
+#
+#     機械の「重箱」397 → 本当の重箱 **121** ／ 「湯桶」528 → **132**
+#     機械の「訓訓」715 → **683**
+#
+# 残ったものが `reading_patterns.json`（**1,057語**＝訓訓801・湯桶131・
+# 重箱125。**音音は載せない＝既定**）。材料と判定は
+# `tools_local/reading_patterns_src/`。
+#
+# **門にはしない**（`mixed_reading` の注記と同じ理由）。使うのは
+# `kanji_guess.reading_combos_with_rank` の**順位**だけ:
+#
+#     素帰任 → 確認     ②で要るのは **すきにん**（素=す は訓）。
+#                       音音だけにすると そきにん → 責任 が先に立つ
+#     待ち外 → 間違い   まち(訓)＋がい(音)＝湯桶
+#     田部井号して      た(訓)ぶ(音)い(訓)——3字の混読み
+#
+# どれも**混読みが的**。落とすと死ぬので、**下げるだけ**にする。
+
+_PATTERNS = None
+_PATTERNS_MISSING = False
+
+
+def _load_patterns():
+    global _PATTERNS, _PATTERNS_MISSING
+    if _PATTERNS is not None or _PATTERNS_MISSING:
+        return _PATTERNS
+    here = os.path.dirname(os.path.abspath(__file__))
+    for path in (os.path.join(here, 'reading_patterns.json'),
+                 'reading_patterns.json'):
+        try:
+            with open(path, encoding='utf-8') as f:
+                data = json.load(f)
+            got = data.get('patterns')
+            if isinstance(got, dict):
+                _PATTERNS = got
+                return _PATTERNS
+        except Exception:
+            continue
+    _PATTERNS_MISSING = True
+    return None
+
+
+def patterns_available():
+    """重箱・湯桶の表が読めているか（診断用・`tests_mock` の見張り）。"""
+    return _load_patterns() is not None
+
+
+def pattern_of(surface):
+    """
+    その表記の**読みの型**（`'重箱'` / `'湯桶'` / `'訓訓'`）。
+    **表に無ければ `None`**（＝音音が既定、または載せていない語）。
+    """
+    table = _load_patterns()
+    if not table:
+        return None
+    return table.get(surface)
+
+
+def on_or_kun(ch, reading):
+    """
+    その読みを**音・訓のどちらとして扱うか**（`'on'` / `'kun'`）。
+
+    印が `'?'` のものは**音読みの形の決まり**（項目48-MQ）で決める
+    ——`is_on_reading` にそのまま聞く。**同じ判定を2度書かない。**
+    """
+    return 'on' if is_on_reading(ch, reading) else 'kun'
+
+
+#: 音訓の並び → 型の名前（`reading_patterns.json` の値と同じ言葉）。
+_PATTERN_NAMES = {
+    ('on', 'on'): '音音',
+    ('on', 'kun'): '重箱',
+    ('kun', 'on'): '湯桶',
+    ('kun', 'kun'): '訓訓',
+}
+
+
+def pattern_name(kinds):
+    """音訓の並び（2つ）を型の名前にする。2字以外は `None`。"""
+    return _PATTERN_NAMES.get(tuple(kinds))

@@ -70,7 +70,12 @@ from tests_mock_ui import (
     run_design33_cases,
     run_scroll_cache_cases,
     run_icon_cases,
-    run_explain_cases)
+    run_explain_cases,
+    test_menu_and_keys_48oc_48od_48oe,
+    test_small_kana_head_units_48oi,
+    test_refit_broken_units_48pv,
+    test_unit_reading_and_rows_20260904,
+    test_pos_from_row_context_48qc_48qd)
 from tests_mock_memory import (
     run_choice_cases,
     run_decision_cases,
@@ -165,7 +170,12 @@ from tests_mock_words import (
     test_compound_words_48nv_48nw,
     test_logical_pos_rules_48nx_48ny,
     test_chunk_near_by_method_48oa,
-    test_naadj_two_faces_48nm2)
+    test_naadj_two_faces_48nm2,
+    test_mark_drop_reverts_48og,
+    test_index_face_48oj,
+    test_pos_and_units_20260903,
+    test_colloquial_20260903b,
+    test_reading_patterns_20260903c)
 from tests_mock_fix import (
     run_cases,
     run_overcorrection_cases,
@@ -497,6 +507,16 @@ if __name__ == '__main__':
     ok115 = test_logical_pos_rules_48nx_48ny()
     ok116 = test_chunk_near_by_method_48oa()
     ok117 = test_naadj_two_faces_48nm2()
+    ok118 = test_menu_and_keys_48oc_48od_48oe()
+    ok119 = test_mark_drop_reverts_48og()
+    ok120 = test_small_kana_head_units_48oi()
+    ok121 = test_index_face_48oj()
+    ok122 = test_pos_and_units_20260903()
+    ok123 = test_colloquial_20260903b()
+    ok124 = test_reading_patterns_20260903c()
+    ok125 = test_refit_broken_units_48pv()
+    ok126 = test_unit_reading_and_rows_20260904()
+    ok127 = test_pos_from_row_context_48qc_48qd()
     print()
     print('ALL OK:', ok1 and ok2 and ok3 and ok4 and ok5 and ok6 and ok7
           and ok8 and ok9 and ok10 and ok11 and ok12 and ok13 and ok14
@@ -507,4 +527,4 @@ if __name__ == '__main__':
           and ok39 and ok40 and ok41 and ok42 and ok43 and ok44 and ok45
           and ok46 and ok47 and ok48 and ok49 and ok50 and ok51 and ok52
           and ok53 and ok54 and ok55 and ok56 and ok57 and ok58 and ok59
-          and ok60 and ok61 and ok62 and ok63 and ok64 and ok65 and ok66 and ok67 and ok68 and ok69 and ok70 and ok71 and ok72 and ok73 and ok74 and ok75 and ok76 and ok77 and ok78 and ok79 and ok80 and ok81 and ok82 and ok83 and ok84 and ok85 and ok86 and ok87 and ok88 and ok89 and ok90 and ok91 and ok92 and ok93 and ok94 and ok95 and ok96 and ok97 and ok98 and ok99 and ok100 and ok101 and ok102 and ok103 and ok104 and ok105 and ok106 and ok107 and ok108 and ok109 and ok110 and ok111 and ok112 and ok113 and ok114 and ok115 and ok116 and ok117)
+          and ok60 and ok61 and ok62 and ok63 and ok64 and ok65 and ok66 and ok67 and ok68 and ok69 and ok70 and ok71 and ok72 and ok73 and ok74 and ok75 and ok76 and ok77 and ok78 and ok79 and ok80 and ok81 and ok82 and ok83 and ok84 and ok85 and ok86 and ok87 and ok88 and ok89 and ok90 and ok91 and ok92 and ok93 and ok94 and ok95 and ok96 and ok97 and ok98 and ok99 and ok100 and ok101 and ok102 and ok103 and ok104 and ok105 and ok106 and ok107 and ok108 and ok109 and ok110 and ok111 and ok112 and ok113 and ok114 and ok115 and ok116 and ok117 and ok118 and ok119 and ok120 and ok121 and ok122 and ok123 and ok124 and ok125 and ok126 and ok127)
