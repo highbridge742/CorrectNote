@@ -61,6 +61,8 @@ class DecisionStore:
         self._rejected = {}
         # word -> 記録
         self._protected = {}
+        # word -> 記録。**紫を下げるだけ**（補正は止めない・項目48-QU）
+        self._odd_only = {}
         if path and os.path.exists(path):
             self.load()
 
@@ -92,6 +94,37 @@ class DecisionStore:
         self._protected[word] = {'word': word, 'added': time.time()}
         return True
 
+    def leave_odd_alone(self, word):
+        """
+        **この文字列に紫を付けない**（補正は止めない・項目48-QU）。
+
+        `protect` とは別の台帳にする。理由は、**入口が違うから**:
+
+            `protect`          候補一覧の「今後直さない」
+                               → 食わせるのは**打ち間違いの塊**
+                               （`奥悠久子帝` のような、その人しか
+                               打たない並び）
+            `leave_odd_alone`  紫の右クリック「この文字列は正しい」
+                               → 食わせるのは**日本語として真っ当な
+                               短い並び**
+
+        `blocks()` は**部分一致**で止める（`縦シュー` を守ったら
+        `縦シューが` も止める）。そこへ真っ当な2〜3字を入れると、
+        **それを含む行の補正が全部止まる**。紫の範囲は
+        `oddness.odd_spans` が返す形態素の連なりなので、
+        **2字の断片がふつうに出る**。
+
+        だから**紫を下げる口（`left_alone_texts`）にだけ混ぜて、
+        補正を止める口（`blocks`）からは見ない**。
+        利用者の意図（「紫が邪魔」）とも、そちらのほうが合う。
+        """
+        if not word or len(word) < 2:
+            return False
+        if word in self._odd_only or word in self._protected:
+            return False
+        self._odd_only[word] = {'word': word, 'added': time.time()}
+        return True
+
     # ------------------------------------------------------------
     # 取り消す
     # ------------------------------------------------------------
@@ -99,7 +132,8 @@ class DecisionStore:
         return self._rejected.pop((original, corrected), None) is not None
 
     def unprotect(self, word):
-        return self._protected.pop(word, None) is not None
+        gone = self._protected.pop(word, None) is not None
+        return self._odd_only.pop(word, None) is not None or gone
 
     # ------------------------------------------------------------
     # 問い合わせ（補正エンジンからはここだけを見る）
@@ -120,6 +154,8 @@ class DecisionStore:
         for word in self._protected:
             if word in original:
                 return True
+        # `_odd_only` は**見ない**（項目48-QU）。あれは紫を下げる
+        # だけの台帳で、補正を止める判断ではない。
         return False
 
     def is_protected(self, word):
@@ -142,7 +178,7 @@ class DecisionStore:
 
         使うのは `corrector._odd_spans_for_line`。
         """
-        out = set(self._protected)
+        out = set(self._protected) | set(self._odd_only)
         for original, _corrected in self._rejected:
             if original:
                 out.add(original)
@@ -162,8 +198,13 @@ class DecisionStore:
         return sorted(self._protected.values(),
                       key=lambda e: e.get('added', 0), reverse=True)
 
+    def odd_only_list(self):
+        return sorted(self._odd_only.values(),
+                      key=lambda e: e.get('added', 0), reverse=True)
+
     def __len__(self):
-        return len(self._rejected) + len(self._protected)
+        return (len(self._rejected) + len(self._protected)
+                + len(self._odd_only))
 
     def save(self, path=None):
         path = path or self.path
@@ -172,6 +213,7 @@ class DecisionStore:
         data = {
             'rejected': self.rejected_list(),
             'protected': self.protected_list(),
+            'odd_only': self.odd_only_list(),
         }
         tmp = path + '.tmp'
         with open(tmp, 'w', encoding='utf-8') as f:
@@ -190,6 +232,7 @@ class DecisionStore:
             return
         self._rejected.clear()
         self._protected.clear()
+        self._odd_only.clear()
         for e in data.get('rejected', []):
             o, c = e.get('original'), e.get('corrected')
             if o and c:
@@ -198,3 +241,7 @@ class DecisionStore:
             w = e.get('word')
             if w:
                 self._protected[w] = e
+        for e in data.get('odd_only', []):
+            w = e.get('word')
+            if w and w not in self._protected:
+                self._odd_only[w] = e

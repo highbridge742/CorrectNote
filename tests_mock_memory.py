@@ -35,7 +35,7 @@ def run_choice_cases(store):
     文脈（前後の語）による使い分け、再選択による上書き、
     保存と読み込み、を見る。
     """
-    from choices import ChoiceStore
+    from last_choice import LastChoiceStore as ChoiceStore
     from candidates import build_candidates
     from units import build_line_units, unit_at
 
@@ -93,34 +93,41 @@ def run_choice_cases(store):
     check('表示が崩れない（前後がそのまま残る）',
           text2, 'あしたの公園にいく')
 
-    # --- 文脈による使い分け ---
+    # --- ★★ 覚えるのは「最後の選択」1枠だけ（項目48-QH・2026-09-05）---
+    # うにさんの指定「同音異義語の一覧表を作成し、**最後にどの変換を
+    # したか、それぞれ履歴1回分記録します**」。
+    # **前後の語による使い分けは持たない**（回数も時刻も持たない）。
+    check('文脈が違っても、覚えているのは1つだけ',
+          ch.lookup('こうえん', 'だいがくで', 'を'), '公園')
     ch.record('こうえん', '講演', 'こうえん', 'だいがくで', 'を')
-    check('元の文脈では元の選択が出る',
-          ch.lookup('こうえん', 'の', 'に'), '公園')
-    check('別の文脈では別の選択が出る',
-          ch.lookup('こうえん', 'だいがくで', 'を'), '講演')
-    check('未知の文脈で選択が割れているなら決めない',
-          ch.lookup('こうえん', 'まったくべつの', 'ばしょ'), None)
-
-    # --- 再選択（何度でも変更できる） ---
-    ch.record('こうえん', '講演', 'こうえん', 'の', 'に')
-    check('同じ文脈での再選択は上書きされる',
+    check('あとから選び直すと上書きされる',
           ch.lookup('こうえん', 'の', 'に'), '講演')
+    check('前後の語を渡しても答えは変わらない（見ていない）',
+          ch.lookup('こうえん', 'まったくべつの', 'ばしょ'), '講演')
+    check('**元の形そのものを選び直したら、枠を消す**',
+          (ch.record('こうえん', 'こうえん', 'こうえん'),
+           ch.lookup('こうえん', 'の', 'に')), (True, None))
+    ch.record('こうえん', '講演', 'こうえん')
     ch.forget('こうえん', 'の', 'に')
     check('選び直しを取り消せる',
-          ch.lookup('こうえん', 'の', 'に'), '講演')  # 残る記録の弱い一致は無い(2択)→
-    # ↑取り消し後は「だいがくで|を」の記録しか無いので、文脈不一致では
-    #   選択が1通り＝弱い一致で「講演」が出る。この動きも仕様として確認する。
+          ch.lookup('こうえん', 'の', 'に'), None)
 
-    # --- 保存と読み込み ---
-    import tempfile, os as _os
-    path = _os.path.join(tempfile.mkdtemp(), 'choices.json')
+    # --- 保存と読み込み（**回数も時刻も書かない**）---
+    import tempfile, os as _os, json as _json
+    path = _os.path.join(tempfile.mkdtemp(), 'last_choice.json')
     ch2 = ChoiceStore(path)
     ch2.record('こうえん', '公園', 'こうえん', 'の', 'に')
     ch2.save()
     reloaded = ChoiceStore(path)
     check('保存した選び直しが読み込める',
           reloaded.lookup('こうえん', 'の', 'に'), '公園')
+    with open(path, encoding='utf-8') as _f:
+        _raw = _f.read()
+    check('ファイルに回数・時刻・前後の文が無い',
+          any(k in _raw for k in ('count', 'updated', 'last_seen',
+                                  'prev', 'next')), False)
+    check('持つ鍵は readings と units だけ',
+          sorted(_json.loads(_raw)), ['readings', 'units'])
 
     # --- ドラッグ選択（区切りが実態と合わないときの救済） ---
     # 実機のjanomeは「ひらがなを」を ひ/ら/が/なを と割る。
@@ -164,9 +171,9 @@ def run_choice_cases(store):
     # 置き換わってはいけない（1文字は文脈一致がないと引き当てない）。
     ch4 = ChoiceStore()
     ch4.record('し', '歯', 'し', 'むし', 'が')
-    check('1文字の語は文脈が合えば引ける',
-          ch4.lookup('し', 'むし', 'が'), '歯')
-    check('1文字の語は文脈が合わなければ引かない',
+    check('1文字の語は引き当てない（前後の語を持たないので必ず）',
+          ch4.lookup('し', 'むし', 'が'), None)
+    check('1文字の語は文脈を渡しても引かない',
           ch4.lookup('し', 'かん', 'に'), None)
     r_sh = {'corrected': 'にします', 'spans': [], 'details': []}
     t_sh, _ = build_line_units(r_sh, mock_tokenize, ch4)
@@ -351,31 +358,30 @@ def run_choice_cases(store):
     # （実機で TypeError: expected str instance, list found）。
     import json as _json
     import os as _os
-    broken_path = '_broken_choices.json'
+    broken_path = '_broken_last_choice.json'
     with open(broken_path, 'w', encoding='utf-8') as f:
-        _json.dump([
-            {'original': 'たんご', 'chosen': ['たんこ゛のつなか゛り', 10, 10],
-             'reading': None, 'prev': '', 'next': '', 'count': 1},
-            {'original': ['壊れた'], 'chosen': '単語',
-             'prev': '', 'next': '', 'count': 1},
-            {'original': '文字', 'chosen': '文字入力',
-             'prev': '', 'next': '', 'count': 1},
-        ], f, ensure_ascii=False)
+        _json.dump({'readings': {'たんご': ['壊れた', 10, 10],
+                                 'もじ': '文字'},
+                    'units': {'たんご': ['たんこ゛のつなか゛り', 10, 10],
+                              '文字': '文字入力',
+                              '壊れた鍵になりうる数': 12345}},
+                   f, ensure_ascii=False)
     broken = ChoiceStore(broken_path)
     _os.remove(broken_path)
-    check('壊れた記録は読み飛ばし、正しい記録だけ残す', len(broken), 1)
+    check('壊れた記録は読み飛ばし、正しい記録だけ残す', len(broken), 2)
     check('壊れた記録は引き当てに出てこない',
           broken.lookup('たんご'), None)
     check('正しい記録は普通に引ける',
           broken.lookup('文字'), '文字入力')
+    check('読みの枠も、壊れていないものだけ残る',
+          (broken.surface_for_reading('たんご'),
+           broken.surface_for_reading('もじ')), (None, '文字'))
     check('表記が文字列でない記録は覚えない',
           broken.record('てすと', ['あ', 1, 2]), False)
 
     # 壊れた記録が混ざっていても、行の組み立てが落ちないこと
     bad = ChoiceStore()
-    bad._by_original['たんご'] = [
-        {'original': 'たんご', 'chosen': ['こわれた', 1, 2],
-         'prev': '', 'next': '', 'count': 1}]
+    bad._units['たんご'] = ['こわれた', 1, 2]
     r_bad = {'original': 'たんごの繋がり', 'corrected': 'たんごの繋がり',
              'changed': False, 'details': [], 'spans': [],
              'original_spans': [], 'unsure_spans': []}
@@ -974,10 +980,22 @@ def test_analysis_cache():
     check('本文と行数が合わない控えは書かない',
           os.path.exists(path), False)
 
-    # 語彙の使用回数が変わっただけでも使わない
-    # （回数は補正の判断に効くため）。
+    # ★★ **語が「立った」だけでも使わない**（項目48-QG・2026-09-05）。
+    # かつては「使用回数が変わっただけでも使わない」だった。回数の
+    # 記録をやめたので、見分けが見るのは**語の顔ぶれと solid だけ**。
+    # 立ったかどうかは補正の判断（count>=2 の門・約60か所）に直に
+    # 効くので、**立った瞬間に控えを捨てる**必要がある。
     AC.save(path, fp(), {text: results})
-    store.add('たんご', '単語', '学業・勉強')
-    check('使用回数が変わっただけでも使わない', AC.load(path, fp()), {})
+    store.add('もじ', '文字', 'その他')          # 新規（solid ではない）
+    check('語が増えたら使わない', AC.load(path, fp()), {})
+    AC.save(path, fp(), {text: results})
+    store.add('もじ', '文字', 'その他')          # 2度目＝立つ
+    check('語が立っただけでも使わない', AC.load(path, fp()), {})
+    # **もう一度同じ語を足しても、今度は何も変わらない**
+    # （立った語には何も書かない＝回数が増えない）。控えは生きたまま。
+    AC.save(path, fp(), {text: results})
+    store.add('もじ', '文字', 'その他')
+    check('立ったあとは何度足しても控えは生きる',
+          list(AC.load(path, fp())), [text])
 
     return all_ok

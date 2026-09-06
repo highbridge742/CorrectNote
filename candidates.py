@@ -926,6 +926,21 @@ def build_range_candidates(segments, store, find_readings,
         except Exception:
             ctx_scores = {}
 
+    # ★★ **その読みで最後に選んだ表記は、いちばん上に出す**
+    # （項目48-QH・2026-09-05）。回数を廃した代わりに、うにさんが
+    # 「最後にどの変換をしたか」を1枠だけ覚える。候補一覧はその枠を
+    # **先頭に**置く——同じ選び直しを二度させないため。
+    _framed = set()
+    try:
+        import last_choice as _lc_cand
+        for _c in out:
+            _r = _c.get('reading') or reading
+            _p = _lc_cand.surface_for_reading(_r) if _r else None
+            if _p and _p == _c['surface']:
+                _framed.add(_c['surface'])
+    except Exception:
+        _framed = set()
+
     def _rank(c):
         # 区切り直し（recut）は**打ち間違いの推測より上**。
         # 読みを1文字も変えずに境目だけ動かした形なので、
@@ -935,7 +950,8 @@ def build_range_candidates(segments, store, find_readings,
         keeps_tail = 0 if (o_tail and c['surface'].endswith(o_tail)) else 1
         # スコアは高いほど上に出したいので符号を反転する
         ctx = -ctx_scores.get(c['surface'], 0.0)
-        return (kind_rank, keeps_tail, ctx)
+        return (0 if c['surface'] in _framed else 1,
+                kind_rank, keeps_tail, ctx)
 
     out.sort(key=_rank)
     return out

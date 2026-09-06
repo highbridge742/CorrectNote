@@ -642,17 +642,32 @@ def _distance1_candidates(key, vocab, index):
 
 def _store_revision(store):
     """
-    語彙が変わった回数（項目48-BT）。
+    語彙が変わった回数（項目48-BT）＋**最後の選択の枠が変わった回数**
+    （項目48-QQ）。
 
     **控えの見分けに件数を使わない。** 語が増えなくても
-    使用回数は変わり、それで直し先の中身は変わる。
-    `revision()` を持たないストア（試験用の作り物など）では
-    -1 を返す＝**毎回作り直す**（遅いだけで、間違わない側）。
+    直し先の中身は変わる。`revision()` を持たないストア
+    （試験用の作り物など）では -1 を返す＝**毎回作り直す**
+    （遅いだけで、間違わない側）。
+
+    ### なぜ枠の版も要るか（項目48-QQ）
+
+    この下の表（`_katakana_vocabulary`・`_english_vocabulary`）は
+    `store.lookup()` の並びの先頭を採り、その並びは
+    **`last_choice` の枠で入れ替わる**。語彙が1つも動かなくても
+    本人が選び直せば答えが変わるので、**語彙の版だけでは足りない**
+    （`cachecheck.py` 第2節）。**ここ1か所に足す**——控えは
+    いくつもあるが見分けは全部この関数を通る（学び22）。
     """
     try:
-        return store.revision()
+        rev = store.revision()
     except Exception:
         return -1
+    try:
+        import last_choice as _lc
+        return (rev, _lc.frame_revision())
+    except Exception:
+        return (rev, 0)
 
 
 def _indexed(store, attr, vocab):
@@ -714,13 +729,28 @@ def _katakana_vocabulary(store, min_count=2):
     """
     語彙のうち「表記がすべてカタカナ」の語。
 
-    戻り値: {読み: 表記}。同じ読みに複数あれば、使用回数の多いほう。
-    結果はストアに控える（**語彙が変わったら**作り直す）。
+    戻り値: {読み: 表記}。同じ読みに複数あれば、
+    **`store.lookup()` の並びで最初に来るカタカナ表記**。
+    結果はストアに控える（**語彙か枠が変わったら**作り直す）。
 
-    見分けは `store.revision()`（項目48-BT）。**読みの件数では
-    足りない**——語が増えなくても使用回数は変わるので、
-    「回数が2に届いて直し先に入る瞬間」と「同じ読みの表記が
-    入れ替わる瞬間」を取りこぼしていた（`cachecheck.py`）。
+    見分けは `_store_revision()`（項目48-BT・48-QQ）。
+
+    ### ★★ 「回数の多いほう」をやめた理由（項目48-QQ・2026-09-05）
+
+    回数の記録を廃したので（48-QG）、ここの `count` は
+    **メモリ上の写し（solid なら 2・そうでなければ 1）**しかない。
+    そのまま最大を採ると、同じ読みに solid なカタカナ表記が2つある
+    とき **`to_list()` に先に出たほう**が勝ち、
+    `lookup()` の並び（`_rank_key` ＋ **最後の選択の枠**）を
+    **迂回してしまう**（学び22）。実測でも `cachecheck.py` が
+    「本人が選び直しても表が入れ替わらない」で落ちていた
+    ——`ばいおりん` を `ヴァイオリン` に選び直しても、この表は
+    `バイオリン` を返していた。
+
+    **`lookup()[0]` をそのまま採ってはいけない**——先頭がカタカナ
+    以外の表記の読み（`こうえん → 公園`）が表から丸ごと落ちる。
+    **並びの順に見て、最初に条件を満たすものを採る。**
+    （種を入れたストアで測って、初期状態の答えは差0・落ちた読み0）
     """
     rev = _store_revision(store)
     cached = getattr(store, '_katakana_vocab_cache', None)
@@ -728,22 +758,29 @@ def _katakana_vocabulary(store, min_count=2):
         return cached[1]
 
     out = {}
-    best_count = {}
     try:
-        entries = store.to_list()
+        readings = list(store._by_reading)
     except Exception:
-        entries = []
-    for e in entries:
-        surface = e.get('surface') or ''
-        reading = e.get('reading') or ''
-        count = e.get('count', 0)
-        if count < min_count or not reading:
+        try:
+            readings = sorted({(e.get('reading') or '')
+                               for e in store.to_list()} - {''})
+        except Exception:
+            readings = []
+    for reading in readings:
+        if not reading:
             continue
-        if not is_all_katakana(surface):
+        try:
+            entries = store.lookup(reading)
+        except Exception:
             continue
-        if count > best_count.get(reading, -1):
-            best_count[reading] = count
+        for e in entries:
+            if (e.get('count', 0) or 0) < min_count:
+                continue
+            surface = e.get('surface') or ''
+            if not is_all_katakana(surface):
+                continue
             out[reading] = surface
+            break
     try:
         store._katakana_vocab_cache = ((rev, min_count), out)
     except Exception:
@@ -882,7 +919,7 @@ def fix_katakana_word(word, store, known_word=False,
     # 費用）。それでも並ぶなら手を引く（`キーード`: キーボード 回数3・
     # 費用13 ／ キーワード 回数1・費用62 → キーボード）。
     if second is not None and second[0] == best[0]:
-        chosen = _break_tie(ties, vocab, store)
+        chosen = _break_tie(ties, vocab, store, typed)
         if chosen is None:
             return None
         best = (best[0], chosen)
@@ -890,12 +927,50 @@ def fix_katakana_word(word, store, known_word=False,
     return surface if surface != word else None
 
 
-def _break_tie(readings, vocab, store):
+def _break_tie(readings, vocab, store, typed=''):
     """
     同じ距離で並んだ読みから1つ選ぶ（項目48-IU）。
-    使用実績（語彙の回数）が多いほう → 同梱の表で一般的なほう（費用が
-    小さい）。どちらでも並ぶなら None（触らない）。
+
+    決め手の順:
+
+        ① **連打の畳み**（打った並びの中の同じ字の連続を1つ減らすと
+           その読みになる）——★★ **これは置換より確からしい**
+        ② 立っている語か（`count >= 2` ＝ solid）
+        ③ 同梱の表で一般的なほう（費用が小さい）
+        どちらでも並ぶなら None（触らない）
+
+    ### ★ ① を足した理由（項目48-QG'・2026-09-05）
+
+    回数の記録をやめたら、**②の目盛りが 2段しか残らなくなった**。
+    育った語彙で同梱の見本が2つ落ちた（`seedcheck` 40 → 38）:
+
+        クリッック → **クリニック**（正しくは クリック）
+        ファイイル → **ファイナル**（正しくは ファイル）
+
+    どちらも「回数 1331 対 4」「924 対 36」で②が裁いていたもの。
+    ③に落ちると**カタカナでは表の費用が当てにならない**——
+    実測で `クリック 35 / クリニック 33`・`ファイル 33 / ファイナル 8`。
+    費用は (読み, 表記) ではなく**表記だけ**の値なので、別の読みでの
+    安さが混ざる（`撃つ 0`・`コウチョウ 50` と同じ罠）。
+
+    そこで**打鍵の形**で裁く。`クリッック` は `ッ` が2つ、
+    `ファイイル` は `イ` が2つ——**同じ字の連続を1つ減らすと相手に
+    なる**。SPEC の4つの型のうち「重複」そのもので、置換1回より
+    ずっとありふれた誤り。**数字ではなく打鍵の形なので、
+    ★★「論理的に正しいもの」の側**（回数が無くても言える）。
+
+    判定は `corrector._is_repeat_collapse` を借りる——**同じ判定を
+    2か所に書かない**（48-GN）。
     """
+    def _repeat(reading):
+        if not typed or reading == typed:
+            return False
+        try:
+            from corrector import _is_repeat_collapse
+            return bool(_is_repeat_collapse(typed, reading))
+        except Exception:
+            return False
+
     def _count(reading):
         try:
             return max((int(e.get('count', 0)) for e in store.lookup(reading)),
@@ -911,11 +986,14 @@ def _break_tie(readings, vocab, store):
             c = None
         return c if c is not None else 10 ** 9
 
-    ranked = sorted(readings, key=lambda r: (-_count(r), _cost(r)))
+    def _key(r):
+        return (0 if _repeat(r) else 1, -_count(r), _cost(r))
+
+    ranked = sorted(readings, key=_key)
     if len(ranked) < 2:
         return ranked[0] if ranked else None
     a, b = ranked[0], ranked[1]
-    if (_count(a), _cost(a)) == (_count(b), _cost(b)):
+    if _key(a) == _key(b):
         return None
     return a
 
@@ -1408,11 +1486,13 @@ def _english_vocabulary(store, min_count=1):
     """
     覚えている英単語。戻り値: {小文字の語: 表記}
 
-    同じ語を大文字小文字ちがいで覚えていたら、使用回数の多いほうを
-    採る（Planetarium と planetarium が両方あるとき）。
+    同じ語を大文字小文字ちがいで覚えていたら、
+    **`store.lookup()` の並びで最初に来るほう**を採る
+    （Planetarium と planetarium が両方あるとき）。
 
-    見分けは `store.revision()`（項目48-BT。理由は
-    `_katakana_vocabulary` の説明を参照）。
+    見分けは `_store_revision()`（項目48-BT・48-QQ）。
+    「回数の多いほう」をやめた理由は `_katakana_vocabulary` の
+    説明を参照（回数は廃した・並びを迂回してはいけない）。
     """
     rev = _store_revision(store)
     cached = getattr(store, '_english_vocab_cache', None)
@@ -1420,21 +1500,27 @@ def _english_vocabulary(store, min_count=1):
         return cached[1]
 
     out = {}
-    best = {}
     try:
-        entries = store.to_list()
+        readings = [r for r in store._by_reading
+                    if r.startswith(ENGLISH_PREFIX)]
     except Exception:
-        entries = []
-    for e in entries:
-        reading = e.get('reading') or ''
-        if not reading.startswith(ENGLISH_PREFIX):
+        try:
+            readings = sorted({(e.get('reading') or '')
+                               for e in store.to_list()
+                               if (e.get('reading') or '').startswith(
+                                   ENGLISH_PREFIX)})
+        except Exception:
+            readings = []
+    for reading in readings:
+        try:
+            entries = store.lookup(reading)
+        except Exception:
             continue
-        if e.get('count', 0) < min_count:
-            continue
-        key = reading[len(ENGLISH_PREFIX):]
-        if e.get('count', 0) > best.get(key, -1):
-            best[key] = e.get('count', 0)
-            out[key] = e.get('surface') or ''
+        for e in entries:
+            if (e.get('count', 0) or 0) < min_count:
+                continue
+            out[reading[len(ENGLISH_PREFIX):]] = e.get('surface') or ''
+            break
     try:
         store._english_vocab_cache = ((rev, min_count), out)
     except Exception:
@@ -1715,9 +1801,16 @@ def fix_english_word(word, store):
         return None
     if second is not None and second[0] == best[0]:
         return None
-    if _override and _english_count(store, best[1]) < 3:
+    if _override and _english_count(store, best[1]) < 2:
         # 一度しか書いていない語を上書きしてよいのは、
-        # **よく書いている語**だけ（歯止めは勝った語に掛ける）。
+        # **二度以上書いている語**だけ（歯止めは勝った語に掛ける）。
+        #
+        # ★★ もとは `< 3`（「よく書いている語」）だった。回数の記録を
+        # やめた（項目48-QG）ので `_english_count` は 1 か 2 しか返さず、
+        # `< 3` は**恒買＝この近道が丸ごと死ぬ**。意図（一度きりの語で
+        # 上書きさせない）をそのまま残すには `< 2`＝**立っている語か**
+        # に読み替えるのが素直。`_override` の側も `own == 1`＝
+        # **立っていない**という同じ2値なので、対になっている。
         return None
     # **頭だけ大文字の語は、1文字の置き換えだけの直しをしない**
     # （2026-08-16・実機で `Claude → Clause` と壊した）。

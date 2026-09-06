@@ -8,11 +8,16 @@ session.json
 context_vec.json
 decisions.json
 choices.json
+# **最後にどの変換をしたか**の枠（項目48-QH・2026-09-05）。
+# `choices.json` の置き換え。回数も時刻も前後の文も持たないが、
+# **本人が何を書き分けているか**は分かるので個人データのまま。
+last_choice.json
 settings.json
 setup.json
 dict_index.json
 # 前回の解析結果の控え（メモの原文と補正結果が丸ごと入っている）
 analysis_cache.json
+deletion_log.txt
 # 文字の並びの表のうち、メモから育てたぶん（項目48-BN）
 charngram.json
 # IME が確定した「表記 → 打った読み」の対（設計25(甲)）。

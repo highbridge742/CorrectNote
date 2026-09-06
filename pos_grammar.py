@@ -159,6 +159,10 @@ def _load_tables():
              | set(_EXTRA_PARTICLES) | set(_EXTRA_FUNCS)
              | {'よい', 'いい', 'ない'})
     funcs = {x for x in funcs if len(x) >= 2}
+    global _VFUNCS, _ATAILS, _FNOUNS
+    _VFUNCS = frozenset(x for x in C.BASIC_VERB_FORMS if len(x) >= 2)
+    _ATAILS = frozenset(x for x in C.AUXILIARY_TAILS if len(x) >= 2)
+    _FNOUNS = frozenset(x for x in C.FUNCTION_NOUNS if len(x) >= 2)
     _TABLES = (words, funcs, _CASE_PARTICLES)
     return _TABLES
 
@@ -181,8 +185,14 @@ def _load_tables():
 #   IST  イ形容詞の語幹のあと（い・く・くて・かった・ければ・さ・そう）
 #   SOU  そう（様態）のあと（だ・です・に・な）
 #   END  述語が閉じた（助詞・終助詞・です が付ける）
+#   K    **1字の格助詞の直後**（項目48-RZ・2026-09-06）。END と同じ
+#        ものが付けるが、次の文節の頭に**もう1つ格助詞**は置けない
+#        （`もみ|と|に|もどります`——と の直後の に）。`Bk` へ ε
+#   Bk   格助詞の直後の文節の頭。Bf と同じだが、が・を・に・へ・で
+#        （1字の格助詞）は置けない。は・も（係助詞）・の・と（へと・
+#        引用の と）は置ける
 #
-# 受け入れ: 連続の終わりに Bf/Bw/END/TA/TE/R/E で立っていること。
+# 受け入れ: 連続の終わりに Bf/Bw/END/TA/TE/R/E/K/Bk で立っていること。
 # （MZ・TSU・N・IST・S の途中では終われない——「〜かっ」は語ではない）
 
 _PIECES = {
@@ -195,6 +205,7 @@ _PIECES = {
         ('なさい', 'END'), ('なさいます', 'END'), ('なさら', 'MZ'),
         ('なさっ', 'TSU'), ('なさる', 'END'),
         ('やす', 'IST'), ('にく', 'IST'), ('づら', 'IST'), ('がた', 'IST'),
+        ('うる', 'END'), ('え', 'E'),    # 得る（可能）: 取り得る・あり得ない（48-SX）
         ('ちゃう', 'END'), ('ちゃっ', 'TSU'), ('ちゃい', 'R'),
         ('じゃう', 'END'), ('じゃっ', 'TSU'),
         # **ら抜き**（項目48-OU・2026-09-03）。一段の語幹末（E）にも
@@ -270,6 +281,27 @@ _PIECES['E'] = _PIECES['E'] + _PIECES['R']
 _PIECES['END'] = _PIECES['END'] + tuple(
     (c, 'END') for c in sorted(_FINAL_PARTICLES)) + _NOUN_PRED
 
+# ★★ **格助詞の連続は説明が付かない**（項目48-RZ・2026-09-06・
+# うにさんの指定「`もみとにもどります`、紫がないですね。`もみとの` が
+# 変なのは AI なら分かります。`もみ` を名詞と捉えていますが、`とに` には
+# 続かないでしょう」）。
+#
+# いままで1字の格助詞は END へ行き、END → ε → Bf → 1字の格助詞 と
+# **際限なく並べられた**（もみ＋と＋に＋もどります が「説明が付く」）。
+# 日本語で格助詞が2つ続くのは **へと**（駅へと向かう）と、**引用の と**
+# （君にと思って）・**並立の と**（父と母とに——前にも と が要る）だけ。
+# だから、1字の格助詞（が・を・に・へ・と・で・は・も）の直後は `K` に
+# 置き、そこから始まる文節の頭（`Bk`）には **が・を・に・へ・で** を
+# 置かない。`の`（との・への・での）・`は`・`も`（にも・とは）・`と`
+# （へと・引用）は今までどおり。`_CASE_PARTICLES` の や・か・の は
+# 格助詞ではなく（並立・疑問・連体）、`K` を作らない。
+#
+# **並立の と（AとBとに）は 48-RZ で立つ**（前の と を数えていない）。
+# 実機メモ・正しい日本語1,500文で測って受け止める（項目48-RZ の実測）。
+_K_INDUCING = frozenset('がをにへとではも')
+_BLOCKED_AFTER_CASE = frozenset('がをにへで')
+_PIECES['K'] = _PIECES['END']
+
 # 状態からの ε 遷移（字を消費しない）
 _EPS = {
     'R': ('Bw',),          # 連用中止・名詞化（読み、書き）
@@ -278,9 +310,38 @@ _EPS = {
     'TA': ('END',),
     'SOU': ('END',),
     'END': ('Bf',),        # 連体形＋形式名詞（するもの・るとき）
+    'K': ('Bk',),          # 格助詞の直後の文節（もう1つ格助詞は置けない・48-RZ）
+    'Ev': ('Bn',),         # 終止の直後（stems_only だけが作る状態・48-TH''''）
 }
 
-_ACCEPT = frozenset(('Bf', 'Bw', 'END', 'TA', 'TE', 'R', 'E'))
+_ACCEPT = frozenset(('Bf', 'Bw', 'END', 'TA', 'TE', 'R', 'E', 'K', 'Bk', 'Ev'))
+
+# ★ **stems_only では、用言の END を「終止」と「接続」に分ける**（項目48-TH''''・
+# 2026-09-06）。今までの END は 終止（やめ**る**・やめ**た**・ひど**い**・し**ます**）
+# も 接続（やめ**たら**・やめ**れば**・ひどく**て**・やめる**し**）も同じ状態で、
+# END → ε → Bf から**もう1つ用言を始められた**（おく＋ゆく・ほう＋れんぞう・
+# てた＋とおす・ねらう＋いち）。日本語で終止形の直後に用言は立たない（連体形＋
+# 名詞は名詞が要る——stems_only は名詞を引かない）。
+#   Ev  用言が終止・連体・命令で終わった（る・う・た・ます・ぬ・ん・い・だ…）
+#   Bn  Ev の直後の文節の頭——助詞・機能語・名詞の述語だけ（用言の語幹を始めない・
+#       名詞を引かない）。機能語の表の動詞形（おく・いく・くる・する…＝
+#       `BASIC_VERB_FORMS`）も終止形なら Ev へ落とす
+# 接続の語尾（`_CONJ_PIECES`）は今までどおり END → Bf で次の用言に続く
+# （やめたら行く・食べて寝る・やめるし行く）。stems_only 以外は何も変えない。
+_PIECES['Ev'] = _PIECES['END']
+_CONJ_PIECES = frozenset(('ながら', 'つつ', 'れば', 'ば', 'ず', 'ずに', 'たら', 'たり',
+                          'かったら', 'ければ', 'し', 'って', 'く', 'くて', 'まして'))
+_VERB_STATES = frozenset(('R', 'E', 'MZ', 'TSU', 'N', 'TE', 'IST', 'SOU', 'TA', 'S', 'Ev'))
+_VFUNCS = frozenset()          # 機能語の表の動詞形（おく・いく・する…）
+_ATAILS = frozenset()          # 助動詞の尾（ます・てた・ない…）——用言のあとにだけ
+_FNOUNS = frozenset()          # 形式名詞（ほう・こと・とき…）——直後に用言は立たない
+
+
+def _stems_target(st, piece, st2):
+    """stems_only: 用言の状態から END に落ちる語尾のうち、接続でないものは Ev へ。"""
+    if st2 == 'END' and st in _VERB_STATES and piece not in _CONJ_PIECES:
+        return 'Ev'
+    return st2
 
 
 def _gen_steps(run, i):
@@ -328,18 +389,44 @@ def _looks_verb(word, words):
     return False
 
 
-def explain_kana_run(run, after_kanji=False, before_kanji=False,
-                     kanji_stem='', is_word=None):
+def explain_kana_run(run, after_kanji=False, before_kanji=None,
+                     kanji_stem='', is_word=None, bare_head=False,
+                     no_words=False, stems_only=False):
     """
     **かな連続が、語の表＋機能語＋活用の文法で説明できるか。**
 
     after_kanji:  直前が漢字（活用語尾・送り仮名がここから始まり得る）
-    before_kanji: 直後が漢字（末尾の お/ご は次の語の接頭辞であり得る）
+    before_kanji: 直後が漢字（末尾の お/ご は次の語の接頭辞であり得る）。
+                  **None は「分からない」**（今までどおり接頭辞であり得る
+                  と読む）。**False（直後が漢字ではない）のときだけ**、
+                  末尾の お/ご を接頭辞とは読まない（項目48-TJ・
+                  2026-09-06。`よれごを確認` の `よれご` が
+                  よれ＋ご で説明されて、`よごれ` に直せなくなっていた。
+                  ご の次は を なので接頭辞ではあり得ない）
     kanji_stem:   直前の漢字の連続（`思` ＋ `いがけず` のように、
                   漢字＋かなでひとつの表の語になる形を引くため）
     is_word:      語かどうかを判定する関数（None なら表だけ）。
                   辞書の索引・本人の語彙を足すのに使う（きちんと・
                   ぴたり は表に無いが辞書には在る普通の語）
+    stems_only:   **語の表を、動詞・形容詞の活用の根拠にだけ使う**読み
+                  （項目48-TH・2026-09-06）。名詞の部品としては使わない。
+                  `やめたら`（やめる＋たら）・`ひどくて`（ひどい＋くて）は
+                  True、`きゅうずいを`（きゅう＋ずい＋を）は False。
+                  **用言1つ＋活用語尾・機能語**の形だけ（48-TH'''）——裸の
+                  連用形から次の語へ進まない（`かぎかえを`＝嗅ぎ＋替え＋を は
+                  False）・用言の直後に用言を始めない
+    no_words:     **語の表を使わない**読み（項目48-SQ・2026-09-06）。
+                  機能語・活用・名前＋敬称だけで説明が付くか——
+                  `しやすさ`（し＋やす＋さ）・`たかちゃん` は True、
+                  `きゅうずいを`（きゅう＋ずい＋を＝語＋語）は False。
+                  「内容語が1つも無い連続」には語彙で直すものが無い、
+                  という判定に使う
+    bare_head:    **連続が行の頭に立っている**（前に何も無い。項目48-RZ・
+                  2026-09-06）。係助詞・格助詞は前の句が要るので、
+                  **本当の行頭に裸の1字助詞は立てない**（48-KX の
+                  かな版）。`もみとにもどります` は も＋みと＋に で
+                  説明が付いていた——行頭の も を助詞に読んでいたから。
+                  行頭でなければ（前が漢字・読点・括弧）今までどおり
 
     戻り値: True（説明が付く＝異様とは言えない）／False（付かない）。
     **False は異様の必要条件であって、単独の証拠にしない。**
@@ -356,15 +443,23 @@ def explain_kana_run(run, after_kanji=False, before_kanji=False,
             def __contains__(self, frag):
                 return frag in _tbl_words or bool(is_word(frag))
         words = _W()
-    if run in words or run in funcs:
+    nouns = words               # 名詞の部品として引く表（48-TH）
+    if no_words or stems_only:
+        class _NoWords(object):
+            def __contains__(self, frag):
+                return False
+        nouns = _NoWords()
+        if no_words:
+            words = nouns
+    if run in nouns or run in funcs:
         return True
     n = len(run)
     # 末尾の お/ご は、次の語の接頭辞（お待ちください・「なんだお前」の
     # 切れ端）。直後が漢字でなくても、行やかぎ括弧の切れ目で同じ形が
     # できる（実測: `なんだお` に印が立ち、48-GL の「出しすぎ」になった）
     ends = {n}
-    if n >= 3 and run[-1] in 'おご':
-        ends.add(n - 1)
+    if n >= 3 and run[-1] in 'おご' and before_kanji is not False:
+        ends.add(n - 1)                  # 次が漢字でないと分かれば読まない（48-TJ）
 
     seen = set()
     stack = [(0, 'Bf')]
@@ -404,7 +499,7 @@ def explain_kana_run(run, after_kanji=False, before_kanji=False,
                     a, i_, e, o, onb = row
                     c = run[k]
                     if c == u:
-                        stack.append((k + 1, 'END'))
+                        stack.append((k + 1, 'Ev' if stems_only else 'END'))
                     if c == a:
                         stack.append((k + 1, 'MZ'))
                     if c == i_:
@@ -414,7 +509,7 @@ def explain_kana_run(run, after_kanji=False, before_kanji=False,
                     if onb and c == onb:
                         stack.append((k + 1, 'TSU' if onb != 'ん' else 'N'))
                     if c == o and k + 1 < n and run[k + 1] == 'う':
-                        stack.append((k + 2, 'END'))
+                        stack.append((k + 2, 'Ev' if stems_only else 'END'))
                     if u == 'る' and (not ('ぁ' <= stem[-1] <= 'ゖ')
                                       or stem[-1] in _ICHIDAN_TAIL):
                         stack.append((k, 'E'))       # 一段（見る・出る）
@@ -434,9 +529,24 @@ def explain_kana_run(run, after_kanji=False, before_kanji=False,
             continue
         # ε 遷移
         for st2 in _EPS.get(st, ()):
+            # **stems_only では、裸の連用形・一段の語幹（R・E）から次の語へ
+            # 進まない**（項目48-TH'''・2026-09-06）。連用形＋を（替えを）・
+            # 連用形＋動詞（嗅ぎ替え）は文法としては立つが、この読みは
+            # 「用言1つ＋活用語尾・機能語」で説明が付くかを聞いている。
+            # 進ませると `かぎかえを`（嗅ぎ＋替え＋を）・`したれやなぎ`
+            # （し＋垂れ＋や＋薙ぎ）まで「読める」になり、readcheck の直りを
+            # 初期 −18／育ち −42 失った（f6）。用言は語尾（た・て・たら・
+            # ます・る・ない…）を取ってから次へ
+            if stems_only and st in ('R', 'E'):
+                continue
+            if stems_only and st2 == 'END' and st in ('TA', 'SOU'):
+                st2 = 'Ev'                # た・そうだ は終止（48-TH''''）
             stack.append((i, st2))
         if st in ('S', 'TE'):
-            stack.extend(_gen_steps(run, i))
+            for _nx in _gen_steps(run, i):
+                if stems_only and _nx[1] == 'END':
+                    _nx = (_nx[0], 'Ev')
+                stack.append(_nx)
             if st == 'TE':
                 # **て形のあとの補助動詞**（項目48-OU）。`_gen_steps`
                 # だけでは い抜きの `てます`・`てない` が作れない
@@ -447,13 +557,19 @@ def explain_kana_run(run, after_kanji=False, before_kanji=False,
         if st in _PIECES:
             for piece, st2 in _PIECES[st]:
                 if run.startswith(piece, i):
+                    if stems_only:
+                        st2 = _stems_target(st, piece, st2)
                     stack.append((i + len(piece), st2))
             continue
-        if st in ('Bf', 'Bw'):
+        if st in ('Bf', 'Bw', 'Bk', 'Bn'):
             # 1字の格助詞（形の変わらない品詞は、表との一致で置ける。
             # 終助詞は END からだけ——「文の間だから助詞」の場所の決まり）
-            if c in p1:
-                stack.append((i + 1, 'END'))
+            # **格助詞の直後（Bk）には、もう1つ格助詞を置かない**（48-RZ）。
+            # **本当の行頭に裸の1字助詞は立てない**（同・bare_head）
+            if c in p1 and not (st == 'Bk' and c in _BLOCKED_AFTER_CASE) \
+                    and not (bare_head and i == 0 and not after_kanji
+                             and c != 'と'):   # 行頭の と は引用・続き（とのことですが）
+                stack.append((i + 1, 'K' if c in _K_INDUCING else 'END'))
             # 名詞の述語（名詞＋だ・です・なら）
             for piece, st2 in _NOUN_PRED:
                 if run.startswith(piece, i):
@@ -461,14 +577,27 @@ def explain_kana_run(run, after_kanji=False, before_kanji=False,
             # 機能語（2字以上）
             for ln in range(2, min(12, n - i) + 1):
                 if run[i:i + ln] in funcs:
-                    stack.append((i + ln, 'END'))
+                    _f = run[i:i + ln]
+                    # 助動詞の尾（てた・ます・ない…）は用言のあとにだけ——
+                    # 文節の頭には立てない（`てた＋とおす`。漢字の直後の
+                    # 連続の頭は 送り仮名＋尾 なので除く。48-TH''''）
+                    if (stems_only and _f in _ATAILS and st in ('Bf', 'Bk', 'Bn')
+                            and not (after_kanji and i == 0)):
+                        continue
+                    stack.append((i + ln, 'Ev' if (
+                        stems_only and (_f in _FNOUNS or (
+                            _f in _VFUNCS and _f != 'あり'
+                            and not _f.endswith(('て', 'で', 'ば', 'く')))))
+                        else 'END'))
             # 語（**語と語は直接つなげない**——Bw からは置けない）
-            if st == 'Bf':
+            if st in ('Bf', 'Bk'):
                 for ln in range(2, min(12, n - i) + 1):
-                    if run[i:i + ln] in words:
+                    if run[i:i + ln] in nouns:
                         stack.append((i + ln, 'Bw'))
                 # 名前＋敬称（うにさん・たろうくん）
-                for k in range(1, min(4, n - i)):
+                # 名前は**2字以上**（項目48-SQ・2026-09-06。1字＋敬称〔`せくん`〕は
+                # 名前の形ではなく、打ち間違い `くせん → せくん` を説明していた）
+                for k in range(2, min(4, n - i)):
                     for h in _HONORIFICS:
                         if run.startswith(h, i + k):
                             stack.append((i + k + len(h), 'Bw'))
@@ -477,12 +606,24 @@ def explain_kana_run(run, after_kanji=False, before_kanji=False,
             # **動詞の語幹は2字以上**（1字の語幹を許すと `ひ|ら|ん` =
             # 干る の未然＋ん のような読み方で、的を取りこぼした・実測）。
             # イ形容詞は `よい`（語幹1字）が普通の語なので1字を許す。
+            if stems_only and st in ('Bw', 'Bn'):
+                continue                  # 用言の直後に用言を始めない（48-TH'''／48-TH''''）
             for ln in range(1, min(11, n - i) + 1):
                 stem = run[i:i + ln]
                 j = i + ln
                 # イ形容詞は文節の頭から（動詞の語幹の直後には立たない
                 # ——`入れ|ちいさい` を許すと的を取りこぼす・実測）
-                if st == 'Bf' and j < n and (stem + 'い') in words:
+                # **stems_only では、活用形が2つ表に在る語だけを用言と読む**
+                # （項目48-TH''・2026-09-06）。表に品詞は無いので、い で
+                # 終わる語（こてい＝固定）や う で終わる語（きゅう＝級）が
+                # 全部「用言」に見えて、打ち間違いまで説明していた。
+                # 形容詞は 語幹＋い と 語幹＋く、五段は 終止形 と 連用形
+                # （い段）、一段は 語幹＋る と 語幹 の両方
+                # **1字の形容詞語幹は閉じた組**（よい・ない・こい・すい。48-TH''''）——
+                # が＋い／が＋く（害・学）のような名詞の偶然が語幹に見えていた
+                if (st in ('Bf', 'Bk') and j < n and (stem + 'い') in words
+                        and (not stems_only or ((stem + 'く') in words
+                                                and (ln >= 2 or stem in 'よなこす')))):
                     stack.append((j, 'IST'))
                 if j >= n:
                     continue
@@ -515,13 +656,15 @@ def explain_kana_run(run, after_kanji=False, before_kanji=False,
                     if (stem + u) not in words:
                         continue
                     a, i_, e, o, onb = row
+                    if stems_only and u != 'る' and (stem + i_) not in words:
+                        continue                  # 連用形が無い＝用言ではない
                     if _onbin_only:
                         if onb and c2 == onb:
                             stack.append((j + 1,
                                           'TSU' if onb != 'ん' else 'N'))
                         continue
                     if c2 == u:
-                        stack.append((j + 1, 'END'))
+                        stack.append((j + 1, 'Ev' if stems_only else 'END'))
                     if c2 == a:
                         stack.append((j + 1, 'MZ'))
                     if c2 == i_:
@@ -531,7 +674,7 @@ def explain_kana_run(run, after_kanji=False, before_kanji=False,
                     if onb and c2 == onb:
                         stack.append((j + 1, 'TSU' if onb != 'ん' else 'N'))
                     if c2 == o and j + 1 < n and run[j + 1] == 'う':
-                        stack.append((j + 2, 'END'))
+                        stack.append((j + 2, 'Ev' if stems_only else 'END'))
                     if u == 'る' and stem[-1] in _ICHIDAN_TAIL:
                         stack.append((j, 'E'))
     return False
@@ -658,10 +801,13 @@ def odd_kana_spans(line, dict_index=None, store=None):
             while k > 0 and same(line[k - 1]):
                 k -= 1
             stem = line[k:i0]
+        # **本当の行頭**（前に空白しか無い）に立つ連続だけ、裸の1字助詞を
+        # 頭に置かない（項目48-RZ。読点・括弧のあとは前の句を受ける形）
+        _bare = (not after) and not line[:i0].strip(' \t\u3000')
         try:
             ok = explain_kana_run(run, after_kanji=after,
                                   before_kanji=before, kanji_stem=stem,
-                                  is_word=_is_word)
+                                  is_word=_is_word, bare_head=_bare)
         except Exception:
             ok = True
         if not ok and dict_index is not None:

@@ -899,13 +899,21 @@ def test_halfwidth_guards():
     check('新しい語が出てくれば、それだけ覚える',
           LW.learn_english_words(memo2 + ' rendered', istore), 1)
 
-    # 覚え直しは、メモに出てきた回数をそのまま使用回数にする
-    # （どの語も1にすると own >= 2 の判定が死ぬ）。
+    # 覚え直しは、メモに**2回以上**出てきた語を「立った語」にする
+    # （どの語も立たないと own >= 2 の判定が死ぬ）。
+    #
+    # ★★ 回数そのものは記録しない（項目48-QG・2026-09-05）。
+    # `relearn_english_from_texts` は出現回数ぶん `store.add` を
+    # 呼ぶので、**2回以上出た語は solid（＝メモリ上の count 2）**、
+    # 1回だけの語は立たない（count 1）。`own >= 2` の門は、
+    # 「何度も書いている語＝正しい」という意味のまま生き残る。
     cstore = VocabularyStore()
     LW.relearn_english_from_texts(['charlie ' * 5 + 'foxtrot'], cstore)
-    check('覚え直しは出現回数をそのまま数える',
+    check('何度も書いた語は立つ／1回だけの語は立たない',
           (LW._english_count(cstore, 'charlie'),
-           LW._english_count(cstore, 'foxtrot')), (5, 1))
+           LW._english_count(cstore, 'foxtrot')), (2, 1))
+    check('回数そのものは残らない（5回書いても 2 のまま）',
+          LW._english_count(cstore, 'charlie') <= 2, True)
 
     # 記号がくっついた英字は語として覚えない
     # （`P:lanetarium` から `lanetarium` を覚えていた）。

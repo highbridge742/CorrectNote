@@ -135,6 +135,22 @@ _POSITION_KANJI = set('上下左右前後内外中表裏奥端横縦先元底頭
 # 閉じた類（4字）。
 _NEG_PREFIX = set('不非未無')
 
+# **形容詞の語幹として名詞の頭に立つ1字**（項目48-SN・2026-09-06）。
+# 強炭酸・厚爪・高濃度・低価格・長時間・軽自動車・大容量・新機能。
+# 解析は `強` を 形容詞:自立（つよ）と切り、`厚` を 地域（あつ）と切る
+# ——品詞では拾えない字を、**閉じた名簿**で補う。
+# AI の判断で書き下した（Fable 5.1・2026-09-06）。語の一覧ではなく
+# 「語幹1字＋名詞」という**文法の型**の側の名簿。
+_ADJ_STEM_KANJI_1 = frozenset(
+    '強弱高低厚薄長短軽重大小新古多少早遅速広狭深浅細太濃淡'
+    '冷温熱寒暑安甘辛苦若近遠固硬柔軟良悪鋭鈍粗密')
+
+# **何にでも付く接尾**（項目48-SN・2026-09-06）。`説明書付き` の
+# （書, 付き）のように、接尾どうしの並びでも後ろがこれなら異様ではない。
+_SUFFIX_TAIL_FREE = frozenset((
+    '付き', '付', '入り', '済み', '済', '向け', '込み', '無し', '有り',
+    '用', '別', '同士', '同然', '同様', '以外', '以来'))
+
 # **位置・順序の2字の名詞**（項目48-LJ・2026-08-30）。`文節最後`
 # `画面中央` のように、どんな名詞の後ろにも「Aの最後」の略記として
 # 付く。(6-3) の位置の1字と同じ**閉じた文法の類**。
@@ -417,6 +433,29 @@ def can_join(a, ap, b, bp, a_reading=''):
     #     前の数に付いた語尾で、そこは語の境目）
     if '接頭' in ap or '接尾' in ap or '接尾' in bp or '非自立' in bp:
         return True
+    # (3-1) **何にでも付く尾**（項目48-SN・`_SUFFIX_TAIL_FREE`。解析が接尾と
+    #       言わない `同士`〔語彙素同士・友達同士〕もここで通す）
+    if b in _SUFFIX_TAIL_FREE:
+        return True
+    # (3') **形容詞の語幹1字は名詞の頭に付く**（項目48-SN・2026-09-06。
+    #      強炭酸・厚爪対応・高濃度・低価格・長時間）。解析は `強` を
+    #      形容詞:自立（つよ）と切る。語幹1字＋名詞は複合名詞の**型**。
+    #      解析が形容詞と言わない字（厚＝地域・薄・濃…）は閉じた名簿
+    #      `_ADJ_STEM_KANJI_1` で補う。うにさんの実機（web の商品説明
+    #      の貼り付け）で `強炭酸 → 今日探索`・`厚爪対応 → あつめ対応`
+    #      **動詞の連用形にも付く**（48-TE・2026-09-06。浅煎り・早起き・
+    #      遅咲き・深煎り——形容詞語幹＋連用形の複合名詞。`浅煎りブレンド`
+    #      に紫が立っていた）
+    if (len(a) == 1 and '一' <= a <= '鿿' and bp.startswith(('名詞', '動詞'))
+            and (ap.startswith('形容詞') or a in _ADJ_STEM_KANJI_1)):
+        return True
+    # (3'') **地名は何にでも付く**（項目48-SN。九州方言・東京在住・
+    #       北海道産・現代九州）。固有名詞は 48-NG で `_plain_noun` から
+    #       外してある（人名は誤変換の常連）が、**地域**は「Aの」の略記で
+    #       どんな名詞にも付くし、名詞の後ろにも立つ
+    if (('地域' in ap and len(b) >= 2 and _plain_noun(bp))
+            or ('地域' in bp and len(a) >= 2 and _plain_noun(ap))):
+        return True
     # (1) 表の語の中で、その並びを見たことがある
     if (a, b) in _PAIR or (a + b) in words:
         return True
@@ -680,6 +719,9 @@ def _katakana_word_known(surf, dict_index=None):
 
     `クリック` `ドラッグ` `スクロール` は在る。`リュク` `カミス` は無い。
 
+    ★★ **まず `katakana_frag` の断片の表を引く**（項目48-RO）——
+    載っていれば **False**（＝印を立ててよい）。理由は下の本文。
+
     **出どころは4つ**（どれか1つでも在れば「世の中の語」。名簿は
     増やすだけで、消さない）:
 
@@ -700,6 +742,25 @@ def _katakana_word_known(surf, dict_index=None):
         return False
     if not all('ァ' <= c <= 'ヶ' or c == 'ー' for c in surf):
         return False
+    # ★★ **断片の表を、いちばん先に引く**（項目48-RO・2026-09-05・
+    # うにさんの報告「`解析課背中セク、`——まず `背中セク` が異様な
+    # のでそう判定しないといけない。**セクが組織名である判定が変**」）。
+    #
+    # 下の4つのうち**費用表と世の読みは、カタカナに対しては
+    # 読みの証拠であって綴りの証拠ではない**——費用表は読みごとに
+    # そのカタカナ綴りを表記として持つ（`せく → セク:35 咳く:145`）。
+    # 2字の読み 3,036 のうち 1,838（60%）にカタカナ形が在り、
+    # たいてい最安。つまり `_table_cost('セク')` が返すのは
+    # 「**せく と読む語が在る**」でしかなく、`セク` という綴りが
+    # 語かどうかを1つも言っていない。**だから表で割る**
+    # （`katakana_frag`・AI の判定・版と出どころつき）。
+    # 表に無ければ何も言わない＝今までどおり下の4つで決める。
+    try:
+        import katakana_frag as _kf
+        if _kf.is_fragment(surf):
+            return False
+    except Exception:
+        pass
     try:
         from general_words import is_general
         if is_general(surf):
@@ -881,7 +942,7 @@ def _proper_noun_downgradable(toks, i):
 
 
 def is_odd_run(text, tokenize_fn, with_spans=False,
-               store=None, dict_index=None):
+               store=None, dict_index=None, skip_join=False):
     """
     **その塊に「その順ではくっつけない語の並び」があるか**。
 
@@ -895,6 +956,10 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
     `store` / `dict_index` を渡すと、**信用できない固有名詞**の
     「読みが立った」を落とす（項目48-OR）。渡さなければ今までどおり
     （検査のモックや janome の無い環境は落とさない）。
+    `skip_join=True` は **「表で見たことのない並び」（`can_join` が
+    False）の判定だけを使わない**読み（項目48-SM・2026-09-06）。
+    呼び手はこれと通常の読みを比べて、「印が立った理由は見たことのない
+    並びだけか」を知る。
 
     戻り値: くっつけない並びの一覧（例 `[('野外', '文章')]`）。
     **空でも「正しい」という意味ではない。**
@@ -1027,7 +1092,13 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         elif ap.startswith('感動詞') and '格助詞' in bp:
             _kz = True
         # (D) **格助詞は連続しない**（をに・がを）。から・へ だけは
-        #     2つ目を取れる（ここ**からが**本番・駅**へと**向かう）
+        #     2つ目を取れる（ここ**からが**本番・駅**へと**向かう）。
+        #     **並立助詞の と は数えない**（項目48-RZ・2026-09-06 に
+        #     一度足して**測って外した**——解析が と を並立助詞と読むのは
+        #     まさに `AとBとが`・`〜とのことですが` の並立・引用の形で、
+        #     実機メモの正しい5行に紫が立った。`もみとにもどります` の
+        #     ①は、かな連続の側の `pos_grammar`（K/Bk・行頭の裸の助詞）が
+        #     立てる）
         elif ('格助詞' in ap and '格助詞' in bp
                 and a_sf not in ('から', 'へ')):
             _kz = True
@@ -1046,7 +1117,11 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         # (R2) **連体詞に助詞は付かない**（そのが）。ある だけは
         #      慣用（あるがまま）で除く
         elif (ap.startswith('連体詞') and bp.startswith('助詞')
-                and a_sf != 'ある'):
+                and a_sf != 'ある'
+                # **この／その／あの／どの＋くらい・ぐらい・ほど** は程度の言い方
+                # （項目48-TE・2026-09-06。`どのくらい日持ちしますか` に紫）
+                and not (a_sf in ('この', 'その', 'あの', 'どの')
+                         and b_sf in ('くらい', 'ぐらい', 'ほど'))):
             _kz = True
         # (S2) **イ形容詞の語幹だけ（送り仮名なし）に「て」が直付き**は
         #      異様（うにさんの案「文節最後の文字を隣接キーと疑ったら
@@ -1072,6 +1147,7 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         #     `流` が動詞になる）ので、測るときは必ず行で測ること。
         if ('名詞:接尾:一般' in ap and '名詞:接尾:一般' in bp
                 and (a_sf, b_sf) not in _SUFFIX_PAIR_OK
+                and b_sf not in _SUFFIX_TAIL_FREE       # 説明書付き（48-SN）
                 and (a_sf + b_sf) not in (_load() or ())
                 and not _run_is_word(text, a_s, b_e)):
             _kz = True
@@ -1208,6 +1284,12 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
                 and bp.startswith('動詞')
                 and b_sf in _SURU_FORMS
                 and prev_sf not in ('お', 'ご')
+                # **接頭詞が直前に付いているなら、接頭詞＋この字が1語**
+                # （項目48-SN・2026-09-06。同梱し・再送し・未着し）。
+                # 解析は `同梱` を 同(接頭詞)|梱 と切るので、`梱し` が
+                # 名詞1字＋する に見えていた（うにさんの実機・紫）
+                and not (i > 0 and spans[i - 1][1] == a_s
+                         and '接頭' in (spans[i - 1][2][1] or ''))
                 # 送り仮名まで含めて表の語（`見做|し`＝見做す）なら語の
                 # 中の切れ目。`号し` だけが表に在っても `田部井号し` は
                 # 無いので、漢字の連続ごと見る（48-IP と同じ `_run_is_word`）
@@ -1257,6 +1339,8 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
                 continue
             # **漢字が境目で隣り合っている形**（元からの道・48-HN）。
             # **A の読みも渡す**（項目48-OV。1字の名詞が訓読みかを見る）
+            if skip_join:
+                continue                    # 見たことのない並びは見ない（48-SM）
             if can_join(a_sf, ap, b_sf, bp,
                         _hira(a[2] if len(a) > 2 else '')) is not False:
                 continue
@@ -1304,7 +1388,15 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
                 # 上の1字の門だけなら **直った +2・化け 据え置き**。
                 if len(b_sf) == 1:
                     continue
+                # **連用形＋動作性名詞は複合の型**（項目48-SN・2026-09-06。
+                # 飛び散り防止・立ち入り禁止・吹き出し防止・書き込み禁止・
+                # 取り扱い注意）。うにさんの実機で `飛び散り防止 →
+                # 飛び入り防止` と化けた
+                if 'サ変接続' in bp:
+                    continue
             elif ap.startswith('名詞') and len(a_sf) >= 2:
+                if skip_join:
+                    continue                # 見たことのない並びは見ない（48-SM）
                 # **動詞の名詞化が前に立つ形**（項目48-KF・2026-08-27）。
                 # うにさんの正解メモ `引き月資料` ＝ **`引き継ぎ資料` の
                 # タイプミス**（ひきつぎ を ひきつき と打った＝濁点の脱け）。

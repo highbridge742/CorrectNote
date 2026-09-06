@@ -756,7 +756,10 @@ def learn_from_text(store, text, category_hint=None):
     ユーザーが実際に書いた文章から学ぶため、
     その人がよく使う語ほど強く記憶される。
 
-    戻り値: 覚えた語の数
+    戻り値: **中身が変わった語の数**（項目48-RJ）。
+        同じ文を2回学べば 2回目は 0——呼び手（`app._learn_now`）は
+        これを見て「控えを疑うか」を決めるので、**「見た数」では
+        毎回捨てることになる**。
     """
     if not HAS_JANOME or not text:
         return 0
@@ -843,26 +846,32 @@ def learn_from_text(store, text, category_hint=None):
         seen.add(key)
 
         category = category_hint or _guess_category(pos, sub_pos, surface)
-        store.add(reading, surface, category)
-        added += 1
+        # ★★ **「見た語」ではなく「変わった語」を数える**
+        # （項目48-RJ・2026-09-05・うにさんの報告「次のタブの先読みが
+        # 動いていません」）。もとは `store.add` の戻りを見ずに
+        # `added += 1` していたので、**同じ文を2回学んでも 0 に
+        # ならず**、`_learn_now` が打つたびに（3秒ごと）控えと
+        # 裏の預かりを捨てていた。`add` は変えたときだけ True。
+        if store.add(reading, surface, category):
+            added += 1
 
     return added
 
 
 def repair_conjugated_fragments(store):
     """
-    語彙に紛れ込んだ「活用の途中の形」の使用実績を取り消す。
+    語彙に紛れ込んだ「活用の途中の形」の印（solid）を取り消す。
 
     過去の自動学習は、編集が落ち着くたびにメモ全文を学習し直して
-    使用回数(count)を水増ししていた（2026-08-09 に「新しく書かれた
+    使用回数を水増ししていた（2026-08-09 に「新しく書かれた
     行だけ学習する」へ修正）。その名残で「分から」「使え」「生き」の
-    ような活用の断片が count>=2 の「使用実績のある語」になっており、
+    ような活用の断片が「この人の語」として立っており、
     正しいかなを断片へ書き換える誤爆（ひらから→ひわから 等）の
     温床になっている。
 
     janome で表記そのものを解析し、**1語の動詞・形容詞で、かつ
-    基本形と違う形**（＝活用の途中の形）だけ count を 1（実績なし）へ
-    戻す。語そのものは消さない（クリック候補としては残る）。
+    基本形と違う形**（＝活用の途中の形）だけ solid を降ろす。
+    語そのものは消さない（クリック候補としては残る）。
     名詞や基本形（巻き込む・使う）には触らない。
 
     一回きりの手入れとして呼ぶこと（実施の印は settings 側で持つ）。
@@ -872,8 +881,9 @@ def repair_conjugated_fragments(store):
         return 0
     t = Tokenizer()
     fixed = 0
+    from vocabulary import _set_solid as _mark, entry_is_solid as _is_solid
     for entry in store.to_list():
-        if entry.get('count', 0) < 2:
+        if not _is_solid(entry):
             continue
         surface = entry.get('surface') or ''
         if len(surface) < 2:
@@ -903,7 +913,7 @@ def repair_conjugated_fragments(store):
         #   消え、かな打ち（1-D）が直らなくなった（実機・2026-08-09）。
         if (base and base != '*' and base != surface
                 and '連用' not in infl):
-            entry['count'] = 1
+            _mark(entry, False)
             fixed += 1
     if fixed:
         store._invalidate_cache()

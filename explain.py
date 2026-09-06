@@ -371,7 +371,11 @@ def _tokens_for(text, tokenize_fn=None):
     無ければ呼び出し側の `tokenize_fn`（エンジンが見ているのと
     同じ割り方）。どちらも駄目なら []。
 
-    戻り値: [(表記, 品詞, 活用形, 原形, 読みが取れたか), ...]
+    戻り値: [(表記, 品詞, 活用形, 原形, 読みが取れたか, **読み**), ...]
+
+    6つ目の**読み**は 48-RN で足した（固有名詞を信用してよいかの
+    判定に要る）。**既存の添字は1つも動かしていない**ので、
+    5つで受けている場所は `t[:5]` で受け直すだけでよい。
     """
     got = _TOK_CACHE.get(text)
     if got is not None:
@@ -392,7 +396,8 @@ def _tokens_for(text, tokenize_fn=None):
                     pos = f'{pos}:{sub}'
                 out.append((t.surface, pos,
                             getattr(t, 'infl_form', '') or '',
-                            t.base_form or '', bool(t.has_reading)))
+                            t.base_form or '', bool(t.has_reading),
+                            getattr(t, 'reading', '') or ''))
             # **複合辞は1語にして見せる**（項目48-NV・学び22）。
             # ここは `morphology.tokenize` を**直に呼んでいる**ので、
             # 補正の道（`corrector.make_tokenizer`）だけに繋ぎを
@@ -409,7 +414,8 @@ def _tokens_for(text, tokenize_fn=None):
                         compound_ranges([t[0] for t in out])):
                     _part = out[_a:_b + 1]
                     out[_a:_b + 1] = [(_w, _CFW[_w], '', _w,
-                                       all(bool(t[4]) for t in _part))]
+                                       all(bool(t[4]) for t in _part),
+                                       '')]
             except Exception:
                 pass
             if out:
@@ -425,7 +431,8 @@ def _tokens_for(text, tokenize_fn=None):
             # 落とすと「動詞の終止形＋名詞」の注記がこの道でだけ
             # 黙る・学び22）。
             return [(t[0], t[1] or '',
-                     (t[6] if len(t) > 6 else '') or '', '', bool(t[5]))
+                     (t[6] if len(t) > 6 else '') or '', '', bool(t[5]),
+                     (t[2] if len(t) > 2 else '') or '')
                     for t in tokenize_fn(text)]
         except Exception:
             pass
@@ -439,8 +446,174 @@ def _remember(text, tokens):
     return tokens
 
 
+def _is_kana_char(c):
+    """かな（ひらがな・カタカナ・長音）か。"""
+    return bool(c) and ('ぁ' <= c <= 'ゖ' or 'ァ' <= c <= 'ヺ' or c == 'ー')
+
+
+def _proper_noun_note(toks, i, store, dict_index):
+    """
+    **その固有名詞の札を、そのまま名乗ってよいか**（項目48-RN・
+    2026-09-05・うにさんの報告「`右田でブルクリック`——以前も
+    言ったが、**地名と人名判定の優先度を下げなければいけない**」）。
+
+    48-OR は①（異様か）で「解析の言う固有名詞を特別扱いしない」と
+    決めた。**同じ判定を、表示が知らなかった**——エンジンが
+    「信用しない」と決めた札を、品詞判定の欄が**そのまま名乗って**
+    いた（`右田 ＝ 固有名詞（地名）`）。
+
+    ★★ **判定は借りるだけ。新しい判定は作らない**（48-GN）——
+    `oddness._proper_noun_downgradable`（そもそも落としてよい形か）と
+    `oddness._proper_noun_is_trusted`（信用してよいか）の2本を、
+    ①が見ているのと**同じ材料**で呼ぶ。
+
+    戻り値: 言い換えの字（`当て推量（地名）——…`）か、空。
+    """
+    if store is None and dict_index is None:
+        return ''
+    try:
+        import oddness as _odd
+        if not _odd._proper_noun_downgradable(toks, i):
+            return ''
+        t = toks[i]
+        # `_proper_noun_is_trusted` は (表記, 品詞, 読み) を見る
+        _t3 = (t[0], t[1], (t[5] if len(t) > 5 else ''))
+        if _odd._proper_noun_is_trusted(_t3, store, dict_index):
+            return ''
+    except Exception:
+        return ''
+    pos = (toks[i][1] or '')
+    if '人名' in pos:
+        what = '人名'
+    elif '地域' in pos or '地名' in pos:
+        what = '地名'
+    elif '組織' in pos:
+        what = '組織名'
+    else:
+        what = '固有名詞'
+    return f'当て推量（{what}）——固有名詞として信用しない'
+
+
+def _unknown_katakana_note(t):
+    """
+    **janome が知らないカタカナを「組織名」と名乗らない**
+    （項目48-RN／D6(b)・2026-09-05・うにさんの報告
+    「`解析課背中セク、`——セクが組織名である判定が変」）。
+
+    48-QD が英字でやったのと**同じ根拠**をカタカナに広げる——
+    辞書に無い綴りに janome が当てる `名詞:固有名詞:組織` は、
+    札ではなく**当て推量**。「知らない」と言うほうが正しい。
+    """
+    surf = t[0] or ''
+    if not surf or not all('ァ' <= c <= 'ヶ' or c == 'ー' for c in surf):
+        return ''
+    pos = (t[1] or '')
+    if '固有名詞' not in pos:
+        return ''
+    if len(t) > 4 and t[4]:
+        return ''               # 読みが取れている＝辞書に在る
+    return 'カタカナ（辞書に無い語）'
+
+
+def _kana_only(text):
+    """かな（と長音）だけの範囲か。"""
+    return bool(text) and all(_is_kana_char(c) for c in text)
+
+
+def _verb_noun_cut(toks):
+    """
+    鎖のどこかで**動詞の終止形に名詞が直付き**になっているか
+    （項目48-RL）。なっていれば (添字, 動詞の字, 名詞の字)。
+
+    判定そのものは `corrector._verb_noun_pair` の**1本**を借りる
+    （48-GN——同じ文法をもう一度書かない）。
+    """
+    try:
+        from corrector import _verb_noun_pair as _vnp
+    except Exception:
+        return None
+    for k in range(1, len(toks)):
+        try:
+            if _vnp(toks[k - 1][1], toks[k - 1][2], toks[k][1]):
+                return k, toks[k - 1][0], toks[k][0]
+        except Exception:
+            continue
+    return None
+
+
+def _run_neighbour_note(text, prev_text, next_text):
+    """
+    **隣とひとつづきである事実**（項目48-RG・2026-09-05・うにさんの指定
+    「**判定できないなら、できる範囲で判定するべきです**」）。
+
+    48-QE は「1拍の内側で切れた割り方から品詞を言わない」と決めた——
+    これは正しいので**動かさない**。だが「判定できません」だけで
+    終わると、**分かっていることまで黙る**ことになる。
+
+    `かんいりゅうりょく` は解析が `かん｜いりゅうりょく` に切るので、
+    F2 で後ろを見ると `いりゅうりょく` になる。**品詞は言えない**が、
+    「**前の『かん』とひとつづきのかな連続**」は**見れば分かる事実**で、
+    当て推量ではない。それを添える。
+
+    **品詞は言わない**（言えないから）。両隣ともかなで繋がるときは
+    両方を言う。繋がらない側は黙る。
+    """
+    if not text:
+        return ''
+    sides = []
+    if prev_text and _is_kana_char(prev_text[-1]) \
+            and _is_kana_char(text[0]):
+        sides.append('前の「%s」' % prev_text[-6:])
+    if next_text and _is_kana_char(next_text[0]) \
+            and _is_kana_char(text[-1]):
+        sides.append('後ろの「%s」' % next_text[:6])
+    if not sides:
+        return ''
+    return '。%sとひとつづきのかな連続' % '・'.join(sides)
+
+
+def candidate_pos_line(surface, tokenize_fn):
+    """
+    **候補の品詞を1行で**（項目48-RH・2026-09-05・うにさんの指定
+    「**判定できないなら、できる範囲で判定するべきです**」）。
+
+    打った字が「1拍の内側で切れた割り方」で品詞を言えないとき
+    （48-QE）、**一覧に既に並んでいる筆頭候補**を借りて
+    「その候補ならこう」と言い添える材料。
+
+        `いりゅうりょく` → 判定できません（…）
+                           候補「入力」なら 名詞（サ変）
+
+    ★★ **新しい判定は作らない**（48-GN）——janome に聞くだけ。
+    **1語に割れないなら何も言わない**（割れた鎖に品詞を言い切るのは
+    48-QE がやめたこと。候補の側でも同じ）。
+
+    戻り値: `名詞（サ変）` のような字。言えなければ空。
+    """
+    if not surface or tokenize_fn is None:
+        return ''
+    try:
+        toks = tokenize_fn(surface)
+    except Exception:
+        return ''
+    if not toks or len(toks) != 1:
+        return ''                    # 1語で割れないなら言わない
+    t = toks[0]
+    if (t[0] or '') != surface:
+        return ''
+    try:
+        name = pos_name(t[1], t[0], (t[6] if len(t) > 6 else ''),
+                        '', bool(t[5]) if len(t) > 5 else True)
+    except Exception:
+        return ''
+    if not name or name == UNKNOWN_POS:
+        return ''
+    return name
+
+
 def pos_lines(text, tokenize_fn=None, store=None, pos_hint=None,
-              infl_hint='', atomic_hint=False, known_hint=True):
+              infl_hint='', atomic_hint=False, known_hint=True,
+              prev_text='', next_text='', dict_index=None):
     """
     **選んだ範囲の品詞**（「－ 品詞判定 －」の中身）を行の一覧で返す。
 
@@ -449,6 +622,10 @@ def pos_lines(text, tokenize_fn=None, store=None, pos_hint=None,
     （`にゅうりょくみす` が `に｜ゅうりょくみす` に割れているのは、
     紫が立たない理由そのもの）。1行にまとめないのは、候補一覧の
     幅がその1行の長さで決まるから（`_make_dropdown`）。
+
+    `prev_text` / `next_text` を渡すと、**1拍の内側で切れた割り方**の
+    ときに「隣とひとつづきのかな連続」という**事実だけ**を添える
+    （項目48-RG。**品詞は言わない**——言えないから）。
 
     **判定が変なときは、変だと言う**（項目48-PW・2026-09-04・
     うにさんの指定「品詞の判定を見れば見るほど変なので、品詞判定を
@@ -526,10 +703,24 @@ def pos_lines(text, tokenize_fn=None, store=None, pos_hint=None,
         if kata:
             return [f'カタカナ語（{kata}）のかな書き']
     if len(toks) == 1:
-        surface, pos, infl, base, has_reading = toks[0]
+        # **1語のときも同じ判定を通す**（学び22——片方だけに置くと
+        # そちらを迂回する。`セク` 単独はこの道）
+        _n1 = (_unknown_katakana_note(toks[0])
+               or _proper_noun_note(toks, 0, store, dict_index))
+        if _n1:
+            return [_n1]
+        surface, pos, infl, base, has_reading = toks[0][:5]
         return [pos_name(pos, surface, infl, base, has_reading)]
     lines = [f'{surface} ＝ {pos_name(pos, surface, infl, base, hr)}'
-             for surface, pos, infl, base, hr in toks]
+             for surface, pos, infl, base, hr in (t[:5] for t in toks)]
+    # **固有名詞の当て推量は、そう言う**（項目48-RN）。
+    # ①（`oddness`）が「信用しない」と決めた札を、ここだけ
+    # そのまま名乗るのはおかしい（学び22——同じ判定を全部の道に）
+    for _i, _t in enumerate(toks):
+        _note2 = (_unknown_katakana_note(_t)
+                  or _proper_noun_note(toks, _i, store, dict_index))
+        if _note2:
+            lines[_i] = f'{_t[0]} ＝ {_note2}'
     # **1拍の内側で切れた割り方からは、品詞を言わない**（項目48-QE・
     # 2026-09-04・うにさんの指定「頭に小文字が来るのも変」の根っこ）。
     #
@@ -549,7 +740,11 @@ def pos_lines(text, tokenize_fn=None, store=None, pos_hint=None,
     _mc = _mora_cut(toks)
     if _mc is not None:
         _k, _mora = _mc
-        _note = f'{UNKNOWN_POS}（`{_mora}` は1拍——語の途中で切れています）'
+        # **言える事実を添える**（項目48-RG）——品詞は言えないが、
+        # 「隣とひとつづきのかな連続だ」は見れば分かる
+        _side = _run_neighbour_note(text, prev_text, next_text)
+        _note = (f'{UNKNOWN_POS}（`{_mora}` は1拍——語の途中で'
+                 f'切れています{_side}）')
         if all('ぁ' <= c <= 'ゖ' or 'ァ' <= c <= 'ヺ' or c == 'ー'
                for c in text):
             lines = [_note]
@@ -557,6 +752,33 @@ def pos_lines(text, tokenize_fn=None, store=None, pos_hint=None,
             _joined = toks[_k - 1][0] + toks[_k][0]
             lines = (lines[:_k - 1] + [f'{_joined} ＝ {_note}']
                      + lines[_k + 1:])
+    elif _kana_only(text):
+        # ★★ **かなだけの範囲で「動詞の終止形＋名詞の直付き」が
+        # 要る割り方は、割り方ごと当て推量**（項目48-RL・2026-09-05・
+        # うにさんの報告「`たぶいごうして`——動詞終止形から名詞と
+        # 繋がる**誤判定**。この文法は変ですよね」）。
+        #
+        #   いま  たぶ ＝ 動詞・終止形 ／ い ＝ 名詞 ／ … ／
+        #         ※ 品詞のつながりが異様
+        #   新    判定できません（「たぶ」を動詞と読むと、終止形に
+        #         名詞「い」が直付きになる——成り立たない割り方。…）
+        #
+        # 48-QE（1拍の内側で切れた割り方から品詞を言わない）と
+        # **同じ性質**——解析が壊れたかなに当てた割り方は、
+        # 割り方ごと当て推量。48-PW は鎖を見せて ※ を足したが、
+        # うにさんは**鎖そのもの**を誤判定だと言っている。
+        #
+        # **漢字を含む範囲（`解す咳`）は今までどおり**鎖＋※——
+        # うにさん自身がその言い方で報告した形（48-PL）。
+        # 判定は `corrector._verb_noun_pair` の**1本のまま**（48-GN）。
+        _vn = _verb_noun_cut(toks)
+        if _vn is not None:
+            _kk, _vw, _nw = _vn
+            _side2 = _run_neighbour_note(text, prev_text, next_text)
+            lines = [f'{UNKNOWN_POS}（「{_vw}」を動詞と読むと、'
+                     f'終止形に名詞「{_nw}」が直付きになる'
+                     f'——成り立たない割り方{_side2}）']
+            _mc = True          # ※ を足さない（下の try が見る）
     try:
         if _mc is not None:
             raise ValueError        # 成り立たない割り方に注記は付けない
@@ -582,7 +804,8 @@ def pos_lines(text, tokenize_fn=None, store=None, pos_hint=None,
     if (store is not None and len(text) >= 3
             and all('ぁ' <= c <= 'ゖ' or c == 'ー' for c in text)
             and not any((p or '').split(':')[0] in ('動詞', '助動詞')
-                        for _s, p, _i, _b, _h in toks)):
+                        for _s, p, _i, _b, _h in (t[:5]
+                                                  for t in toks))):
         try:
             if store.has_reading(text):
                 lines.append('※ まるごとでは語彙に在る読み'
@@ -604,10 +827,10 @@ def pos_label(text, tokenize_fn=None):
 # 1行目に出す「違和感の正体」。**判定をもう一度回して**書く。
 NO_ODD_REASON = '異様だという判定は立っていない'
 
-#: 初期語彙が付ける使用回数の上限（`seed_vocabulary.load_seed` は 2 を
-#: 入れ、同じ語が種の表に2度出ていると 3 になる）。これ以下を
-#: 「学習した」と書かない（項目48-MD）。
-SEED_COUNT_MAX = 3
+#: **撤去した**（項目48-QJ・2026-09-05）。初期語彙の使用回数の上限
+#: （3）を見て「学習した」と書くかを決めていたが、**回数そのものを
+#: 記録しなくなった**（うにさんの指定）。名前だけ残すと、いつか
+#: 「回数がある」前提のコードがまた生える。`learn_reason` を参照。
 
 
 def odd_reason(text, line='', start=None, end=None, tokenize_fn=None,
@@ -1017,25 +1240,24 @@ def hand_reason(typed, fixed, input_method='kana', store=None,
 
 def learn_reason(typed, fixed, unit=None, choices=None, store=None):
     """
-    **学習履歴が効いたか**（「－ 補正根拠 －」の3行目）。
+    **本人の選択が効いたか**（「－ 補正根拠 －」の3行目）。
 
     効いていなければ **None**（呼び出し側はこの行を出さない）。
 
-      ・「補正の判断」の選び直し（`choices`）で決まった
+      ・語の枠（選び直し）で決まった
         → 「学習による選び直し」（うにさんの指定の言葉のまま）
-      ・直し先が**本人が実際に使った語**
-        → 何回使った語かを添える（これも学習履歴）
+      ・読みの枠（同音異義語で最後に選んだ表記）で決まった
+        → 「前回この読みで選んだ表記に合わせた」
 
-    **実績の敷居は 4 回**（項目48-MD）。初期語彙は投入の時点で
-    **count=2**、同じ語が種の表に2度出ていると 3 になる（実測:
-    初期状態の分布は 1:16,689 / 2:284 / 3:117 で、**3 が上限**）。
-    3 以下を「学習した」と書くと、**まだ何も学習していない初期状態で
-    この行が出てしまう**——うにさんの問い「学習履歴が影響したか」に
-    嘘を返すことになる。4 以上なら、本人が少なくとも1回は使っている。
+    ★★ **「何回使った語か」はもう書かない**（項目48-QJ・2026-09-05）。
+    うにさんの指定「変換の根拠に、**履歴に何回あったという表示**が
+    ありました。**履歴として記録されることをユーザは望みません**」。
+    回数そのものを記録しなくなったので、書きようがない
+    （旧: `学習した語彙が効いた（「X」・N回）`／`SEED_COUNT_MAX`）。
     """
     typed, fixed = typed or '', fixed or ''
 
-    # ① 選び直しの記憶
+    # ① 語の枠（選び直しの記憶）
     if choices is not None and typed:
         prev = next_ = ''
         if isinstance(unit, dict):
@@ -1054,17 +1276,31 @@ def learn_reason(typed, fixed, unit=None, choices=None, store=None):
                                                            'chosen_hint'):
             return '学習による選び直し'
 
-    # ② 直し先が本人の使った語（初期語彙の上限 3 より上）
-    if store is not None and fixed:
+    # ② 読みの枠（同音異義語で最後に選んだ表記・項目48-QH）
+    #
+    # ★★ **両方の読みで照らす**（項目48-QT）。`unit['reading']` は
+    # 道によって中身が違う——`build_line_units`（補正結果の欄）は
+    # **直した語の読み**、`build_suspect_units`（メモ欄・F2）は
+    # **打った語の読み**を入れる（`units.py`）。片方だけ見ると、
+    # **同じ1件が補正結果欄では出て、メモ欄では出ない**
+    # （学び22——門が片方の道にしか掛かっていない形）。
+    # 落ちるのは**読みが変わる直し**（誤字を直した読みで引き当て、
+    # 枠の並べ替えが効いた場合）。`store.reading_of` を第一候補に
+    # 「する」のではなく**足す**——`fixed` が語彙に立っていないとき、
+    # いま出ている②を消してしまう（★★ 壊さない ＞ 直る）。
+    if choices is not None and fixed:
         try:
-            from morphology import katakana_to_hiragana as _k2h
-            reading = store.reading_of(fixed) or ''
-            best = 0
-            for e in store.lookup(_k2h(reading)) if reading else []:
-                if e.get('surface') == fixed:
-                    best = max(best, int(e.get('count', 0) or 0))
-            if best >= SEED_COUNT_MAX + 1:
-                return f'学習した語彙が効いた（「{fixed}」・{best}回）'
+            _rds = []
+            if isinstance(unit, dict) and unit.get('reading'):
+                _rds.append(unit['reading'])
+            if store is not None:
+                from morphology import katakana_to_hiragana as _k2h
+                _got = _k2h(store.reading_of(fixed) or '')
+                if _got and _got not in _rds:
+                    _rds.append(_got)
+            for reading in _rds:
+                if choices.surface_for_reading(reading) == fixed:
+                    return '前回この読みで選んだ表記に合わせた'
         except Exception:
             pass
     return None

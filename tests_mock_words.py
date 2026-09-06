@@ -813,16 +813,20 @@ def test_kana_to_kanji():
 
     pick = C._kanji_surface_for_reading
 
-    # --- 通ってほしいもの ---
-    check('漢字でしか書かない語は返る', pick('たんご', store), '単語')
+    # --- ★★ 回数を廃したので、この道は**いま誰も通らない**
+    #     （項目48-QG'・2026-09-05）。`_K2K_MIN_USAGE = 10` は
+    #     `count` が {1,2} しか取らなくなったので絶対に越えられない。
+    #     **初期状態では前からそうだった**（初期の count は 1〜3）ので、
+    #     出荷される挙動＝初期状態の挙動、で揃った形。
+    #     `solid` へ置き換えるかは**測ってから決める**（巡3）。
+    check('回数の証拠が無くなったので返らない（項目48-QG-dash）',
+          pick('たんご', store), None)
 
-    # --- 通ってはいけないもの ---
+    # --- 回数に依らない門は、そのまま生きている ---
     check('かなでも書く語は返らない（つながり）',
           pick('つながり', store), None)
     check('漢字の表記が無い語は返らない（かよわい）',
           pick('かよわい', store), None)
-    check('使用実績が乏しければ返らない（補正 4回）',
-          pick('ほせい', store), None)
     check('語彙に無い読みは返らない', pick('ぬけぬけ', store), None)
 
     # --- 「誤字の見本らしい行」の見分け ---
@@ -2350,7 +2354,10 @@ def test_parallel_pair_48ka():
     `加工 → 下降` は同音（かこう）の対、`中華 → 中か` は読みの再分割。
     **片方だけでは開かない**（`上昇中か加工中か` は、かえって読めない）。
     並列の相手（上昇⇔下降）が閉じた証拠なので使用実績は見ない
-    （初期語彙の 下降 は実績1。count>=2 の門はうにさんの指定で触らない）。
+    （初期語彙の 下降 は立っていない。**`count>=2` の門は、うにさんの
+    2026-09-05 の指定で `solid` の意味になった**——回数の記録そのものを
+    廃したので、この門は「この人の語として立っているか」を聞く形に
+    なっている。等価であることは構造で示してある〔項目48-QG〕）。
     """
     all_ok = True
 
@@ -2439,7 +2446,8 @@ def test_backslash_key_48kb():
 
     的（うにさんの正解メモ・実装方針5）: `rh\\\\.` ⇒ スクロール
     （すくろーる。初期語彙の スクロール は実績1なので、回数を見ない
-    表が証拠——count>=2 の門はうにさんの指定で触らない）。
+    表が証拠——`count>=2` の門は、うにさんの 2026-09-05 の指定で
+    `solid`〔立っているか〕の意味になった。項目48-QG）。
     """
     all_ok = True
 
@@ -2921,11 +2929,40 @@ def test_no_purple_when_left_alone_48ko():
     check('判断置き場が無くても落ちない',
           C._decided_spans('奥悠久子帝', None), [])
 
-    # **印のほうが狭くても外れる**（重なりで外す）
+    # ------------------------------------------------------------
+    # 48-QY **紫下げの門は、描画の直前の1本**（`visible_odd_spans`）
+    # ------------------------------------------------------------
+    # エンジン（`_odd_spans_for_line`）は**素の紫**を返し、
+    # 落とすのは画面へ塗る直前だけ。こうすると「紫を1つ下げる」ために
+    # 解析をやり直す必要が無くなる（うにさんの報告——他の行の補正の色が
+    # 一度消えて再度つく）。
     d3 = DecisionStore()
     d3.protect('奥悠久子帝')
-    spans = C._odd_spans_for_line('奥悠久子帝', None, (), d3)
-    check('解析できないときは今までどおり []', spans, [])
+    check('決めた範囲と重なる紫は落ちる',
+          C.visible_odd_spans('奥悠久子帝です', [(0, 5)], d3), [])
+    check('**印のほうが狭くても外れる**（重なりで外す）',
+          C.visible_odd_spans('奥悠久子帝です', [(2, 5)], d3), [])
+    check('重ならない紫は残る',
+          C.visible_odd_spans('奥悠久子帝です', [(5, 7)], d3), [(5, 7)])
+    check('決めていなければ、そのまま返す',
+          C.visible_odd_spans('奥悠久子帝です', [(0, 5)], DecisionStore()),
+          [(0, 5)])
+    check('判断置き場が無くても落ちない',
+          C.visible_odd_spans('奥悠久子帝です', [(0, 5)], None), [(0, 5)])
+    check('紫が無い行では何もしない',
+          C.visible_odd_spans('奥悠久子帝です', [], d3), [])
+
+    # ★★ **エンジン側は もう落とさない**（門を2か所に増やさない・48-GN）
+    check('`_odd_spans_for_line` は `decisions` を受け取らない',
+          'decisions' in C._odd_spans_for_line.__code__.co_varnames, False)
+
+    # ★★ **塗り口に門が掛かっていること**（学び22——ここが唯一の口）
+    import io as _io
+    _src = _io.open('app.py', encoding='utf-8').read()
+    check('app の塗り口が `visible_odd_spans` を通している',
+          'corrector.visible_odd_spans(' in _src, True)
+    check('紫下げは `_reanalyze_all` を呼ばない（answer_changed=False）',
+          'answer_changed=False' in _src, True)
     return all_ok
 
 
@@ -3345,14 +3382,34 @@ def test_kt_hands_48ku():
     st = _St({'しゅうりょ': [{'surface': '囚虜', 'count': 6}],
               'しゅうりょう': [{'surface': '終了', 'count': 554},
                                {'surface': '修了', 'count': 1}]})
-    check('囚虜時 → 終了時（優勢 554 >= 20×6）',
+    # ★★ **優勢は「回数の 20倍」から「書かれている読みが語彙に在るか」へ**
+    # （項目48-QG'・2026-09-05）。回数の記録をやめたので 20倍は二度と
+    # 越えられない。残るのは前半——もとの `base_count == 0`＝
+    # **その読みの語が語彙に1つも無いとき**だけ通す形。
+    #
+    # ★ `solid` で聞く形は**測って外した**。育ちには count 1 の語が
+    # 13,866件あり、solid で聞くとそれが全部「立っていない」側へ落ちて
+    # **門が旧より広く開く**——`除雪用 → 常設用`・`助演者 → 上演者` など
+    # **正しく書いた語を 21件壊した**（実測）。
+    st = _St({'しゅうりょ': [],
+              'しゅうりょう': [{'surface': '終了', 'count': 2},
+                               {'surface': '修了', 'count': 1}]})
+    check('囚虜時 → 終了時（しゅうりょ の語が無い・終了 は立っている）',
           C._run_reading_merge_fixes('囚虜時', tok_shuryo, st),
           [(0, 3, '終了時')])
 
-    st2 = _St({'しゅうりょ': [{'surface': '囚虜', 'count': 6}],
-               'しゅうりょう': [{'surface': '終了', 'count': 100}]})
-    check('優勢が 20倍未満（100 < 120）なら触らない',
+    # **書かれている読みの語が語彙に在るなら触らない**
+    # （count 1 でも触らない——旧の `base_count >= 1` と同じ）
+    st2 = _St({'しゅうりょ': [{'surface': '囚虜', 'count': 1}],
+               'しゅうりょう': [{'surface': '終了', 'count': 2}]})
+    check('書かれている読みの語が在るなら触らない（count 1 でも）',
           C._run_reading_merge_fixes('囚虜時', tok_shuryo, st2), [])
+
+    # **直し先が立っていなければ通さない**
+    st2b = _St({'しゅうりょ': [],
+                'しゅうりょう': [{'surface': '終了', 'count': 1}]})
+    check('直し先が立っていなければ触らない',
+          C._run_reading_merge_fixes('囚虜時', tok_shuryo, st2b), [])
 
     # **前が漢字1字なら見ない**（秒数 → 表数 の誤爆を受け止めた門）
     def tok_byosu(_line):
@@ -4464,6 +4521,191 @@ def test_compose_48lu():
     check('同じ変種の組は漢字の多い側（続きをはなす／続きを話す）',
           '漢字の多い側' in src, True)
 
+    # --- 7巡目（2026-09-06・項目48-RZ〜48-SC）---
+    print('--- 項目48-RZ〜48-SC（格助詞の連続・人名＋を・濁点の位置ずれ・④の選び方） ---')
+    import pos_grammar as _P7
+    check('48-RZ 格助詞の連続は説明が付かない（これをにする）',
+          _P7.explain_kana_run('これをにする'), False)
+    check('48-RZ 行頭の裸の助詞は立てない（もみとにもどります）',
+          _P7.explain_kana_run('もみとにもどります', bare_head=True), False)
+    check('48-RZ 直した形は説明が付く（もとにもどります）',
+          _P7.explain_kana_run('もとにもどります', bare_head=True), True)
+    check('48-RZ へと は置ける（えきへとむかう）',
+          _P7.explain_kana_run('えきへとむかう'), True)
+    check('48-RZ にも・とは は置ける（あなたにはむり）',
+          _P7.explain_kana_run('あなたにはむり'), True)
+    check('48-RZ 行頭でなければ助詞で始まれる（をよむ・直前が漢字）',
+          _P7.explain_kana_run('をよむ', after_kanji=True, bare_head=True), True)
+    check('48-RZ とにかく は語（行頭でも）',
+          _P7.explain_kana_run('とにかく', bare_head=True), True)
+    check('48-SB 濁点の位置ずれ（つつぎ → つづき）',
+          C._moved_dakuten_variants('つつぎ'), ['つづき'])
+    check('48-SB 頭へは移さない（ぎつ）',
+          C._moved_dakuten_variants('ぎつ'), [])
+    check('48-SB 濁音の無い並びは何も出ない（かたい）',
+          C._moved_dakuten_variants('かたい'), [])
+    check('48-SB 半濁点も同じ（はぱ → ぱは は頭が変わるので出ない）',
+          C._moved_dakuten_variants('はぱ'), [])
+    check("48-SB' 位置ずれは設計27の手に門付きで（_typo_repairs には置かない）",
+          "_add(r, '濁点の位置ずれ', 1.0)" in src
+          and 'つづき' not in C._typo_repairs('つつぎ'), True)
+    # --- 9巡目（48-SM〜48-SO・2026-09-06） ---
+    _osrc9 = open('oddness.py', encoding='utf-8').read()
+    import oddness as _O9
+    check('48-SN 形容詞の語幹1字＋名詞はくっつく（強炭酸）',
+          _O9.can_join('強', '形容詞:自立', '炭酸', '名詞:一般'), True)
+    check('48-SN 名簿の1字（厚）も同じ（解析が地域と言っても）',
+          _O9.can_join('厚', '名詞:固有名詞:地域:一般', '爪', '名詞:一般'), True)
+    check('48-SN 地名＋名詞はくっつく（九州方言）',
+          _O9.can_join('九州', '名詞:固有名詞:地域:一般', '方言', '名詞:一般'), True)
+    check('48-SN 名詞＋地名もくっつく（現代九州）',
+          _O9.can_join('現代', '名詞:一般', '九州', '名詞:固有名詞:地域:一般'), True)
+    check('48-SN 人名＋名詞は今までどおり（固有名詞は _plain_noun から外したまま）',
+          _O9.can_join('都築', '名詞:固有名詞:人名:姓', '方言', '名詞:一般'), False)
+    check('48-SN 何にでも付く接尾（付き・入り・済み・用…）',
+          all(x in _O9._SUFFIX_TAIL_FREE for x in ('付き', '入り', '済み', '用')), True)
+    check('48-SN 何にでも付く尾は can_join でも通す（素＋同士）',
+          _O9.can_join('素', '名詞:一般', '同士', '名詞:一般'), True)
+    check('48-SM is_odd_run に skip_join の読みがある',
+          'skip_join=False' in _osrc9 and _osrc9.count('if skip_join:') == 2, True)
+    check('48-SM 見たことのない並びだけの塊は、1語（＋接辞）で漢字を減らさないものに限る（4つの出口）',
+          'def _sm_single_unit(' in src and src.count('_sm_ok(') == 5, True)
+    check('48-SO 敬語の接頭辞（お・ご）の隙間は落とさない（にご → に も。機能語の並びには足さない）',
+          "or (_b and _a.replace(_b, '', 1) in ('お', 'ご'))):" in src
+          and "{'っ', 'よい', 'いい', 'お'}" in src, True)
+    check("48-SM' 置き換えは1語か、内容語が元より減るもの（_sm_content_count）",
+          'def _sm_content_count(' in src and 'return _n1 <= 1 or _n1 < _sm_n0' in src, True)
+    import pos_grammar as _PG9
+    check('48-SQ 語の表を使わない読み: しやすさ（し＋やす＋さ）は文法だけで説明が付く',
+          _PG9.explain_kana_run('しやすさ', no_words=True), True)
+    check('48-SQ 語の表を使わない読み: たかちゃん は 名前＋敬称',
+          _PG9.explain_kana_run('たかちゃん', no_words=True), True)
+    check('48-SQ 語の表を使わない読み: きゅうずいを（語＋語＋を）は付かない',
+          _PG9.explain_kana_run('きゅうずいを', no_words=True), False)
+    check('48-SQ/48-TH 2段: 機能語だけで説明が付く連続は触らない／用言の活用で説明が付く連続は芯が「明らかに自然になる直し」だけ',
+          "if (source != 'token_windows' and len(run) >= 3" in src
+          and 'and not _is_all_functional(run)):' in src
+          and '_sq_pure = _pg_sq.explain_kana_run(run, no_words=True,' in src
+          and 'readable_hint=(window_readable or _sq_readable),' in src, True)
+    check("48-TH' 48-IS の判定は用言の活用＋機能語の説明を受け入れる（やめたら・ひどくて は読める）",
+          C._kana_run_explained('やめたら') and C._kana_run_explained('ひどくて')
+          and not C._kana_run_explained('ぬぷぐさぞ'), True)
+    check('48-TH stems_only: やめたら・ひどくて は活用で説明が付く（no_words では付かない）',
+          _PG9.explain_kana_run('やめたら', stems_only=True)
+          and _PG9.explain_kana_run('ひどくて', stems_only=True)
+          and not _PG9.explain_kana_run('やめたら', no_words=True), True)
+    check("48-TH''' stems_only は用言1つ＋語尾・機能語だけ（かぎかえを・したれやなぎ は付かない／やめたら・ありえない・たべていく は付く）",
+          not _PG9.explain_kana_run('かぎかえを', stems_only=True, before_kanji=False)
+          and not _PG9.explain_kana_run('したれやなぎ', stems_only=True, before_kanji=False)
+          and _PG9.explain_kana_run('やめたら', stems_only=True)
+          and _PG9.explain_kana_run('ありえない', stems_only=True)
+          and _PG9.explain_kana_run('たべていく', stems_only=True)
+          and _PG9.explain_kana_run('あまりにもひどくて', stems_only=True), True)
+    check("48-TH'''' stems_only は終止の直後に用言を始めない（おくゆく・ほうれんぞう・てたとおす・がいししょう は付かない／やめたらいく・やめるし・すねると は付く）",
+          not _PG9.explain_kana_run('おくゆく', stems_only=True, before_kanji=False)
+          and not _PG9.explain_kana_run('ほうれんぞうを', stems_only=True, before_kanji=False)
+          and not _PG9.explain_kana_run('てたとおすを', stems_only=True, before_kanji=False)
+          and not _PG9.explain_kana_run('がいししょうを', stems_only=True, before_kanji=False)
+          and not _PG9.explain_kana_run('すいあけるを', stems_only=True, before_kanji=False)
+          and _PG9.explain_kana_run('みてた', stems_only=True, after_kanji=True)
+          and _PG9.explain_kana_run('やめたらいく', stems_only=True)
+          and _PG9.explain_kana_run('やめるし', stems_only=True)
+          and _PG9.explain_kana_run('すねると', stems_only=True)
+          and _PG9.explain_kana_run('たべていく', stems_only=True), True)
+    check('48-TJ 末尾の お/ご は、直後が漢字でないと分かれば接頭辞と読まない（よれご）',
+          _PG9.explain_kana_run('よれご', stems_only=True) is True
+          and _PG9.explain_kana_run('よれご', stems_only=True,
+                                    before_kanji=True) is True
+          and _PG9.explain_kana_run('よれご', stems_only=True,
+                                    before_kanji=False) is False
+          and _PG9.explain_kana_run('そのご', no_words=True,
+                                    before_kanji=True) is True, True)
+    check('48-TJ 48-IS の判定と芯にも before_kanji が通る',
+          C._kana_run_explained('よれご', before_kanji=False) is False
+          and 'before_kanji=before_kanji,' in src
+          and '_bk_core = before_kanji if c_e >= len(window) else False' in src
+          and 'and is_kanji(line[max(b, run_end)])),' in src, True)
+    check('48-TB 1語の辞書語の塊は読みに手を当てない（_single_known_token）',
+          'def _single_known_token(' in src
+          and 'if _single_known_token(chunk, tokenize_fn):' in src, True)
+    check('48-TC 読みの立つ2字以上の漢字語は解析の読みのまま（別読みの組を落とす）',
+          "_keep_rd = [r for r in readings if all(f in r for f in _fixed_rd)]" in src, True)
+    check('48-TD 語の組は辞書の語だけの漢字の塊を丸ごと組み替えない',
+          'def _seq_recomposes_known_kanji(' in src
+          and 'if _seq_recomposes_known_kanji(chunk, win.get' in src, True)
+    check('48-TE 形容詞語幹1字＋動詞連用形（浅煎り）はくっつく',
+          _O9.can_join('浅', '形容詞:自立', '煎り', '動詞:自立'), True)
+    check('48-TE 連体詞＋くらい は異様ではない（どのくらい）',
+          "and b_sf in ('くらい', 'ぐらい', 'ほど'))):" in _osrc9, True)
+    check('48-TF てる・でる の縮約は機能語',
+          'てる' in C.AUXILIARY_TAILS and 'でない' in C.AUXILIARY_TAILS, True)
+    check('48-TG 数字の直後の助数詞（かな）は連続の頭に入れない',
+          'for _cnt in _KANA_COUNTERS:' in src and 'つ' in C._KANA_COUNTERS, True)
+    check("48-SM 漢字を減らしてかな（カタカナも）を増やさない（48-ND (b) の線。素帰任 → 確認・引き月資料 → 引き継ぎ資料 を通し、炭酸度 → たんと・語彙素同士 → ボイス同士 を止める）",
+          "if (sum(1 for _c in _repl if is_kanji(_c)) < _sm_nk" in src
+          and '_kana = lambda _c: is_hiragana(_c) or is_katakana(_c)' in src, True)
+    check('48-SU 世の語2つの複合のカタカナも語（ダブル＋クリック）',
+          C._katakana_known_or_compound('ダブルクリック', None)
+          and not C._katakana_known_or_compound('リュクカミス', None), True)
+    check('48-SR 数字の直後から始まる漢字の塊は数え方（造語の入口・1か所・呼び手2つが直前の字を渡す）',
+          'は数字の直後から始まる（数え方）ので' in src
+          and src.count("prev_char=(line[m_start - 1] if m_start > 0 else '')") == 2, True)
+    check('48-SU 生やすカタカナは世の語（48-LA の出口）',
+          'def _new_katakana_known(' in src
+          and "_why['生やしたカタカナが世の語ではない（48-SU）'] += 1" in src, True)
+    check('48-SV 真ん中の漢字は読みが同じときだけ助詞に（48-PG の線）',
+          'and p1 not in _gap_readings(middle):' in src, True)
+    check("48-SW/48-SW' 読みの立つ名詞＋接尾は切り直さない（1字に限らない）・用言に読み替えない",
+          "if (L == 2 and '接尾' in pos[1] and run[0][0]" in src
+          and 'def _d42_has_yougen(' in src, True)
+    check("48-SW' 頭が数詞の連なりを外す門は置かない（設計42 の的 二階席 が 二｜階｜席）",
+          "if '数' in pos[0]:" not in src, True)
+    check('48-SX 得る（可能）: 機能語は うる だけ・自動機は R のあとの うる／え（とりうる・ありえない）',
+          'うる' in C.BASIC_VERB_FORMS and 'える' not in C.BASIC_VERB_FORMS
+          and _PG9.explain_kana_run('とりうる') and _PG9.explain_kana_run('ありえない'), True)
+    check('48-SQ 名前＋敬称の名前は2字以上（せくん は名前の形ではない）',
+          _PG9.explain_kana_run('せくん', no_words=True), False)
+    check("48-SK' 索引の顔の1語は サ変／になる の尾だけ",
+          "'にする', 'にし', 'となる', 'とし', 'として')))):" in src, True)
+    check('48-SB 芯の再構築は 守る語＋1字 の門より先に見る',
+          src.index('_md = _moved_dakuten_fix(core, store, dict_index)')
+          < src.index("if is_protected_word(core[:-1]):"), True)
+    _tk = lambda sf, pos: (sf, pos, '', 0, len(sf), True)
+    check('48-SA 話す は人を を で受けない',
+          C._verb_takes_no_person_object(_tk('話す', '動詞:自立')), True)
+    check('48-SA 話し（連用形）も',
+          C._verb_takes_no_person_object(_tk('話し', '動詞:自立')), True)
+    check('48-SA 呼ぶ は受ける（表の外）',
+          C._verb_takes_no_person_object(_tk('呼ぶ', '動詞:自立')), False)
+    check('48-SA 説明（サ変）も',
+          C._verb_takes_no_person_object(_tk('説明', '名詞:サ変接続')), True)
+    check('48-SA 名詞の 話 は動詞ではない',
+          C._verb_takes_no_person_object(_tk('話', '名詞:一般')), False)
+    check('48-SC 優勢は回数なしで決める（_lu_dominant）',
+          '_lu_dominant' in src and 'def _lu_dominant(' in src, True)
+    check('48-SC 述語の尾は1つの部品（_lu_predicate_tail）',
+          'def _lu_predicate_tail(' in src, True)
+    check('48-SC/48-SJ 手の段は 0手 → ゛ → 隣のキー → 落とす → 遠い（脱字は自動には使わない）',
+          'tiers = [[run], mark, cheap, drop, far]' in src, True)
+    check('48-SJ 動詞の基本形＋です は組まない',
+          "and t[0] in ('です', 'でした', 'ます', 'ました')" in src, True)
+    check('48-SI 伸ばしを含む連続の①は 48-LU だけ',
+          '伸ばしを含む連続に①。語の列として組み直し' in src, True)
+    check('48-SK 内容語1つ＋です・ます は solid のときだけ',
+          "if len(cset) == 1 and mn < 3:" in src, True)
+    check('48-SC 内容語を3つ直に並べない・名詞の直後に動詞の部品を置かない',
+          '_run_c >= 3' in src and "_pp.startswith('動詞')" in src, True)
+    check("48-SC/48-SB' かな→かな はこの道では受け入れない（芯の持ち場）",
+          'かな→かな はこの道では受け入れない' in src
+          and '_mdk' not in src, True)
+    check('48-SC 行全体の①の範囲で組み直す（_lu_scope）',
+          'def _lu_scope(' in src and 'odd_known=_lu_odd' in src, True)
+    check('48-SF 候補一覧の口（lu_run_candidates）',
+          'def lu_run_candidates(' in src, True)
+    check('48-SA の口は 48-PQ と同じ場所',
+          '_person_object_fixes(line, store, tokenize_fn, dict_index)' in src,
+          True)
+
     # 48-LW: 略語の隣のキー（純粋関数なので janome なしで測れる）
     import loanword as LW
     from vocabulary import VocabularyStore as _VS
@@ -4565,16 +4807,14 @@ def test_sei_pair_48le():
 
     del C._ODD_PENDING[:]
     check('柚須苅田 に紫（どちらも実績0）',
-          C._odd_spans_for_line('柚須苅田', tok_yusu, (), None, _St(),
-                                None),
+          C._odd_spans_for_line('柚須苅田', tok_yusu, (), _St(), None),
           [(0, 4)])
 
     # 本人がよく使う姓なら立てない
     st2 = _St()
     st2.data = {'ゆす': (('柚須', 3),)}
     check('語彙に実績のある姓は立てない',
-          C._odd_spans_for_line('柚須苅田', tok_yusu, (), None, st2,
-                                None), [])
+          C._odd_spans_for_line('柚須苅田', tok_yusu, (), st2, None), [])
 
     # 姓＋名（48-JL の守りの形）はこの規則の対象外
     def tok_takahashi(_line):
@@ -4582,7 +4822,7 @@ def test_sei_pair_48le():
                 ('祐太', '名詞:固有名詞:人名:名', 'ユウタ', 2, 4, True)]
 
     check('姓＋名は見ない',
-          C._odd_spans_for_line('高橋祐太', tok_takahashi, (), None,
+          C._odd_spans_for_line('高橋祐太', tok_takahashi, (),
                                 _St(), None), [])
     return all_ok
 
@@ -5540,7 +5780,7 @@ def test_assemble_after_hand_48mw():
     check('受け皿は best が無いときだけ',
           'if best is None and assemble:' in src, True)
     check('開いた読みと、手を当てた読みの両方に掛ける',
-          '_try += [v for v in _fixes(_rd) if v not in _tried]' in src, True)
+          '_try += [v for v in _fx if v not in _tried]' in src, True)
     check('受け入れは本道と同じ（長さ ±1）',
           'if _dl2 > 1:' in src, True)
     check('受け入れは本道と同じ（異様さが消えたか）',
@@ -5652,7 +5892,8 @@ def test_anchor_not_at_head_48my():
 
     check('弱い先頭の枝が在る', '_weak = True' in src, True)
     check('弱い先頭は (あ) の枝を通さない',
-          'if not _weak and not _short and _tail_kana_ok(ln1):' in src, True)
+          'if (not _weak and not _short and not only_born_particle' in src
+          and 'and _tail_kana_ok(ln1)):' in src, True)
     check('弱い先頭では2つ目は強い語（実績2以上か、段1がただ1つの索引の顔・48-ON）',
           'piece = _strong_piece(_frag)' in src, True)
     check('弱い先頭は表記が語彙にただ1つ',
@@ -5910,8 +6151,8 @@ def test_stable_across_launches_48ne():
 
     check('set を回りながら打ち切る形は残っていない',
           'if len(outs) > CAP:' in src, False)
-    check('並べてから切る', "-t[1],\n                sum(1 for _k, _w in "
-          "t[2] if _k == 'c')," in src, True)
+    check('並べてから切る', "-t[1],\n                sum(1 for _pc in "
+          "t[2] if _pc[0] == 'c')," in src, True)
     check('軸は全順序（表記と組み方まで）',
           "t[0], t[2])))[:CAP + 1]" in src, True)
     check('打ち切りの幅は変えていない', 'CAP = 8' in src, True)
@@ -7273,8 +7514,12 @@ def test_index_face_48oj():
           'if ((not strict_anchor or index_anchor) and not vocab_only' in src, True)
     check('(あ) は名詞に続く機能語で始まる尾だけ（48-ON）',
           'if _idx and not _noun_tail_start(text[ln1:]):' in src, True)
-    check('語＋助詞＋語 は測って外してある（枝は残す・48-OM）',
-          'for _gap in (0,):' in src, True)
+    # **48-RQ（2026-09-05）で狭い門を開けた**——語＋助詞＋語 は
+    # 「手が生んだ助詞」（born）のときだけ。N2 の2件（打たれたままの
+    # 助詞）はこの門で止まる
+    check('語＋助詞＋語 は「手が生んだ助詞」のときだけ開ける（48-RQ）',
+          'for _gap in (0, 1):' in src
+          and 'if not born or ln1 not in born:' in src, True)
     # **2〜3字の先頭は「本人の語彙のカタカナ語」だけ開けた**
     # （項目48-OQ(b)・2026-09-03）。漢字の2〜3字は 48-ON で測って
     # 壊れた（ぶんうつ → 文打つ・外しょつする → 外施設する）ので、
@@ -7307,7 +7552,7 @@ def test_index_face_48oj():
           "index_anchor=(os.environ.get('CN_MI_INDEX')" in src
           and "!= '0'))" in src, True)
     check('印のキーの隣を開いた読みにも・2回重ね（48-OM）',
-          "_add(r2, '印のキーの隣×2', 2.0)" in src, True)
+          "_add(r2, '同じ誤りの繰り返し（印の隣×2）', 2.0)" in src, True)
     check('_fixes の候補は費用の安い順（48-OQ(e)）',
           'key=lambda r: _cost.get(r, 9.9))' in src, True)
 
@@ -7367,7 +7612,7 @@ def test_pos_and_units_20260903():
           in src, True)
     check("(b') 短い先頭は組み立ての受け皿だけ（育ちで測って足した門）",
           'if _short and not short_head:' in src
-          and 'vocab_only=vocab_only, short_head=True)' in src, True)
+          and 'vocab_only=vocab_only, short_head=True,' in src, True)
     check('(48-OR(c)) 世の中のカタカナ語は4字以上・組み立ての受け皿だけ',
           "if strict_anchor or vocab_only or not short_head or len(frag) < 4:"
           in src, True)

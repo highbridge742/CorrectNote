@@ -52,6 +52,11 @@ ITEMS = (
          '2字漢語の「一般的さの段」（項目48-OJ）が読めず、索引の並びがコスト順に'
          '戻り、課題・効率・参考 のような語彙に無い基本語が直し先になれない',
          False),
+    Item('katakana_frag.json', 'katakana_frag',
+         'カタカナ2字の「断片」の表（項目48-RO）が読めず、`セク`・`ヅメ` の'
+         'ような語の切れ端に印が立たなくなる（費用表と世の読みは'
+         'カタカナに対して読みの証拠でしかないため、表が無いと割れない）',
+         False),
     Item('reading_patterns.json', 'kanji_onkun:patterns_available',
          '2字の語の読みの型（重箱・湯桶・訓訓・項目48-PD）が読めず、'
          '漢字を読みに開くときの順位が「音音を先に」だけに戻る',
@@ -132,9 +137,13 @@ def collect(here, label):
     lines.append('exe と同じフォルダに、実行時に作られるもの（同梱しない）')
     lines.append('-' * 60)
     lines.append('  vocabulary.json / context_vec.json / dict_index.json /')
-    lines.append('  charngram.json / session.json / settings.json /')
-    lines.append('  decisions.json / choices.json / setup.json /')
+    lines.append('  session.json / settings.json /')
+    lines.append('  decisions.json / last_choice.json / setup.json /')
     lines.append('  analysis_cache.json / ime_readings.json')
+    lines.append('')
+    lines.append('  ※ `charngram.json`（字の並びの表のうち育ったぶん）は')
+    lines.append('    **もう作られません**（項目48-QL・2026-09-05。')
+    lines.append('    同梱の `ngram_ja` の表だけを使います）。')
     lines.append('')
     lines.append('  **exe は、置いたフォルダを見ます。** 新しいフォルダで')
     lines.append('  動かせば、語彙もメモも空の**初期状態**から始まります')

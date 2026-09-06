@@ -46,11 +46,18 @@ for cat, n in sorted(cats.items(), key=lambda x: -x[1]):
     print(f'  {cat:20s} {n:6d} 件')
 
 print()
-print('サンプル（使用回数が多い上位20件）:')
-top = sorted(data, key=lambda e: e.get('count', 0), reverse=True)[:20]
-for e in top:
+# **回数は持たない**（項目48-QG・2026-09-05）。うにさんの指定で
+# 使用回数と最終使用時刻の記録をやめたので、「上位20件」は無い。
+# 代わりに **立っている語（solid）** を数えて、先頭を並べる。
+_solid = [e for e in data
+          if (e.get('solid') if 'solid' in e
+              else (e.get('count', 0) >= 2))]
+print(f'立っている語（solid）: {len(_solid)} 件 '
+      f'／ 辞書から取り込んだだけ: {len(data) - len(_solid)} 件')
+print('サンプル（立っている語の先頭20件）:')
+for e in _solid[:20]:
     print(f'  {e["surface"]:12s}  読み:{e["reading"]:14s}  '
-          f'count:{e["count"]:4d}  {e.get("category","?")}')
+          f'world:{e.get("world", 0):3d}  {e.get("category","?")}')
 
 print()
 # 特定の読みを引けるか確認

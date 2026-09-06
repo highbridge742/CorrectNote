@@ -39,7 +39,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 VOCAB_FILE = os.path.join(HERE, 'vocabulary.json')
 CONTEXT_VEC_FILE = os.path.join(HERE, 'context_vec.json')
 DECISIONS_FILE = os.path.join(HERE, 'decisions.json')
-CHOICES_FILE = os.path.join(HERE, 'choices.json')
+CHOICES_FILE = os.path.join(HERE, 'last_choice.json')
 
 # (行, 上下の行) の組。上下の行は実機の nearby_words を再現するために
 # 渡す（並記の関門・文脈の裁定は周りの語で決まるため、これを省くと
@@ -123,8 +123,8 @@ except Exception as e:
     print(f'辞書索引: 読み込めず ({e})')
 
 try:
-    from choices import ChoiceStore
-    choices = ChoiceStore(CHOICES_FILE)
+    from last_choice import LastChoiceStore
+    choices = LastChoiceStore(CHOICES_FILE)
     print(f'選び直しの記憶: {len(choices)} 件')
     print('  ※ ここに記録があると、補正エンジンとは別に'
           '表示側で語が置き換わります。')

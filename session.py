@@ -76,6 +76,28 @@ def new_tab(text='', path=None, saved=True, cursor='1.0', scroll=0.0,
     }
 
 
+FRESH_TAB_BOOKMARKS = (1,)
+
+
+def fresh_tab(**kw):
+    """
+    **新しく作る**タブの控え（項目48-RA・2026-09-05・うにさんの指定
+    「新規タブができた際、1行目を自動でブックマークオンにする」）。
+
+    ★★ **`new_tab` の既定値にしてはいけない。** `new_tab` は
+    **控えからの復元**（`load`）と**1.5秒ごとの自動保存**
+    （`update_active`）も通る工場なので、そこに既定を置くと
+    **本人が外した1行目の印が、打つたびに戻ってくる**。
+
+    「1行目に印を付ける」と書くのは**この1か所だけ**（48-GN——
+    決めているのは最初の行）。ほかの道は `fresh_tab()` を呼ぶ。
+    呼び手が `bookmarks=` を渡したときは**そちらが勝つ**
+    （`setdefault`）ので、控えから戻す道を塞がない。
+    """
+    kw.setdefault('bookmarks', FRESH_TAB_BOOKMARKS)
+    return new_tab(**kw)
+
+
 def tab_title(tab):
     """タブに表示する名前。未保存なら「無題」。"""
     if tab.get('title'):
@@ -112,6 +134,15 @@ class SessionStore:
                             bookmarks=bookmarks)]
         self.active = 0
 
+    def reset_fresh(self, text='', path=None, saved=True):
+        """
+        **新しく作り直して1枚にする**（項目48-RA）。起動して控えが
+        読めなかったときの道。`fresh_tab` を通すので、
+        「1行目に印を付ける」は**あちらの1か所のまま**（48-GN）。
+        """
+        self.tabs = [fresh_tab(text=text, path=path, saved=saved)]
+        self.active = 0
+
     def current(self):
         if not self.tabs:
             return None
@@ -130,7 +161,9 @@ class SessionStore:
 
     def add_tab(self, tab=None, activate=True):
         """タブを1つ足す。戻り値はその位置。"""
-        self.tabs.append(tab if tab is not None else new_tab())
+        # **新しく作る**ので `fresh_tab`（項目48-RA）。控えから戻す
+        # ときは呼び手が `tab` を渡すので、そちらはそのまま
+        self.tabs.append(tab if tab is not None else fresh_tab())
         i = len(self.tabs) - 1
         if activate:
             self.active = i
@@ -148,7 +181,8 @@ class SessionStore:
         old_active = max(0, min(self.active, len(self.tabs) - 1))
         del self.tabs[index]
         if not self.tabs:
-            self.tabs = [new_tab()]
+            # 最後の1つを閉じた補充も「新しく作る」（項目48-RA）
+            self.tabs = [fresh_tab()]
             self.active = 0
             return True
         if index == old_active:

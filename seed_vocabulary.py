@@ -365,9 +365,6 @@ def expand_adjective(reading, surface):
 SEED_VOCABULARY = SEED_VOCABULARY + BASE_FORMS
 
 
-import time
-
-
 def load_seed(store):
     """
     語彙ストアに初期語彙を投入する。既存の語には触れない。
@@ -375,32 +372,27 @@ def load_seed(store):
     形容詞は原形だけを登録しておき、活用形はここで自動的に作る。
     （辞書に全活用形を書き並べる必要がない）
 
-    **初期語彙は全部、同じ時刻で入れる**（項目48-IO・2026-08-22）。
-    `lookup()` の順位は `score()`＝回数と `last_seen` で決まる。
-    回数はここで全部 2 にしているので、**同じ読みに表記が2つある語**
-    （`つながり`／`繋がり`）は `last_seen` の差で順位が決まっていた。
-    その差は「投入が何マイクロ秒ずれたか」で、**OS の時計の刻みで
-    答えが変わる**——Linux（CI）では後から入れた `繋がり` が勝ち、
-    Windows（`time.time()` の刻み約15ms）では同点になって先に入れた
-    `つながり` が勝つ。**同じ入力に同じ答え**が立たない。
-    時刻を1つに揃えれば、同点は**この表の並び順**で決まる
-    （決めているのは最初の行）。Windows で出ていた答えはそのまま。
+    **初期語彙は全部 solid で入れる**（項目48-QG・2026-09-05）。
+
+    かつてはここで `count = 2` と `last_seen = 同じ時刻` を書いていた。
+    時刻を1つに揃えたのは、`score()` が `last_seen` の差
+    （投入が何マイクロ秒ずれたか）で順位を決めていたためで、
+    **OS の時計の刻みで答えが変わっていた**（項目48-IO・2026-08-22）。
+    回数と時刻を廃した今、順位は `_rank_key`（solid → world →
+    表の費用 → 表記の辞書順）で決まるので、**そもそも時計を見ない**。
     """
     added = 0
-    stamp = time.time()
 
     def _add(reading, surface, category):
         nonlocal added
         existing = [e for e in store.lookup(reading) if e['surface'] == surface]
         if existing:
             return
-        store.add(reading, surface, category)
-        # 初期語彙はユーザーが意図した語なので、
-        # 辞書から取り込んだだけの語（count=1）と区別するためにcountを2にする
+        # 初期語彙はユーザーが意図した語なので、辞書から取り込んだ
+        # だけの語（solid=False）と区別して、その場で立てる。
+        store.add(reading, surface, category, solid=True)
         entry = store._by_reading[reading].get(surface)
         if entry:
-            entry['count'] = 2
-            entry['last_seen'] = stamp
             # **初期語彙は日常語**なので、世の中での使われぶり（`world`・
             # 項目48-DA）も最上位の帯にする（項目48-IS）。これが無いと
             # `_general_count` が 確認(count 3・world 0) より

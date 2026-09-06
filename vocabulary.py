@@ -44,9 +44,7 @@ find_homophone_replacements / find_particle_replacements など）が
 import functools
 import heapq
 import json
-import math
 import os
-import time
 from collections import defaultdict
 
 from kana_layout import nearby_candidates
@@ -56,6 +54,167 @@ except Exception:      # pragma: no cover
     _ALL_KANA = ()
 
 
+def _set_solid(entry, solid):
+    """
+    **立っているかの印を書く**（項目48-QG）。
+
+    メモリ上の `'count'` は `solid` の写しでしかない（2 か 1）。
+    **ファイルには書かない**（`_entry_for_save`）。巡4 で名前ごと
+    片付けるまで、約100か所の `count >= 2` の門をそのまま通すための
+    足場（同じ意味を2か所に書かない——写す向きはここ1本だけ）。
+    """
+    entry['solid'] = bool(solid)
+    entry['count'] = 2 if solid else 1
+    entry.pop('last_seen', None)
+
+
+def entry_is_solid(entry):
+    """その語がこの人の語として立っているか（項目48-QG）。"""
+    if 'solid' in entry:
+        return bool(entry['solid'])
+    # 旧形式の名残（読み込みで潰しているので、ふつうは通らない）
+    return int(entry.get('count') or 0) >= 2
+
+
+#: ファイルに書く鍵（**これ以外は書かない**）。回数・時刻はここに無い。
+_SAVE_KEYS = ('reading', 'surface', 'category', 'solid', 'world')
+
+
+def _entry_for_save(entry):
+    """
+    ファイルに書く形にする（項目48-QG）。
+
+    **`count` と `last_seen` を落とす。** メモリ上の `'count'` は
+    `solid` の写しなので、書かなくても読み直しで作り直せる。
+    """
+    out = {}
+    for k in _SAVE_KEYS:
+        if k == 'solid':
+            out['solid'] = bool(entry.get('solid'))
+        elif k == 'world':
+            # **0 は書かない。** 「`world` を持たない」＝
+            # **この人が覚えた語**、という見分けに使うので
+            # （`_rank_key` の③）、0 を書くと辞書の語と区別が付かなくなる。
+            if entry.get('world'):
+                out['world'] = int(entry['world'])
+        elif k in entry and entry[k] not in (None, ''):
+            out[k] = entry[k]
+    return out
+
+
+def _rank_key(entry):
+    """
+    **同じ読みの表記を並べる順**（項目48-QG・`score()` の置き換え）。
+
+    回数と最終使用時刻を廃したので、順位は次で決める:
+
+        ② solid（この人の語として立っているか）
+        ④ world 降順（世の中での使われぶり・辞書由来の帯 20/5/2/1）
+        ⑤ **入った順**（並べ替えが安定なので、同点はこの順に残る）
+
+    ①（最後の選択の枠）と③（**この人が覚えた語**を上に）は、
+    どちらも `lookup()` の側で先に当てる（項目48-QH・48-QP）。
+    **ここに入れてはいけない**——`_rank_key` は
+    `_build_surface_index()`（表記→読みの逆引き）からも使われ、
+    あちらは**問いが違う**（下の「③をここに置かない理由」）。
+
+    ### ④ が「入った順」である理由（**測って決めた**）
+
+    48-IO の決まり——「同点は**この表の並び順**で決まる（決めているのは
+    最初の行）」——をそのまま残した形。入った順は、たまたまではなく
+    **中身が決めている**:
+
+        種の語     `seed_vocabulary.SEED_VOCABULARY` の並び（48-IO）
+        辞書の語   `janome_import` が **IPAdic の費用の安い順**に足す
+                   （`candidates.sort(key=lambda c: c[0])`）
+
+    ### 同梱の費用表（`seed_japanese_cost`）を④にする案は、測って外した
+
+    実測（初期の語彙 15,313 読み・表記が2つ以上あるのは 1,187）:
+
+        旧 score() の並び   きょうかい→**教会** ／ こうこう→**孝行**
+                            せいさん→**凄惨**  ／ こうかん→**浩瀚**
+        入った順            きょうかい→協会   ／ こうこう→高校
+                            せいさん→生産    ／ こうかん→高官
+
+    ——**旧い並びは last_seen の差で「あとに入ったほうが勝つ」**＝
+    費用の高い（珍しい）語が先頭に来ていた。入った順にすると素直に直る。
+
+    費用表を④にすると **361 読みで先頭が変わる**が、その表は
+    **(読み, 表記) ではなく表記だけの費用**で、**別の読みでの安さが
+    混ざる**:
+
+        撃つ 0 ／ コウチョウ 50 ／ ヒビ 64 ／ 一体 31
+
+    その結果 `うつ → 撃つ`・`つながり → 繋がり`・`つぎつぎ → つぎつぎ`
+    のように、**日本語として尤もらしくないほう**へ倒れる
+    （★★「ものさしと判断が食い違ったら、まずものさしを疑う」）。
+    費用は**塊を裁く場所**（`_table_cost`・48-IS・48-MP）で使う。
+
+    ### ★★ ③（この人が覚えた語）を、ここに置かない理由（**測った**）
+
+    ③ は `lookup()` の側だけに置く（項目48-QP・2026-09-05）。
+    理由は、この鍵が**2つの違う問い**に使われているから:
+
+        `lookup()`               同じ**読み**の中で、どの**表記**を先に出すか
+                                 → 「本人が覚えた語か」は**問いに対応する**
+        `_build_surface_index()` 同じ**表記**に対して、どの**読み**を名乗るか
+                                 → 「本人が覚えた語か」は**問いに対応しない**
+
+    後者に③を掛けると、**長音の変種読みが必ず正規の読みに勝つ**——
+    `きのー`・`ふつー` のような変種は一括投入で `world` を持たないので
+    ③で先頭へ出てしまう。実測（育ちの語彙 26,208件）で
+    **11表記の読みが `ー` の側へ倒れていた**:
+
+        機能 きのう→**きのー** ／ 当然 とうぜん→**とーぜん**
+        施行・施工 しこう→**しこー** ／ 普通 ふつう→**ふつー**
+        万能・公正・所有・公文・競技・高級 も同じ形
+
+    表に出るのは `corrector.py:8050` の「**読みが同じ置き換えは採らない**
+    （＝表記を変えているだけ）」の門。あちらの `_analyzer_reading` は
+    `ー` を作らないので、読みが `きのー` にずれると門が**二度と成立
+    しなくなり**、正しく書かれた語への置き換えが素通りする側へ倒れる。
+
+    ③を `lookup()` へ移すと **11件とも正しい読みに戻り、`lookup()` の
+    先頭は 26,208件で1つも動かない**（実測・差0）。
+    ——`world` を持つ側を上に置くのは、逆引きの問い
+    （「世の中でこの表記はこう読む」）にちょうど合う。
+
+    ### ③ が「この人が覚えた語」である理由（**育ちで測って足した**）
+
+    `world` は**辞書から取り込んだ語にしか付かない**（項目48-DA）。
+    種の語は投入のときに 20 を付けるので、**初期状態では全部の語が
+    `world` を持っている**——つまり③は初期では**いつも同じ値**で、
+    初期の答えは1つも変わらない。
+
+    変わるのは育ちのほう。そこでは「本人が打って覚えた語」が
+    `world` を持たない＝**0 として扱われ、いちばん弱くなっていた**:
+
+        移動（本人の語・world **無し**）  ／  異動（辞書から・world 1）
+        → world だけで裁くと **異動** が勝つ（実測。育ちの画面33行で
+          `田部井号して → タブ異動して` に化けた）
+
+    `world` の 0 は「世の中で珍しい」ではなく「**知らない**」。
+    知らないことを弱さの証拠にしてはいけない。**この人が2度以上
+    書いた語は、その人の語**なので先に置く。
+
+    **なぜ決定性が要るか**: 旧 `score()` は `last_seen` の差
+    （投入が何マイクロ秒ずれたか）で順位が決まり、
+    **同じ入力に同じ答えが立たなかった**（項目48-IO）。
+    """
+    return (0 if entry_is_solid(entry) else 1,
+            -int(entry.get('world') or 0))
+
+
+def _is_own_word(entry):
+    """
+    **この人が覚えた語**か——solid なのに `world` を持たない語
+    （項目48-QG の③）。`lookup()` だけで使う（`_rank_key` の
+    docstring「③をここに置かない理由」）。
+    """
+    return entry_is_solid(entry) and 'world' not in entry
+
+
 class VocabularyStore:
     """
     ユーザー固有の語彙を記録する。
@@ -63,9 +222,38 @@ class VocabularyStore:
     各エントリ:
         reading  : 読み（ひらがな）  例: もじにゅうりょく
         surface  : 表記             例: 文字入力
-        count    : 使用回数
-        last_seen: 最終使用時刻(epoch秒)
+        solid    : **一度きりの印**（この人の語として立っているか）
         category : カテゴリ
+        world    : 世の中での使われぶり（辞書から取り込んだ語だけ・48-DA）
+
+    ★★ **回数（count）と最終使用時刻（last_seen）は持たない**
+    （項目48-QG・2026-09-05）。うにさんの指定:
+
+        「変換の根拠に、履歴が影響した、履歴に何回あったという表示が
+          ありました。**履歴として記録されることをユーザは望みません。**
+          人に見られたくないデータが保存されている。
+          **この回数を記録する仕組みを削除します。**」
+
+    数えるのをやめ、**立っているか／いないか**の2値だけにした:
+
+        新規           → solid=False
+        もう一度来た   → solid=True（ここで一度だけ上がる）
+        既に solid     → **何も書かない**（時刻も書かない）
+
+    ### メモリ上の `'count'` について（巡1のあいだだけ）
+
+    読み込みのとき、**solid なら 2・そうでなければ 1** を
+    `entry['count']` に併記する。**ファイルには書かない。**
+
+    こうすると、コードの中に約100か所ある `count >= 2` の門が
+    **1行も触らずに、意味が変わらないことを構造で証明できる**——
+    `count` が {1,2} しか取らないので、`>= 2` は `solid` そのもの、
+    `>= 1` は「在る」そのものになる。
+
+    **`>= 3` 以上の門は成立しなくなる**（＝死ぬ）。どこが死ぬか・
+    死んだ先が安全側か危険側かは、項目48-QG' で1件ずつ仕分けた。
+
+    名前の片付け（`'count'` を消して `solid` に読み替える）は巡4。
     """
 
     def __init__(self, path=None):
@@ -90,6 +278,10 @@ class VocabularyStore:
         # `revision` を見せると**打鍵のたびに作り直す**ことになり、
         # 1000行のタブで毎回0.6秒かかる（そのための控えなのに）。
         self._shape_revision = 0
+        # **旧形式（count・last_seen 付き）をファイルから読んだか**
+        # （項目48-QG/48-QN）。起動処理が一度だけ `save()` を呼んで
+        # 消すための印。読むだけの道具は書き換えない。
+        self.legacy_on_disk = False
         if path and os.path.exists(path):
             self.load()
 
@@ -142,9 +334,25 @@ class VocabularyStore:
 
     # ---------------- 記録 ----------------
 
-    def add(self, reading, surface, category='その他', world=0):
+    def add(self, reading, surface, category='その他', world=0, solid=None):
         """
-        語彙を1件記録する。既にあれば使用回数を増やす。
+        語彙を1件記録する。**回数は数えない**（項目48-QG）。
+
+            新規             → solid=False（＝メモリ上の count 1）
+            既存 solid=False → solid=True へ上げる（＝count 2）
+            既存 solid=True  → **何も書かない**
+
+        戻り値: **中身が変わったか**（項目48-RJ・2026-09-05）。
+            新規に足した／solid に上げた／分類を書き換えた → True
+            **既に立っている語をもう一度書いただけ → False**
+
+            うにさんの報告「次のタブの先読みが動いていません」の根。
+            `learn_from_text` は**見た語の数**を返していたので、
+            同じ文を2回学んでも 0 にならず、`_learn_now` が
+            **打つたびに控えと預かりを捨てて**いた（3秒ごと）。
+            **「見た」ではなく「変わった」を数える。**
+
+        `solid=True` を渡すと、新規でもその場で立てる（種の語）。
 
         world: **世の中での使われぶり**（項目48-DA）。
             辞書から取り込むときに、書籍での頻度から与える。
@@ -162,29 +370,41 @@ class VocabularyStore:
             **既にある語には触らない**（学び20）。
         """
         if not reading or not surface:
-            return
+            return False
         entry = self._by_reading[reading].get(surface)
         if entry:
-            entry['count'] += 1
-            entry['last_seen'] = time.time()
+            _was = bool(entry.get('solid'))
+            _changed = False
+            if solid or not _was:
+                # **一度だけ上がる。** 既に立っている語には何も書かない
+                # ——時刻も回数も残さない（項目48-QG）。
+                _set_solid(entry, True)
+                _changed = not _was
             if category != 'その他' and entry.get('category') != category:
                 entry['category'] = category
+                _changed = True
                 # 分類は**顔ぶれ**の側（項目48-BV）。文脈語彙は
                 # 分類を持って回るので、変わったら作り直させる。
                 self._shape_revision = getattr(
                     self, '_shape_revision', 0) + 1
             # **件数は変わらないが、中身は変わった**（項目48-BT）。
-            # ここを数えないと、回数が敷居に届いた語がその場では
-            # 直し先に入らない（`cachecheck.py` で見つけた）。
-            self._revision = getattr(self, '_revision', 0) + 1
+            # ここを数えないと、敷居に届いた語がその場では直し先に
+            # 入らない（`cachecheck.py` で見つけた）。
+            # **立ったときだけ数える**——既に立っている語をもう一度
+            # 書いても、もう何も変わらない（項目48-QG）。
+            if not _was:
+                self._revision = getattr(self, '_revision', 0) + 1
+            return _changed
         else:
             entry = {
                 'reading': reading,
                 'surface': surface,
-                'count': 1,
-                'last_seen': time.time(),
                 'category': category,
             }
+            # **印を書くのは `_set_solid` 1本**（項目48-QG・48-QS）。
+            # ここに `count` の写しを書き下すと、巡4 で写しを
+            # 片付ける日に**ここだけ取り残される**（48-GN）。
+            _set_solid(entry, solid)
             if world:
                 # **`count` は増やさない。** 世の中での重みは別の鍵。
                 # **1 でも書く。** 「辞書から取り込んだ語である」
@@ -193,6 +413,7 @@ class VocabularyStore:
                 entry['world'] = int(world)
             self._by_reading[reading][surface] = entry
             self._invalidate_cache()
+            return True
 
     def remove(self, reading, surface):
         """
@@ -214,52 +435,55 @@ class VocabularyStore:
         self._invalidate_cache()
         return True
 
-    # 同音異義語で選ばれなかった表記を、どれだけ残すか。
-    # うにさんの指定（2026-08-10）:「同音異義語で選ばれなかった
-    # 場合は評価値を大きく減らしてください」。
-    DEMOTE_FACTOR = 0.2
-
-    def demote_homophones(self, reading, chosen, factor=None):
-        """
-        同じ読みで**選ばれなかった**表記の使用実績を大きく下げる。
-
-        ユーザーが同音異義語の中から1つを選び直したということは、
-        「その読みで欲しいのはこれで、他ではない」という、いちばん
-        はっきりした意思表示になる。それでも他の表記が高い実績を
-        持ったままだと、次に同じ読みを書いたときにまた競り勝って
-        しまう（実機で「単語」と「玉子」が競った件と同じ形）。
-
-        **消しはしない**（1回ぶんは残す）。語彙を勝手に消さない
-        という方針を守りつつ、判断材料としての重みだけ落とす。
-        また使えば `add` で戻る。
-
-        戻り値: 下げた件数。
-        """
-        if not reading:
-            return 0
-        f = self.DEMOTE_FACTOR if factor is None else factor
-        entries = self._by_reading.get(reading)
-        if not entries:
-            return 0
-        n = 0
-        for surface, entry in entries.items():
-            if surface == chosen:
-                continue
-            old = entry.get('count', 0)
-            new = max(1, int(old * f))
-            if new < old:
-                entry['count'] = new
-                n += 1
-        if n:
-            self._invalidate_cache()
-        return n
+    # `demote_homophones`（選ばれなかった表記の実績を 0.2 倍にする）は
+    # **廃止した**（項目48-QH・2026-09-05）。回数があってこその仕組みで、
+    # 「最後にどれを選んだか」の1枠（`last_choice`）がその役目をそのまま
+    # 果たす——**最後の選択が勝つ**ので、侵食も蓄積も要らない。
 
     # ---------------- 検索 ----------------
 
     def lookup(self, reading):
-        """読みが完全一致する語を、スコアの高い順に返す。"""
+        """
+        読みが完全一致する語を、**強い順**に返す（項目48-QG）。
+
+        並びは
+
+            ① **その読みで最後に選んだ表記**（`last_choice` の枠・48-QH）
+            ③ **この人が覚えた語**を上に（solid なのに `world` 無し）
+            ② `_rank_key`（solid → world → 入った順）
+
+        1件しか無いときは並べ替えない（呼ばれる回数が多いので）。
+
+        ③をここに置いた理由は `_rank_key` の docstring
+        「③をここに置かない理由」（項目48-QP）。要点だけ言うと、
+        `_rank_key` は `_build_surface_index()`（表記→読み）からも
+        使われ、**あちらでは③が長音の変種読みを勝たせてしまう**。
+        ここは「同じ読みの中で表記を競わせる」問いなので③が効く。
+
+        ①をここに置いたのは、**「count 最大の表記を採る」口が
+        コードの中に十数か所ある**ため（`_best_surface_for`・`_exact`・
+        `_content_piece`・`_strong_piece`・`dominant`…）。どれも
+        `store.lookup()` の並びの先頭を採るので、**ここ1か所で枠を
+        効かせれば全部の道に届く**（学び22——片方だけに置くと、
+        そちらを迂回して素通りする）。
+        """
         entries = list(self._by_reading.get(reading, {}).values())
-        entries.sort(key=lambda e: self.score(e), reverse=True)
+        if len(entries) > 1:
+            entries.sort(key=_rank_key)
+            # ③ この人が覚えた語を前へ（安定＝もとの並びは崩さない）
+            own = [e for e in entries if _is_own_word(e)]
+            if own and len(own) != len(entries):
+                entries = own + [e for e in entries if not _is_own_word(e)]
+            try:
+                import last_choice as _lc
+                pick = _lc.surface_for_reading(reading)
+            except Exception:
+                pick = None
+            if pick and entries[0].get('surface') != pick:
+                for i, e in enumerate(entries):
+                    if e.get('surface') == pick:
+                        entries.insert(0, entries.pop(i))
+                        break
         return entries
 
     def reading_of(self, surface):
@@ -274,18 +498,46 @@ class VocabularyStore:
         return self._surface_to_reading.get(surface)
 
     def _build_surface_index(self):
-        """表記→読みの逆引き辞書を構築する。"""
+        """
+        表記→読みの逆引き辞書を構築する。
+
+        同じ表記に複数の読みがあるときは、`lookup()` と**同じ並び**
+        （`_rank_key`）の先頭を採る（項目48-QG。回数は見ない）。
+        **同点なら読みの辞書順**——決定性のため（項目48-IO）。
+
+        ### ★★ 同点を「入った順」で裁いたら、長音の読みが勝った
+
+        ここは `lookup()` とは**問いが違う**——`lookup()` は
+        「同じ読みの中で、どの表記を先に出すか」、こちらは
+        「同じ表記に対して、どの読みを名乗るか」。`_rank_key` は
+        前者の物差しなので、**後者では同点が大量に出る**（回数を
+        廃して値が数種類しか無くなったため。旧 `score()` は
+        `last_seen` の連続値だったので同点はまれだった）。
+
+        最初の版は同点を**入った順**で裁いた。実測（育ちの語彙
+        26,208件）で **139 表記の答えが変わり、129 が `ー` を含む
+        読み**になった:
+
+            同時に  どうじに → **どーじに**
+            本当に  ほんとうに → **ほんとーに**
+            工事    こうじ → **こーじ**
+
+        表に出るのは `corrector.py` の「**読みが同じ置き換えは採らない**
+        （＝表記を変えているだけ）」の門。あちらの `_analyzer_reading` は
+        `ー` を作らないので、**門が二度と成立しなくなり**、
+        正しく書かれた語への置き換えが素通りする側へ倒れる。
+
+        読みの辞書順に直すと 139 → **53**（`ー` は 129 → 8）。
+        **説明と実装は必ず片方に揃えること**（48-GN——同じ判定を
+        1つの関数の中に2通り書かない）。
+        """
         index = {}
         for reading, surfaces in self._by_reading.items():
             for surface, entry in surfaces.items():
-                # 同じ表記に複数の読みがある場合は使用頻度の高いものを採用
-                if surface not in index:
-                    index[surface] = (reading, self.score(entry))
-                else:
-                    _, cur_score = index[surface]
-                    s = self.score(entry)
-                    if s > cur_score:
-                        index[surface] = (reading, s)
+                key = _rank_key(entry)
+                cur = index.get(surface)
+                if cur is None or (key, reading) < (cur[1], cur[0]):
+                    index[surface] = (reading, key)
         # 読みだけを返すように整理
         self._surface_to_reading = {s: r for s, (r, _) in index.items()}
 
@@ -376,17 +628,8 @@ class VocabularyStore:
                     index[surface[0]].append((reading, surface, entry))
         self._surface_index = dict(index)
 
-    @staticmethod
-    def score(entry):
-        """
-        語彙の有力さ。
-        よく使う語ほど高く、最近使った語ほど高い。
-        """
-        count_part = math.log(entry['count'] + 1)
-        elapsed_days = (time.time() - entry['last_seen']) / 86400.0
-        # 半減期を7日とした減衰
-        recency_part = 0.5 ** (elapsed_days / 7.0)
-        return count_part * (0.3 + 0.7 * recency_part)
+    # `score()`（log(回数) × last_seen の減衰）は**廃止した**
+    # （項目48-QG）。順位は `_rank_key` へ移した。
 
     # ---------------- 永続化 ----------------
 
@@ -397,21 +640,51 @@ class VocabularyStore:
         return out
 
     def save(self, path=None):
+        """
+        語彙を書き出す。**回数と最終使用時刻は書かない**（項目48-QG）。
+
+        書き換えは原子的に（tmp → replace）——途中で落ちても
+        語彙が半分だけの状態にならない。
+        """
         target = path or self.path
         if not target:
             return
-        with open(target, 'w', encoding='utf-8') as f:
-            json.dump(self.to_list(), f, ensure_ascii=False, indent=2)
+        data = [_entry_for_save(e) for e in self.to_list()]
+        tmp = target + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, target)
+        self.legacy_on_disk = False
 
     def load(self, path=None):
+        """
+        語彙を読み込む。**旧形式（count・last_seen 付き）は、
+        読みながら新形式へ潰す**（項目48-QG・移行）。
+
+            count >= 2  → solid=True
+            それ以外    → solid=False
+            count・last_seen は**捨てる**
+
+        ファイルからも消すのは `save()` のとき。旧形式を見つけたら
+        `legacy_on_disk` を立てるので、起動処理（項目48-QN）が
+        一度だけ `save()` を呼んで消す。**読むだけの道具は
+        ファイルを書き換えない。**
+        """
         target = path or self.path
         if not target or not os.path.exists(target):
             return
         with open(target, encoding='utf-8') as f:
             data = json.load(f)
         self._by_reading.clear()
+        legacy = False
         for e in data:
+            if 'count' in e or 'last_seen' in e:
+                legacy = True
+                _set_solid(e, int(e.get('count') or 0) >= 2)
+            else:
+                _set_solid(e, bool(e.get('solid')))
             self._by_reading[e['reading']][e['surface']] = e
+        self.legacy_on_disk = legacy
         self._invalidate_cache()
 
 

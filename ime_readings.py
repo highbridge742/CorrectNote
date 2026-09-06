@@ -314,6 +314,42 @@ class IMEReadings:
             self._pairs.pop(surface, None)
         self._dirty = True
 
+    def keep_only_in(self, texts):
+        """
+        ★★ **アプリに書かれている文字と命運を共にする**
+        （項目48-QM・2026-09-05）。うにさんの指定:
+
+            「打った表記は、アプリに掛かれている文字と対にするので、
+              **アプリの文字が消えれば打ったキー情報も消えます**」
+
+        ＝ ここは「蓄積する入力履歴」ではなく、**いま書かれている
+        本文の付随情報**。どのタブの本文にも現れない表記の対は落とす。
+
+        `texts`: いま開いている全タブの本文（文字列の並び）。
+
+        **並びそのものが空なら何もしない**——「本文が取れなかった」
+        （読み込みの途中・タブが1枚も無い）と「本文が空だ」を分ける。
+        **中身が空の紙が渡されたら、そのときは全部落とす**——
+        本当に何も書かれていないなら、打鍵の記録も残らないのが指定。
+
+        戻り値: 落とした件数。
+
+        判定は**本文への部分一致**で始める（粗いが、上限5,000の輪と
+        合わせれば毎保存でも軽い）。重い・粗いが出たら測ってから直す。
+        """
+        if not self._pairs:
+            return 0
+        got = [t for t in (texts or ()) if isinstance(t, str)]
+        if not got:
+            return 0
+        blob = '\n'.join(got)
+        gone = [s for s in self._pairs if s not in blob]
+        for s in gone:
+            self._pairs.pop(s, None)
+        if gone:
+            self._dirty = True
+        return len(gone)
+
     # ---------------------------------------------------------------- 諸々
 
     def __len__(self):

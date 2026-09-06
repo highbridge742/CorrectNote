@@ -1500,6 +1500,68 @@ def run_tab_cases():
     check('最後の1つを閉じると空のタブが残る',
           (st.remove_tab(0), len(st.tabs), st.tabs[0]['text']),
           (True, 1, ''))
+
+    # ------------------------------------------------------------
+    # 48-RA **新しく作るタブは1行目にブックマークが付く**
+    # ------------------------------------------------------------
+    # うにさんの指定（2026-09-05）「新規タブができた際、**1行目を
+    # 自動でブックマークオンにする**」。
+    #
+    # ★★ **`new_tab` の既定にしてはいけない**——`new_tab` は
+    # 「控えからの復元」と「1.5秒ごとの自動保存」も通る工場なので、
+    # そこに置くと**本人が外した印が打つたびに戻る**。
+    from session import fresh_tab
+    check('新しく作るタブは1行目に印が付く',
+          fresh_tab()['bookmarks'], [1])
+    check('**素の `new_tab` は付けない**（復元と自動保存が通る道）',
+          new_tab()['bookmarks'], [])
+    check('呼び手が渡したら、そちらが勝つ（控えから戻す道）',
+          fresh_tab(bookmarks=[3, 7])['bookmarks'], [3, 7])
+    check('**空だと分かっている控えは空のまま**（外した印は戻らない）',
+          new_tab(bookmarks=[])['bookmarks'], [])
+
+    st2 = SessionStore()
+    st2.reset_fresh()
+    check('起動して新しく作る1枚にも印が付く',
+          st2.tabs[0]['bookmarks'], [1])
+    # **決めているのは `fresh_tab` の1か所**——呼び手は定数を知らない
+    check('`set_single` は今までどおり印を付けない（控えを戻す道）',
+          SessionStore().set_single('あ', None, True) or
+          None, None)
+    st2.add_tab()
+    check('タブを足したら、そのタブにも印が付く',
+          st2.tabs[1]['bookmarks'], [1])
+    st2.add_tab(new_tab('控えから', bookmarks=[5]))
+    check('控えを渡して足したら、その中身のまま',
+          st2.tabs[2]['bookmarks'], [5])
+    # **外した印が、閉じ直しても戻らないこと**
+    st2.tabs[1]['bookmarks'] = []
+    st2.update_active(new_tab('い', bookmarks=[]))
+    check('自動保存の作り直しで印は戻らない',
+          st2.tabs[2]['bookmarks'], [])
+    while len(st2.tabs) > 1:
+        st2.remove_tab(len(st2.tabs) - 1)
+    st2.remove_tab(0)
+    check('最後の1つを閉じた補充にも印が付く',
+          st2.tabs[0]['bookmarks'], [1])
+
+    # **決めているのは1か所**（48-GN）——「1行目に印を付ける」と
+    # 書いてよいのは `session.fresh_tab` だけ。**app は定数を知らない**
+    import io as _io2
+    _sess = _io2.open('session.py', encoding='utf-8').read()
+    check('`FRESH_TAB_BOOKMARKS` の代入は session.py に1つだけ',
+          _sess.count('FRESH_TAB_BOOKMARKS = '), 1)
+    _appsrc = _io2.open('app.py', encoding='utf-8').read()
+    check('**app は定数を持ち出さない**（決め所を増やさない）',
+          'FRESH_TAB_BOOKMARKS' in _appsrc, False)
+
+    # ★★ **ファイルを開く道は `fresh_tab` を通さない**（案B・48-RA）
+    # ——うにさんの指定は「新規タブ」であって、開いたファイルに
+    # 前のタブの印を引き継ぐことではない（壊さない ＞ 直る）
+    check('`open_file` は素の `new_tab` を渡す',
+          'self.session.add_tab(new_tab())' in _appsrc, True)
+    check('`open_file` は印を空にしたまま',
+          _appsrc.count('self.bookmarks.clear()') >= 2, True)
     return all_ok
 
 
@@ -1777,9 +1839,22 @@ def run_scroll_cache_cases():
             self.line_results = []
             self.settings = _FakeSettings()
             self.scheduled = 0
+            # **前のタブの値**（項目48-QZ）。控えから戻す道が
+            # これを置き直さないと、塗りの合図が一度も出ない
+            self._analyze_shown_visible = True
+            self._analyze_painted_pos = 999
+            self._analyze_visible_n = 999
+            self._analyze_last_paint_ms = 12345.0
+            self._analyze_band = ('前のタブ',)
 
         def _schedule_analysis_chunk(self):
             self.scheduled += 1
+
+        def _visible_first(self, todo):
+            """画面に見えている行を先に（本物は並べ替える）。"""
+            self.visible_first_called = getattr(
+                self, 'visible_first_called', 0) + 1
+            return list(todo), min(len(todo), 30)
 
     def _res(lines):
         return [{'original': l, 'corrected': l, 'changed': False,
@@ -1806,6 +1881,28 @@ def run_scroll_cache_cases():
     check('埋めたのは空行だけ',
           [r['original'] for r in f.line_results[3:]] == [''] * 24, True)
     check('解析の続き（単位の組み立て）は予約されている', f.scheduled, 1)
+
+    # ------------------------------------------------------------
+    # 48-QZ **控えから戻した回も「見えているぶんから塗る」**
+    # ------------------------------------------------------------
+    # うにさんの報告（2026-09-05）「**タブ移動でも**（補正の色が）
+    # 一度消えて再度つく」。`_load_active_tab` が本文を入れ替えると
+    # タグが全部消えるのに、控えから戻す道は塗りの合図が使う3つの値を
+    # **前のタブのまま持ち越して**いたので、色が戻るのは**全行の単位を
+    # 組み終えたあと**だった。
+    check('見えている行から先に組む（並べ替えを通る）',
+          getattr(f, 'visible_first_called', 0), 1)
+    check('**「見えているぶんは出した」の旗を下ろす**',
+          f._analyze_shown_visible, False)
+    check('**塗った位置を 0 に戻す**（前のタブの行数が残ると永久に偽）',
+          f._analyze_painted_pos, 0)
+    check('**見えているぶんの数を置き直す**（前のタブの数を使わない）',
+          f._analyze_visible_n, len(f.line_results))
+    check('前の塗りの時刻も持ち越さない', f._analyze_last_paint_ms, 0.0)
+    check('画面の範囲の控えも持ち直す', f._analyze_band, None)
+    check('単位の組み立てだけの印が立つ', f._analyze_units_only, True)
+    check('組む行は全部（並べ替えても件数は同じ）',
+          sorted(f._analyze_todo), list(range(len(padded.split('\n')))))
 
     # 中身が違えば当たらない
     f2 = _Fake()
@@ -2423,9 +2520,33 @@ def run_explain_cases():
         """動詞終止形＋名詞の直付き（たぶ|い）を返す作り物の割り方。"""
         return [('たぶ', '動詞:自立', 'タブ', 0, 2, True, '基本形'),
                 ('い', '名詞:一般', 'イ', 2, 3, True, '')]
-    check('動詞の終止形に名詞が直付きなら「つながりが異様」と書き添える',
-          explain.pos_lines('たぶい', tok_vn)[-1],
+    # ★★ **かなだけの範囲では、割り方ごと当て推量**（項目48-RL・
+    # 2026-09-05・うにさんの報告「`たぶいごうして`——動詞終止形から
+    # 名詞と繋がる**誤判定**。この文法は変ですよね」）。
+    # 48-QE（1拍の内側で切れた割り方）と同じ性質なので、同じ扱いに。
+    check('かなだけなら「成り立たない割り方」と言う（鎖を見せない）',
+          explain.pos_lines('たぶい', tok_vn),
+          ['判定できません（「たぶ」を動詞と読むと、終止形に'
+           '名詞「い」が直付きになる——成り立たない割り方）'])
+    check('隣がかなで続いていれば、そう添える（48-RG と同じ口）',
+          explain.pos_lines('たぶい', tok_vn, next_text='ごうして')[0]
+          .endswith('後ろの「ごうして」とひとつづきのかな連続）'), True)
+    check('**48-RH が効く**（頭が `判定できません` なので候補の行が付く）',
+          explain.pos_lines('たぶい', tok_vn)[0].startswith(
+              explain.UNKNOWN_POS), True)
+
+    def tok_vn_kanji(line):
+        """漢字を含む形（解す|咳）——**今までどおり鎖＋※**。"""
+        return [('解す', '動詞:自立', 'カイス', 0, 2, True, '基本形'),
+                ('咳', '名詞:一般', 'セキ', 2, 3, True, '')]
+    # ★★ **漢字を含む範囲は巻き戻さない**——うにさん自身が
+    # その言い方（`解す咳`）で報告した形（48-PL）
+    check('漢字を含むなら、今までどおり鎖＋※',
+          explain.pos_lines('解す咳', tok_vn_kanji)[-1],
           '※ 品詞のつながりが異様（動詞の終止形に名詞が直付き）')
+    check('漢字を含むなら鎖も見せる',
+          explain.pos_lines('解す咳', tok_vn_kanji)[0],
+          '解す ＝ 動詞・終止形')
     check('品詞が立たなければ、そう言う',
           explain.pos_name(''), '判定できません')
 
@@ -2754,11 +2875,10 @@ def test_menu_and_keys_48oc_48od_48oe():
           "self.settings.set('show_pos_info', True)" in src, False)
 
     print('--- 項目48-OD（Shift+スペース／Ctrl+スペース） ---')
-    check('Shift+スペースを束縛している',
-          "_w.bind('<Shift-space>', self._on_select_line_text)" in src, True)
-    check('Ctrl+スペースを束縛している',
-          "_w.bind('<Control-space>', self._on_toggle_bookmark_key)"
-          in src, True)
+    check("Shift+スペースを束縛している（48-SZ' で _ime_first に包んだ）",
+          "self._ime_first(self._on_select_line_text))" in src, True)
+    check("Ctrl+スペースを束縛している（48-SZ' で _ime_first に包んだ）",
+          "self._ime_first(self._on_toggle_bookmark_key))" in src, True)
     check('**メモ欄と補正欄の両方に掛けている**（学び22）',
           'for _w in (self.editor, self.result_view):' in src, True)
     check('行の中身を選ぶ処理が在る',
@@ -2947,6 +3067,193 @@ def test_refit_broken_units_48pv():
     check('3字の浅い当たりでは切らない（くみす）',
           [g[0] for g in got], ['にゅうりよくみす'])
 
+    print('--- 項目48-RM（右端の既知語＋続く漢字で辞書語） ---')
+    # うにさんの報告（2026-09-05）「`きょじえかく乱`——F2 で
+    # `きょじえかく` が範囲と出て品詞判定できないと出る。
+    # **判定できる範囲にする**」
+    def tok_kakuran(text):
+        table = {
+            'かく乱': [('かく乱', '名詞:サ変接続', 'カクラン', 0, 3,
+                        True, '')],
+            'く乱': [('く', '助詞:接続助詞', 'ク', 0, 1, True, ''),
+                     ('乱', '名詞:一般', 'ラン', 1, 2, True, '')],
+        }
+        return table.get(text, [(text, '名詞:一般', '', 0, len(text),
+                                 False, '')])
+
+    got = U._refit_extract_known_with_kanji(
+        [t('きょじえかく', '名詞:一般', 0, known=False),
+         t('乱', '名詞:一般', 6)], tok_kakuran)
+    check('きょじえかく|乱 → きょじえ|かく乱',
+          [g[0] for g in got], ['きょじえ', 'かく乱'])
+    check('切り出した先は読みが立つ扱い', got[1][5], True)
+    check('品詞も辞書語のものになる', got[1][1], '名詞:サ変接続')
+    # **1語に割れないなら何もしない**
+    got = U._refit_extract_known_with_kanji(
+        [t('あいうえおか', '名詞:一般', 0, known=False),
+         t('乱', '名詞:一般', 6)], tok_kakuran)
+    check('1語に割れないなら触らない',
+          [g[0] for g in got], ['あいうえおか', '乱'])
+    # **残る頭が2字未満なら切らない**
+    got = U._refit_extract_known_with_kanji(
+        [t('かかく', '名詞:一般', 0, known=False),
+         t('乱', '名詞:一般', 3)], tok_kakuran)
+    check('残る頭が短いなら切らない',
+          [g[0] for g in got], ['かかく', '乱'])
+
+    print('--- 項目48-RJ（学習は「変わったとき」だけ） ---')
+    from vocabulary import VocabularyStore as _VS
+    _st = _VS(path=None)
+    check('新しく足したら True', _st.add('てすと', 'テスト'), True)
+    check('**2回目は solid に上がるので True**',
+          _st.add('てすと', 'テスト'), True)
+    check('**3回目は何も変わらないので False**',
+          _st.add('てすと', 'テスト'), False)
+    check('読み・表記が無ければ False', _st.add('', 'テスト'), False)
+    import io as _io4
+    _jsrc = _io4.open('janome_import.py', encoding='utf-8').read()
+    check('`learn_from_text` は `add` の戻りを数える',
+          'if store.add(reading, surface, category):' in _jsrc, True)
+    _asrc4 = _io4.open('app.py', encoding='utf-8').read()
+    check('**控えを捨てる回は預かりも捨てる／残す回は残す**',
+          ('if keep_current:' in _asrc4
+           and 'self._bg_parked = {}' in _asrc4), True)
+
+    print('--- 項目48-RN／48-RO（固有名詞の当て推量・カタカナの断片） ---')
+    import katakana_frag as _kf
+    check('`セク` は断片', _kf.is_fragment('セク'), True)
+    check('**`ブレ` は断片ではない**（48-OY の的）',
+          _kf.is_fragment('ブレ'), False)
+    check('**`プレイ` も断片ではない**', _kf.is_fragment('プレイ'), False)
+    check('表が読める', _kf.available(), True)
+    import oddness as _odd4
+    check('`_katakana_word_known(セク)` が False',
+          _odd4._katakana_word_known('セク'), False)
+    check('`_katakana_word_known(ブレ)` は True',
+          _odd4._katakana_word_known('ブレ'), True)
+    # **表の検品**——同じ綴りが「語」と「断片」の両方に載っていないこと
+    # **判定の材料（`tools_local/katakana_frag_src/`）は公開しない決まり**
+    # （項目48-QF）。**無ければこの2件だけ飛ばす**——
+    # **有るのに落ちるのと、無いから測れないのは別**（項目48-OB で
+    # `readcheck.py` に置いたのと同じ形。**CI は追跡ファイルだけで回る**ので、
+    # ここに栓が無いと新しく clone した写しで tests_mock がまるごと落ちる
+    # ——項目48-TL・2026-09-06 に実際に落ちた）
+    import glob as _glob
+    _frag, _word = set(), set()
+    _src4 = _glob.glob('tools_local/katakana_frag_src/judgments_*.tsv')
+    for _p4 in _src4:
+        for _ln in _io4.open(_p4, encoding='utf-8'):
+            if _ln.startswith('#') or '\t' not in _ln:
+                continue
+            _c = _ln.split('\t')
+            (_frag if _c[1].strip() == '断片' else _word).add(_c[0].strip())
+    if _src4:
+        check('**語と断片の両方に載っている綴りは無い**',
+              sorted(_frag & _word), [])
+        check('表に載っているのは断片だけ（json）',
+              set(_kf._load()) <= _frag, True)
+    else:
+        print('..  カタカナ2字の表の検品（判定の材料が無いので飛ばす）')
+
+    print('--- 項目48-TM（消えたときの記録は、本文と命運を共にする）---')
+    # うにさんの指定（2026-09-07）「**本文にない履歴が問題**であって、
+    # アプリ内に打った文字の情報が残ることは構いません。
+    # **アプリ内の文字を消したら連動して履歴が消えれば**よいです」。
+    # `ime_readings.keep_only_in`（48-QM）と同じ形にした。
+    import app as _A_tm
+    _src_tm = _io4.open('app.py', encoding='utf-8').read()
+    check('48-TM 掃除の口が在り、ime_readings と同じ2か所から呼ばれる',
+          'def _sz_prune_log(' in _src_tm
+          and _src_tm.count('self._sz_prune_log()') == 2, True)
+    check('48-TM 既定で切にする門は残っていない',
+          '_sz_enabled' in _src_tm, False)
+    _f_tm = _A_tm.CorrectNoteApp._sz_filter_log
+    _blob_tm = (
+        "=== 2026-09-07 01:00:00  行 3  KeyRelease=space state=1\n"
+        "  前 (7字): 'いまも在る行'\n"
+        "  後 (2字): 'いま'\n"
+        "  消えた: 'も在る行'\n"
+        "=== 2026-09-07 01:00:05  行 9  KeyRelease=U state=1\n"
+        "  前 (8字): 'もう消した行'\n"
+        "  後 (1字): 'も'\n"
+        "  消えた: 'う消した行'\n")
+    _kept_tm = _f_tm(_blob_tm, ['ここに いまも在る行 が書いてある'])
+    check('48-TM 本文に在る記録は残る', 'いまも在る行' in _kept_tm, True)
+    check('48-TM 本文から消えた記録は落ちる', 'もう消した行' in _kept_tm, False)
+    check('48-TM 本文が取れなかったら触らない（紙が1枚も無い）',
+          _f_tm(_blob_tm, []), _blob_tm)
+    check('48-TM 中身の無い紙なら全部落とす', _f_tm(_blob_tm, ['']), '')
+    check('48-TM 的（前の行）が読めない記録は落とす',
+          _f_tm("=== 壊れた記録\n  なにも無い\n", ['いまも在る行']), '')
+    print("--- 項目48-RI（壊れた連なりの**左端**から既知語を切り出す） ---")
+    # うにさんの報告（2026-09-05）「`かんいりゅうりょく` を F2 で見ると
+    # `いりゅうりょく` で区切られ、品詞として判定できないと出ます」。
+    # 解析は `かん＋いり＋ゅうりょく` と刻み、48-PV(C) が断片を左と
+    # 繋いで `いりゅうりょく` を作る。**左端を切り出す手が無かった。**
+    got = U._refit_extract_known_head(
+        [t('かん', '名詞:一般', 0),
+         t('いり', '動詞:自立', 2),
+         t('ゅうりょく', '名詞:一般', 4, known=False)],
+        {'かんい'}.__contains__)
+    check('かん|いり|ゅうりょく → かんい|りゅうりょく',
+          [g[0] for g in got], ['かんい', 'りゅうりょく'])
+    check('切り出した頭は読みが立つ扱い', got[0][5], True)
+
+    # ★★ **もう切れている場所では何もしない**（実測で足した門）
+    # ——切り方が変わらないのに触ると、**品詞だけ落ちる**
+    got = U._refit_extract_known_head(
+        [t('もくもく', '副詞:一般', 0),
+         t('しゅー', '名詞:一般', 4, known=False)],
+        {'もくもく'}.__contains__)
+    check('もう切れている場所では触らない（品詞を落とさない）',
+          [(g[0], g[1]) for g in got],
+          [('もくもく', '副詞:一般'), ('しゅー', '名詞:一般')])
+
+    # ★★ **残りは4字以上**（実測で足した門）——正しいかなの文を割らない
+    got = U._refit_extract_known_head(
+        [t('みて', '動詞:自立', 0),
+         t('います', '名詞:一般', 2, known=False)],
+        {'みてい'}.__contains__)
+    check('残りが短いなら切らない（みています を みてい|ます にしない）',
+          [g[0] for g in got], ['みて', 'います'])
+
+    # 48-PV(C') と同じ2つの門
+    got = U._refit_extract_known_head(
+        [t('ぷらね', '名詞:一般', 0),
+         t('たりうむ', '名詞:一般', 3, known=False)],
+        {'ぷらねたりうむ', 'ぷらね'}.__contains__)
+    check('連なりそれ自体が既知語なら切り出さない',
+          [g[0] for g in got], ['ぷらね', 'たりうむ'])
+    got = U._refit_extract_known_head(
+        [t('かんいりゅうりょく', '名詞:一般', 0, known=False)],
+        {'かんい'}.__contains__)
+    check('1トークンだけの連なりは右端の手にまかせる',
+          [g[0] for g in got], ['かんいりゅうりょく'])
+    # **読みが立っている連なりは触らない**（壊れていない）
+    got = U._refit_extract_known_head(
+        [t('かんい', '名詞:一般', 0),
+         t('りゅうりょく', '名詞:一般', 3)],
+        {'かんい'}.__contains__)
+    check('壊れていない連なりは触らない',
+          [g[0] for g in got], ['かんい', 'りゅうりょく'])
+
+    print('--- 項目48-RF（紫の項目は1本・補正欄からも引ける） ---')
+    import io as _io3
+    _src3 = _io3.open('app.py', encoding='utf-8').read()
+    check('紫の項目を組むのは1か所だけ',
+          _src3.count("'― 紫の印 ―'"), 1)
+    check('その1本は `_odd_menu_items`',
+          'def _odd_menu_items(self, row, src_start, src_end):' in _src3,
+          True)
+    check('メモ欄も補正欄も、その1本を呼ぶ',
+          _src3.count('self._odd_menu_items('), 2)
+    check('対応表は1本（`_span_pairs`）',
+          _src3.count('def _span_pairs(self, row):'), 1)
+    check('行きも帰りもその1本を使う',
+          _src3.count('self._span_pairs(row)'), 2)
+    check('**当てずっぽうでは出さない**（写した字が合うときだけ）',
+          "if _orig == unit.get('text'):" in _src3, True)
+
     print('--- 項目48-PV(B)（壊れた連なりの末尾を「末尾にくる言葉」で） ---')
     got = U._refit_run_tail([t('たぶ', '動詞:自立', 0, infl='基本形'),
                              t('い', '名詞:一般', 2),
@@ -2965,9 +3272,238 @@ def test_refit_broken_units_48pv():
     src = open('units.py', encoding='utf-8').read()
     check('両方の道に掛けている（学び22）',
           src.count('tokens = _refit_broken_kana_units('
-                    'tokens, tokenize_fn, known_kana_word)'), 2)
+                    'tokens, tokenize_fn, known_kana_word'), 2)
     check('異様の述語は corrector の1本を借りる（48-GN）',
           'from corrector import _verb_noun_pair as _vnp' in src, True)
+
+    print('--- 項目48-RQ〜48-RS（せ＝゛の隣を先に疑う・'
+          '語＋手が生んだ助詞＋語） ---')
+    # うにさんの指定（2026-09-05）「背中セクよりも先に、せ が ゛ の
+    # 隣接打ち間違いを疑う。解析課の か が が に繋がれば接続詞として
+    # 自然で、後ろの文とも繋がる」
+    import corrector as _C5
+    # 48-RR: 同じ誤りの繰り返しが1つの仮説として作られる
+    _one = list(_C5._mark_slip_repairs('かいせきかせなかせく'))
+    _two = sorted({r2 for r in _one for r2 in _C5._mark_slip_repairs(r)})
+    check('印の隣×1 は2つ', sorted(_one),
+          ['かいせきかせながく', 'かいせきがなかせく'])
+    check('印の隣×2（同じ誤りの繰り返し）は かいせきがながく',
+          _two, ['かいせきがながく'])
+    check('born: 手が変えた位置は が の2か所',
+          sorted(_C5._born_positions('かいせきかせなかせく',
+                                     'かいせきがながく')), [4, 6])
+    check('born: 1手なら1か所',
+          _C5._born_positions('りゅうりょく', 'にゅうりょく'), {0})
+    check('born: 同じ読みなら空', _C5._born_positions('あいう', 'あいう'),
+          set())
+    _src5 = open('corrector.py', encoding='utf-8').read()
+    check('記録名は「同じ誤りの繰り返し」',
+          "_add(r2, '同じ誤りの繰り返し（印の隣×2）', 2.0)" in _src5, True)
+    # 48-RS: 1字の機能語だけの説明は7字以上には認めない
+    check('かいせきかせなかせく は機能語だけではない',
+          _C5._is_all_functional('かいせきかせなかせく'), False)
+    check('かいせきがながく も（正しい読みだが機能語の並びではない）',
+          _C5._is_all_functional('かいせきがながく'), False)
+    check('になっていて は今までどおり機能語だけ',
+          _C5._is_all_functional('になっていて'), True)
+    check('がおわった も今までどおり', _C5._is_all_functional('がおわった'),
+          True)
+    check('2字以上の機能語を使う説明は、長くても通る（のではないでしょうか）',
+          _C5._is_all_functional('のではないでしょうか'), True)
+    check('同（してもらえませんか）',
+          _C5._is_all_functional('してもらえませんか'), True)
+    check('上限は 6', _C5._ALL_FUNC_ONECHAR_MAX, 6)
+    # 48-RQ: 語＋手が生んだ助詞＋語 の門（形だけ・エンジンは写しで測る）
+    check('_gap は (0, 1)', 'for _gap in (0, 1):' in _src5, True)
+    check('born を見ている（(i)）', 'if not born or ln1 not in born:' in _src5,
+          True)
+    check('でで は開けない（(vi)）',
+          'if ln1 + 1 < n and text[ln1 + 1] == text[ln1]:' in _src5, True)
+    check('A/B の道にも掛けている（学び22）',
+          '_wbp = _word_born_particle_fix(run, store, dict_index,' in _src5,
+          True)
+    check('D の道でも born を渡している',
+          'born=(_born_positions(_rd, _v)' in _src5, True)
+    check('48-RK より先に置いてある（先に疑う）',
+          _src5.index('_wbp = _word_born_particle_fix(')
+          < _src5.index('_khc = _fix_known_head_compound(\n'), True)
+
+    print('--- 項目48-RU（入れ子で通した行の紫を捨てない） ---')
+    # `・「解析課背中セク、」は、まず「背中セク」が…` で前の塊を直したら、
+    # 後ろの `背中セク` の紫まで消えていた。内側の印は内側に渡した行の
+    # 位置なので、外の行へ**写す**（equal の塊の中だけ）
+    _outer = '・「解析課背中セク、」は、まず「背中セク」が'
+    _inner = '・「解析が長く、」は、まず「背中セク」が'
+    check('写し替え: 後ろの塊の紫が外の位置に来る',
+          _C5._map_inner_spans(_outer, _inner, [(14, 18)]), [(16, 20)])
+    check('写した先の字が同じ', _outer[16:20], '背中セク')
+    check('直した範囲に掛かる印は写さない（＝直せた範囲は消える）',
+          _C5._map_inner_spans(_outer, _inner, [(2, 8)]), [])
+    check('同じ行なら そのまま',
+          _C5._map_inner_spans('あいう', 'あいう', [(0, 2)]), [(0, 2)])
+    check('印が無ければ空', _C5._map_inner_spans(_outer, _inner, []), [])
+    check('**入れ子の返し口で `odd_spans` を捨てているのは `empty` だけ**',
+          _src5.count("'odd_spans': [],"), 1)
+    check('入れ子10か所とも写している',
+          _src5.count("'odd_spans': _map_inner_spans("), 10)
+
+    print('--- 項目48-RV〜48-RY（品詞のつながり・読みの切れ目・預かり） ---')
+    # 48-RV(c): 手を当てていない読みの立つ語の読みの中に、組の境目を置かない
+    _ti = [('背中', True), ('セク', False)]
+    _al = [['せなか'], ['せく']]
+    check('はいなかせく → ハイ｜仲良く（境目2）は 背中 の読みの中なので不可',
+          _C5._hand_boundaries_ok(_ti, _al, 'はいなかせく', 'はいなかよく', [2]),
+          False)
+    check('境目4（背中｜よく）なら置いてよい',
+          _C5._hand_boundaries_ok(_ti, _al, 'はいなかせく', 'はいなかよく', [4]),
+          True)
+    check('手が触った語は守らない（かせ→が で 背中 が変わる 解析が長く）',
+          _C5._hand_boundaries_ok(
+              [('解析', True), ('課', True), ('背中', True), ('セク', False)],
+              [['かいせき'], ['か'], ['せなか'], ['せく']],
+              'かいせきかせなかせく', 'かいせきがながく', [4]), True)
+    check('格下げした固有名詞は守らない（たぶ｜いどう）',
+          _C5._hand_boundaries_ok(
+              [('田部井', False), ('号', True), ('し', True), ('て', True)],
+              [['たぶい'], ['ごう'], ['し'], ['て']],
+              'たぶいごうして', 'たぶいどうして', [2]), True)
+    check('揃え方が分からなければ意見なし',
+          _C5._hand_boundaries_ok([('あ', True)], [['い']], 'う', 'え', [1]),
+          True)
+    check('48-RV(a) 2語の組は名詞＋名詞（源を見張る）',
+          "_why['品詞のつながり'] += 1" in _src5, True)
+    check('48-RV(b) 短い部品は is_unit',
+          '_sj_sf.is_unit(x + y) is not True' in _src5, True)
+    check("48-RW' 直した読みを変換の道に通す（かな連続まるごと）",
+          '_cv = _convert_fixed_kana_run(_whole, store, dict_index)' in _src5,
+          True)
+    check("48-RW' 2語の組の判定は1本（_two_word_faces）",
+          _src5.count('def _two_word_faces(') == 1
+          and 'return _two_word_faces(v, lo_a, store)' in _src5, True)
+    check('48-RW は外してある（呼び手が無い）',
+          _src5.count('as_kana_run=True') == 0, True)
+    import io as _io6
+    _asrc6 = _io6.open('app.py', encoding='utf-8').read()
+    check('48-RY 途中の状態を預ける', '_fg_parked' in _asrc6
+          and "'todo': _fg_todo[_fg_pos:]" in _asrc6, True)
+    check('48-RY 戻ったら預かりから続ける',
+          "self._trace_analysis('預かりから続き'" in _asrc6, True)
+    check('48-RY 裏は表が済ませた行を飛ばす',
+          "if st['results'][i] is None:" in _asrc6, True)
+    check('48-RX 学習は直した範囲・紫の範囲を潰す',
+          "_r.get('original_spans')" in _asrc6
+          and "_r.get('odd_spans')" in _asrc6, True)
+    check('48-RV(e) 尾が接頭の お で終わる形は無い',
+          "if i < n and text[n - 1] == 'お':" in _src5, True)
+    check('48-RV(e) 1字の助詞だけの尾は2字以上には認めない',
+          'if n - i >= 2 and not multi[n]:' in _src5, True)
+    check('48-RV(e) 2つ目がかなだけなら部品ではない',
+          "if all(is_hiragana(c) or c == 'ー' for c in piece):" in _src5,
+          True)
+    check('48-RV(e) 読みが2字以下の部品に手の変更が掛かっていれば採らない',
+          'if (born and ln2 <= 2' in _src5, True)
+
+    # --- 7巡目（2026-09-06・項目48-SE〜48-SH）---
+    print('--- 項目48-SE〜48-SH（F2 の単位・候補・検索の履歴・控えの整理） ---')
+    _usrc7 = _io6.open('units.py', encoding='utf-8').read()
+    check('48-SE 助詞＋述語の尾を切る（_refit_particle_predicate）',
+          'def _refit_particle_predicate(' in _usrc7, True)
+    check('48-SE 外来語の頭を切る（_refit_loanword_head）',
+          'def _refit_loanword_head(' in _usrc7, True)
+    check('48-SE 単位の切り直しに ①（紫・直した範囲）を渡す',
+          'odd_spans=_odd_sp' in _usrc7
+          and "result.get('original_spans')" in _usrc7, True)
+    check('48-SE ①の連なりは頭を1つの単位に（たぶいごう｜して）',
+          '_odd_run and len(head) >= 3' in _usrc7, True)
+    check('48-SE 述語の判定は1本（_predicate_text）',
+          _usrc7.count('def _predicate_text(') == 1, True)
+    check('48-SE カタカナ語の直後の ご は 後（名詞:接尾）',
+          "'名詞:接尾', 'ご'" in _usrc7, True)
+    check('48-SF 紫のかな連続の中の単位には連続まるごとの候補',
+          'def _odd_run_candidates(' in _asrc6
+          and '_run_c = self._odd_run_candidates(row, unit)' in _asrc6, True)
+    check('48-SF 選ぶと連続まるごとが置き換わる（span）',
+          "if isinstance(cand, dict) and cand.get('span'):" in _asrc6, True)
+    check('48-SG 検索の履歴は保存しない（settings にも session にも書かない）',
+          '_find_history' in _asrc6
+          and "settings.set('find_history'" not in _asrc6, True)
+    check('48-SG 前回の検索語を欄に置く',
+          "initial = getattr(self, '_find_last_text', '') or ''" in _asrc6,
+          True)
+    check('48-SG 覚える場所は1か所（_current_pattern）',
+          _asrc6.count('self._remember_find_text(_q)') == 1, True)
+    check('48-SG 下キーで履歴（IME の受け皿で包む）',
+          "e_find.bind('<Down>', self._ime_first(" in _asrc6, True)
+    check('48-SG 履歴一覧の Up は受け皿が先',
+          "lb.bind('<Up>', self._on_find_history_up)" in _asrc6, True)
+    check("48-SG' 開いた直後の検索は先頭から（タブ移動のあと末尾のカーソルでも）",
+          "if hit is None and getattr(self, '_find_fresh', False):" in _asrc6
+          and "self._find_fresh = True" in _asrc6, True)
+    check('48-SL 検索ウインドウを開いたままタブを移っても焦点は検索ウインドウに残す（全部の道＝_load_active_tab で受ける）',
+          'def _find_follow_tab(' in _asrc6
+          and 'if not self._find_follow_tab():' in _asrc6
+          and _asrc6.count('self._find_follow_tab()') == 1, True)
+    check('48-SL 移った先の検索は新しい検索・履歴の一覧は閉じる・焦点が無いときは奪わない',
+          _asrc6.count('self._find_fresh = True') == 2
+          and 'has_focus = self.root.focus_displayof() is not None' in _asrc6, True)
+    check('48-SY 右ボタン（右ドラッグ・右ダブルクリック＝俯瞰）も「触っている」に数える',
+          "'<ButtonPress-3>', '<B3-Motion>', '<Double-Button-3>'," in _asrc6
+          and "if getattr(self, '_overview', None) is not None:" in _asrc6
+          and "if _d and _d.get('mode') == 'scroll':" in _asrc6
+          and 'if self._analyze_yields <= self.ANALYZE_MAX_YIELD or _held:' in _asrc6, True)
+    import app as _A9
+    check("48-SZ' 非 ASCII の字を伴う KeyPress は、キー名が何であれ IME の確定（映＝space・さ＝U）",
+          _A9.ime_confirmed_char('space', '映') == '映'
+          and _A9.ime_confirmed_char('U', 'さ') == 'さ'
+          and _A9.ime_confirmed_char('space', ' ') is None
+          and _A9.ime_confirmed_char('??', '反') is None
+          and _A9.ime_confirmed_char('Delete', '.') == '.', True)
+    check("48-SZ' <Shift-space>・<Control-space> は _ime_first で包む",
+          "_w.bind('<Shift-space>'," in _asrc6
+          and 'self._ime_first(self._on_select_line_text))' in _asrc6
+          and 'self._ime_first(self._on_toggle_bookmark_key))' in _asrc6, True)
+    check('48-TA 右を押してから動いていたら、離しは候補一覧を開かない（左右同時のドラッグ）',
+          "self._r3_press = (int(event.x_root), int(event.y_root))" in _asrc6
+          and "_p = getattr(self, '_r3_press', None)" in _asrc6
+          and "self.root.tk.call('tk::CancelRepeat')" in _asrc6, True)
+    check('48-SZ 消えたときの証拠を残す見張り（KeyPress の控え・KeyRelease で縮みを見る・deletion_log.txt）',
+          'def _sz_check_shrink(' in _asrc6
+          and "self._sz_note_key(event)" in _asrc6
+          and "self._sz_check_shrink(event)" in _asrc6
+          and "'deletion_log.txt'" in _asrc6, True)
+    check('48-SL 履歴の一覧を Enter／Esc で閉じるときは、焦点を先に検索欄へ返す（48-SG の穴）',
+          '焦点を先に検索欄へ返してから閉じる' in _asrc6
+          and "entry.focus_set()       # 先に返す（項目48-SL・上と同じ）" in _asrc6, True)
+    check('48-SH 控えは今在るタブの本文のぶんだけ（_prune_analysis_cache）',
+          'def _prune_analysis_cache(' in _asrc6
+          and _asrc6.count('self._prune_analysis_cache(keep=') == 2, True)
+    check('48-SH いま見ているタブは、いま解析している本文のほう',
+          'if _i == _cur and k0:' in _asrc6, True)
+    # _remember_find_text の動き（偽の self で）
+    import ast as _ast7
+    _tree7 = _ast7.parse(_asrc6)
+    _fn7 = None
+    for _node in _ast7.walk(_tree7):
+        if isinstance(_node, _ast7.FunctionDef) \
+                and _node.name == '_remember_find_text':
+            _fn7 = _node
+            break
+    _ns7 = {}
+    exec(compile(_ast7.Module(body=[_fn7], type_ignores=[]), '<f7>', 'exec'),
+         _ns7)
+
+    class _S7:
+        pass
+    _s7 = _S7()
+    _s7._find_history = []
+    _s7._find_last_text = ''
+    for _q in ('abc', 'def', 'abc', ''):
+        _ns7['_remember_find_text'](_s7, _q)
+    check('48-SG 新しいものが先・同じ語は1つ・空は覚えない',
+          (_s7._find_history, _s7._find_last_text), (['abc', 'def'], 'abc'))
+    for _k in range(30):
+        _ns7['_remember_find_text'](_s7, 'q%d' % _k)
+    check('48-SG 履歴は20件まで', len(_s7._find_history), 20)
     return all_ok
 
 
@@ -3131,9 +3667,44 @@ def test_pos_from_row_context_48qc_48qd():
         return table.get(text, [(text, '名詞:一般', text, 0, len(text),
                                  True, '')])
 
+    # **文言の先頭で見る**（項目48-RG）——隣の字を渡すと後ろに
+    # 「。前の『…』とひとつづきのかな連続」が付くので、完全一致に
+    # すると事実を添えた瞬間に落ちる
     check('しゅるい は「し ＝ 動詞」と言わない',
+          [x.startswith('判定できません（`しゅ` は1拍——語の途中で切れています')
+           for x in explain.pos_lines('しゅるい', tok2, prev_text='かん')],
+          [True])
+    check('隣を渡さなければ、今までと同じ文言のまま',
           explain.pos_lines('しゅるい', tok2),
           ['判定できません（`しゅ` は1拍——語の途中で切れています）'])
+
+    # ------------------------------------------------------------
+    # 48-RG **「判定できません」だけで終わらせず、言える事実を添える**
+    # ------------------------------------------------------------
+    # うにさんの指定（2026-09-05）「**判定できないなら、できる範囲で
+    # 判定するべきです**」。48-QE の「壊れた割り方から品詞を言わない」は
+    # 正しいので動かさない。**品詞は言わずに、見れば分かる事実を足す。**
+    check('前がかなで続いていれば、そう言う',
+          explain.pos_lines('しゅるい', tok2, prev_text='かん'),
+          ['判定できません（`しゅ` は1拍——語の途中で切れています。'
+           '前の「かん」とひとつづきのかな連続）'])
+    check('両隣がかなで続いていれば、両方言う',
+          explain.pos_lines('しゅるい', tok2, prev_text='かん',
+                            next_text='で'),
+          ['判定できません（`しゅ` は1拍——語の途中で切れています。'
+           '前の「かん」・後ろの「で」とひとつづきのかな連続）'])
+    check('**かなで繋がらない隣は言わない**（漢字の隣）',
+          explain.pos_lines('しゅるい', tok2, prev_text='漢字'),
+          ['判定できません（`しゅ` は1拍——語の途中で切れています）'])
+    check('**品詞は言わない**（言えないから）',
+          any('動詞' in x or '名詞' in x
+              for x in explain.pos_lines('しゅるい', tok2,
+                                         prev_text='かん')),
+          False)
+    check('判定が付く語には何も足さない',
+          explain.pos_lines('かな', tok, pos_hint='名詞:一般',
+                            prev_text='かん', next_text='で'),
+          explain.pos_lines('かな', tok, pos_hint='名詞:一般'))
     check('漢字を含むときは、割れた2語ぶんだけ言い直す（する は残す）',
           explain.pos_lines('外しょつする', tok2),
           ['外しょつ ＝ 判定できません（`しょ` は1拍——語の途中で切れています）',
@@ -3167,4 +3738,269 @@ def test_pos_from_row_context_48qc_48qd():
           ("def emit(shown, base, reading, kind, detail, prev, next_,\n"
            "             pos='', infl='', atomic=False, known=False):") in src,
           True)
+    return all_ok
+
+
+def test_privacy_no_counts_48qg_48qh_48qj():
+    """
+    ★★ **回数と履歴を記録していないことの見張り**
+    （項目48-QG/QH/QJ/QL/QM・2026-09-05）。
+
+    うにさんの指定:
+
+        「変換の根拠に、履歴が影響した、履歴に何回あったという表示が
+          ありました。**履歴として記録されることをユーザは望みません。**
+          人に見られたくないデータが保存されている。
+          **この回数を記録する仕組みを削除します。**
+          代わりに同音異義語の一覧表を作成し、最後にどの変換をしたか、
+          それぞれ履歴1回分記録します。
+          同音異義語ではない単語の回数は残しません」
+
+    見るのは**出来上がったファイルと画面の言葉**——実装の形ではなく、
+    **外へ出るもの**を測る（次の人が中を作り直しても、この見張りは
+    そのまま効く）。
+    """
+    import io as _io
+    import json as _json
+    import os as _os
+    import tempfile as _tempfile
+
+    print('--- 項目48-QG/QH/QJ（回数と履歴を記録しない） ---')
+    all_ok = True
+
+    def check(label, got, want):
+        nonlocal all_ok
+        ok = (got == want)
+        all_ok = all_ok and ok
+        print(f'{"OK " if ok else "NG "}{label}')
+        if not ok:
+            print(f'      得た値: {got!r}   期待: {want!r}')
+
+    from vocabulary import VocabularyStore, entry_is_solid
+
+    tmp = _tempfile.mkdtemp()
+    vpath = _os.path.join(tmp, 'vocabulary.json')
+
+    # --- (1) 保存した語彙に count / last_seen が無い ---
+    st = VocabularyStore(vpath)
+    st.add('たんご', '単語', 'その他')
+    st.add('たんご', '単語', 'その他')            # 2度目＝立つ
+    st.add('もじ', '文字', 'その他')              # 1度だけ＝立たない
+    st.add('えいご', 'English', '英語', world=5)
+    st.save()
+    with open(vpath, encoding='utf-8') as f:
+        raw = f.read()
+        data = _json.loads(raw)
+    check('保存した語彙に count が無い', 'count' in raw, False)
+    check('保存した語彙に last_seen が無い', 'last_seen' in raw, False)
+    check('持つ鍵は reading/surface/category/solid/world だけ',
+          sorted({k for e in data for k in e}),
+          ['category', 'reading', 'solid', 'surface', 'world'])
+    check('2度書いた語は立つ',
+          [e['solid'] for e in data if e['surface'] == '単語'], [True])
+    check('1度だけの語は立たない',
+          [e['solid'] for e in data if e['surface'] == '文字'], [False])
+
+    # --- (1') ★★ **メモリ上の `count` は 1 か 2 しか取らない** ---
+    # 巡1 の足場（`solid` の写し）が写しのままであることの見張り。
+    # ここが崩れると、約60か所の `count >= 2` の門が「回数の門」に
+    # 戻ってしまう（＝うにさんの指定に反する記録が復活する）。
+    # **新しく回数を数えるコードを書いたら、ここで落ちる。**
+    for _ in range(50):
+        st.add('たんご', '単語', 'その他')
+        st.add('もじ', '文字', 'その他')
+    check('メモリ上の count は 1 か 2 しか取らない',
+          sorted({e.get('count') for e in st.to_list()}), [1, 2])
+    check('count は solid の写し（食い違わない）',
+          all((e.get('count') == 2) == bool(e.get('solid'))
+              for e in st.to_list()), True)
+
+    # --- (2) 読み直しても同じ／立った語は何度足しても変わらない ---
+    st2 = VocabularyStore(vpath)
+    check('読み直しても立ち方が同じ',
+          (entry_is_solid(st2.lookup('たんご')[0]),
+           entry_is_solid(st2.lookup('もじ')[0])), (True, False))
+    _rev = st2.revision()
+    st2.add('たんご', '単語', 'その他')
+    st2.add('たんご', '単語', 'その他')
+    check('立った語をもう一度書いても何も変わらない',
+          st2.revision(), _rev)
+
+    # --- (3) 旧形式（count・last_seen 付き）は読みながら潰れる ---
+    old = [
+        {'reading': 'かんしん', 'surface': '関心', 'category': 'その他',
+         'count': 37, 'last_seen': 1788000000.0},
+        {'reading': 'かんしん', 'surface': '感心', 'category': 'その他',
+         'count': 1, 'last_seen': 1788000001.0},
+    ]
+    opath = _os.path.join(tmp, 'old_vocabulary.json')
+    with open(opath, 'w', encoding='utf-8') as f:
+        _json.dump(old, f, ensure_ascii=False)
+    st3 = VocabularyStore(opath)
+    check('旧形式を読んだら印が立つ（移行の合図）',
+          st3.legacy_on_disk, True)
+    check('count>=2 だった語だけが立つ',
+          {e['surface']: entry_is_solid(e) for e in st3.lookup('かんしん')},
+          {'関心': True, '感心': False})
+    st3.save()
+    with open(opath, encoding='utf-8') as f:
+        raw3 = f.read()
+    check('保存し直すとファイルからも回数が消える',
+          ('count' in raw3 or 'last_seen' in raw3), False)
+    check('消したあとは移行の合図が下りる', st3.legacy_on_disk, False)
+
+    # --- (4) 補正根拠の3行目に「回」が出ない（項目48-QJ） ---
+    import explain as _EX
+    import last_choice as _LC
+    lc = _LC.LastChoiceStore()
+    lc.bind(st2, None)
+    lc.remember('たんご', '単語', 'たんご')
+    got = _EX.learn_reason('たんこ', '単語',
+                           {'base': 'たんご', 'reading': 'たんご'},
+                           lc, st2)
+    check('枠で決まったら、そう書く（回数は書かない）',
+          got, '学習による選び直し')
+    check('補正根拠に「回」が出ない', '回' in (got or ''), False)
+    check('SEED_COUNT_MAX は撤去した',
+          hasattr(_EX, 'SEED_COUNT_MAX'), False)
+
+    # --- (4') **枠は答えを変えるので、控えの見分けに入っていること**
+    # （項目48-QH。`charngram`＝48-BN・`ime_readings`＝48-HA と同じ罠。
+    #   掛け忘れは毎回、実機で化けてから見つかっている）
+    import analysis_cache as _AC
+    from last_choice import LastChoiceStore
+    st4 = VocabularyStore()
+    for _s in ('公園', '講演'):
+        st4.add('こうえん', _s, 'その他')
+        st4.add('こうえん', _s, 'その他')
+    lc4 = LastChoiceStore()
+    lc4.bind(st4, None)
+
+    def _fp():
+        return _AC.build_fingerprint(tmp, '1.0.0', 'kana', (),
+                                     store=st4, choices=lc4)['choices']
+    _before = _fp()
+    lc4.remember('こうえん', '講演', 'こうえん')
+    check('枠を入れると控えの見分けが変わる', _before != _fp(), True)
+    lc5 = LastChoiceStore()
+    lc5.bind(st4, None)
+    lc5.remember('こうえん', '講演', 'こうえん')
+    check('同じ中身なら同じ見分け',
+          _fp(), _AC.build_fingerprint(tmp, '1.0.0', 'kana', (),
+                                       store=st4, choices=lc5)['choices'])
+
+    # --- (5) 旧 choices.json を1枠へ畳んで消す（項目48-QI） ---
+    from last_choice import migrate_from_choices
+    cpath = _os.path.join(tmp, 'choices.json')
+    lpath = _os.path.join(tmp, 'last_choice.json')
+    with open(cpath, 'w', encoding='utf-8') as f:
+        _json.dump([
+            {'original': 'こうえん', 'chosen': '公園', 'reading': 'こうえん',
+             'prev': 'あしたの', 'next': 'に', 'count': 3,
+             'updated': 100.0},
+            {'original': 'こうえん', 'chosen': '講演', 'reading': 'こうえん',
+             'prev': 'だいがくで', 'next': 'を', 'count': 9,
+             'updated': 200.0},
+        ], f, ensure_ascii=False)
+    n, r = migrate_from_choices(cpath, lpath, store=st2)
+    check('元の choices.json は消える', _os.path.exists(cpath), False)
+    check('語ごとに1件だけ残る', n, 1)
+    lc2 = LastChoiceStore(lpath)
+    check('残るのはいちばん新しい選択',
+          lc2.lookup('こうえん'), '講演')
+
+    # ★ **読みの枠も、いちばん新しい選択が取る**（項目48-QI）。
+    # 旧 `choices.json` は `updated` の**降順**に並んでいるので、
+    # そのまま流し込むと**いちばん古い選択が読みの枠を取る**
+    # （読みの枠は1つしか無く、あとに入れたほうが勝つため）。
+    st6 = VocabularyStore()
+    for _s in ('公園', '講演', '後援'):
+        st6.add('こうえん', _s, 'その他')
+        st6.add('こうえん', _s, 'その他')
+    cpath2 = _os.path.join(tmp, 'choices2.json')
+    lpath2 = _os.path.join(tmp, 'last_choice2.json')
+    with open(cpath2, 'w', encoding='utf-8') as f:
+        _json.dump([
+            {'original': 'こうえn', 'chosen': '公園', 'reading': 'こうえん',
+             'prev': '', 'next': '', 'count': 1, 'updated': 200.0},
+            {'original': 'こうえん', 'chosen': '講演', 'reading': 'こうえん',
+             'prev': '', 'next': '', 'count': 1, 'updated': 100.0},
+        ], f, ensure_ascii=False)
+    migrate_from_choices(cpath2, lpath2, store=st6)
+    check('読みの枠は、いちばん新しい選択が取る',
+          LastChoiceStore(lpath2).surface_for_reading('こうえん'), '公園')
+    with open(lpath, encoding='utf-8') as f:
+        rawl = f.read()
+    check('畳んだ先に回数・時刻・前後の文が無い',
+          any(k in rawl for k in ('count', 'updated', 'prev', 'next')),
+          False)
+
+    # --- (6) 育ちのデータは、学習の口ごと止まっている（項目48-QL） ---
+    src = open('app.py', encoding='utf-8').read()
+    i = src.find('def _learn_context_vec_now')
+    check('文脈ベクトルは覚えない（口はある・中で返す）',
+          'return' in src[i:i + 1400] and 'observe_line' not in src[i:i + 1400],
+          True)
+    j = src.find('def _learn_charngram')
+    check('字の並びも覚えない',
+          'charngram.learn' not in src[j:j + 900], True)
+    check('起動時に育ちのファイルを消す',
+          "os.remove(_grown)" in src, True)
+
+    # --- (7) 打鍵の記録は、本文に残っている語だけ（項目48-QM） ---
+    from ime_readings import IMEReadings
+    ir = IMEReadings(_os.path.join(tmp, 'ime.json'))
+    ir.remember('奥悠久子帝', 'おくゆうきこてい')
+    ir.remember('文字入力', 'もじにゅうりょく')
+    dropped = ir.keep_only_in(['きょうは文字入力の練習をした'])
+    check('本文に無い対は落ちる', dropped, 1)
+    check('本文に在る対は残る',
+          (ir.readings_for('文字入力'), ir.readings_for('奥悠久子帝')),
+          (['もじにゅうりょく'], []))
+    check('本文が1つも取れないときは何もしない（読み込みの途中）',
+          ir.keep_only_in([]), 0)
+    # **本文が本当に空なら、打鍵の記録も残さない**（うにさんの指定
+    # 「アプリの文字が消えれば打ったキー情報も消えます」そのもの）。
+    check('中身の無い紙が渡されたら全部落とす',
+          ir.keep_only_in(['', '']), 1)
+    check('落としたあとは空', len(ir), 0)
+
+    # ------------------------------------------------------------
+    # 48-QU **紫を下げる台帳と、補正を止める台帳を分ける**
+    # ------------------------------------------------------------
+    # 紫の右クリックの「この文字列は正しい」に食わせるのは、
+    # **日本語として真っ当な短い並び**（紫の範囲は形態素の連なりで、
+    # 2字がふつうに出る）。`decisions.blocks()` は**部分一致**で
+    # 止めるので、そこへ入れると**それを含む行の補正が全部止まる**。
+    from decisions import DecisionStore
+    d = DecisionStore()
+    check('短すぎる（1字）ものは受け付けない', d.leave_odd_alone('あ'), False)
+    check('紫を下げる台帳に入る', d.leave_odd_alone('本語'), True)
+    check('同じものは二度入らない', d.leave_odd_alone('本語'), False)
+    # ★★ ここが 48-QU の要点
+    check('補正は止めない（部分一致で巻き添えにしない）',
+          d.blocks('本語がある', '日本語がある'), False)
+    check('補正を止める台帳には入っていない',
+          [e['word'] for e in d.protected_list()], [])
+    check('紫を下げる口には出る', sorted(d.left_alone_texts()), ['本語'])
+    check('一覧に出る', [e['word'] for e in d.odd_only_list()], ['本語'])
+    # 取り消し口は1つのまま（学習メニューは `unprotect` だけを呼ぶ）
+    check('取り消せる', d.unprotect('本語'), True)
+    check('取り消したら紫が戻る', sorted(d.left_alone_texts()), [])
+    # `protect`（補正も止める）のほうは、今までどおり部分一致で止める
+    check('protect は今までどおり止める',
+          (d.protect('縦シュー'), d.blocks('縦シューが', 'なにか')),
+          (True, True))
+    # 保存と読み込みで、台帳の区別が残ること
+    _dp = _os.path.join(tmp, 'dec.json')
+    d.leave_odd_alone('本語')
+    d.save(_dp)
+    d2 = DecisionStore(_dp)
+    check('読み直しても台帳の区別が残る',
+          (sorted(e['word'] for e in d2.protected_list()),
+           sorted(e['word'] for e in d2.odd_only_list()),
+           d2.blocks('本語がある', '日本語がある'),
+           d2.blocks('縦シューが', 'なにか')),
+          (['縦シュー'], ['本語'], False, True))
+
     return all_ok

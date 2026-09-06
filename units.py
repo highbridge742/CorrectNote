@@ -225,8 +225,18 @@ def build_suspect_units(result, tokenize_fn, choice_store=None,
     tokens = _merge_prefix_into_unreadable(tokens)
     # **読みの立たない かなの塊から、機能語の尾を切る**（項目48-OS）
     tokens = _split_unreadable_kana_tail(tokens)
-    # **壊れたかなの連なりを、エンジンの知識で切り直す**（項目48-PV）
-    tokens = _refit_broken_kana_units(tokens, tokenize_fn, known_kana_word)
+    # **壊れたかなの連なりを、エンジンの知識で切り直す**（項目48-PV）。
+    # **①（紫）の範囲も「壊れた連なり」として渡す**（項目48-SE・
+    # 2026-09-06。`たぶいごうして` は解析の読みが全部立つので、読みの
+    # 立たない断片では「壊れている」と分からなかった——行の①は
+    # 立っている。ここは原文の座標なので、そのまま渡せる）
+    _odd_sp = (list(result.get('odd_spans') or [])
+               + list(result.get('unsure_spans') or [])
+               # 直した範囲も「壊れていた連なり」（直った行は紫が消えるが、
+               # 単位は原文の上で切るので、そこが壊れていたことは変わらない）
+               + list(result.get('original_spans') or []))
+    tokens = _refit_broken_kana_units(tokens, tokenize_fn, known_kana_word,
+                                      odd_spans=_odd_sp)
 
     if not tokens or ''.join(t[0] for t in tokens) != text:
         # 語の区切りが信用できない（形態素解析が空白などを落とし、
@@ -1003,7 +1013,182 @@ def _refit_extract_known(tokens, known):
     return out
 
 
-def _refit_run_tail(tokens, tokenize_fn):
+def _refit_extract_known_head(tokens, known):
+    """
+    **長い読みの立たない塊から、左端の既知語を切り出す**
+    （項目48-RI・2026-09-05・うにさんの報告「`かんいりゅうりょく` を
+    F2 で見ると `いりゅうりょく` で区切られ、品詞として判定できない」）。
+
+    解析は `かんいりゅうりょく` を `かん＋いり＋ゅうりょく` と刻み、
+    48-PV(C) が断片 `ゅうりょく` を左と繋いで `いりゅうりょく` を作る。
+    **左端の既知語を切り出す手が無かった**（48-PV(C') は右端だけ）ので、
+    `かんい`（簡易）で切れず、F2 が `りゅうりょく → 入力` に届かない。
+
+        かんいりゅうりょく   → **かんい｜りゅうりょく**
+
+    門3つ（48-PV(C') と同じ考え方）:
+      ・**塊それ自体が既知語なら切り出さない**（まるごと語なら割らない）
+      ・**残り（右）が2字以上**（1字の切れ端を作らない）
+      ・**切り出しは1回だけ**（頭から順に食べ尽くさない）
+
+    ★★ **左端は3字から**（右端は4字から）。48-PV(C') が4字にしたのは
+    `にゅうりよくみす` の `くみす`（組す）のような**浅い当たり**を
+    避けるためだったが、それは**右端**の話——右端は「語＋助詞の尾」の
+    形で浅く当たりやすい。左端は**語の頭**なので当たり方が違う。
+    的の `かんい` は3字なので、3字を許さないと1件も拾えない。
+    **代わりに、3字のときは「本人の語彙にその読みが在る」ことを
+    求める**（費用表だけの当たりは浅い）——`known` はまさにそれ。
+
+    ### ★★ 実機メモ全行の単位で測って、門を2つ足した（項目48-RI）
+
+    最初の形は**的以外の行も動かした**（128行）。読んで2つに絞れた:
+
+        ・**もう切れている場所では何もしない**——`もくもくしゅー` は
+          既に `もくもく｜しゅー` に切れているのに、同じ場所で切り直して
+          **品詞だけ落として**いた（`副詞:一般` → `名詞:一般`）。
+          切り方が変わらないなら触る理由が無い
+        ・**残りは4字以上**——`みています` を `みてい｜ます` に
+          割っていた。**正しく書いたかなの文を割る**（★★ 壊さない）。
+          `にゅうりょくみす` の `みす`（2字）も落ちるが、
+          あれは的ではない
+
+    連なりが**2トークン以上**であることも要る——1トークンなら
+    48-PV(C') の右端の手と同じ土俵になり、あちらが4字で裁いている。
+    """
+    if not tokens or known is None:
+        return tokens
+    out = []
+    i = 0
+    n = len(tokens)
+    while i < n:
+        # **隣り合ったかなだけの並び**をひとつづきの連なりとして見る
+        j = i
+        run = ''
+        broken = False
+        while j < n:
+            t = tokens[j]
+            sf = t[0] or ''
+            if not _kana_only_text(sf):
+                break
+            if j > i and _tok_int(tokens[j - 1][4]) != _tok_int(t[3]):
+                break
+            run += sf
+            if len(t) > 5 and not t[5]:
+                broken = True       # 読みの立たない字を含む＝壊れた連なり
+            j += 1
+        hit = None
+        if (broken and len(run) >= 5 and j - i >= 2 and not known(run)
+                and not (run.endswith('ー')
+                         and len(run.rstrip('ー')) >= 2
+                         and known(run.rstrip('ー')))):
+            s0 = _tok_int(tokens[i][3])
+            # **もう切れている場所の一覧**（連なりの中の境目）
+            _cuts = set()
+            _at = 0
+            for k in range(i, j - 1):
+                _at += len(tokens[k][0] or '')
+                _cuts.add(_at)
+            if s0 is not None:
+                # 長いほうから見る（`かんい` より長い語が在るならそちら）
+                # **残りは4字以上**（測って足した・下の ★★）
+                for ln in range(min(len(run) - 4, 8), 2, -1):
+                    if run[ln] in _SMALL_HEAD_SET:
+                        continue    # 残りが語の頭に立たない字になる
+                    if ln in _cuts:
+                        continue    # **もう切れている**＝ここでは何もしない
+                    if known(run[:ln]):
+                        hit = run[:ln]
+                        break
+        if hit:
+            s0 = _tok_int(tokens[i][3])
+            tail = run[len(hit):]
+            out.append(_mk_tok(hit, '名詞:一般', hit, s0, True))
+            out.append(_mk_tok(tail, '名詞:一般', '', s0 + len(hit),
+                               False))
+            i = j
+            continue
+        out.append(tokens[i])
+        i += 1
+    return out
+
+
+def _refit_extract_known_with_kanji(tokens, tokenize_fn):
+    """
+    **右端の既知語を、続く漢字トークンと合わせて見る**
+    （項目48-RM・2026-09-05・うにさんの報告「`きょじえかく乱`——
+    F2 で `きょじえかく` が範囲と出て品詞判定できないと出る。
+    **判定できる範囲にする**」）。
+
+        きょじえかく ｜ 乱  →  **きょじえ ｜ かく乱**（攪乱・名詞サ変）
+
+    48-PV(C')（右端の既知語）は**かな連続の中**しか見ないので、
+    `かく` ＋ 次の漢字 `乱` ＝ `かく乱`（IPAdic の辞書語）が
+    見えていなかった。
+
+    門（48-PV(C') と同じ考え方）:
+      ・読みの立たないかな連続 U の**直後に漢字のトークン K**
+      ・U の右端 2〜4字 s について `tokenize_fn(s + K)` が
+        **ちょうど1語・読みが立つ・名詞**
+      ・残る頭は**2字以上**（1字の切れ端を作らない）
+      ・**切るのは1回**
+      ・`s+K` が1語に割れないなら**何もしない**
+
+    **エンジンは触らない**——F2 と画面の単位だけ（48-QA）。
+    """
+    if not tokens or tokenize_fn is None:
+        return tokens
+    out = []
+    i = 0
+    n = len(tokens)
+    while i < n:
+        t = tokens[i]
+        sf = t[0] or ''
+        nxt = tokens[i + 1] if i + 1 < n else None
+        hit = None
+        if (nxt is not None and len(t) > 5 and not t[5]
+                and _kana_only_text(sf) and len(sf) >= 4
+                and _tok_int(t[4]) == _tok_int(nxt[3])):
+            k = nxt[0] or ''
+            if k and all('一' <= c <= '鿿' for c in k):
+                s0 = _tok_int(t[3])
+                if s0 is not None:
+                    for ln in range(min(4, len(sf) - 2), 1, -1):
+                        cand = sf[-ln:]
+                        if cand[0] in _SMALL_HEAD_SET:
+                            continue
+                        try:
+                            got = tokenize_fn(cand + k)
+                        except Exception:
+                            got = None
+                        if not got or len(got) != 1:
+                            continue
+                        g = got[0]
+                        if (g[0] or '') != cand + k:
+                            continue
+                        if not (len(g) > 5 and g[5]):
+                            continue        # 読みが立たない
+                        if not (g[1] or '').startswith('名詞'):
+                            continue
+                        hit = (cand, g)
+                        break
+        if hit:
+            cand, g = hit
+            s0 = _tok_int(t[3])
+            head = sf[:-len(cand)]
+            out.append(_mk_tok(head, t[1], '', s0, False,
+                               (t[6] if len(t) > 6 else '') or ''))
+            out.append(_mk_tok(cand + (nxt[0] or ''), g[1],
+                               (g[2] if len(g) > 2 else '') or '',
+                               s0 + len(head), True,
+                               (g[6] if len(g) > 6 else '') or ''))
+            i += 2
+            continue
+        out.append(t)
+        i += 1
+    return out
+
+
+def _refit_run_tail(tokens, tokenize_fn, odd_spans=None):
     """
     **壊れたかなの連なりの末尾を、「末尾にくる言葉」で切り直す**
     （項目48-PV(B)・2026-09-04・うにさんの指定「末尾の `して` が
@@ -1042,6 +1227,14 @@ def _refit_run_tail(tokens, tokenize_fn):
         i = j + 1
         S = ''.join(t[0] or '' for t in run)
         broken = any(len(t) > 5 and not t[5] for t in run)
+        # **①（紫）が連なりまるごとに立っているなら壊れている**（48-SE）。
+        # ただし①だけが根拠の連なりは、下の「頭を1つにまとめる」形だけ
+        # （解析の刻みを崩さない——`もんたい` を `もん|たい` に割らない）
+        _odd_only = False
+        if not broken and _span_is_odd(_tok_int(run[0][3]),
+                                       _tok_int(run[-1][4]), odd_spans):
+            broken = True
+            _odd_only = True
         if not broken and _vnp is not None:
             # 判定は corrector の述語1本（48-GN）。手元の token で見る
             # ので、文字列を解析し直させない（1行の組み立てごとに
@@ -1064,8 +1257,28 @@ def _refit_run_tail(tokens, tokenize_fn):
             out.extend(run)
             continue
         cut = base + p
+        _odd_run = _span_is_odd(base, _tok_int(run[-1][4]), odd_spans)
+        _has_cut = any(_tok_int(t[3]) == cut for t in run)
+        if _odd_run and len(head) >= 3 and len(run) >= 2:
+            # **①（紫）が連なりまるごとに立っているなら、末尾の言葉を
+            # 除いた頭を1つの単位にする**（項目48-SE・2026-09-06・
+            # うにさんの指定「`たぶいごうして`、して は正しい」——
+            # F2 の範囲は `たぶいごう`。解析の刻み（たぶ｜い｜ごうし｜て）は
+            # 壊れた連なりでは当てにならない）。尾は、既に切れていれば
+            # 解析の刻みのまま（`みています` を割り直さない）
+            out.append(_mk_tok(head, '名詞:一般', '', base, False))
+            if _has_cut:
+                out.extend(t for t in run
+                           if _tok_int(t[3]) is not None
+                           and _tok_int(t[3]) >= cut)
+            else:
+                out.extend(_retok_sub(tail, cut, tokenize_fn))
+            continue
+        if _odd_only:
+            out.extend(run)         # ①だけの連なりは、まとめる形だけ
+            continue
         # 境目が既存の切れ目に一致するなら、そのまま
-        if any(_tok_int(t[3]) == cut for t in run):
+        if _has_cut:
             out.extend(run)
             continue
         for t in run:
@@ -1083,7 +1296,21 @@ def _refit_run_tail(tokens, tokenize_fn):
     return out
 
 
-def _refit_broken_kana_units(tokens, tokenize_fn, known):
+def _span_is_odd(s0, e0, odd_spans):
+    """[s0,e0) が ①（紫）の範囲にすっぽり入っているか（項目48-SE）。"""
+    if not odd_spans or s0 is None or e0 is None:
+        return False
+    for sp in odd_spans:
+        try:
+            a, b = int(sp[0]), int(sp[1])
+        except Exception:
+            continue
+        if a <= s0 and e0 <= b:
+            return True
+    return False
+
+
+def _refit_broken_kana_units(tokens, tokenize_fn, known, odd_spans=None):
     """
     **壊れたかなの連なりの単位を、エンジンの知識で切り直す**
     （項目48-PV・2026-09-04・うにさんの報告4件）。
@@ -1095,7 +1322,11 @@ def _refit_broken_kana_units(tokens, tokenize_fn, known):
 
         (A)  読みの立たない塊の中の `を` で切る（48-MN を借りる）
         (C)  読みの立たない断片を隣と繋いで既知語に（かー＋そる）
+        (C'')壊れたかなの**連なり**の左端から既知語を切り出す（48-RI。
+             **(C) より先に**——(C) が繋ぐと頭が見えなくなる）
         (C') 長い読みの立たない塊から右端の既知語を切り出す
+        (C''') 右端の既知語を**続く漢字と合わせて**見る（48-RM。
+             `きょじえかく｜乱` → `きょじえ｜かく乱`）
         (B)  壊れた連なりの末尾を「末尾にくる言葉」で切り直す
 
     どれも**読みの立たない断片か、品詞のつながりが異様な連なり**
@@ -1103,10 +1334,213 @@ def _refit_broken_kana_units(tokens, tokenize_fn, known):
     `tools_local/probe_f2units.py`）。
     """
     tokens = _refit_split_wo(tokens, tokenize_fn)
+    # **左端の切り出しは (C) より先**（項目48-RI）——(C) が断片を
+    # 隣と繋いでしまうと、連なりの頭が見えなくなる
+    # （`かん｜いり｜ゅうりょく` → (C) が `かん｜いりゅうりょく`）
+    tokens = _refit_extract_known_head(tokens, known)
     tokens = _refit_join_known(tokens, known)
     tokens = _refit_extract_known(tokens, known)
-    tokens = _refit_run_tail(tokens, tokenize_fn)
+    # **右端の既知語は、続く漢字と合わせても見る**（項目48-RM）
+    tokens = _refit_extract_known_with_kanji(tokens, tokenize_fn)
+    tokens = _refit_run_tail(tokens, tokenize_fn, odd_spans=odd_spans)
+    # **助詞＋述語の尾と、外来語の頭**（48-SE・2026-09-06）
+    tokens = _refit_particle_predicate(tokens, tokenize_fn,
+                                       odd_spans=odd_spans)
+    tokens = _refit_loanword_head(tokens, odd_spans=odd_spans)
     return tokens
+
+
+def _predicate_text(text, tokenize_fn):
+    """
+    **その並びは述語か**（動詞（形容詞）＋付属語だけで、文法でも説明が
+    付く。項目48-SE）。`みえた`＝見え＋た・`みています`。
+    """
+    if not text or len(text) < 2 or tokenize_fn is None:
+        return False
+    try:
+        ts = list(tokenize_fn(text))
+    except Exception:
+        return False
+    if not ts or ''.join(t[0] or '' for t in ts) != text:
+        return False
+    if any(len(t) > 5 and not t[5] for t in ts):
+        return False
+    p0 = ts[0][1] or ''
+    if not (p0.startswith('動詞:自立') or p0.startswith('形容詞:自立')):
+        return False
+    for t in ts[1:]:
+        pz = t[1] or ''
+        if not (pz.startswith('助詞') or pz.startswith('助動詞')
+                or pz.startswith('動詞:非自立')
+                or pz.startswith('形容詞:非自立')):
+            return False
+    try:
+        import pos_grammar as _pg
+        return bool(_pg.explain_kana_run(text))
+    except Exception:
+        return False
+
+
+def _refit_particle_predicate(tokens, tokenize_fn, odd_spans=None):
+    """
+    **壊れたかなの連なりの末尾の「助詞＋述語」を切り出す**（項目48-SE・
+    2026-09-06・うにさんの報告「`すくろーるごのみえた`、F2の範囲が
+    すくろーる/ご/のみえ/た という区切り。ご の接頭辞、のみえ の品詞判定が
+    おかしい」）。
+
+    解析は壊れた連なりを `ご｜のみ｜え｜た` と刻む（`のみ`＝飲み）。
+    48-PV(B) は**機能語の表**で末尾を剥がすが、`みえた` は機能語では
+    ない（動詞）。**1字の格助詞の右が述語**（`_predicate_text`）なら、
+    その助詞で切って右を解析し直す:
+
+        すくろーるごのみえた → すくろーるご｜の｜みえ｜た
+
+    掛けるのは**読みの立たない断片を含む連なり**だけ（正しい文は
+    解析が既に割っている）。頭は2字以上残す。左から見て最初に立つ
+    切れ目＝いちばん長い述語を採る。
+    """
+    if not tokens or tokenize_fn is None:
+        return tokens
+    out = []
+    i = 0
+    n = len(tokens)
+    while i < n:
+        if not _kana_only_text(tokens[i][0] or ''):
+            out.append(tokens[i])
+            i += 1
+            continue
+        j = i
+        while (j + 1 < n and _kana_only_text(tokens[j + 1][0] or '')
+               and _tok_int(tokens[j][4]) == _tok_int(tokens[j + 1][3])):
+            j += 1
+        run = tokens[i:j + 1]
+        i = j + 1
+        S = ''.join(t[0] or '' for t in run)
+        broken = any(len(t) > 5 and not t[5] for t in run)
+        base = _tok_int(run[0][3])
+        if not broken and _span_is_odd(base, _tok_int(run[-1][4]),
+                                       odd_spans):
+            broken = True           # ①が立っている連なり（48-SE）
+        if not broken or len(S) < 5 or base is None:
+            out.extend(run)
+            continue
+        cut = None
+        for k in range(2, len(S) - 1):
+            if S[k] not in 'のにをがでとへはも':
+                continue
+            if _predicate_text(S[k + 1:], tokenize_fn):
+                cut = k
+                break
+        if cut is None:
+            out.extend(run)
+            continue
+        # 既にその形に切れているなら触らない
+        tail_now = [t for t in run if _tok_int(t[3]) is not None
+                    and _tok_int(t[3]) >= base + cut]
+        want = ([(S[cut], base + cut)]
+                + [(t[0], _tok_int(t[3]))
+                   for t in _retok_sub(S[cut + 1:], base + cut + 1,
+                                       tokenize_fn)])
+        if [(t[0], _tok_int(t[3])) for t in tail_now] == want:
+            out.extend(run)
+            continue
+        c_abs = base + cut
+        for t in run:
+            s0, e0 = _tok_int(t[3]), _tok_int(t[4])
+            if s0 is None or e0 is None:
+                continue
+            if e0 <= c_abs:
+                out.append(t)
+            elif s0 < c_abs:
+                left = (t[0] or '')[:c_abs - s0]
+                out.append(_mk_tok(left, t[1], '', s0, False,
+                                   (t[6] if len(t) > 6 else '') or ''))
+        out.append(_mk_tok(S[cut], '助詞:格助詞:一般', S[cut], c_abs, True))
+        out.extend(_retok_sub(S[cut + 1:], c_abs + 1, tokenize_fn))
+    return out
+
+
+def _refit_loanword_head(tokens, odd_spans=None):
+    """
+    **壊れたかなの連なりの頭の外来語を切り出す**（項目48-SE）。
+
+        すくろーるご → **すくろーる｜ご**（スクロール＋後）
+
+    同梱の外来語の表（`loanword._katakana_seed_kana_only`——ひらがなから
+    カタカナに寄せてよい語）に**4字以上**の頭が在り、残りが1字以上
+    あるとき。切り出した頭のあとに1字の `ご` が残るなら、それは
+    **動作の名詞に付く `後`**（48-PQ）なので `名詞:接尾` に言い直す。
+    """
+    if not tokens:
+        return tokens
+    try:
+        from loanword import _katakana_seed_kana_only as _seed
+        tbl = _seed()
+    except Exception:
+        return tokens
+    if not tbl:
+        return tokens
+    out = []
+    i = 0
+    n = len(tokens)
+    while i < n:
+        if not _kana_only_text(tokens[i][0] or ''):
+            out.append(tokens[i])
+            i += 1
+            continue
+        j = i
+        while (j + 1 < n and _kana_only_text(tokens[j + 1][0] or '')
+               and _tok_int(tokens[j][4]) == _tok_int(tokens[j + 1][3])):
+            j += 1
+        run = tokens[i:j + 1]
+        i = j + 1
+        S = ''.join(t[0] or '' for t in run)
+        broken = any(len(t) > 5 and not t[5] for t in run)
+        base = _tok_int(run[0][3])
+        if not broken and _span_is_odd(base, _tok_int(run[-1][4]),
+                                       odd_spans):
+            broken = True           # ①が立っている連なり（48-SE）
+        if not broken or len(S) < 5 or base is None:
+            out.extend(run)
+            continue
+        hit = None
+        for ln in range(min(len(S) - 1, 10), 3, -1):
+            if S[:ln] in tbl and S[ln] not in _SMALL_HEAD_SET:
+                hit = ln
+                break
+        if hit is None:
+            out.extend(run)
+            continue
+        # 既にそこで切れていて、頭が1トークンなら、続く1字の `ご` の
+        # 言い直し（`後`＝名詞:接尾）だけして、そのまま
+        if _tok_int(run[0][4]) == base + hit:
+            _rest0 = list(run)
+            if len(_rest0) > 1 and (_rest0[1][0] or '') == 'ご' \
+                    and not (_rest0[1][1] or '').startswith('名詞:接尾'):
+                t0 = _rest0[1]
+                _rest0[1] = (t0[0], '名詞:接尾', 'ご', t0[3], t0[4], True) \
+                    + tuple(t0[6:])
+            out.extend(_rest0)
+            continue
+        c_abs = base + hit
+        out.append(_mk_tok(S[:hit], '名詞:一般', S[:hit], base, True))
+        rest = []
+        for t in run:
+            s0, e0 = _tok_int(t[3]), _tok_int(t[4])
+            if s0 is None or e0 is None or e0 <= c_abs:
+                continue
+            if s0 < c_abs:
+                right = (t[0] or '')[c_abs - s0:]
+                rest.append(_mk_tok(right, t[1], '', c_abs, False,
+                                    (t[6] if len(t) > 6 else '') or ''))
+            else:
+                rest.append(t)
+        if rest and (rest[0][0] or '') == 'ご':
+            t0 = rest[0]
+            rest[0] = (t0[0], '名詞:接尾', 'ご', t0[3], t0[4], True) \
+                + tuple(t0[6:])
+        out.extend(rest)
+    return out
 
 
 def build_line_units(result, tokenize_fn, choice_store=None,

@@ -118,6 +118,10 @@ PARTICLES_MULTI = {
 # 助動詞・活用語尾。これで終わる語は語尾部分を保護する。
 AUXILIARY_TAILS = (
     'です', 'ます', 'ました', 'ません', 'ませんでした', 'でした',
+    # **〜てる（〜ている の縮約）**（項目48-TF・2026-09-06。`包装されてるのが`
+    #   の `る` を 48-IT が「機能語の並びとして異様」と落とした）
+    'てる', 'てた', 'てて', 'てます', 'てない', 'てれば',
+    'でる', 'でた', 'でて', 'でます', 'でない', 'でれば',
     'でしょう', 'ましょう', 'ください', 'ておく', 'ている', 'ていた',
     'ていない', 'てある', 'てしまう', 'ちゃう', 'られる', 'させる',
     'せる', 'れる', 'たい', 'たがる', 'そうだ', 'らしい', 'ようだ',
@@ -242,6 +246,12 @@ _AUX_VERB_AFTER_TE = {
 }
 
 BASIC_VERB_FORMS = {
+    # **得る**（可能の補助動詞・連用形に付く。取り得る・あり得る。項目48-SX・
+    #   2026-09-06。`無限にとりうる` に紫が立っていた）。**うる だけ**——
+    #   える・えない を足すと `おじえる`＝おじ＋える・`かんえる`＝かん＋える と
+    #   打ち間違いまで説明できてしまい、readcheck の直りを失った（実測）。
+    #   位置を見られる 48-KS の自動機（R のあとだけ）には え→E も置いてある
+    'うる',
     'ある', 'あり', 'あっ', 'あった', 'あって', 'あれば', 'あろう', 'あります',
     # 1字の形（い・き・み）は入れない。`ほらい` が `ほら`＋`い` で
     # 説明できてしまい、`ほせい`（補正）に直らなくなった（tests_mock）。
@@ -839,7 +849,8 @@ def find_hiragana_runs(line, min_len=4, allow_adjacent_kanji=False):
             # 送り仮名や複合語の一部の可能性が高いので対象外
             prev_ok = (i == 0) or not is_japanese_word_char(line[i - 1])
             next_ok = (j >= n) or not is_japanese_word_char(line[j])
-        if len(run) >= min_len and prev_ok and next_ok                 and not kana_is_mentioned(line, i, j):
+        if len(run) >= min_len and prev_ok and next_ok \
+                and not kana_is_mentioned(line, i, j):
             runs.append((i, j, run))
         i = j
     return runs
@@ -1090,8 +1101,330 @@ _LU_FUNCTIONAL = tuple(sorted(
     key=len, reverse=True))
 
 
+def _lu_katakana_face(frag):
+    """読みをカタカナに綴った形が**世の中で1語**なら、その表記（4字以上。
+    `_convert_odd_kana_run` の `_world_katakana_piece` と同じ門・48-OR(c)）。"""
+    if not frag or len(frag) < 4:
+        return None
+    try:
+        from loanword import hiragana_to_katakana as _h2k
+        import seed_japanese as _sj
+    except Exception:
+        return None
+    k = _h2k(frag)
+    if k == frag or not all(is_katakana(_c) or _c == 'ー' for _c in k):
+        return None
+    try:
+        return k if _sj.is_unit(k) else None
+    except Exception:
+        return None
+
+
+def _lu_dominant(r, store, dict_index=None):
+    """
+    **その読みの「優勢な」表記を、回数なしで決める**（項目48-SC・
+    2026-09-06。48-LU の `dominant`（床10・比20倍）は回数を廃した
+    48-QG' で成立しなくなり、道が丸ごと眠っていた）。
+
+    順に:
+      (1) 本人の語彙に **solid（実績2以上）** の表記——ただ1つならそれ。
+          2つ以上なら **段（`kango_tier`）→ 同梱の費用** で1つに
+          （いどう: 移動〔段1〕／異動〔段2〕→ 移動）。並べば None
+      (2) 索引の顔（`_index_face`——段1の2字漢語がただ1つ）
+      (3) 世の中のカタカナ語（`_lu_katakana_face`・4字以上）
+
+    **count 1 の表記は数えない**（48-LU の注記「立った表記がただ1つ」
+    へ緩めた案は、育ちの readcheck で本当の化けを 34 作った）。
+    戻り値: (表記, 強さ) か None。強さは (1)=3・(2)(3)=2。
+    """
+    if not r or store is None:
+        return None
+    faces = []
+    try:
+        for e in store.lookup(r):
+            sf = e.get('surface') or ''
+            if sf and e.get('count', 0) >= 2 and sf not in faces \
+                    and sf != r:
+                faces.append(sf)
+    except Exception:
+        faces = []
+    if faces:
+        if len(faces) == 1:
+            return faces[0], 3
+
+        def _key(sf):
+            tc = _table_cost(sf)
+            return (_kango_tier_of(sf), tc if tc is not None else 10 ** 9)
+        faces.sort(key=lambda sf: (_key(sf), sf))
+        if _key(faces[0]) < _key(faces[1]):
+            return faces[0], 3
+        return None
+    if dict_index is not None:
+        try:
+            f = _index_face(r, store, dict_index)
+        except Exception:
+            f = None
+        if f:
+            return f, 2
+    k = _lu_katakana_face(r)
+    if k:
+        return k, 2
+    return None
+
+
+def _lu_moved_piece(run, v, tokenize_fn):
+    """゛の位置ずれで変わった2か所を含む、v の解析の**同じ語**の範囲
+    （`つづき` → (0, 3)／`むだ|つかい` は別々の語に散るので None・項目48-SB）。"""
+    if not run or not v or len(run) != len(v) or tokenize_fn is None:
+        return None
+    diff = [i for i in range(len(v)) if run[i] != v[i]]
+    if not diff:
+        return None
+    try:
+        toks = list(tokenize_fn(v))
+    except Exception:
+        return None
+    if not toks or ''.join(t[0] or '' for t in toks) != v:
+        return None
+    for t in toks:
+        try:
+            s0, e0 = int(t[3]), int(t[4])
+        except Exception:
+            return None
+        if s0 <= diff[0] < e0:
+            return (s0, e0) if all(s0 <= d < e0 for d in diff) else None
+    return None
+
+
+def _lu_moved_in_one_word(run, v, tokenize_fn):
+    """（旧名・同じ判定）゛の位置ずれで変わった2か所が同じ語の中に在るか。"""
+    return _lu_moved_piece(run, v, tokenize_fn) is not None
+
+
+def _lu_changed_positions(run, v):
+    """手が変えた v の位置の集まり（落とした字は、落とした位置・項目48-SC）。"""
+    if not run or not v or run == v:
+        return set()
+    out = set()
+    try:
+        import difflib as _dl
+        for tag, _i1, _i2, j1, j2 in _dl.SequenceMatcher(
+                None, run, v, autojunk=False).get_opcodes():
+            if tag == 'equal':
+                continue
+            if j2 > j1:
+                out.update(range(j1, j2))
+            elif j1 < len(v):
+                out.add(j1)
+            elif v:
+                out.add(len(v) - 1)
+    except Exception:
+        return set()
+    return out
+
+
+def _lu_orig_piece_known(run, v, store, tokenize_fn):
+    """
+    **手を当てる前の、その語が「知っている語」か**（項目48-SC の
+    ゛の位置ずれの門）。語の切れ目は**手を当てた読み v の解析**で取り
+    （壊れた run の解析は当てにならない——`つつぎをはなす` は
+    つつ｜ぎをはなす）、同じ範囲の run の字を見る。位置ずれは長さを
+    変えないので範囲はそのまま使える。
+    """
+    if not run or not v or len(run) != len(v) or tokenize_fn is None:
+        return False
+    p = 0
+    while p < len(v) and run[p] == v[p]:
+        p += 1
+    if p >= len(v):
+        return False
+    try:
+        toks = list(tokenize_fn(v))
+    except Exception:
+        return False
+    if not toks or ''.join(t[0] or '' for t in toks) != v:
+        return False
+    for t in toks:
+        try:
+            s0, e0 = int(t[3]), int(t[4])
+        except Exception:
+            return False
+        if s0 <= p < e0:
+            seg = run[s0:e0]
+            if len(seg) < 2:
+                return False
+            try:
+                if any(e.get('count', 0) >= 2 for e in store.lookup(seg)):
+                    return True
+            except Exception:
+                pass
+            return _table_cost(seg) is not None
+    return False
+
+
+def _lu_changed_piece_known(run, v, store, tokenize_fn, against=None):
+    """
+    **手を当てた読み v の、変わった所を含む語が「知っている語」か**
+    （項目48-SC の かな→かな の受け入れ・48-PO と同じ物差し）。
+
+    語の切れ目は解析（`tokenize_fn`）に聞く——`もとにもどります` の
+    変わった所（み を落とした 1）は `もと`。知っているとは、本人の
+    語彙に実績2以上か、同梱の費用の表に在ること（`is_world_reading`
+    は `くみと` まで True で使えない・48-PO の実測）。
+    """
+    if not run or not v or tokenize_fn is None:
+        return False
+    # `against` を渡すと、変わった所は run と against の差で決め、語は v
+    # （＝run そのもの）の側で見る（元の語が知っている語か）
+    other = against if against is not None else v
+    if run == other:
+        return False
+    p = 0
+    while p < min(len(run), len(other)) and run[p] == other[p]:
+        p += 1
+    if p >= len(v):
+        p = len(v) - 1
+    try:
+        toks = list(tokenize_fn(v))
+    except Exception:
+        return False
+    if not toks or ''.join(t[0] or '' for t in toks) != v:
+        return False
+    seg = ''
+    for t in toks:
+        try:
+            s0, e0 = int(t[3]), int(t[4])
+        except Exception:
+            return False
+        if s0 <= p < e0:
+            seg = t[0] or ''
+            break
+    if len(seg) < 2:
+        return False
+    try:
+        if any(e.get('count', 0) >= 2 for e in store.lookup(seg)):
+            return True
+    except Exception:
+        pass
+    return _table_cost(seg) is not None
+
+
+def _lu_functional_only(tail):
+    """その尾が **`_LU_FUNCTIONAL`（閉じた名簿）の並びだけ**で埋まるか
+    （項目48-SC）。`になる`・`して`・`のには` は True、`かして`（か は
+    名簿の外）は False。`_is_all_functional` は緩すぎた（実測）。"""
+    n = len(tail)
+    ok = [False] * (n + 1)
+    ok[0] = True
+    for i in range(n):
+        if not ok[i]:
+            continue
+        for fp in _LU_FUNCTIONAL:
+            if tail.startswith(fp, i):
+                ok[i + len(fp)] = True
+    return ok[n]
+
+
+def _lu_predicate_tail(tail, tokenize_fn):
+    """
+    **その尾は、名詞の直後に直付きできる述語か**（項目48-SC・2026-09-06）。
+
+    メモの文は助詞を省く（`入力みています`・`スクロール後のみえた` の
+    `みえた`）。尾が **い段の送り仮名の頭**（み・し・き＝連用形）で
+    始まり、送り仮名＋機能語で説明が付く（`_okurigana_functional_only`）
+    か、解析が **動詞（形容詞）＋付属語だけ** と読んで文法でも説明が
+    付く（`みえた`＝見え＋た）ときだけ。`う` で始まる尾（`うして`）は
+    名詞に付かないので False。
+    """
+    if not tail or tail[0] not in OKURIGANA_HEADS:
+        return False
+    # **1字の語幹で立てるのは、閉じた名簿だけ**（し＝する・き＝来る／
+    # 着る・`pos_grammar._BASIC_STEMS_1`＝見る・居る・出る・寝る…）。
+    # `え`・`せ`・`て` のような送り仮名の頭は、名詞の直後では動詞に
+    # ならない（`タブ以後|えして` の junk・実測）
+    try:
+        import pos_grammar as _pg_h
+        _stems1 = set(_pg_h._BASIC_STEMS_1) | {'し', 'き'}
+    except Exception:
+        _stems1 = set('しきみい')
+    try:
+        if tail[0] in _stems1 and _okurigana_functional_only(tail):
+            return True
+    except Exception:
+        pass
+    if tokenize_fn is None:
+        return False
+    try:
+        ts = list(tokenize_fn(tail))
+    except Exception:
+        return False
+    if not ts or ''.join(t[0] or '' for t in ts) != tail:
+        return False
+    if any(len(t) > 5 and not t[5] for t in ts):
+        return False
+    p0 = ts[0][1] or ''
+    if not (p0.startswith('動詞') or p0.startswith('形容詞')):
+        return False
+    if len(ts[0][0] or '') < 2 and (ts[0][0] or '') not in _stems1:
+        return False
+    for t in ts[1:]:
+        pz = t[1] or ''
+        # 2つ目からは付属語だけ（`すら|き|が|おわっ|た` のように別の
+        # 自立語の動詞が続く並びは、1つの述語ではない・実測）
+        if not (pz.startswith('助詞') or pz.startswith('助動詞')
+                or pz.startswith('動詞:非自立')
+                or pz.startswith('形容詞:非自立')):
+            return False
+    try:
+        import pos_grammar as _pg_t
+        return bool(_pg_t.explain_kana_run(tail))
+    except Exception:
+        return False
+
+
+def lu_run_candidates(run, store, dict_index, tokenize_fn,
+                      input_method=None, limit=6):
+    """
+    **紫のかな連続まるごとの候補**（項目48-SF・2026-09-06・うにさんの
+    指定「`たぶいごうして`、して は正しい。たぶい の候補に 舞台 を
+    挙げているが、それだと 舞台ごうして で成立しない」）。
+
+    F2 の候補一覧のための口。48-LU/48-SC の受け皿が**組めた表記を
+    全部**（手の段の順・強さの順）返す——自動の直しは「ただ1つ」の
+    ときだけだが、候補なら並べてよい（脱字の段も含める）。
+    連続の一部（`たぶい`）ではなく**連続そのもの**に対する候補なので、
+    選ぶと連続まるごとが置き換わる（呼び手が `span` を持つ）。
+    """
+    got = []
+    out = []
+    # **自動の直しが決めた答えが先頭**（④の選び方をそのまま候補の順に）
+    try:
+        _top = _lu_compose_odd_run(run, store, input_method=input_method,
+                                   tokenize_fn=tokenize_fn,
+                                   dict_index=dict_index,
+                                   odd_known=True, bare_head=True)
+        if _top and _top != run:
+            out.append(_top)
+    except Exception:
+        pass
+    try:
+        _lu_compose_odd_run(run, store, input_method=input_method,
+                            tokenize_fn=tokenize_fn, dict_index=dict_index,
+                            odd_known=True, bare_head=True, collect=got)
+    except Exception:
+        return out
+    got.sort(key=lambda t: (t[0], t[1], t[2]))
+    for _ti, _st, sf in got:
+        if sf not in out and sf != run:
+            out.append(sf)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _lu_compose_odd_run(run, store, input_method=None, tokenize_fn=None,
-                        context_vec=None):
+                        context_vec=None, dict_index=None, odd_known=False,
+                        bare_head=False, collect=None):
     """
     **異様なかな連なりを、見本なしで語の列として組み直す**
     （項目48-LU・2026-08-30 19回目）。うにさんの指定:
@@ -1101,25 +1434,46 @@ def _lu_compose_odd_run(run, store, input_method=None, tokenize_fn=None,
           見本がなくても異様な文字列を正しく漢字に補正する必要が
           あります」
 
-    18回目の「行の後ろの並記への変換」（48-LT）は、⇒で答えが横に並ぶ
-    **開発用の形に寄りかかっていた**ので撤去し、こちらに置き換えた。
-
     形は ★★ の順そのもの:
       ① 異様と判定された連なりだけが来る（窓のどの探索でも直せず、
          紫に落ちる直前——呼び元がその場所）
-      ③ 本来の入力を探る——手は**1つまで**（隣のキー1置換・
-         脱字1字・余分1字。手なしを先に試し、有れば1手は見ない）
-      ④ 確かめる——直した読みが**語彙の優勢な語＋機能語で端から端
-         まで組み上がり**、組み上がる表記が**ただ1つ**のときだけ採る
-         （2つ以上は拮抗＝組まない。優勢は 床10・比20倍——48-LC/LM と
-         同じ物差し）
+      ③ 本来の入力を探る——手は**1つまで**
+      ④ 確かめる——直した読みが**優勢な語＋機能語で端から端まで
+         組み上がり**、組み上がる表記が**ただ1つ**のときだけ採る
 
-        かなちでのほせい  ＋う → かな＋打ち＋で＋の＋補正
-                                  → **かな打ちでの補正**
-        かいすせきがおわった −す → 解析＋が＋終わっ＋た
-                                  → **解析が終わった**
+    ### 7巡目で起こした（項目48-SC・2026-09-06・**④の選び方**）
 
-    戻り値: 組み上がった表記（漢字を含むものだけ）か None。
+    回数を廃した 48-QG' で `dominant`（床10・比20倍）が成立しなく
+    なり、この道は丸ごと眠っていた（48-RW で「かな連続の受け皿が
+    無い」と見えたのはそのため）。**優勢は回数なしで決める**
+    （`_lu_dominant`——solid・段・費用・索引の顔・世の中のカタカナ語）。
+    あわせて:
+
+      ・**手を費用の段に分ける**（48-OQ(e')「打った字を使う手が先」）:
+          0手 → 安い1手（隣のキー≤1.0・゛の付け外し・**゛の位置ずれ**
+          〔48-SB〕・**余分な字に濁点**〔48-OR(b)・たで→だ〕・
+          **余分な隣のキー／同じキー**を落とす）→ 遠い隣（≤1.4・
+          `たぶいごうして` の ご→ど）→ 脱字（1字足す・1.5）。
+          **どの字でも消す手は止めた**（余分な打鍵は隣のキーのとき
+          だけ——SPEC の型5）
+      ・**述語の尾はそのまま1つの部品**（`みています`・`して`・
+        `になる` は `_okurigana_functional_only`＝送り仮名＋機能語で
+        説明が付く尾。語の列に敷き詰めず、そのまま後ろに置く）——
+        芯の切り出しが `にゅうりゅくみ` に み を巻き込んでいた形の答え
+      ・**2字の部品は solid かカタカナだけ**（右・タブ。2字の漢字を
+        索引の顔で埋めると `ぶんうつ → 文打つ` の族・48-ON）
+      ・**自然さは、共通の尾を除いて比べる**（`入力みています` は
+        まるごとだと差 2091 で落ちるが、比べるべきは
+        にゅうりゅく → 入力 の頭）
+      ・**かな→かな も受け入れる**（漢字に届かないとき）: 手を当てた
+        読みが文法で説明が付き、変わった所を含む語が知っている語
+        （solid か費用の表）で、その段の候補が**ただ1つ**なら
+        （`もみとにもどります → もとにもどります`。48-PO の かな版）
+      ・`odd_known`: 呼び手が行全体の①（`odd_kana_spans`）で「この
+        窓は異様」と確かめてある（窓だけでは説明が付いて見える形——
+        `もみと`）。`bare_head`: 窓が行の頭
+
+    戻り値: 組み上がった表記（漢字を含むもの／かな→かな）か None。
     """
     if not (4 <= len(run) <= 14):
         return None
@@ -1131,35 +1485,24 @@ def _lu_compose_odd_run(run, store, input_method=None, tokenize_fn=None,
     # （pos_grammar）で説明が付くなら、それは書きたい形でありうる）
     try:
         import pos_grammar as _pg
-        if _pg.explain_kana_run(run):
+        if not odd_known and _pg.explain_kana_run(run, bare_head=bare_head):
             return None
     except Exception:
-        pass
+        _pg = None
 
     dom_cache = {}
 
     def dominant(r):
-        """その読みの**優勢な**表記（床10・比20倍）。無ければ None。"""
         if r in dom_cache:
             return dom_cache[r]
-        got = None
-        try:
-            es = sorted((e for e in store.lookup(r)),
-                        key=lambda e: -e.get('count', 0))
-            if es:
-                top = es[0]
-                second = es[1].get('count', 0) if len(es) > 1 else 0
-                if top.get('count', 0) >= max(10, 20 * second):
-                    got = (top.get('surface'), top.get('count', 0))
-        except Exception:
-            got = None
+        got = _lu_dominant(r, store, dict_index)
         dom_cache[r] = got
         return got
 
     seg_cache = {}
 
     def seg_full(v):
-        """v を端から端まで組む。{(表記, 最弱の実績, 内容語の組)} を返す。"""
+        """v を端から端まで組む。{(表記, 最弱の強さ, 部品の組)} を返す。"""
         if v in seg_cache:
             return seg_cache[v]
         n = len(v)
@@ -1167,50 +1510,54 @@ def _lu_compose_odd_run(run, store, input_method=None, tokenize_fn=None,
         memo = {n: (('', 10 ** 9, ()),)}
 
         def rec(i):
-            # **打ち切るなら、良いものを残す**（項目48-NE・2026-08-31）。
-            #
-            # ここは `set` に貯めて **8件を超えたら break** していた。
-            # `set` の回る順は**起動ごとに変わる**（Python は文字列の
-            # ハッシュに毎回ちがう種を混ぜる）ので、**どの8件が残るかが
-            # 起動ごとに変わって**いた——同じ版・同じ入力・同じ語彙で
-            # 答えが変わる。`hashcheck.py` はこれを見る道具だが、
-            # **初期状態では拮抗がほとんど起きない**ので 0 のまま
-            # 通っていた。**育ちの語彙で回すと 5件以上ずれる**:
-            #
-            #     きんて  → `きて`      ／ **消えて**
-            #     うそさい → そのまま    ／ **ウソ記載**
-            #     さんとう → そのまま    ／ **山道**
-            #
-            # 直し方は「順を決めてから切る」。**貯めるのは全部**、
-            # 切るのは**並べたあと**。並べる軸は、この機械がずっと
-            # 使ってきたもの——**実績の高い順 → 語数の少ない順 →
-            # 表記**（48-IE と 48-LU (B) と同じ向き）。
+            # **打ち切るなら、良いものを残す**（項目48-NE・2026-08-31）——
+            # 貯めるのは全部、切るのは並べたあと。並べる軸は全順序
             if i in memo:
                 return memo[i]
             outs = set()
-            # **組の頭は内容語**（文は機能語では始まらない。この判定が
-            # 無かった最初の版は さ＋参考＋になる のようなゴミの組が
-            # 拮抗を埋めた・実測）
+            # **組の頭は内容語**（文は機能語では始まらない）
             if i > 0:
                 for fp in _LU_FUNCTIONAL:
                     if v.startswith(fp, i):
                         for s2, mn, cs in rec(i + len(fp)):
-                            outs.add((fp + s2, mn, (('f', fp),) + cs))
+                            outs.add((fp + s2, mn, (('f', fp, len(fp)),) + cs))
+                # **述語の尾は、そのまま1つの部品**（項目48-SC）。
+                # 尾の頭は **名詞の直後に置ける機能語**（に・を・して・
+                # です…`_noun_tail_start`）か、**い段の送り仮名で始まる
+                # 述語**（`_lu_predicate_tail`・みています・みえた）に
+                # 限る——`う` で始まる尾（`タブ以後|うして`）は名詞に付かない
+                tail = v[i:]
+                try:
+                    _tail_ok = ((_lu_functional_only(tail)
+                                 and _noun_tail_start(tail))
+                                or _lu_predicate_tail(tail, tokenize_fn))
+                except Exception:
+                    _tail_ok = False
+                if _tail_ok:
+                    outs.add((tail, 10 ** 9, (('f', tail, len(tail)),)))
+                # **カタカナのサ変名詞の直後の `ご` は `後`**（48-PQ の
+                # かな版。`すくろーる|ご|の|みえた`——後ろに 名詞に付く
+                # 助詞が続くときだけ。前がカタカナの部品かは、組み上がりを
+                # 見る側で確かめる）
+                if v[i] == 'ご' and i + 1 < n and v[i + 1] in 'のにではも':
+                    for s2, mn, cs in rec(i + 1):
+                        outs.add(('後' + s2, min(mn, 2), (('c', '後', 1),) + cs))
             for L in range(2, min(8, n - i) + 1):
                 got = dominant(v[i:i + L])
-                if got:
-                    for s2, mn, cs in rec(i + L):
-                        outs.add((got[0] + s2, min(mn, got[1]),
-                                  (('c', got[0]),) + cs))
-            # 並べる軸は**全順序**にすること——`(表記, 実績)` が同じで
-            # **組み方だけ違う**組が並ぶ（`さえ|問う|が|あり|ました` の
-            # `あり` を機能語と見るか内容語と見るか）。そこが決まって
-            # いないと、`len(cset)` が起動ごとに 2 と 3 で入れ替わり、
-            # **48-LU (B) の「語数が最少」が裁けたり裁けなかったり**
-            # した（`さんとう → 山道` が出たり出なかったり・実測）。
+                if not got:
+                    continue
+                face, strength = got
+                # **2字の部品は solid かカタカナだけ**（48-ON の族）
+                if L == 2 and strength < 3 \
+                        and not all(is_katakana(_c) or _c == 'ー'
+                                    for _c in face):
+                    continue
+                for s2, mn, cs in rec(i + L):
+                    outs.add((face + s2, min(mn, strength),
+                              (('c', face, L),) + cs))
             memo[i] = tuple(sorted(outs, key=lambda t: (
                 -t[1],
-                sum(1 for _k, _w in t[2] if _k == 'c'),
+                sum(1 for _pc in t[2] if _pc[0] == 'c'),
                 t[0], t[2])))[:CAP + 1]
             return memo[i]
 
@@ -1218,66 +1565,96 @@ def _lu_compose_odd_run(run, store, input_method=None, tokenize_fn=None,
         seg_cache[v] = out
         return out
 
-    # 手の段: 0手（そのまま）→ 1手。0手で組み上がる（か拮抗する）なら
-    # 1手は見ない（最小の手）。
-    tiers = [[run]]
-    one = []
-    # **手は先頭の字に掛けない**（頭の1字は打った字そのもの。
-    # み→き の置換で みぎだぶるくりっく → 木々ダブルクリック を
-    # 作った・実測。48-LS「頭のかなは動かさない」と同じ向きの判断）
+    # --- 手の段（安い順）。**先頭の字には掛けない**（頭の1字は打った字
+    #     そのもの。48-LS「頭のかなは動かさない」）
+    n = len(run)
+    mark, cheap, drop, far, ins = [], [], [], [], []
     try:
-        from kana_layout import nearby_candidates
-        for i, ch in enumerate(run):
-            if i == 0:
-                continue
-            for alt, dist in nearby_candidates(ch):
-                if dist <= 1.0 and alt != ch:
-                    one.append(run[:i] + alt + run[i + 1:])
+        from kana_layout import nearby_candidates as _nearby
     except Exception:
-        pass
-    # **゛゜の打ち忘れ・打ちすぎも1手**（つつぎ→つづき。かな入力では
-    # 濁点が独立キーで、いちばん多い打ち間違いの族——48-LL と同じ
-    # 判断。表は morphology の対をそのまま使う）
+        _nearby = None
+    if _nearby is not None:
+        for i in range(1, n):
+            ch = run[i]
+            try:
+                alts = _nearby(ch, input_method=input_method)
+            except TypeError:
+                alts = _nearby(ch)
+            except Exception:
+                alts = []
+            for alt, dist in alts:
+                if alt == ch:
+                    continue
+                v = run[:i] + alt + run[i + 1:]
+                if dist <= 1.0:
+                    cheap.append(v)
+                elif dist <= _CHUNK_NEAR_MAX:
+                    far.append(v)
+    # ゛゜の打ち忘れ・打ちすぎ（かな入力では ゛ が独立キー・48-LL と同じ）
     try:
         from morphology import _DAKUTEN_COMPOSE, _HANDAKUTEN_COMPOSE
         _fwd = dict(_DAKUTEN_COMPOSE)
         _fwd.update(_HANDAKUTEN_COMPOSE)
         _rev = {v: k for k, v in _fwd.items()}
-        for i, ch in enumerate(run):
-            if i == 0:
-                continue
-            if ch in _fwd:
-                one.append(run[:i] + _fwd[ch] + run[i + 1:])
-            if ch in _rev:
-                one.append(run[:i] + _rev[ch] + run[i + 1:])
-        # **゛が1つ隣にずれた形も1手**（つつぎ→つづき。48-LA' の
-        # 遅れた濁点と同じ族——かな入力では ゛ が独立キーなので、
-        # 1打の遅れ・早まりで隣の字に付く）
-        for i in range(1, len(run)):
+        for i in range(1, n):
             ch = run[i]
-            if ch not in _rev:
-                continue
-            base = _rev[ch]
-            if i - 1 >= 1 and run[i - 1] in _fwd:
-                one.append(run[:i - 1] + _fwd[run[i - 1]] + base
-                           + run[i + 1:])
-            if i + 1 < len(run) and run[i + 1] in _fwd:
-                one.append(run[:i] + base + _fwd[run[i + 1]]
-                           + run[i + 2:])
+            if ch in _fwd:
+                mark.append(run[:i] + _fwd[ch] + run[i + 1:])
+            if ch in _rev:
+                mark.append(run[:i] + _rev[ch] + run[i + 1:])
     except Exception:
         pass
-    # 脱字（1字を足す。**頭には足さない**——切り出しの紛れと
-    # 区別が付かない・48-LQ と同じ理由）
+    # ゛が1つ隣にずれた形も1手（項目48-SB。頭は変えない）——**打った字を
+    # 全部使って読み替える手**なので、隣のキーと同じ段
+    for v in _moved_dakuten_variants(run):
+        mark.append(v)
+    # 余分な字に濁点が付いた形（48-OR(b)・たで→だ）
+    for i in range(1, n - 1):
+        u, w = run[i], run[i + 1]
+        if u in _OR_DAKUTEN_BASE and w in _OR_VOICED_KANA \
+                and u in _TYPO_DAKUTEN:
+            drop.append(run[:i] + _TYPO_DAKUTEN[u] + run[i + 2:])
+    # 余分な打鍵は**隣のキーか同じキー**のときだけ落とす（SPEC の型5。
+    # どの字でも消す手は junk を作る——`チサ積んこうになる` の族）
+    for i in range(1, n):
+        nb = False
+        for j in (i - 1, i + 1):
+            if 0 <= j < n:
+                if run[j] == run[i]:
+                    nb = True
+                else:
+                    try:
+                        if adjacent_slip(run[j], run[i],
+                                         input_method or 'kana'):
+                            nb = True
+                    except Exception:
+                        pass
+        if nb:
+            drop.append(run[:i] + run[i + 1:])
+    # 脱字（1字を足す。頭には足さない——切り出しの紛れと区別が
+    # 付かない・48-LQ と同じ理由）。**打っていない字を足す手はあと**
     _ks = [chr(c) for c in range(ord('ぁ'), ord('ゖ') + 1)] + ['ー']
-    for i in range(1, len(run) + 1):
+    for i in range(1, n + 1):
         for ch in _ks:
-            one.append(run[:i] + ch + run[i:])
-    # 余分（1字を消す。先頭は消さない）
-    for i in range(1, len(run)):
-        one.append(run[:i] + run[i + 1:])
-    tiers.append(one)
+            ins.append(run[:i] + ch + run[i:])
+    # **段の順**（項目48-SC・④の選び方の「手の種類」）:
+    #   0手 → 打った字を**全部使って読み替える**手（隣のキー≤1.0・
+    #   ゛の位置ずれ）→ 打った字を**落とす／印を付け外す**手（余分な
+    #   隣のキー・余分な字に濁点・゛の付け外し）→ 遠い隣（≤1.4）→
+    #   脱字（打っていない字を足す・1.5）。`つつぎをはなす` は
+    #   ゛の位置ずれ（続きを話す）が 重複打鍵を落とす（次を話す）より先。
+    #   **手は先頭の字に掛けない**（どの段も。頭の1字は打った字）
+    # **脱字（1字足す）の段は自動の直しには使わない**（項目48-SC・
+    # 実測 `しゅうりょじ → 囚虜文字`〔もじ を足して 文字〕）。打っていない
+    # 字を足す手は候補が広すぎる——う挿入（48-KV/48-OP）・同じ行の並記
+    # （48-LQ）の持ち場に任せる。`ins` は作るだけ（F2 の候補の材料）
+    # **゛の段が隣のキーより先**（項目48-SJ・2026-09-06。48-OQ(e') の費用
+    # ——濁点 0.3・位置ずれ 0.8・隣のキー 1.0。readcheck の `めさす`〔材料
+    # めざす〕は す→き の隣のキー〔目先〕が ゛を戻す手〔目指す〕より先に
+    # 組めていた）
+    tiers = [[run], mark, cheap, drop, far]
 
-    def _grammar_ok(surf):
+    def _grammar_ok(surf, v=None):
         """組み上がりが文の形か（品詞対と自然さ・項目48-LU）。"""
         if tokenize_fn is None:
             return False
@@ -1290,6 +1667,7 @@ def _lu_compose_odd_run(run, store, input_method=None, tokenize_fn=None,
         if any(not t[5] for t in ts):
             return False            # 未知語を作らない
         prev = ''
+        prev_infl = ''
         for t in ts:
             pos = t[1] or ''
             # **動詞の直後に動詞・名詞は文にならない**（置く往く固定）
@@ -1297,46 +1675,245 @@ def _lu_compose_odd_run(run, store, input_method=None, tokenize_fn=None,
                                             or pos.startswith('名詞')):
                 return False
             # **名詞の直後の ます・た 系も文にならない**（入力未定ます）
-            if prev.startswith('名詞') and pos.startswith('助動詞')                     and t[0] in ('ます', 'ました', 'ません', 'た'):
+            if prev.startswith('名詞') and pos.startswith('助動詞') \
+                    and t[0] in ('ます', 'ました', 'ません', 'た'):
+                return False
+            # **動詞の基本形（終止形）の直後の です・ます も**（項目48-SJ・
+            # `目指すです`。活用形は t[6]・48-NT）
+            if (prev.startswith('動詞') and prev_infl == '基本形'
+                    and pos.startswith('助動詞')
+                    and t[0] in ('です', 'でした', 'ます', 'ました')):
                 return False
             prev = pos
-        # 仕上げは自然さ（字の並び）。明らかに自然になる組だけ
-        # （入力未定ます は品詞では 名詞+名詞+ます だが、ここで落ちる）
+            prev_infl = (t[6] if len(t) > 6 else '') or ''
+        # **「する」にならない名詞に し／して を付けない**（48-OQ(d)・
+        # `タブ以降して`）——判定は `_suru_attach_ok` の1本
         try:
-            if not _naturalness.worth_touching_readable(run, surf,
-                                                        default=False):
+            if not _suru_attach_ok(surf, tokenize_fn):
                 return False
         except Exception:
+            pass
+        # 仕上げは自然さ（字の並び）。明らかに自然になる組だけ。
+        # **共通の尾は除いて比べる**（項目48-SC）——尾（みています）は
+        # 打ったまま残るので、比べるべきは変えた頭だけ
+        k = 0
+        while (k < min(len(run), len(surf)) - 1
+               and run[-1 - k] == surf[-1 - k]):
+            k += 1
+        b0 = run[:len(run) - k] if k else run
+        a0 = surf[:len(surf) - k] if k else surf
+        if not a0 or not b0:
+            a0, b0 = surf, run
+        try:
+            # 組み上がり**全体**が字の並びとして異様でないこと
+            # （`_looks_unnatural` は `参考` のような2字の語だけでも
+            #  True と言うので、頭だけには掛けない）
+            if _naturalness._looks_unnatural(surf):
+                return False
+            if _naturalness.comparable(b0, a0):
+                return bool(_naturalness.is_more_natural(
+                    b0, a0, min_gain=_naturalness.MIN_GAIN_READABLE,
+                    default=False))
+            return bool(_naturalness.worth_touching_readable(
+                run, surf, default=False))
+        except Exception:
             return False
-        return True
 
-    for variants in tiers:
+    _pos_cache = {}
+
+    def _lu_face_pos(face):
+        """部品の表記の品詞（先頭の語・解析に聞く。無ければ ''）。"""
+        if face in _pos_cache:
+            return _pos_cache[face]
+        got = ''
+        if tokenize_fn is not None:
+            try:
+                _tf = tokenize_fn(face)
+                got = (_tf[0][1] or '') if _tf else ''
+            except Exception:
+                got = ''
+        _pos_cache[face] = got
+        return got
+
+    def _lu_clause_shape(pieces):
+        """組み上がりが**句の形**か（上の注記の (a)(b)）。"""
+        cs = [k for k in range(len(pieces)) if pieces[k][0] == 'c']
+        if not cs:
+            return False
+        last = cs[-1]
+        tail = ''.join(t[1] for t in pieces[last + 1:])
+        if len(cs) == 1:
+            return _lu_tail_shape(tail)
+        if len(cs) > 2:
+            return False
+        c1, c2 = pieces[cs[0]][1], pieces[cs[1]][1]
+        between = ''.join(t[1] for t in pieces[cs[0] + 1:cs[1]])
+        if between:
+            # 間は1字の格助詞（を・が・に・で・と・へ）だけ
+            return (len(between) == 1 and between in 'をがにでとへ'
+                    and (not tail or _lu_tail_shape(tail)))
+        if c2 == '後':
+            return True                         # カタカナ＋後（上で確かめ済み）
+        if len(c2) >= 4 and all(is_katakana(_c) or _c == 'ー'
+                                for _c in c2):
+            return not tail or _lu_tail_shape(tail)
+        try:
+            import seed_japanese as _sj_cl
+            if _sj_cl.is_unit(c1 + c2) is True:
+                return not tail or _lu_tail_shape(tail)
+        except Exception:
+            pass
+        # 2つ目＋尾がサ変（移動＋して）
+        if tail and tail[0] in 'しさせ' and _lu_face_pos(c2).startswith(
+                '名詞:サ変接続'):
+            return True
+        return False
+
+    def _lu_tail_shape(tail):
+        """最後の内容語の後ろの尾が、**2字以上の機能語／述語**か。"""
+        if not tail or len(tail) < 2:
+            return False
+        if _lu_functional_only(tail) and _noun_tail_start(tail):
+            # 1字の助詞だけの並び（へは・には）は不可——2字以上の
+            # 機能語（して・になる・でした・ます）を1つは含むこと
+            for fp in _LU_FUNCTIONAL:
+                if len(fp) >= 2 and fp in tail:
+                    return True
+            return False
+        if _lu_predicate_tail(tail, tokenize_fn):
+            return True
+        # 1字の格助詞＋述語（の＋みえた・が＋おわった）
+        if tail[0] in 'のにをがでとへはも' and len(tail) > 2:
+            return _lu_predicate_tail(tail[1:], tokenize_fn)
+        return False
+
+    def _tier_surfaces(variants):
+        """その段の変種から組める表記（文の形になるものだけ）。"""
         surfaces = {}
         surf_var = {}
         for v in dict.fromkeys(variants):
             for surf, mn, pieces in seg_full(v):
-                cset = tuple(t for k, t in pieces if k == 'c')
+                cset = tuple(t[1] for t in pieces if t[0] == 'c')
                 if not cset or surf == run:
                     continue
                 if not any(is_kanji(c) for c in surf):
                     continue        # 漢字に届く組だけ（かな→かなは別の道）
+                # `後`（ご）は**カタカナの部品の直後**だけ（48-PQ の門）。
+                # **内容語の直後の機能語は、名詞の直後に置けるもの**
+                # （`_noun_tail_start`）か述語の尾（`_lu_predicate_tail`）
+                # ——`以後て`・`ウソて` の て は動詞に付く助詞（実測の junk）
+                _go_bad = False
+                for _pk in range(len(pieces)):
+                    _pv = pieces[_pk - 1] if _pk > 0 else None
+                    if pieces[_pk][:2] == ('c', '後'):
+                        if (_pv is None or _pv[0] != 'c'
+                                or not all(is_katakana(_c) or _c == 'ー'
+                                           for _c in _pv[1])):
+                            _go_bad = True
+                            break
+                    if (pieces[_pk][0] == 'f' and _pv is not None
+                            and _pv[0] == 'c'):
+                        _fp = pieces[_pk][1]
+                        if not (_noun_tail_start(_fp)
+                                or _lu_predicate_tail(_fp, tokenize_fn)):
+                            _go_bad = True
+                            break
+                # **内容語を3つ以上直に並べた組は採らない**（`タブ|以後|打て`
+                # の junk・実測。複合名詞は2語まで、3語目は機能語を挟む）。
+                # **名詞の部品の直後に、読みから組んだ動詞の部品は置かない**
+                # （`巨人|書く`・実測。名詞に直付きしてよい述語は、打った
+                # ままの尾〔`入力|みています`〕だけ——語の組み立てで動詞を
+                # 生やすと、名詞＋動詞の当て推量が無限に作れる）
+                _run_c = 0
+                _prev_c = None
+                for _pc in pieces:
+                    if _pc[0] == 'c':
+                        _run_c += 1
+                        if _run_c >= 3:
+                            _go_bad = True
+                            break
+                        if _prev_c is not None:
+                            _pp = _lu_face_pos(_pc[1])
+                            if _pp.startswith('動詞') or _pp.startswith('形容詞'):
+                                _go_bad = True
+                                break
+                        _prev_c = _pc[1]
+                    else:
+                        _run_c = 0
+                        _prev_c = None
+                if _go_bad:
+                    continue
+                # ★★ **句の形をしている組だけ**（項目48-SC・readcheck で
+                # 受け止めた門。育ち +46／初期 +45 の化けのほとんどが
+                # **裸の1語**（`めさす → 目先`・`しごう → 思考`・
+                # `つうく → 通過`）か **語＋語の当て推量**（`いらせんす →
+                # 医科センス`・`せなかあせわ → 背中お世話`）だった）。
+                # 裸の1語は芯の再構築の持ち場で、この道は**語の列**を組む:
+                #   (a) 内容語が1つ → 最後の内容語の後ろに **2字以上の
+                #       機能語／述語の尾**（参考|になる・入力|みています・
+                #       解析|でした）。1字の助詞だけ（`上|へ|は`）は不可
+                #   (b) 内容語が2つ → 間に格助詞（続き|を|話す）か、
+                #       2つ目＋尾がサ変（タブ|移動|して）か、
+                #       2つ目が世の中のカタカナ語4字以上（右|ダブルクリック）か、
+                #       組んだ形が世の中の1語（`is_unit`）か、
+                #       カタカナ＋後（スクロール|後）
+                if not _lu_clause_shape(pieces):
+                    continue
+                # ★★ **内容語1つ＋です・ます・でした の組は、その語が本人の語彙の
+                # solid のときだけ**（項目48-SK・2026-09-06・readcheck で受け止めた
+                # 門）。`〜です` の枠は語の選びに何の証拠も足さない——索引の顔
+                # （段1がただ1つ）で埋めると `びじょうです → 微笑です`・
+                # `こくどです → 今度です` のように、届かない材料（2字の脱字・
+                # 順序違い）に**もっともらしい別の語**を当てる。本人が使う語
+                # （solid）なら「その語を書こうとした」と言える（`かいすせきでした
+                # → 解析でした`）
+                if len(cset) == 1 and mn < 3:
+                    _lc = [k for k in range(len(pieces)) if pieces[k][0] == 'c'][0]
+                    _tl = ''.join(t[1] for t in pieces[_lc + 1:])
+                    # **索引の顔（強さ2）の1語は、尾がその語を述語にする形
+                    # （サ変: し・する・させ・でき／になる・にする・となる）の
+                    # ときだけ**（項目48-SK'。`参考|になる`・`外出|する`）。
+                    # です・がありました・をみます・いきます のような尾は
+                    # 語の選びに証拠を足さない——readcheck の枠で
+                    # `つうく → 通過をみます`・`かんう → 簡易がありました`・
+                    # `こくど → 今度` と、届かない材料に別の語を当てた。
+                    # 本人の語（solid・強さ3）はどの尾でも今までどおり
+                    if not (_tl and (_tl[:1] == 'し' or _tl.startswith((
+                            'する', 'させ', 'でき', 'になる', 'になっ', 'になり',
+                            'にする', 'にし', 'となる', 'とし', 'として')))):
+                        continue
+                # ★★ **手を当てた所が、機能語／述語の尾の中に在る組は採らない**
+                # （項目48-SC・`probe_born_particle` で受け止めた:
+                # `ほせいがきいた` は 0手で `補正がきいた` に組めない〔`きいた`
+                # ＝聞く のイ音便を文法が説明できない〕のに、き→は の1手で
+                # `補正が|はいた` が組めて通った。手は**語（内容語）の中**に
+                # 当てるもの——打ったままの尾を手で作り替えて組む形は当て推量）
+                if v != run:
+                    _pos = 0
+                    _bad_hand = False
+                    _chg = _lu_changed_positions(run, v)
+                    for _pc in pieces:
+                        _a, _b = _pos, _pos + int(_pc[2])
+                        _pos = _b
+                        if _pc[0] == 'f' and any(_a <= _q < _b for _q in _chg):
+                            _bad_hand = True
+                            break
+                    if _bad_hand:
+                        continue
                 old = surfaces.get(surf)
                 if old is None or mn > old[0]:
                     surfaces[surf] = (mn, frozenset(cset), len(cset),
                                       pieces)
                     surf_var[surf] = v
         if surfaces:
-            surfaces = {s: v for s, v in surfaces.items()
-                        if _grammar_ok(s)}
+            surfaces = {s3: val for s3, val in surfaces.items()
+                        if _grammar_ok(s3, surf_var.get(s3))}
         if len(surfaces) > 1:
             # **同じ変種（同じ読み）から出た組どうしは、漢字の多い側**
-            # （続きをはなす と 続きを話す——同じ直しの写し方の違い。
-            # 漢字に補正するのがこの道の仕事なので、変換の進んだ側を
-            # 残す・項目48-LU）
             by_var = {}
             for s3 in surfaces:
                 by_var.setdefault(surf_var.get(s3), []).append(s3)
-            drop = set()
+            drop_s = set()
             for _v3, group in by_var.items():
                 if len(group) < 2:
                     continue
@@ -1345,86 +1922,127 @@ def _lu_compose_odd_run(run, store, input_method=None, tokenize_fn=None,
                 mx = max(kc.values())
                 tops = [s3 for s3 in group if kc[s3] == mx]
                 if len(tops) == 1:
-                    drop |= set(group) - {tops[0]}
-            for s3 in drop:
+                    drop_s |= set(group) - {tops[0]}
+            for s3 in drop_s:
                 surfaces.pop(s3, None)
-        if len(surfaces) == 1:
-            return next(iter(surfaces))
-        if surfaces:
-            # (A0) **直接隣り合う内容語の対（複合語の形）の共起**で
-            #      裁く（かな×打ち 0.69 ／ かな×待ち 0.27 ／
-            #      簡易×入力 0.55——実測。床 0.35・2倍の差）。
-            #      複合語を作る対を本人の実績が知っているなら、
-            #      その組が本来の入力。
-            if context_vec is not None:
-                scored = []
-                for surf, (_mn, _cs, _n, pieces) in surfaces.items():
-                    best = 0.0
-                    for i2 in range(len(pieces) - 1):
-                        if pieces[i2][0] == 'c' and pieces[i2 + 1][0] == 'c':
-                            try:
-                                sim = context_vec.similarity(
-                                    pieces[i2][1], pieces[i2 + 1][1])
-                            except Exception:
-                                sim = 0.0
-                            best = max(best, sim)
-                    scored.append((best, surf))
-                scored.sort(reverse=True)
-                if scored and scored[0][0] >= 0.35                         and (len(scored) == 1
-                             or scored[0][0] >= 2 * scored[1][0]):
-                    _trace('組み直し', f'{run!r} → {scored[0][1]!r}'
-                                       f'（拮抗を複合語の対の共起 '
-                                       f'{scored[0][0]:.2f} で裁いた・'
-                                       f'項目48-LU）')
-                    return scored[0][1]
-            # 拮抗の裁定（家の順序: 周りの語 → 語数 → 見送り）。
-            # (A) **周りの語**——組どうしの違いが「1語の入れ替わり」
-            #     なら、共通の語との共起で裁く（かな＋補正 と一緒に
-            #     出るのは 打ち か 待ち か——うにさんの実績が答える）
-            if context_vec is not None:
-                common = None
-                for _mn, cs, _n, _p in surfaces.values():
-                    common = cs if common is None else (common & cs)
-                diffs = {}
-                ok_frame = True
-                for surf, (_mn, cs, _n, _p) in surfaces.items():
-                    d = cs - (common or frozenset())
-                    if len(d) > 1:
-                        ok_frame = False
-                        break
-                    diffs[surf] = next(iter(d)) if d else None
-                if ok_frame and common:
-                    cand_words = [w for w in diffs.values() if w]
-                    if cand_words:
-                        try:
-                            sel = context_vec.pick_best_by_context(
-                                cand_words, sorted(common))
-                        except Exception:
-                            sel = None
-                        if sel:
-                            for surf, w in diffs.items():
-                                if w == sel:
-                                    _trace('組み直し',
-                                           f'{run!r} → {surf!r}'
-                                           f'（拮抗を周りの語 {sel!r} で'
-                                           f'裁いた・項目48-LU）')
-                                    return surf
-            # (B) **語数が最少**の組がただ1つなら、それ（余分な す が
-            #     作った切れ目より、1語で読める解釈——解す咳→解析 と
-            #     同じ向きの判断）
-            ns = sorted(v[2] for v in surfaces.values())
-            if len(ns) > 1 and ns[0] < ns[1]:
-                least = [s for s, v in surfaces.items() if v[2] == ns[0]]
-                if len(least) == 1:
-                    _trace('組み直し', f'{run!r} → {least[0]!r}'
-                                       f'（拮抗を語数で裁いた・項目48-LU）')
-                    return least[0]
-            _trace('組み直し', f'{run!r} → 拮抗 '
-                               f'{sorted(surfaces)[:4]} は組まない'
-                               f'（項目48-LU）')
-            return None
-    return None
+        if len(surfaces) > 1:
+            # **強い組が1つだけなら、それ**（項目48-SC。solid の語だけで
+            # 組めた形 3 は、索引の顔や世の中のカタカナ語で埋めた形 2
+            # より強い証拠）
+            top = max(val[0] for val in surfaces.values())
+            strong = [s3 for s3, val in surfaces.items() if val[0] == top]
+            if len(strong) == 1 and top >= 3:
+                surfaces = {strong[0]: surfaces[strong[0]]}
+        return surfaces, surf_var
 
+    per_tier = [_tier_surfaces(variants) for variants in tiers]
+    if collect is not None:
+        # **候補一覧のための口**（`lu_run_candidates`・48-SF）——組めた
+        # 表記を段ごとに積んで返す。脱字の段（`ins`）も候補には出す
+        for _ti, (_sf2, _sv2) in enumerate(per_tier + [_tier_surfaces(ins)]):
+            for _k3, _v3 in _sf2.items():
+                collect.append((_ti, -_v3[0], _k3))
+        return None
+    # **かな→かな はこの道では受け入れない**（項目48-SB'・2026-09-06に外した）。
+    # 7巡目で「濁点の位置ずれだけ」を受けたが、解析が壊れた連なりを
+    # `と|くどく` と刻むので、変わった語の範囲が取れず門が立たなかった
+    # （`これはとぐとくです → とくどく`・初期の readcheck）。位置ずれの
+    # かな→かな は**芯の再構築**（`_moved_dakuten_fix`——窓が語の単位で来る）の
+    # 持ち場（`つつぎをはなす → つづきをはなす` はそちらで届く・実測）
+    def _a0(cands):
+        """(A0) **直接隣り合う内容語の対（複合語の形）の共起**で裁く
+        （かな×打ち 0.69 ／ かな×待ち 0.27——床 0.35・2倍の差）。"""
+        if context_vec is None:
+            return None
+        scored = []
+        for surf, (_mn, _cs, _n, pieces) in cands.items():
+            best = 0.0
+            for i2 in range(len(pieces) - 1):
+                if pieces[i2][0] == 'c' and pieces[i2 + 1][0] == 'c':
+                    try:
+                        sim = context_vec.similarity(pieces[i2][1],
+                                                     pieces[i2 + 1][1])
+                    except Exception:
+                        sim = 0.0
+                    best = max(best, sim)
+            scored.append((best, surf))
+        scored.sort(reverse=True)
+        if scored and scored[0][0] >= 0.35 \
+                and (len(scored) == 1 or scored[0][0] >= 2 * scored[1][0]):
+            return scored[0][1], scored[0][0]
+        return None
+
+    # **安い段から見て、その段でただ1つならそれ**（④の選び方・項目48-SC）。
+    # 段の中で拮抗したら、(A0) は**全部の段の候補**で裁く——複合語の対を
+    # 本人の実績が知っているなら、手の段より強い証拠
+    # （`かなちでのほせい`: 隣のキーの段は 各地での補正／適っでの補正 で
+    #  拮抗、脱字の段の かな打ちでの補正 が かな×打ち 0.69 で勝つ）。
+    # それでも決まらなければ、その段の中で (A) 周りの語 → (B) 語数
+    for surfaces, surf_var in per_tier:
+        if not surfaces:
+            continue
+        if len(surfaces) == 1:
+            _s = next(iter(surfaces))
+            _trace('組み直し', f'{run!r} → {_s!r}（{surf_var.get(_s)!r} を'
+                               f'語の列として組んだ '
+                               f'{[t[1] for t in surfaces[_s][3]]}・'
+                               f'項目48-LU/48-SC）')
+            return _s
+        _all = {}
+        for _sf2, _sv2 in per_tier:
+            for k3, v3 in _sf2.items():
+                _all.setdefault(k3, v3)
+        got = _a0(_all)
+        if got:
+            _trace('組み直し', f'{run!r} → {got[0]!r}'
+                               f'（拮抗を複合語の対の共起 {got[1]:.2f} で'
+                               f'裁いた・項目48-LU）')
+            return got[0]
+        # (A) **周りの語**——組どうしの違いが「1語の入れ替わり」
+        if context_vec is not None:
+            common = None
+            for _mn, cs, _n, _p in surfaces.values():
+                common = cs if common is None else (common & cs)
+            diffs = {}
+            ok_frame = True
+            for surf, (_mn, cs, _n, _p) in surfaces.items():
+                d = cs - (common or frozenset())
+                if len(d) > 1:
+                    ok_frame = False
+                    break
+                diffs[surf] = next(iter(d)) if d else None
+            if ok_frame and common:
+                cand_words = [w for w in diffs.values() if w]
+                if cand_words:
+                    try:
+                        sel = context_vec.pick_best_by_context(
+                            cand_words, sorted(common))
+                    except Exception:
+                        sel = None
+                    if sel:
+                        for surf, w in diffs.items():
+                            if w == sel:
+                                _trace('組み直し',
+                                       f'{run!r} → {surf!r}'
+                                       f'（拮抗を周りの語 {sel!r} で'
+                                       f'裁いた・項目48-LU）')
+                                return surf
+        # (B) **語数が最少**の組がただ1つなら、それ
+        ns = sorted(val[2] for val in surfaces.values())
+        if len(ns) > 1 and ns[0] < ns[1]:
+            least = [s3 for s3, val in surfaces.items() if val[2] == ns[0]]
+            if len(least) == 1:
+                _trace('組み直し', f'{run!r} → {least[0]!r}'
+                                   f'（拮抗を語数で裁いた・項目48-LU）')
+                return least[0]
+        _trace('組み直し', f'{run!r} → 拮抗 {sorted(surfaces)[:4]} は'
+                           f'組まない（項目48-LU）')
+        return None
+    # **かな→かな はこの道では受け入れない**（項目48-SC・測って外した。
+    # 文法の説明は緩く、`さとんこう`・`ももと` のような候補が並んで
+    # 拮抗ばかりになった。かな→かな は 芯の再構築（48-SB の位置ずれ
+    # など）と 48-PO の持ち場）
+    return None
 
 
 def explain_cores(run, store, min_len=3, max_len=8, after_kanji=False):
@@ -2179,6 +2797,11 @@ def is_plausible_typo(typed, cost, edits):
     return True
 
 
+#: **1字の機能語だけで説明してよい並びの長さの上限**（項目48-RS）。
+#: これより長い並びを 1字の機能語だけで「説明が付く」とは言わない。
+_ALL_FUNC_ONECHAR_MAX = 6
+
+
 def _is_all_functional(run):
     """
     その並びが、助詞・活用語尾・指示語だけで説明が付くか。
@@ -2215,15 +2838,34 @@ def _is_all_functional(run):
              | {'っ', 'よい', 'いい', 'お'})
     n = len(run)
     # reach[i] = 先頭から i 文字目までを機能語だけで説明できるか
+    # multi[i] = その説明に **2字以上の機能語が1つでも使われた**道が
+    #            在るか（項目48-RS・2026-09-05）
     reach = [False] * (n + 1)
+    multi = [False] * (n + 1)
     reach[0] = True
     for i in range(n):
         if not reach[i]:
             continue
         for tail in tails:
             if run.startswith(tail, i):
-                reach[i + len(tail)] = True
-    return reach[n]
+                j = i + len(tail)
+                reach[j] = True
+                if len(tail) >= 2 or multi[i]:
+                    multi[j] = True
+    if not reach[n]:
+        return False
+    # **1字の機能語だけの説明は、7字以上には認めない**（項目48-RS・
+    # 2026-09-05・うにさんの指定「せ が ゛ の隣接打ち間違いを疑う」の
+    # かな欄）。1字の機能語は **44 字**あるので、長い並びは何でも
+    # 「か・い・せ・き・か・せ・な・か・せ・く」と説明が付いてしまい、
+    # `かいせきかせなかせく`（壊れている）も `かいせきがながく`（正しい
+    # 読み）も**同じ門で読める扱い**になって、①が立たなかった。
+    # 実機メモで数えると、1字だけで説明される 5字以上の連なりは 26 種、
+    # うち **7字以上は 4 種で全部この族**（5〜6字は `になっていて`・
+    # `がおわった` のような正しい並び）。**5〜6字は今までどおり。**
+    if n > _ALL_FUNC_ONECHAR_MAX and not multi[n]:
+        return False
+    return True
 
 
 # 接尾の形容詞・様態。単独の内容語ではなく、動詞の連用形に付く。
@@ -2263,6 +2905,7 @@ def _okurigana_functional_only(run, any_head=False):
              | set(CONNECTIVES)
              | set(FUNCTION_NOUNS) | set(_SUFFIX_TAILS) | {'っ'})
     reach = [False] * (n + 1)
+    multi = [False] * (n + 1)   # 2字以上の機能語を使った道が在るか（48-RS）
     reach[0] = True
     if run[0] in OKURIGANA_HEADS or (any_head and is_hiragana(run[0])):
         reach[1] = True
@@ -2273,8 +2916,21 @@ def _okurigana_functional_only(run, any_head=False):
             continue
         for tail in tails:
             if run.startswith(tail, i):
-                reach[i + len(tail)] = True
-    return reach[n]
+                j = i + len(tail)
+                reach[j] = True
+                if len(tail) >= 2 or multi[i]:
+                    multi[j] = True
+    if not reach[n]:
+        return False
+    # **1字の機能語だけの説明は7字以上には認めない**（項目48-RS・
+    # 2026-09-05）——`_is_all_functional` と同じ門。かな欄の
+    # `かいせきかせなかせく` はあちらを抜けたあと、こちらが
+    # 「か（送り仮名）＋い・せ・き・か・せ・な・か・せ・く」で止めていた
+    # （学び22——兄弟の門に同じ規則を掛ける。送り仮名の頭は1字の
+    # 機能語には数えない＝多字の道には数えない）
+    if n > _ALL_FUNC_ONECHAR_MAX and not multi[n]:
+        return False
+    return True
 
 
 def _leading_particle_len(run):
@@ -2447,6 +3103,49 @@ def _split_on_space(text):
         i = m.end()
     parts.append((i, len(text)))
     return parts, seps
+
+
+def _map_inner_spans(outer, inner_line, spans):
+    """
+    **入れ子で通した行の印（紫・unsure）を、外の行の位置へ写す**
+    （項目48-RU・2026-09-05）。
+
+    `correct_line` は「行を組み替えて自分をもう一度通す」入れ子を
+    10か所持つ（遅れた濁点・場違いな濁点・異様の塊の先直し・英字…）。
+    どれも内側の `odd_spans` を **`[]` に捨てて**いた（座標が違うので
+    そのまま渡せない、と注記だけして）。その結果、**同じ行に直しが
+    1つ在ると、直っていない別の塊の紫まで消えていた**——
+    `・「解析課背中セク、」は、まず「背中セク」が…` で前の塊を
+    `解析が長く、` に直したら、後ろの `背中セク` の紫が落ちた
+    （触る前は `乳リュク見ていますと背中セク → 入力見ていますと背中セク`
+    でも同じ）。**直せなくても印は立てる**（CLAUDE.md ★★）に反する。
+
+    写し方は `_diff_spans` と同じ difflib の並び。内側の位置は
+    `inner['original']`（内側に渡した行）の上に在るので、外の行との
+    **equal の塊の中に丸ごと入る印だけ**を、その塊のずれで写す。
+    組み替えた（直した）範囲に掛かる印は写さない＝「直せた範囲は
+    消える」（`_odd_spans_for_line` の決まり）と同じ結果になる。
+    **答えは1文字も変えない**（印の位置だけ）。
+    """
+    if not spans:
+        return []
+    if outer == inner_line:
+        return list(spans)
+    try:
+        import difflib as _dl
+        eq = [(i1, i2, j1, j2) for tag, i1, i2, j1, j2
+              in _dl.SequenceMatcher(None, outer, inner_line,
+                                     autojunk=False).get_opcodes()
+              if tag == 'equal']
+    except Exception:
+        return []
+    out = []
+    for a, b in spans:
+        for i1, i2, j1, j2 in eq:
+            if j1 <= a and b <= j2:
+                out.append((a - j1 + i1, b - j1 + i1))
+                break
+    return out
 
 
 def _diff_spans(before, after):
@@ -3270,6 +3969,13 @@ _USAGE_HALFLIFE_DAYS = 14.0
 
 def _now_for_usage():
     """
+    ★★ **もう誰も呼んでいない**（項目48-QG'・2026-09-05）。
+    最終使用時刻を記録しなくなり、弱まりそのものを廃止したため。
+    `CORRECTNOTE_NOW` を置いても、補正の答えはもう動かない
+    ——**時計で答えが変わることが無くなった**のがこの巡の副産物。
+    残してあるのは、道具（`measure.sh`）が置く環境変数の意味を
+    ここで説明しておくため。以下は廃止前の説明。
+
     使われぶりの弱まりを測る「いま」。**測るときだけ固定できる**
     （項目48-DQ・2026-08-15）。
 
@@ -3304,10 +4010,30 @@ def _now_for_usage():
 
 def _usage_count(reading, store):
     """
-    その読みの「いまの使われぶり」。
+    その読みの「使われぶり」。
 
-    生の回数ではなく、頭打ちと日数による弱まりを掛けた値を返す
-    （`_USAGE_CAP` / `_USAGE_HALFLIFE_DAYS` の説明を参照）。
+    ★★ **日数による弱まりは廃止した**（項目48-QG'・2026-09-05）。
+    最終使用時刻（`last_seen`）を記録しなくなったので、
+    「最近使ったか」は**もう誰も知らない**——うにさんの指定
+    「履歴として記録されることをユーザは望みません」の帰結。
+
+    残るのは「立っているか」だけなので、この値は **1 か 2** しか
+    取らない（`_USAGE_CAP` は当たらない）。つまり
+
+        `< _USAGE_MIN`（20）      … **常に成立する**
+        `< 二番手 × _USAGE_DOMINANCE`（4倍）… 1 と 2 では成立しない
+
+    ＝ **`_break_tie_by_usage` と `_break_tie_by_generality` の
+    `_USAGE_MIN` の門は、これ以降は必ず「決めない」に落ちる。**
+    落ちた先は「決めずに次へ渡す」＝安全側なので、そのまま受ける。
+
+    **初期状態では、この関数は前から 1〜2 しか返していない**
+    （辞書から取り込んだ語は count 1・種は 2・どちらも入れたばかりで
+    弱まりが掛からない）。だから**初期状態の答えは 1 つも変わらない**
+    ——変わるのは育った語彙のほうだけ（§4 の「代償」そのもの）。
+
+    「一般的さ」で決めたい場所は `_general_count`（world と費用の表を
+    見る）へ寄せること。**こちらには一般度の情報が無い。**
     """
     try:
         entries = store.lookup(reading)
@@ -3315,15 +4041,9 @@ def _usage_count(reading, store):
         return 0
     if not entries:
         return 0
-    now = _now_for_usage()
-    best = 0.0
+    best = 0
     for e in entries:
         n = min(e.get('count', 0), _USAGE_CAP)
-        if not n:
-            continue
-        last = e.get('last_seen') or 0
-        days = max(0.0, (now - last) / 86400.0)
-        n *= 0.5 ** (days / _USAGE_HALFLIFE_DAYS)
         if n > best:
             best = n
     return best
@@ -3343,11 +4063,17 @@ def _general_count(reading, store):
     """
     その読みの **一般的さ**。生の回数の最大値を返す。
 
+    ★★ **回数を廃したので、実質は `world`（世の中での使われぶり）
+    だけになった**（項目48-QG'・2026-09-05）。取りうるのは
+    {1, 2, 5, 20} ——1/2/5/20 は取り込みの帯（書籍での上位 16%／34%／
+    78%／残り）で、種の語と立った語はここに 2 の下限が乗る。
+    **初期状態では前から count が 1〜2 しかないので、初期の答えは
+    1つも変わらない**（変わるのは育った語彙のほう）。
+
     `_usage_count` との違い（**使い分けること**）:
 
-        _usage_count    「いまの使われぶり」。頭打ち(300)と
-                        日数による弱まりが掛かる。最近使ったか。
-        _general_count  「一般的さ」。**生の回数**。よく使う語か。
+        _usage_count    立っているか（1 か 2）。**一般度を知らない**
+        _general_count  「一般的さ」。**world の帯**。よく使う語か
 
     **なぜ分けたか**（項目48-BZ）。`_break_tie_by_generality` は
     `_usage_count` を使っていたが、**頭打ちと減衰が、まさに
@@ -3496,24 +4222,48 @@ def _break_tie_by_generality(candidates, store, loose=False):
     # 回数も world も同じで、字の頻度では びっしり が勝っていた。
     # 表の費用が最小のものが1つなら、それを採る。
     if loose:
-        best_cost = None
+        # ★★ **費用が同点のときだけ、段（`kango_tier`・AI の判断）で
+        # 決める**（項目48-QG'・2026-09-05）。うにさんの指定
+        # 「一般的か、自然か、もっともらしいか、**このような主観の
+        # 判断は AI の能力を活かす**」（48-OJ）。
+        #
+        # 費用表は**2字の漢語に同点が多い**——`確認` も `新任` も
+        # **101**。回数を廃す前は、育った字の並びの表（`charngram`）が
+        # 偶然そこを裁いていたが、そちらも初期分だけにしたので
+        # （48-QL）、**`すきにん → 新任` に倒れた**（移行したあとの
+        # 実機メモで実測）。段で見れば 確認=1（日常語）・
+        # 新任=2（一般語）で割れる。
+        #
+        # **段を第1の軸にする形は測って外した**——初期で 直り −4／
+        # 化け +2（`まいす` が `麻酔`〔段1〕に負けて `ますい` に）。
+        best_key = None
         best_rd = None
         tie = False
         for r, _c, _e in candidates:
             try:
-                costs = [_table_cost(e['surface']) for e in store.lookup(r)]
+                keys = [(_table_cost(e['surface']), _kango_tier_of(e['surface']))
+                        for e in store.lookup(r)]
             except Exception:
-                costs = []
-            costs = [c for c in costs if c is not None]
-            if not costs:
+                keys = []
+            keys = [k for k in keys if k[0] is not None]
+            if not keys:
                 continue
-            c = min(costs)
-            if best_cost is None or c < best_cost:
-                best_cost, best_rd, tie = c, r, False
-            elif c == best_cost:
+            k = min(keys)
+            if best_key is None or k < best_key:
+                best_key, best_rd, tie = k, r, False
+            elif k == best_key:
                 tie = True
         if best_rd is not None and not tie:
             return best_rd
+    # ★★ **この門は、回数を廃した今は必ず成立する**（項目48-QG'）。
+    # `_usage_count` は 1 か 2 しか返さない（`last_seen` を廃止して
+    # 弱まりを掛けなくなり、`count` は solid の写しになった）ので
+    # `< 20` は恒真＝**読める芯の側（loose=False）では、この関数は
+    # 必ず「決めない」に落ちる**。落ちた先は「直さない」＝安全側。
+    # **初期状態では前からそうだった**（初期の count は 1〜3 で
+    # 20 に届かない）ので、初期の答えは1つも変わらない。
+    # 一般度で復活させるなら `_general_count`（world）で測り直すこと
+    # ——ヒューリスティックなので、★★のとおり**測って**から入れる。
     if not loose and _usage_count(scored[0][1], store) < _USAGE_MIN:
         return None
     # **一番手が二番手を、はっきり上回っていること。**
@@ -3565,6 +4315,14 @@ def _prefer_general(found, store, top_cost, edits, max_cost):
             best_usage, best_reading = usage, reading
     if best_reading is None or top_usage is None:
         return None
+    # ★★ **恒真になった**（項目48-QG'）。`_usage_count` は 1 か 2。
+    # ＝ `_prefer_general`（打鍵の近さでは二番手でも、桁違いによく使う
+    # 語があればそちらへ）は**この巡から働かない**。倒れる先は
+    # 「費用がいちばん安い候補をそのまま採る」＝補正は実行される。
+    # **初期状態では前から働いていない**（count 1〜3）。
+    # うにさんの `たこご → たまご(費用1.0) ではなく たんご(単語1312回)`
+    # は**育った回数の話**で、回数を廃した以上そのままでは戻せない。
+    # 復活させるなら world／同梱の費用表で測り直す（巡3）。
     if best_usage < _USAGE_MIN:
         return None
     if best_usage < max(1, top_usage) * _GENERAL_DOMINANCE:
@@ -3617,6 +4375,14 @@ def _break_tie_by_usage(candidates, store):
         return None
     top_count, top_reading = scored[0]
     second_count = scored[1][0]
+    # ★★ **恒真になった**（項目48-QG'）。`_usage_count` は 1 か 2 で
+    # 20 に届かない＝**`_break_tie_by_usage` はこの巡から必ず None**。
+    # 芯の拮抗の裁定から「本人の使用実績」の段が抜け、次の段
+    # （`_core_is_unnatural` → `_break_tie_by_generality` →
+    #   異様と判定した側なら 字の並び・読みの並び・字の頻度・先頭）へ
+    # 落ちる。**異様な芯では最後に必ず何かしら決まる**ので、
+    # うにさんの「異様だと判定したら何かしらに決める」は保たれる。
+    # **初期状態では前からそうだった**（count 1〜3）。
     if top_count < _USAGE_MIN:
         return None
     if top_count < max(1, second_count) * _USAGE_DOMINANCE:
@@ -3851,30 +4617,93 @@ def _chunk_is_intact(chunk, tokenize_fn):
         except Exception:
             pass
     # (2) **動詞の活用列としてできあがっている**（項目48-PX・
-    #     2026-09-04）。未解決.txt の注記の行（`糸を察して →
-    #     意図をさして　（触る前は「意図を察して」…）`）で、壊れた
-    #     形の見本が**並記**になり、正しい側の `察して` が `さして` に
-    #     壊された（塊全体の完全一致＋1字削除の変種が、文字通りの
-    #     並記で裏を取った）。
+    #     2026-09-04 → **48-QV で広げた**・2026-09-05）。
+    #     もとは 未解決.txt の注記の行（`糸を察して → 意図をさして
+    #     （触る前は「意図を察して」…）`）で、壊れた形の見本が**並記**に
+    #     なり、正しい側の `察して` が `さして` に壊された。
     #
     #     `察し`（連用形）＋`て`（接続助詞）は**完成した接続形**——
     #     文法がそう決めている（★★「論理的に正しいものは重ねる」）。
     #     読みを変える手で別の語に置き換えるのは補正ではない。
-    #     同音の別表記への直し（帰って⇄返って）は別の道で、この
-    #     入口を通らないので失わない。的の `差釣れません → されません`
-    #     は4トークン（差＋釣れ＋ませ＋ん）なので、ここには当たらない。
+    #
+    #     ### ★★ 48-PX が「2トークンちょうど」だったので抜けていた
+    #
+    #     うにさんの実機で **`見ていない → 検定ない`**（2026-09-05）。
+    #     4トークンとも品詞は正しい——
+    #     見[動詞:自立/連用形] て[助詞:接続助詞] い[動詞:非自立/未然形]
+    #     ない[助動詞]。**文法として完成した列**なのに、`見てい` の
+    #     3トークンが「2ちょうど」を外れて素通りし、`語の組` が
+    #     **音音で開いて** `けん`＋`てい` ＝ `検定` に置き換えていた
+    #     （設計23 の「元は非単位だから通す」で届いた）。
+    #     **紫は1つも立っていない**——①（異様か）が立たないのに
+    #     走る道が残っていた（CLAUDE.md ★★ の順番そのもの）。
+    #     同じ形で `書いていない → 海底ない`・
+    #     `見ていなかった → 検定なかった` も壊れていた（実測）。
+    #
+    #     **て/で のあとに続くのは、閉じた文法の類だけ**——
+    #     補助動詞（動詞:非自立。い・いる・いく・おく・くれ・しまう・
+    #     みる・ください）／助動詞（ない・た・ます・たい・なかっ）／
+    #     もう1つの接続助詞 て・で（持っていって）。**名簿は作らない。**
+    #     この形に**きれいに割れること自体**が「打ち損ねの塊ではない」
+    #     という証拠になる——誤打の塊は 動詞:自立連用形＋接続助詞 の
+    #     頭を作れない。
+    #
+    #     **守るべき的は当たらない**（形で分かる・実測でも確かめた）:
+    #       `差釣れません`      差[名詞:一般] が頭 → 動詞:自立ではない
+    #       `かいすせきがおわった` かいす[基本形]＋せき[名詞] → て が無い
+    #       `解す咳`・`囚虜時`   て が無い
+    #     **末尾が言い切りである必要は無い**——呼び手は `見てい` のような
+    #     途中までの塊を渡してくる。**そこまでが正しく割れている**なら、
+    #     それは打ち損ねではない。
     try:
         _tk2 = tokenize_fn(chunk)
     except Exception:
         _tk2 = None
-    if (_tk2 and len(_tk2) == 2
+
+    def _te_tail_ok(t):
+        """て/で のあとに続いてよい類か（閉じた文法。名簿は作らない）。"""
+        pos = t[1] or ''
+        if pos.startswith('動詞:非自立') or pos.startswith('助動詞'):
+            return True
+        # 持っていって——接続助詞の て/で がもう一度来る形
+        return pos.startswith('助詞:接続助詞') and t[0] in ('て', 'で')
+
+    if (_tk2 and len(_tk2) >= 2
             and (_tk2[0][1] or '').startswith('動詞:自立')
             and ((_tk2[0][6] if len(_tk2[0]) > 6 else '')
                  in ('連用形', '連用タ接続'))
             and _tk2[1][0] in ('て', 'で')
             and (_tk2[1][1] or '').startswith('助詞:接続助詞')
+            and all(_te_tail_ok(t) for t in _tk2[2:])
             and all(t[5] for t in _tk2)
             and ''.join(t[0] for t in _tk2) == chunk):
+        return True
+    # (3) **連体詞＋名詞でできあがっている**（項目48-QX・2026-09-05）。
+    #
+    #     うにさんの実機で **`同じ字 → 叔父時`**。2トークンとも正しい——
+    #     同じ[連体詞] 字[名詞:一般]。`造語` の道（設計18・48-EX）が
+    #     読み `おなじじ` を開いて `な` を落とし、`おじじ` を
+    #     `叔父`＋`時` と綴り直していた。**誤打はひとつも直していない。**
+    #     紫も立っていない（①が立たないのに走る道・CLAUDE.md ★★）。
+    #
+    #     `芯` の道は**同じ材料で自分から断れていた**——
+    #     「`おなじ` は、読める並びを覆すほど自然にならないので直さない」。
+    #     **正しい読みの側は断れているのに、別の道が走っていた**＝
+    #     48-GN の型そのもの。だから**入口**で止める。
+    #
+    #     連体詞は IPAdic の**閉じた小さな類**（この・その・あの・同じ・
+    #     大きな・あらゆる・いわゆる…）。打ち損ねの塊が連体詞に割れる
+    #     ことは無い——その並びが辞書にそのまま在るということだから。
+    #     **名簿は作らない**（品詞名だけを見る）。
+    #
+    #     **守るべき的は当たらない**（どれも頭が連体詞ではない）:
+    #       `囚虜時`（名詞＋名詞）・`解す咳`（動詞＋名詞）・
+    #       `殺意代価`・`再退化`・`誘い消化`・`小売り坂`・`最大家事`
+    if _tk2 and len(_tk2) == 2 \
+            and (_tk2[0][1] or '').startswith('連体詞') \
+            and (_tk2[1][1] or '').startswith('名詞') \
+            and all(t[5] for t in _tk2) \
+            and ''.join(t[0] for t in _tk2) == chunk:
         return True
     if not _USE_48KH_SOUND_RUN:
         return False        # **意図的に切ってある**（上の ==== の説明）
@@ -3888,6 +4717,32 @@ def _chunk_is_intact(chunk, tokenize_fn):
     except Exception:
         return False
     return False
+
+
+def _single_known_token(chunk, tokenize_fn):
+    """**解析が1語の辞書語と読む塊か**（項目48-TB）。2字以上・読みが立つ・
+    固有名詞ではない（人名・地名は 48-OR で信用しない）。"""
+    if not chunk or len(chunk) < 2 or tokenize_fn is None:
+        return False
+    try:
+        toks = [t for t in (tokenize_fn(chunk) or ()) if t[0]]
+    except Exception:
+        return False
+    if len(toks) != 1:
+        return False
+    t = toks[0]
+    if len(t) > 5 and not t[5]:
+        return False
+    if '固有名詞' in (t[1] or ''):
+        return False
+    return t[0] == chunk
+
+
+# **数字の直後に来る、かなの助数詞**（項目48-TG）。長いものが先。
+_KANA_COUNTERS = ('かげつ', 'かしょ', 'びょう', 'ほん', 'にん', 'だい', 'かい',
+                  'ばん', 'まい', 'さつ', 'ひき', 'けん', 'はい', 'だん', 'つう',
+                  'ねん', 'がつ', 'にち', 'ふん', 'えん', 'わり', 'ぶん', 'つ', 'こ',
+                  'ど')
 
 
 def _resolve_reading_list(chunk, readings, store, tokenize_fn,
@@ -3972,6 +4827,15 @@ def _resolve_reading_list(chunk, readings, store, tokenize_fn,
         if _reading_intact(reading, store, tokenize_fn):
             _trace('混合塊', f'{reading!r} は正しい読みとして通るので'
                              f'塊ごと触らない')
+            return None
+        # **解析が1語の辞書語と読む塊は、その読みに手を当てない**（項目48-TB・
+        # 2026-09-06。`効き目` は 効き目(名詞:一般・読みが立つ) の1語なのに、
+        # 芯が `ききめ → きめ`（1字落とし）で `決め` にした——育ちで実測。
+        # 同音の置き換え（上の枝: `視覚 → 四角`・`市内 → しない`）は手を
+        # 当てないので今までどおり。48-KI「できあがった塊には走らせない」）
+        if _single_known_token(chunk, tokenize_fn):
+            _trace('混合塊', f'{chunk!r} は1語の辞書語なので、読み '
+                             f'{reading!r} に手を当てない（項目48-TB）')
             return None
         fix = rebuild_window_core(reading, store, tokenize_fn,
                                   context_vec=context_vec,
@@ -4295,6 +5159,24 @@ def _middle_is_working_particle(chunk, ms, me, tokenize_fn):
     return all((t[1] or '').startswith(ok_sub) for t in mids)
 
 
+def _seq_recomposes_known_kanji(chunk, surface, tokenize_fn):
+    """漢字だけ・読みの立つトークンだけの塊で、元のトークンが1つも surface に
+    残らないか（項目48-TD）。"""
+    if not chunk or not surface or surface == chunk or tokenize_fn is None:
+        return False
+    if not all(is_kanji(c) for c in chunk):
+        return False
+    try:
+        toks = [t for t in (tokenize_fn(chunk) or ()) if t[0]]
+    except Exception:
+        return False
+    if len(toks) < 2:
+        return False
+    if any(len(t) > 5 and not t[5] for t in toks):
+        return False
+    return not any(t[0] in surface for t in toks)
+
+
 def _resolve_reading_seq(chunk, readings, store, tokenize_fn,
                          context_vec=None, surrounding=(),
                          require_context=False, attest_text='',
@@ -4523,6 +5405,15 @@ def _resolve_reading_seq(chunk, readings, store, tokenize_fn,
                         middle = chunk[len(mx[0]):len(chunk) - len(my[0])]
                         if middle == p1:
                             continue        # いまの表記で正しい
+                        # **漢字・カタカナの真ん中は、その読みが助詞と同じ
+                        # ときだけ**書き換える（項目48-SV・2026-09-06。48-PG
+                        # と同じ線——`化`→`か` は読みが同じ。`引き月資料 →
+                        # 引きが資料` は 月 の読みに が が無いのに、自然さの
+                        # 差だけで通っていた）
+                        if middle and any(is_kanji(_c) or is_katakana(_c)
+                                          for _c in middle) \
+                                and p1 not in _gap_readings(middle):
+                            continue
                         # 元の真ん中が既に働いている助詞なら、関節は
                         # できあがっている（項目48-PY。前より前 の
                         # より を よ に書き換えない。判定は
@@ -4721,6 +5612,15 @@ def _resolve_reading_seq(chunk, readings, store, tokenize_fn,
                 if sel:
                     picked = next((r for r in reps if r[0] == sel), None)
             if picked is None:
+                # ★★ **恒偽になった**（項目48-QG'・回数を廃した）。
+                # `_exact` は `count >= 2` で絞ってから数を返すので
+                # `rep[1]` は**必ず 2**、右辺は最小 4。＝この段は
+                # この巡から必ず外れ、**拮抗は文脈だけが決める**。
+                # 倒れる先は下の「決め手が無い」＝**触らない**（安全側）。
+                # 初期状態では前からほぼ成立しなかった（count 1〜3）ので、
+                # 変わるのは育った語彙のときだけ。
+                # 生かし直すなら証拠を `_general_count`（world・費用表）
+                # へ寄せる——**入れる前に初期と育ちの両方で測る**。
                 ordered = sorted(reps, key=lambda r: -r[1])
                 if ordered[0][1] >= max(1, ordered[1][1]) \
                         * _USAGE_DOMINANCE:
@@ -4731,6 +5631,17 @@ def _resolve_reading_seq(chunk, readings, store, tokenize_fn,
                 return None
             win = picked[2]
 
+    # **辞書の語だけでできた漢字の塊を、丸ごと別の語の組にしない**
+    # （項目48-TD・2026-09-06。`焙煎度`〔焙｜煎｜度・どれも読みが立つ〕を
+    # 「明らかに自然になる（差 17090）」で `浴び選択` にした——ngram の表は
+    # 珍しい語を知らないので、差は当てにならない。元の語が1つも残らない
+    # 組は当て推量。同音の置き換えと 設計27 の受け皿は別の道）
+    if _seq_recomposes_known_kanji(chunk, win.get('surface', ''),
+                                   tokenize_fn):
+        _trace('語の組', f'{chunk!r} → {win.get("surface")!r} は、辞書の語'
+                         f'だけの漢字の塊を丸ごと組み替えた形。通さない'
+                         f'（項目48-TD）')
+        return None
     if require_context or win.get('needs'):
         # 塊全体の完全一致・真ん中助詞の3分割（1-F）は、読みの削除や
         # 表記の組み替えを含む分、塊が読めるかどうかに関係なく
@@ -4802,7 +5713,10 @@ def _resolve_reading_seq(chunk, readings, store, tokenize_fn,
 # 長い文章` は -1080 になる）。**大きく悪くなるときだけ断る。**
 _ODD_REOPEN_DROP = 4000
 
-_KATAKANA_MELT_MIN_COUNT = 100
+#: **撤去した**（項目48-QG'・2026-09-05）。回数の記録をやめたので
+#: 100 には届かない。`_katakana_melt_ok` の末尾を参照——溶かす
+#: 置き換え先は**種の語だけ**になった。名前だけ残すと、いつか
+#: 「回数がある」前提のコードがまた生える。
 
 
 # 溶かしてはいけないカタカナ語の最短の長さ（2026-08-11）。
@@ -4889,15 +5803,19 @@ def _katakana_melt_ok(chunk, new_surface, store, tokenize_fn=None):
             return True
     except Exception:
         pass
-    try:
-        r = store.reading_of(new_surface)
-        if not r:
-            return False
-        count = max((e['count'] for e in store.lookup(r)
-                     if e['surface'] == new_surface), default=0)
-    except Exception:
-        return False
-    return count >= _KATAKANA_MELT_MIN_COUNT
+    # ★★ **種の語だけになった**（項目48-QG'・2026-09-05）。
+    # ここは「使い込まれた語（実績100以上）だけがカタカナを溶かす
+    # 置き換え先になれる」という門だったが、回数の記録をやめたので
+    # **100 には二度と届かない**。倒れる先は「溶かさない」＝安全側で、
+    # 実害も無い——上の `_seed_surfaces()` が `入力`・`単語` のような
+    # 日常語を通しているので、うにさんの的（`乳リュク → 入力`・
+    # `タン子 → 単語`）は**種の側で全部通っている**（実測）。
+    #
+    # 一般度の表で開き直す案は**入れない**。この門が止めたいのは
+    # まさに `縦シュー → 大衆`・`ブチ上 → 日常`・`耳コピ → 事項`
+    # で、**どれも世の中では在る語**（表では裁けない）。
+    # 「使い込んだか」は回数でしか言えなかったので、**言わない**。
+    return False
 
 
 def _is_repeat_collapse(core, cand):
@@ -5244,9 +6162,13 @@ def _mark_slip_repairs(core):
 
 
 # 清音 → 濁音／半濁音（印を1つ足した形）。
+# **`し` の対は `じ`**（2026-09-06・項目48-SB で見つけた表の誤り。
+# `ございず` と書いてあり `し → い` になっていた——`_mark_slip_repairs` が
+# し＋゛の隣 を い にしていた。48-SB の位置ずれの手が `かたい → かだし` を
+# 作って見つかった）
 _MARK_COMPOSE_DAKUTEN = {}
 for _a, _b in zip('かきくけこさしすせそたちつてとはひふへほう',
-                  'がぎぐげございずぜぞだぢづでどばびぶべぼゔ'):
+                  'がぎぐげござじずぜぞだぢづでどばびぶべぼゔ'):
     _MARK_COMPOSE_DAKUTEN[_a] = _b
 _MARK_COMPOSE_HANDAKUTEN = dict(zip('はひふへほ', 'ぱぴぷぺぽ'))
 
@@ -5347,6 +6269,11 @@ def _typo_repairs(core, extra_key=False, input_method='kana'):
         alt = _TYPO_DAKUTEN.get(core[i])
         if alt:
             push(core[:i] + alt + core[i + 1:])
+    # （濁点の位置ずれ〔48-SB〕は**ここには置かない**——語彙で受ける門が無く、
+    #   芯の再構築の「誤打を巻き戻した候補」で `とぐとく → とくどく`〔正しくは
+    #   ゛を外す とくとく〕を作った・初期の readcheck で実測。芯は
+    #   `_moved_dakuten_fix`、設計27 は `_fixes`、48-LU は かな→かな を受けず、
+    #   どれも「゛1つの手が勝るなら採らない」付きで持つ・項目48-SB'）
     # 脱字: 1字入れる（**いちばん数が多いので最後**）
     for i in range(n + 1):
         head, tail = core[:i], core[i:]
@@ -5424,6 +6351,133 @@ def _typo_repairs_cheap(core):
         if alt:
             push(core[:i] + alt + core[i + 1:])
     return out
+
+
+def _moved_dakuten_variants(run):
+    """
+    **濁点・半濁点が隣の字にずれて付いた形を戻す**（項目48-SB・
+    2026-09-06・うにさんの指定「濁点の入れ替えが苦手なように感じる。
+    平仮名に開く時、濁音は清音と濁点に分けて考える。`つつき゛`」）。
+
+    かな入力では ゛ は独立したキーなので、開いた読みを
+    **清音＋゛** に分けて見ると、
+
+        つつぎ ＝ つ つ き ゛     打ちたかった  つづき ＝ つ つ ゛ き
+
+    は **き と ゛ の順序違い**（隣どうしの入れ替え・SPEC の誤打の型）
+    にすぎない。合成された字のままだと「ぎ→き ＋ つ→づ の2手」に
+    見えて、1手の道に届かなかった。**濁音の字から印を外し、隣の
+    字（印を受けられる清音）に付け直す**——左右どちらの隣も見る。
+    半濁点（ぱ行）も同じ。**頭の字は変えない**（48-LS「頭のかなは
+    動かさない」）——`ぎつ → きづ` のように印が頭へ移る形は、
+    頭の1字が別の字になるので作らない。
+
+    戻り値: 戻した並びの一覧（元と同じものは含まない）。
+    """
+    out = []
+    n = len(run)
+    if n < 2:
+        return out
+    for table in (_MARK_COMPOSE_DAKUTEN, _MARK_COMPOSE_HANDAKUTEN):
+        rev = {v: k for k, v in table.items()}
+        for i in range(n):
+            ch = run[i]
+            if ch not in rev:
+                continue
+            base = rev[ch]
+            for j in (i - 1, i + 1):
+                if not (0 <= j < n) or j == 0:
+                    continue          # 印を頭の字へ移す形（頭が変わる）は作らない
+                if run[j] not in table:
+                    continue          # 隣は印を受けられる清音であること
+                chars = list(run)
+                chars[i] = base
+                chars[j] = table[run[j]]
+                v = ''.join(chars)
+                if v != run and v[0] == run[0] and v not in out:
+                    out.append(v)
+    return out
+
+
+def _lu_known_score(x, store):
+    """その読みを**どれくらい知っているか**（小さいほど強い・None＝知らない）。
+    本人の語彙 solid → 0、語彙に在る（count 1）→ 50、同梱の費用の表 → その費用。"""
+    if not x or store is None:
+        return None
+    try:
+        es = list(store.lookup(x))
+    except Exception:
+        es = []
+    if any(e.get('count', 0) >= 2 for e in es):
+        return 0
+    if es:
+        return 50
+    tc = _table_cost(x)
+    return tc if tc is not None else None
+
+
+def _dakuten_rival_stronger(x, moved, store):
+    """
+    **゛の付け外し1つ**で届く読みのほうが、位置ずれで届く読み `moved` と
+    同じかそれ以上に知られているなら True（項目48-SB の門・初期の
+    readcheck で受け止めた: `むたづかい` は だ の゛を戻す1手〔むだづかい〕
+    が正しく、位置ずれ〔むだつかい〕は当て推量。`つつぎ` は `つつき`〔185〕
+    より `つづき`〔143〕が知られているので通る）。
+    """
+    ms = _lu_known_score(moved, store)
+    for i, ch in enumerate(x):
+        alt = _TYPO_DAKUTEN.get(ch)
+        if not alt:
+            continue
+        v = x[:i] + alt + x[i + 1:]
+        sc = _lu_known_score(v, store)
+        if sc is None:
+            continue
+        if ms is None or sc <= ms:
+            return True
+    return False
+
+
+def _moved_dakuten_fix(core, store, dict_index=None):
+    """
+    **芯が「濁点の位置がずれた語」なら、その1手を先に採る**（項目48-SB）。
+
+    芯の再構築には「守る語＋1字は対象外」（48-GZ）の門があり、
+    `つつぎ`（守る語 つつ ＋ ぎ）はそこで止まっていた。**濁点の
+    位置ずれは形だけで立つ仮説**（正しい日本語で、印が隣の字に
+    付いた形と、元の形の両方が語であることはまず無い）なので、
+    その門より先に見る。
+
+    採るのは、**元の芯が語でなく**、戻した形が**ただ1つ**、語として
+    立つ（本人の語彙に実績2以上・同梱の費用の表に在る・世の中の読み
+    〔4字以上〕）ときだけ。決まらなければ None（今までの道へ）。
+    """
+    if not core or len(core) < 3 or store is None:
+        return None
+
+    def _known(x):
+        try:
+            if any(e.get('count', 0) >= 2 for e in store.lookup(x)):
+                return True
+        except Exception:
+            pass
+        if _table_cost(x) is not None:
+            return True
+        if dict_index is not None and len(x) >= 4:
+            try:
+                return bool(dict_index.is_world_reading(x))
+            except Exception:
+                return False
+        return False
+
+    if _known(core):
+        return None
+    good = []
+    for v in _moved_dakuten_variants(core):
+        if _known(v) and v not in good \
+                and not _dakuten_rival_stronger(core, v, store):
+            good.append(v)
+    return good[0] if len(good) == 1 else None
 
 
 def _wide_repairs_enabled():
@@ -5547,7 +6601,7 @@ def _charngram_gain(before, after):
 
 
 def compose_from_intruded(chunk, readings, store, dict_index,
-                          tokenize_fn=None):
+                          tokenize_fn=None, prev_char=''):
     """
     **造語めいた複合語を、開いた読みから直して表記を組む**
     （項目48-EX・うにさん指示 (g) の自動補正ぶん・2026-08-18）。
@@ -5586,6 +6640,17 @@ def compose_from_intruded(chunk, readings, store, dict_index,
     if _chunk_is_intact(chunk, tokenize_fn):
         _trace('造語', f'{chunk!r} はもうできあがっている（48-KI の入口）'
                        f'ので触らない')
+        return None
+    # **数字の直後から始まる漢字の塊は数え方**（項目48-SR・2026-09-06）。
+    # 数字の直後の漢字は助数詞・単位（2個・3回・10日・100円・2倍）で、
+    # 塊だけを解析すると `個` は 名詞:一般 になって見えない
+    # （`2個以下` の `個以下` を造語めいた複合と見て `語彙化` に組み直して
+    # いた。うにさんの実機・初期でも）。呼び手が直前の1字を渡す。
+    # 判定はここ1か所（呼び手は2つ在る・48-GN）
+    if (prev_char and (prev_char.isdigit() or prev_char in '０１２３４５６７８９')
+            and is_kanji(chunk[0])):
+        _trace('造語', f'{chunk!r} は数字の直後から始まる（数え方）ので'
+                       f'触らない（項目48-SR）')
         return None
     # (0) **もう「語＋接尾」の形の塊は、直した先が
     #     「字の並び」として明らかに良くなるときだけ作り直す**
@@ -5980,9 +7045,11 @@ def rebuild_window_core(window, store, tokenize_fn, max_cost=3.0,
                         after_kanji=False, whole_only=False,
                         readable_hint=False, keep_tail='',
                         dict_index=None, attest_text='',
-                        input_method=None):
+                        input_method=None, before_kanji=None):
     """
     単語として成立していない窓を、語彙にある読みへ組み直す。
+    before_kanji: 窓の直後が漢字か（None＝分からない）。末尾の お/ご を
+                  次の語の接頭辞と読んでよいかに使う（項目48-TJ）。
 
     方針「ひらがなに直し、隣接キーや脱字などを考慮して再構築する」
     に対応する経路。窓から機能語を剥がした「芯」を取り出し、
@@ -6092,7 +7159,8 @@ def rebuild_window_core(window, store, tokenize_fn, max_cost=3.0,
         # 本人の打った形ではないので、新しい「読める」の外。
         if readable and not whole_only \
                 and not _kana_run_explained(window, after_kanji,
-                                            tokenize_fn):
+                                            tokenize_fn,
+                                            before_kanji=before_kanji):
             _trace('芯', f'{window!r} → 解析は読めると言うが、かなの語と'
                          f'機能語では説明できない（項目48-IS）。読めない扱い')
             readable = False
@@ -6121,6 +7189,13 @@ def rebuild_window_core(window, store, tokenize_fn, max_cost=3.0,
         if len(core) < 3:
             _trace('芯', f'{core!r} → 3文字未満なので対象外')
             continue
+        # ★★ **濁点の位置ずれは、下の門より先に**（項目48-SB・2026-09-06。
+        # `つつぎ` は「守る語 つつ に1字足しただけ」で止まっていた）
+        _md = _moved_dakuten_fix(core, store, dict_index)
+        if _md:
+            _trace('芯', f'{core!r} → 濁点の位置がずれた形。{_md!r} に'
+                         f'直す（項目48-SB）')
+            return c_s, c_e, _md
         # **送り仮名を剥がさない形は、世の中に在る語なら触らない**
         # （項目48-DY）。直前が漢字のとき、窓の頭から始まる芯は
         # `window_cores` が足した「剥がさない形」。そこは
@@ -6347,12 +7422,17 @@ def rebuild_window_core(window, store, tokenize_fn, max_cost=3.0,
         # するが、`ら` は `済んだら` の送り仮名で `まず` は副詞（項目48-IS）。
         # 頭と芯の間に助詞が無いときだけ（`ちでの|ほらい` は `での` で
         # 切れているので、`ほ` は送り仮名ではない）。
+        # 芯の直後が窓の中のかななら、芯の末尾の お/ご は接頭辞ではない
+        # （項目48-TJ）。窓の末尾まで芯なら、窓の直後の字で決める
+        _bk_core = before_kanji if c_e >= len(window) else False
         if after_kanji and c_s <= 3 and not whole_only \
                 and not any(ch in PARTICLES_1CHAR for ch in window[:c_s]):
-            _core_readable = _kana_run_explained(core, True)
+            _core_readable = _kana_run_explained(core, True,
+                                                 before_kanji=_bk_core)
         else:
             _core_readable = _looks_like_valid_japanese(core, tokenize_fn) \
-                and (whole_only or _kana_run_explained(core)) \
+                and (whole_only or _kana_run_explained(
+                    core, before_kanji=_bk_core)) \
                 and not _verb_noun_joined(core, tokenize_fn)
         if _core_readable:
             _trace('芯', f'{core!r} → 芯だけでも読める。'
@@ -6563,7 +7643,8 @@ def rebuild_window_core(window, store, tokenize_fn, max_cost=3.0,
             if len(cand) != len(core) - 1:
                 return False
             for _i, _ch in enumerate(core):
-                if _ch in PARTICLES_1CHAR                         and core[:_i] + core[_i + 1:] == cand:
+                if _ch in PARTICLES_1CHAR \
+                        and core[:_i] + core[_i + 1:] == cand:
                     return True
             return False
         found = [f for f in found if not _is_particle_drop(f[0])]
@@ -6630,7 +7711,8 @@ def rebuild_window_core(window, store, tokenize_fn, max_cost=3.0,
         #       （掛けたままだと `おゆ`＝お湯 に削られて
         #        **`おゆくこてい` に化けていた**）
         rest = window[c_e:]
-        if rest and rest[0] not in PARTICLES_1CHAR                 and not _rest_is_own_word(rest, store):
+        if rest and rest[0] not in PARTICLES_1CHAR \
+                and not _rest_is_own_word(rest, store):
             found = [f for f in found if f[0][-1] == core[-1]]
         if not found:
             continue
@@ -8283,7 +9365,8 @@ def _fix_samekey_in_run(line, start, end, store, tokenize_fn,
     #     **全部が語彙か辞書に載っていた**（2026-08-16 に数えた）。
     if dict_index is not None:
         try:
-            if dict_index.readings_for_surface(core)                     or dict_index.surfaces_for_reading(core):
+            if dict_index.readings_for_surface(core) \
+                    or dict_index.surfaces_for_reading(core):
                 _trace('同じキー', f'{core!r} は辞書にあるので触らない')
                 return None
         except Exception:
@@ -8628,9 +9711,22 @@ def _fix_samekey_in_run(line, start, end, store, tokenize_fn,
         # 誤検知報告——`（現在・1人称単数）` の ・ が ？ になった。
         # ・→？ は「しつもん・」のような**言い終わりの打ち損ね**の
         # 対であって、・の直後にまだ語の字が続くなら列挙の中黒）
-        if '・' in run and end < len(line) \
-                and (is_japanese_word_char(line[end])
-                     or line[end].isalnum()):
+        #
+        # ★★ **空白は飛ばして見る**（項目48-QW・2026-09-05）。
+        # うにさんの実機で `実機メモ全タブ・ 同梱の見本` の ・ が
+        # `？` になった——**直後が空白1つ**だったので、この見張りが
+        # 素通りしていた（`実機メモ全タブ・同梱の見本` は正しく
+        # 断れていた。実測で両方確かめた）。列挙の中黒は
+        # **`A・ B` とも `A・B` とも書く**ので、間の空白は列挙か
+        # どうかを1つも変えない。
+        # **言い終わりの打ち損ねは失わない**——`しつもん・` は
+        # 行末（＝飛ばした先も行末）なので今までどおり通る。
+        _nx = end
+        while _nx < len(line) and line[_nx] in ' \u3000\t':
+            _nx += 1
+        if '・' in run and _nx < len(line) \
+                and (is_japanese_word_char(line[_nx])
+                     or line[_nx].isalnum()):
             _trace('同じキー', f'{run!r} の直後に語が続く＝列挙の中黒。'
                                f'触らない')
             continue
@@ -9167,6 +10263,36 @@ def _homophone_by_context(surface, reading, store, context_vec,
     if not alts:
         return None
 
+    # ★★ **その読みで最後に選んだ表記があるなら、それが最優先**
+    # （項目48-QH・2026-09-05）。うにさんの指定:
+    #
+    #   「同音異義語の一覧表を作成し、**最後にどの変換をしたか、
+    #     それぞれ履歴1回分記録します**」
+    #
+    # 回数（`_HOMOPHONE_MIN_USAGE` の実績・`demote_homophones` の
+    # 0.2倍）でやっていたことを、**1枠の上書き**に置き換えた形。
+    # 共起（下）より先に見る——共起はうにさんのメモが誤変換の議論
+    # だらけで毒されうる（項目48-IQ）が、**枠は本人が選んだ事実**。
+    #
+    # **枠が「いま書かれている表記」を指しているなら動かさない。**
+    # 本人が最後にそう選んだのだから、それが正しい（学び「正しく
+    # 書いたものを壊さない ＞ 直る」）。
+    try:
+        import last_choice as _lc_frame
+        _framed = _lc_frame.surface_for_reading(reading)
+    except Exception:
+        _framed = None
+    if _framed:
+        if _framed == surface:
+            _trace('同音', f'{surface!r} は前回この読みで選んだ表記'
+                           f'なので動かさない（項目48-QH）')
+            return None
+        _fe = next((e for e in alts if e['surface'] == _framed), None)
+        if _fe is not None:
+            _trace('同音', f'{surface!r} → 前回この読みで選んだ '
+                           f'{_framed!r} に合わせる（項目48-QH）')
+            return (_framed, _fe.get('category', 'その他'), EVIDENCE_VECTOR)
+
     # **候補が近くに書いてあることも、証拠として使う**
     # （2026-08-12・項目48-AY。**48-AV を取り消した**）。
     #
@@ -9361,6 +10487,15 @@ def evaluate_candidate(surface, reading, store, context_vocab,
         return _fix35
 
     # --- 1. 既に正しく書けているなら触らない ---
+    # ★★ **その読みで最後に選んだ表記そのものなら、触らない**
+    # （項目48-QH）。語彙に立っていなくても、本人が選んだ事実は
+    # 「立っている」より強い証拠（うにさんの指定・2026-09-05）。
+    try:
+        import last_choice as _lc_eval
+        if _lc_eval.surface_for_reading(reading) == surface:
+            return None
+    except Exception:
+        pass
     entries = store.lookup(reading)
     for e in entries:
         if e['surface'] == surface and e['count'] >= 2:
@@ -10352,10 +11487,12 @@ def _is_common_verb_form(frag):
 
             stem, last = frag[:-1], frag[-1]
             for u in _GODAN_LIVE:
-                if last in _GODAN_ROW[u] and _common(stem + u)                         and _is_verb_word(stem + u):
+                if last in _GODAN_ROW[u] and _common(stem + u) \
+                        and _is_verb_word(stem + u):
                     out = True
                     break
-            if not out and frag[-1] in _ICHIDAN_TAIL                     and _common(frag + 'る') and _is_verb_word(frag + 'る'):
+            if not out and frag[-1] in _ICHIDAN_TAIL \
+                    and _common(frag + 'る') and _is_verb_word(frag + 'る'):
                 out = True                      # 一段の語幹（たべ・み）
         except Exception:
             out = False
@@ -10596,7 +11733,8 @@ def _fix_functional_run(window, after_kanji=False):
     return scored[0][1]
 
 
-def _kana_run_explained(run, after_kanji=False, tokenize_fn=None):
+def _kana_run_explained(run, after_kanji=False, tokenize_fn=None,
+                        before_kanji=None):
     """
     **かな連続が、かなで書かれる語と機能語だけで説明できるか**
     （項目48-IS・2026-08-23）。
@@ -10635,6 +11773,22 @@ def _kana_run_explained(run, after_kanji=False, tokenize_fn=None):
     # `pos_grammar.explain_kana_run` を丸ごと借りるのは**駄目**
     # （測った: じゅんけしょう・おくゆくこてい まで「説明が付く」に
     # なって、直りが 2 落ちる）。**この形だけ**を足す。
+    # **用言の活用＋機能語で説明が付くなら「読める」**（項目48-TH'・
+    # 2026-09-06）。`やめたら`（やめる＋たら）・`ひどくて`（ひどい＋くて）は
+    # かなの語の表に無く、この判定が「説明できない」と言って芯が
+    # `やたら`・`ひとくち` に直した。48-KS の自動機は活用を知っている
+    # （語の表は動詞・形容詞の根拠にだけ使う `stems_only`——名詞を
+    # 敷き詰める読みは打ち間違いも説明してしまう〔48-SQ の実測〕）。
+    # 同じ材料で答えが割れたら、文法の側を採る（48-QX）。芯は
+    # 「明らかに自然になる直しだけ通す」側に置かれる
+    try:
+        import pos_grammar as _pg_is
+        if _pg_is.explain_kana_run(run, after_kanji=after_kanji,
+                                   before_kanji=before_kanji,
+                                   stems_only=True):
+            return True
+    except Exception:
+        pass
     if tokenize_fn is not None and len(run) >= 3 and run.endswith('ん'):
         try:
             _ts = [t for t in tokenize_fn(run) if t[0]]
@@ -11803,6 +12957,16 @@ def _unit_table_support(chunk, surface, names):
                     if _b and _b in _gap_readings(_a):
                         continue
                     return None
+                # **敬語の接頭辞（お・ご）は仕事をしている**（項目48-SO・
+                # 2026-09-06。`医師にご相談 → 医師に相談` と落としていた）。
+                # `_is_all_functional` の並びに ご を足す形は **readcheck で
+                # 直りを失った**（`さきご`＝さき＋ご が説明できてしまう。
+                # ご は名詞の頭にしか立たない）ので、ここで直に見る
+                # 隙間 `にご` → `に` のように、**落ちた字が お・ご だけ**なら
+                # それも同じ（元の隙間から新しい隙間を除いた残りで見る）
+                if (_a in ('お', 'ご')
+                        or (_b and _a.replace(_b, '', 1) in ('お', 'ご'))):
+                    return None
                 if not _is_all_functional(_a):
                     continue     # 機能語ですらない＝混入。落としてよい
                 if _gap_does_grammar_work(_a):
@@ -12825,8 +13989,84 @@ def _po_replace_odd_span(chunk, odd_pairs, ar, fixes, tokenize_fn,
     return None
 
 
+def _new_katakana_known(text, chunk, dict_index=None):
+    """
+    **元に無いカタカナの連続は、世の中の語か**（項目48-SU・2026-09-06）。
+    text の中のカタカナ2字以上の連続のうち、元の塊 chunk にそのまま
+    無いものは `oddness._katakana_word_known`（AI の表・外来語の表・
+    費用の表・索引の読み）で語であること。1つでも語でなければ False。
+    """
+    if not text:
+        return True
+    try:
+        import oddness as _odd
+    except Exception:
+        return True
+    i, n = 0, len(text)
+    while i < n:
+        if not (is_katakana(text[i]) or text[i] == 'ー'):
+            i += 1
+            continue
+        j = i
+        while j < n and (is_katakana(text[j]) or text[j] == 'ー'):
+            j += 1
+        k = text[i:j]
+        i = j
+        if len(k) < 2 or k in chunk:
+            continue
+        if _katakana_known_or_compound(k, dict_index):
+            continue
+        return False
+    return True
+
+
+def _katakana_known_or_compound(k, dict_index=None):
+    """カタカナ語が世の語か、**世の語2つの複合**か（ダブル＋クリック・48-SU）。"""
+    try:
+        import oddness as _odd
+    except Exception:
+        return True
+    try:
+        if _odd._katakana_word_known(k, dict_index):
+            return True
+        for i in range(2, len(k) - 1):
+            if (_odd._katakana_word_known(k[:i], dict_index)
+                    and _odd._katakana_word_known(k[i:], dict_index)):
+                return True
+    except Exception:
+        return True
+    return False
+
+
+def _sm_content_count(text, tokenize_fn):
+    """
+    **内容語のトークンの数**（項目48-SM・2026-09-06）。接頭・接尾・
+    非自立・助詞・助動詞・記号・数を除いて数える。`効率化`（効率＋化）・
+    `最大化`・`終了時` は 1、`今日探索`・`驚嘆潜水`・`創建無茶` は 2、
+    `引き月資料`（引き｜月｜資料）は 3。解析できなければ 99（＝多い側）。
+    """
+    try:
+        toks = list(tokenize_fn(text) or ())
+    except Exception:
+        return 99
+    n = 0
+    for t in toks:
+        pos = t[1] or ''
+        if any(x in pos for x in ('接頭', '接尾', '非自立', '助詞',
+                                  '助動詞', '記号', '数')):
+            continue
+        n += 1
+    return n
+
+
+def _sm_single_unit(text, tokenize_fn):
+    """**1つの語（＋接辞）か**（項目48-SM）。`_sm_content_count` が 1 まで。"""
+    return _sm_content_count(text, tokenize_fn) <= 1
+
+
 def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
-                      input_method=None, assemble=False, vocab_only=False):
+                      input_method=None, assemble=False, vocab_only=False,
+                      as_kana_run=False):
     """
     **異様と判定した塊を、ひらがなに開いて直す**（設計27・項目48-HS）。
 
@@ -12878,8 +14118,17 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
         return None
     _odd_pairs = _odd.is_odd_run(chunk, tokenize_fn,
                                  store=store, dict_index=dict_index)
-    if not _odd_pairs:
+    if not _odd_pairs and not as_kana_run:
         return None                     # 印が立たない＝入口に入らない
+    # **かな連続**（項目48-RW・2026-09-05）: ①は呼び手が 48-KS
+    # （`pos_grammar.odd_kana_spans`）で確かめている。`is_odd_run` は
+    # 漢字・カタカナの対の判定なので、かなだけの連続には立たない——
+    # 「異様と判定はしているのに、決める道に渡していない」を塞ぐ入口。
+    # 漢字で書けば直り（`田部井号して → タブ移動して`）、かなで書けば
+    # 直らない（`たぶいごうして`）を同じ受け皿にする。
+    if not _odd_pairs:
+        _trace('異様', f'{chunk!r} → かな連続に①が立っている（48-KS）ので、'
+                       f'異様の受け皿に通す（項目48-RW）')
     # **1字を根拠にしては動かない**（項目48-HU）。
     #
     # 印は「差＋釣れ」「型＋不一致」のような1字がらみの並びにも
@@ -12901,7 +14150,60 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
     # 判定するものがあればよい」）。`型不一致` は 48-IP の否定の接頭辞の
     # 規則で**印が立たなくなった**ので、この門の動機は消えている。
     # `一度止まる` は門(2)、`文字乳リュク` は門(1) が守る。
-    _trace('異様', f'{chunk!r} → 印が立った（{_odd_pairs}・設計27の入口）')
+    if _odd_pairs:
+        _trace('異様', f'{chunk!r} → 印が立った（{_odd_pairs}・設計27の入口）')
+    # **印が立った理由は「表で見たことのない並び」だけか**（項目48-SM・
+    # 2026-09-06）。うにさんの実機（web の商品説明の貼り付け）で
+    #
+    #     強炭酸 → 今日探索    強炭酸水 → 驚嘆潜水    爽健美茶 → 創建無茶
+    #     電動爪切り → 電動締切  自動爪切り → 指導締切  九州方言 → 吸収放言
+    #     炭酸度 → たんと       厚爪対応 → あつめ対応
+    #
+    # 元はどれも**辞書の語だけでできた0手の塊**。印は `can_join` の
+    # 「その並びを表で見たことがない」だけで立った。置き換えの側は
+    # **手を1つ当てた読みを、やはり見たことのない2語に敷き詰めた**もの
+    # ——元より弱い証拠で、正しく書いたものを壊す。
+    # そういう塊は、**1つの語（＋接辞）に届いて漢字を減らさないとき**
+    # だけ置き換える（`小売り坂 → 効率化`・`再退化 → 最大化` は届く）。
+    # 届かなければ紫だけ残す（決めない＝「補正先が無い」の側）。
+    # 号＋し・流＋力・断片 のような**文法の判定**で立った印は今までどおり
+    # （`田部井号して → タブ移動して`・`簡易流力 → 簡易入力` は 2語に組む）。
+    _sm_unseen_only = False
+    if _odd_pairs:
+        try:
+            _sm_unseen_only = not _odd.is_odd_run(
+                chunk, tokenize_fn, store=store, dict_index=dict_index,
+                skip_join=True)
+        except Exception:
+            _sm_unseen_only = False
+    _sm_nk = sum(1 for _c in chunk if is_kanji(_c))
+    _sm_n0 = _sm_content_count(chunk, tokenize_fn) if _sm_unseen_only else 0
+
+    def _sm_ok(_repl):
+        # **1語（＋接辞）に届くか、内容語が元より減る**（項目48-SM'）。
+        # `引き月資料`（引き｜月｜資料＝3）→ `引き継ぎ資料`（2）は
+        # 語の境目をまたいで1語に届いた形なので通す（き→ぎ の1手）。
+        # `強炭酸`（2）→ `今日探索`（2）は減っていないので通さない
+        if not _sm_unseen_only or not _repl:
+            return True
+        # **漢字を減らして、そのぶんかなを増やさない**（48-ND (b) と同じ線・
+        # 48-GN）。`炭酸度 → たんと`・`厚爪対応 → あつめ対応` を止める。
+        # 漢字の数だけで見ると `素帰任 → 確認`（余分な1打を落とすので
+        # 1字減る）を、割合で見ると `引き月資料 → 引き継ぎ資料`（送り仮名が
+        # 1字増える）を止めてしまった——実測して、この形に落ち着いた
+        # かなは**カタカナも**（`語彙素同士 → ボイス同士`——漢字を読みに開いて
+        # 本人の語彙のカタカナ語に敷き詰めた形。実機メモで実測）
+        _kana = lambda _c: is_hiragana(_c) or is_katakana(_c)
+        if (sum(1 for _c in _repl if is_kanji(_c)) < _sm_nk
+                and sum(1 for _c in _repl if _kana(_c))
+                > sum(1 for _c in chunk if _kana(_c))):
+            return False
+        _n1 = _sm_content_count(_repl, tokenize_fn)
+        return _n1 <= 1 or _n1 < _sm_n0
+    if _sm_unseen_only:
+        _trace('異様', f'{chunk!r} → 印の理由は見たことのない並びだけ。'
+                       f'置き換えは1語（＋接辞）か内容語が減るもので、'
+                       f'漢字を減らしてかなを増やさないものに限る（項目48-SM）')
 
     # --- 2. ひらがなに開く（**当て推量の読みは使わない**）---
     readings = []
@@ -12959,9 +14261,45 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
                 readings.append(r)
     except Exception:
         pass
+    _tok_info = []      # (表記, 読みが立つか) をトークン順に（項目48-RV''）
+    try:
+        # **格下げ後の並び**で見る（48-OR。`田部井`・`右田` は読みの
+        # 立たない語として扱い、境目の門で守らない）
+        _dtoks = list(_odd.downgraded_tokens(
+            list(tokenize_fn(chunk) or ()), store=store,
+            dict_index=dict_index))
+    except Exception:
+        _dtoks = []
+    # **読みの立つ2字以上の漢字語は、解析の読みのまま**（項目48-TC・
+    # 2026-09-06）。`産地アソート` の開いた読みに、漢字の読みの組
+    # （`kanji_guess`）が `さんじ…` を混ぜ、48-LA が `三時アゾート` を
+    # 組んだ——`産地` は読みが立つ語で、さんち 以外に読みようがない。
+    # 信用しない固有名詞（48-OR で `_dtoks` が落とす）は縛らない
+    try:
+        from morphology import katakana_to_hiragana as _k2h_tc
+        _fixed_rd = [_k2h_tc(t[2]) for t in _dtoks
+                     if t[0] and len(t[0]) >= 2 and t[2]
+                     and all(is_kanji(_c) for _c in t[0])
+                     and len(t) > 5 and t[5]
+                     and '固有名詞' not in (t[1] or '')]   # 田部井（たぶい）
+    except Exception:
+        _fixed_rd = []
+    if _fixed_rd and len(readings) > 1:
+        _keep_rd = [r for r in readings if all(f in r for f in _fixed_rd)]
+        if _keep_rd and len(_keep_rd) < len(readings):
+            _trace('異様', f'{chunk!r} → 読みの立つ語 {_fixed_rd} の読みを'
+                           f'変えた組 {len(readings) - len(_keep_rd)} 件を'
+                           f'落とす（項目48-TC）')
+            readings = _keep_rd
     try:
         _alts_per_tok = []
-        for t in (tokenize_fn(chunk) or ()):
+        for _k_t, t in enumerate(tokenize_fn(chunk) or ()):
+            _known_t = not ((len(t) > 5 and not t[5])
+                            or t[0] in 'ゃゅょっぁぃぅぇぉ')
+            if _k_t < len(_dtoks) and len(_dtoks[_k_t]) > 5 \
+                    and not _dtoks[_k_t][5]:
+                _known_t = False
+            _tok_info.append((t[0] or '', _known_t))
             if (len(t) > 5 and not t[5]) or t[0] in 'ゃゅょっぁぃぅぇぉ':
                 # **読みの立たない断片・小書き1字**（二ゅ力ミス の ゅ）。
                 # 壊れた塊は書きたい形ではありえないので、下の
@@ -13090,6 +14428,14 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
                 continue
             _add(rd[:i] + _TYPO_DAKUTEN[u] + rd[i + 2:],
                  '余分な字に濁点', 1.3)
+        # **濁点の位置ずれ**（項目48-SB'・2026-09-06。つつぎ → つづき。
+        # ゛1つの手で届く読みのほうが強いなら採らない——`むたづかい`）
+        try:
+            for r in _moved_dakuten_variants(rd):
+                if not _dakuten_rival_stronger(rd, r, store):
+                    _add(r, '濁点の位置ずれ', 1.0)
+        except Exception:
+            pass
         # **印のキーの隣を叩いた**（48-FX の手。項目48-OM・2026-09-02）。
         # うにさんの一覧 `解析課背中セク、 ⇒ 解析が長く、`＝かいせき**かせ**
         # な**かせ**く の せ(P) は ゛(@) の隣（2か所）。この手は
@@ -13100,7 +14446,13 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
             for r in _mark_slip_repairs(rd):
                 _add(r, '印のキーの隣', 1.0)
                 for r2 in _mark_slip_repairs(r):
-                    _add(r2, '印のキーの隣×2', 2.0)
+                    # **同じ誤りの繰り返しは1つの仮説**（項目48-RR・
+                    # 2026-09-05・うにさんの指定「背中セクよりも先に、
+                    # せ が ゛ の隣接打ち間違いを疑う」）。費用は 2.0 の
+                    # ままだが、`_add` の挿入順＋安定な並べ替えで、
+                    # **同じ費用の「似た読み 2.0」（別々の手2つ）より
+                    # 先**に来る。記録名で見分けられるようにした
+                    _add(r2, '同じ誤りの繰り返し（印の隣×2）', 2.0)
         except Exception:
             pass
         # **似た読み（2手まで・費用2.0まで）**（項目48-IS）。
@@ -13178,6 +14530,52 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
             for x, cx in sa[:3]:
                 for y, cy in sb[:3]:
                     if (x + y) in whole:
+                        continue
+                    # **片方が1字の漢字なら、組んだ形が世の中の1語のときだけ**
+                    # （項目48-RV・2026-09-05）。`背中セク → 背中枠`（育ち）——
+                    # 断片 `セク` を隣接キーで `わく` にし、`枠`（実績2）を
+                    # `背中` に貼っていた。1字の漢字は読みが短く何にでも当たる。
+                    # `is_unit('背中枠')` False／`手ブレ`・`入力ミス` True——
+                    # **表で割れる**。表が無いとき（None）も採らない（守る側）
+                    # **短いかなの部品も同じ**（`背中セク → 背中しく`——
+                    # `せく→しく` の2字かなを `背中` に貼った・同日）。
+                    # `入力ミス`（ミス 2字）は `is_unit` True で通る
+                    def _sf_short(_p):
+                        return ((len(_p) == 1 and is_kanji(_p))
+                                or (len(_p) <= 2
+                                    and all(is_hiragana(_c) or is_katakana(_c)
+                                            or _c == 'ー' for _c in _p)))
+                    if _sf_short(x) or _sf_short(y):
+                        try:
+                            import seed_japanese as _sj_sf
+                            if _sj_sf.is_unit(x + y) is not True:
+                                continue
+                        except Exception:
+                            continue
+                    # ★★ **品詞のつながりで裁く**（項目48-RV'・2026-09-05・
+                    # うにさんの指定「品詞の判定やつながりを重要視して
+                    # ください」）。2語の組は**複合名詞**を組む道——
+                    # `背中セク → 背中狭く`（名詞＋形容詞の連用形の直付き。
+                    # `狭く` が solid だっただけ）は語ではない。両方が
+                    # **名詞**（前は非自立・接尾を除く／後ろは接尾・サ変も可）
+                    # のときだけ組む。`is_odd_run` は名詞＋形容詞を
+                    # 「くっつけない並び」に数えていない（実測 []）ので、
+                    # ここで見る
+                    try:
+                        _tx = tokenize_fn(x)
+                        _ty = tokenize_fn(y)
+                    except Exception:
+                        _tx = _ty = None
+                    if not _tx or not _ty:
+                        continue
+                    _px = (_tx[-1][1] or '') if _tx else ''
+                    _py = (_ty[0][1] or '') if _ty else ''
+                    if (not _px.startswith('名詞')
+                            or _px.startswith('名詞:非自立')
+                            or _px.startswith('名詞:接尾')
+                            or not _py.startswith('名詞')
+                            or _py.startswith('名詞:非自立')):
+                        _why['品詞のつながり'] += 1
                         continue
                     if min(cx, cy) > out.get(x + y, 0):
                         parts[x + y] = (a, x, b, y)
@@ -13267,6 +14665,24 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
                         and not _chunk_has_unknown:
                     _why['手を掛けた2語の組'] += 1
                     continue
+                # ★★ **読みの立たない語が居る塊でも、手を掛けた2語の組は
+                # 「断片を直して貼り直す形」だけ**（項目48-RV''・2026-09-05・
+                # うにさんの指定「品詞の判定やつながりを重要視」）。
+                # `背中セク` は、上の例外（塊に断片が居るので手＋組を許す）で
+                # `背中枠`→`背中しく`→`背中狭く`→**`ハイ仲良く`**と、塞ぐ
+                # たびに次の当て推量が出た。最後のは `背中` の読み `せなか` を
+                # `はい｜なか` に**切り直して**組んだもの——手は断片 `セク` に
+                # 当てたのに、組の境目は断片の境目（`せなか｜せく` の 3）に
+                # 無い。**組の境目が、読みの立たない語の境目に揃うときだけ**
+                # 通す。読みの切れ目を変える組は当て推量（48-ND「書かれ方は
+                # 変えない」を読み方にも）
+                if fixed != rd and _pt is not None \
+                        and surf not in getattr(_surfaces, 'whole', ()) \
+                        and not _hand_boundaries_ok(
+                            _tok_info, _alts_per_tok, rd, fixed,
+                            [len(_pt[0])]):
+                    _why['読みの立つ語の読みを切り直す組'] += 1
+                    continue
                 # 5-b: 語の並びとして読めるか
                 try:
                     if not _real(surf, store, tokenize_fn):
@@ -13309,7 +14725,46 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
                 # 表記の五十音順＝でたらめだった。実績の軸（48-IE）は
                 # 動かさない——同点の中の順だけ）。
                 _yp = _yomi_prior_bucket(fixed) if _yomi_prior_enabled() else 0
-                key = (_whole_pref, -cnt, _kanji_pref, _yp, len(surf), surf)
+                # ★★ **実績の目盛りが2段しか残らないぶんを、
+                # 「世の中での一般度」で埋める**（項目48-QG'・2026-09-05）。
+                #
+                # うにさんの指定（2026-08-21・項目48-IE）は「異様だと
+                # 判定したら、**実績のいちばん高い候補に直す**」。
+                # 回数を廃した今、`cnt` は 2 か 2（＝ほぼ同点）にしか
+                # ならないので、**この軸だけでは決まらなくなった**:
+                #
+                #     好き任 → 確認(実績3) が 後任(実績2) に勝っていた
+                #            → 同点になり、**表記の字コード順で 後任**
+                #     田部井号して → タブ移動(world 2) と タブ異動(world 1)
+                #            → 同点になり、**異動** が勝った（実測）
+                #
+                # 一般度の軸（`_tc` → `_kt_rank`）を `-cnt` のすぐ
+                # 後ろではなく `_kanji_pref` の後ろに置く——48-IS の
+                # 「元が漢字なら漢字の表記を優先」は一般度より上の
+                # 決まり（`非欄仮名 → 平仮名`）。
+                #
+                # **順序（費用 → 段）とその根拠は `_kango_tier_of` の
+                # 説明を見ること**（項目48-QR。「決めているのは最初の
+                # 行」——同じ実測を2か所に書くと、いつか食い違う）。
+                # ここで実際に解けた例だけ書く:
+                #
+                #     確認 段1 ／ 新任 段2  —— **費用はどちらも 101**
+                #
+                # 費用だけだと同点になり、**表記の字コード順**で
+                # `新任` が勝っていた（育ちの実機メモで
+                # `すきにん → 新任`）。費用が同点のときだけ段で割る。
+                #
+                # ★★ **`world` を軸にする案も、測って外した**。
+                # `world`（書籍での帯・48-DA）は**辞書から取り込んだ語
+                # にしか付かない**——本人が打って覚えた語は 0 のまま。
+                # 育ちで `移動`（本人の語・world 無し）が
+                # `異動`（辞書・world 1）に負けた。
+                _kt_rank = _kango_tier_of(surf)
+                _tc = _table_cost(surf)
+                if _tc is None:
+                    _tc = 10 ** 9
+                key = (_whole_pref, -cnt, _kanji_pref, _tc, _kt_rank,
+                       _yp, len(surf), surf)
                 cands[surf] = min(cands.get(surf, key), key)
                 if best is None or key < best[0]:
                     best = (key, surf, how, rd, fixed, cnt)
@@ -13376,6 +14831,20 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
         # 先に足すと `雛仮名 → 表明`・`にゅうりょ組ス → 入力ます` に
         # なった（実測。組めているならそちらが上）。
         _tried = set()
+        # **元の塊の頭が漢字で書かれていて、変種がその読みから始まるなら、
+        # 頭はその表記を保つ**（項目48-RQ(iii)・48-IU の一般化・2026-09-05）。
+        # `解析課背中セク` の `解析`（かいせき）には手を当てていない——
+        # 会席・懐石に置き換えない。使うのは 48-RQ の枝（語＋手が生んだ
+        # 助詞＋語）だけ
+        _keep_head = None
+        try:
+            _t0 = (tokenize_fn(chunk) or ())[0]
+            if (_t0 and _t0[0] and all(is_kanji(_c) for _c in _t0[0])
+                    and len(_t0) > 5 and _t0[5] and _t0[2]
+                    and all(is_hiragana(_c) for _c in _t0[2])):
+                _keep_head = (_t0[2], _t0[0])
+        except Exception:
+            _keep_head = None
         # **解析が読んだ読みに近いものから試す**（項目48-OQ(d)・
         # 2026-09-03）。この受け皿は「最初に通ったものを採る」ので、
         # **並び順がそのまま順位**になる。いままでの並びは
@@ -13395,7 +14864,15 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
                     if _ar else readings):
             _try = [_rd]
             try:
-                _try += [v for v in _fixes(_rd) if v not in _tried]
+                _fx = _fixes(_rd)
+                _try += [v for v in _fx if v not in _tried]
+                # **手の並びを記録に残す**（項目48-RR・2026-09-05）——
+                # 「どの仮説を先に疑ったか」を trace で読めるように。
+                # 同じ費用なら `_fixes` の挿入順（安定な並べ替え）で、
+                # **同じ誤りの繰り返し（印の隣×2）が、別々の手2つ
+                # （似た読み 2.0）より先**に来る
+                _trace('異様', f'{_rd!r} の手（先頭12）: '
+                               f'{list(_fx.items())[:12]}')
             except Exception:
                 pass
             for _v in _try:
@@ -13405,10 +14882,24 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
                 try:
                     _conv = _convert_odd_kana_run(
                         _v, store, dict_index,
-                        vocab_only=vocab_only, short_head=True)
+                        vocab_only=vocab_only, short_head=True,
+                        # **手が変えた位置**（項目48-RQ(i)）。元の読み
+                        # そのもの（_v == _rd）なら無し＝語＋助詞＋語の
+                        # 枝は開かない
+                        born=(_born_positions(_rd, _v)
+                              if _v != _rd else None),
+                        keep_head=_keep_head, tokenize_fn=tokenize_fn)
                 except Exception:
                     _conv = None
                 if not _conv or _conv[0] == chunk:
+                    continue
+                # ★★ **手を当てていない読みの立つ語の読みの中に、組の頭の
+                # 境目を置かない**（項目48-RV''。`背中セク` → `はいなかよく`
+                # → `ハイ｜仲良く` は `背中` の読みを切り直していた）
+                if _v != _rd and len(_conv) > 1 and _conv[1] \
+                        and not _hand_boundaries_ok(
+                            _tok_info, _alts_per_tok, _rd, _v, [_conv[1]]):
+                    _why['読みの立つ語の読みを切り直す組'] += 1
                     continue
                 # 受け入れは本道と同じ形で——**長さ ±1**（カタカナを
                 # 含む塊は縮んでよい）と**異様さが消えたか**
@@ -13452,7 +14943,8 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
                 #     判定は `_grown_katakana_is_own_word` ただ1つ。
                 _kata_own = _grown_katakana_is_own_word(_conv[0], chunk,
                                                         store)
-                if any(is_katakana(c) for c in _conv[0]) and not _kata_own                         and not any(is_katakana(c) for c in chunk):
+                if any(is_katakana(c) for c in _conv[0]) and not _kata_own \
+                        and not any(is_katakana(c) for c in chunk):
                     continue
                 # (b) **漢字を減らして、そのぶんかなを増やさない**。
                 #     組み立ては読みを語で埋める道なので、埋めきれない
@@ -13463,7 +14955,8 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
                 #     `奥行固定`(4) はかなが増えていないので別の話
                 _nk = sum(1 for c in chunk if is_kanji(c))
                 _nh = sum(1 for c in chunk if is_hiragana(c))
-                if sum(1 for c in _conv[0] if is_kanji(c)) < _nk                         and sum(1 for c in _conv[0]
+                if sum(1 for c in _conv[0] if is_kanji(c)) < _nk \
+                        and sum(1 for c in _conv[0]
                                 if is_hiragana(c)) > _nh \
                         and not _kana_growth_is_grammar(_conv[0]):
                     continue
@@ -13471,6 +14964,17 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
                 #     2拍なので、同じ読みを敷き詰めて**字数が増える**のは
                 #     読みの切れ目を変えた（＝当て推量した）しるし
                 if _is_all_kanji(chunk) and len(_conv[0]) > len(chunk):
+                    continue
+                # (d) **元に無いカタカナの連続は、世の中の語でなければ
+                #     生やさない**（項目48-SU・2026-09-06）。(a) は
+                #     「元にカタカナが在れば生やしてよい」だが、元の
+                #     `シュワー` を手で `シヤワー` に変えて敷き詰めた形は
+                #     語ではない（うにさんの実機 `使用シュワー → 使用シヤワー`）
+                if not _new_katakana_known(_conv[0], chunk, dict_index):
+                    _why['生やしたカタカナが世の語ではない（48-SU）'] += 1
+                    continue
+                if not _sm_ok(_conv[0]):
+                    _why['見たことのない並びに、手を当てた語の組（48-SM）'] += 1
                     continue
                 _trace('異様', f'{chunk!r} → 異様なので {_v!r} に開き、'
                                f'語の組み立てで {_conv[0]!r}（項目48-LA）')
@@ -13481,6 +14985,10 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
         #     （も水戸に戻ります → もとに戻ります）。
         _po = _po_replace_odd_span(chunk, _odd_pairs, _ar, _fixes,
                                    tokenize_fn, store, dict_index)
+        if _po is not None and _po != chunk and not _sm_ok(_po):
+            _trace('異様', f'{chunk!r} → 読みでの置き換え {_po!r} は、'
+                           f'見たことのない並びだけの塊には当てない（項目48-SM）')
+            _po = None
         if _po is not None and _po != chunk:
             _trace('異様', f'{chunk!r} → 表記には組めないが、手を当てた'
                            f'読みが文法で説明が付く。異様の対の範囲だけを'
@@ -13492,6 +15000,23 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
         # あとの塊が全部飛ばされていた（`野外文章／素帰任` の
         # 素帰任 が黙って素通り。野外文章が必ず直っていた間は
         # 露出しなかった）。
+        # **48-RK**（2026-09-05）: 直し先が出なかった／全部落ちた。
+        # **開いた読みを、既知の頭で割って熟語＋熟語に決める**
+        # （`簡易流力` → 開くと `かんいりゅうりょく` → `簡易入力`）。
+        # A/B の道（かな連続）と**同じ1本**を呼ぶ（48-GN）。
+        for _rd_try in readings[:8]:
+            _khc = _fix_known_head_compound(_rd_try, store, tokenize_fn,
+                                            dict_index)
+            if _khc is not None and _khc != chunk and not _sm_ok(_khc):
+                _trace('異様', f'{chunk!r} → 既知の頭で割った {_khc!r} は、'
+                               f'見たことのない並びだけの塊には当てない'
+                               f'（項目48-SM）')
+                _seen_any = True
+                continue
+            if _khc is not None and _khc != chunk:
+                _trace('異様', f'{chunk!r} → 異様なので {_rd_try!r} に開き、'
+                               f'既知の頭で割って {_khc!r}（項目48-RK）')
+                return _khc, 'その他'
         if not _seen_any:
             _trace('異様', f'{chunk!r} → 直し先の**表記が一つも組めない**'
                            f'（実績2以上の語に届かない）。決めない')
@@ -13500,6 +15025,10 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
                            f'{dict(_why)}。決めない')
         return None
     _, surf, how, rd, fixed, cnt = best
+    if not _sm_ok(surf):
+        _trace('異様', f'{chunk!r} → {how}の {surf!r} は、見たことのない'
+                       f'並びだけの塊には当てない（項目48-SM）。決めない')
+        return None
     _trace('異様', f'{chunk!r} → 異様なので {rd!r} に開き、'
                    f'{how}で {fixed!r} に直して {surf!r}'
                    f'（実績{cnt}・設計27）')
@@ -13509,6 +15038,102 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
 
 _TABLE_READINGS = None
 _TABLE_COST = None
+
+
+def _kango_tier_of(surface):
+    """
+    **その表記の「一般的さの段」**（`kango_tier`・AI の判断・48-OJ）。
+    1＝日常語／2＝一般語／3＝それ以外。**2字の漢語だけ**が表に在る。
+
+    ★★ **表に無い形（3字以上・かな混じり・カタカナ）は 1 を返す**
+    ——**罰しない**。この表が知っているのは「**この2字漢語は日常語では
+    ない**」ということだけで、載っていない形について何も言っていない。
+    「知らない」を「珍しい」の側に倒すと、**カタカナ語が負ける**:
+
+        まいす（マイナス の脱字）→ 段2 扱いにすると
+        **`麻酔`（段1）に負けて `ますい`** になった（実測・初期状態）
+
+    ＝ この軸は「**段2・段3 と分かっている2字漢語を下げる**」だけの
+    片側の軸。`world` の 0 で同じ間違いを一度踏んでいる（項目48-QG'）。
+
+    ★★ **見るのは、同梱の費用表が同点だったときだけ**（費用 → 段）。
+    段を第1の軸にした形も測ったが、**割れすぎた**——初期で
+    直り −4／化け +2。費用表は 2字の漢語に同点が多い（`確認` も
+    `新任` も 101）ので、**そこだけを段が裁く**のがちょうどよい。
+
+    引き当ての内側から呼ばれるので**例外を外へ出さない**。
+    """
+    if not surface or len(surface) != 2:
+        return 1
+    try:
+        if not all(is_kanji(c) for c in surface):
+            return 1
+        import kango_tier as _kt
+        if not _kt.available():
+            return 1
+        return int(_kt.tier(surface))
+    except Exception:
+        return 1
+
+
+def _base_reading_is_own_word(reading, store):
+    """
+    **書かれている語の読みに、表記が1つでも在るか**
+    （項目48-QG'・2026-09-05）。在るなら、そこは触らない。
+
+    （名前は「この人の語か」と読めるが、**聞いているのは在るか無いか**
+    ——`solid` で聞くと壊れる。下の「solid で聞いたら」の節。）
+
+    回数を廃した（48-QG）ぶんの、48-KU の**優勢の比（20倍）の
+    置き換え**。もとは
+
+        need = max(2, 20 * 書かれている語の回数)
+
+    で、**書かれている語をまだ使っていない**（回数0）ときは
+    `need = 2`＝「直し先が立っていれば通す」、使っているときは
+    **20倍の圧倒的な差**を求めていた。回数を廃すと 20倍は
+    二度と越えられないので、**残るのは前半の意味だけ**:
+
+        書かれている語がこの人の語として立っている → 触らない
+        立っていない                               → 直し先が立てば通す
+
+    ### ★★ 費用の差で言い直す案は、**測って外した**
+
+    「直し先のほうが同梱の表で安い（＝世の中でよく使う）なら通す」に
+    してみたら、**わずかな差でも通ってしまい**、育ちで壊れた:
+
+        居で以下 → 巨大化（正しい）→ **強大化**
+        （`巨大` 費用 119 ／ `強大` 費用 113 ——**6 の差は誤差**）
+
+    もとの門は「20倍」＝圧倒的な差を求めていたのに、置き換えが
+    「わずかでも上」になっていた。では何点で圧倒的かというと、
+    `囚虜 115 → 終了 101` は 14 の差で**通したい**——**14 と 6 の
+    あいだに線を引く根拠は無い**（★★ 数字の当てもの）。
+    **言えないことは言わない。**
+
+    代償: 育ちで `囚虜時 → 終了時` が沈黙する（打鍵の試しで
+    `囚虜` を覚えてしまっているため）。**初期状態では語彙に無い**
+    ので今までどおり直る。§4 の「数の証拠が消えるぶんの失い」の1つ。
+
+    ### ★★ **`solid` で聞いたら、門が広がって正しい語を壊した**
+
+    最初は `count >= 2`（＝ solid）で聞いた。だが旧の `base_count == 0`
+    は「**その読みの entry が1つも無い**」という意味で、
+    「立っていない」ではない。育ちの語彙には **count 1 の entry が
+    13,866件**あり、solid で聞くとそれが全部「立っていない」側へ
+    落ちて、**門が旧より広く開く**。実測（育ちの2字漢語 3,398語×接尾）
+    で、**旧が無傷だった 21件を新だけが書き換えた**:
+
+        除雪用 → **常設用** ／ 助演者 → **上演者**
+        考古的 → **口腔的** ／ 粗大化 → **壮大化**
+
+    ★★「正しく書いたものを壊さない ＞ 直る」。**entry が1つでも
+    在るなら触らない**——それが旧の `base_count == 0` そのもの。
+    """
+    try:
+        return bool(store.lookup(reading))
+    except Exception:
+        return True         # 分からないときは触らない側へ
 
 
 def _table_cost(surface):
@@ -13719,9 +15344,16 @@ def _arrow_respell(line, tokenize_fn, dict_index=None):
 
 
 def _kana_backed(reading, store):
-    """その読みが、使用実績のある語として立つか（設計38・39 の共通の物差し）。"""
+    """
+    その読みが、**この人の語として立つか**（設計38・39 の共通の物差し）。
+
+    判定の本体は `vocabulary.entry_is_solid` **1本**（項目48-QG・48-QS）。
+    `count >= 2` と書き下さない——巡4 でメモリ上の `count` の写しを
+    落としたとき、**ここだけ黙って古い意味のまま残る**（48-GN）。
+    """
     try:
-        return any(e.get('count', 0) >= 2 for e in store.lookup(reading))
+        from vocabulary import entry_is_solid as _solid
+        return any(_solid(e) for e in store.lookup(reading))
     except Exception:
         return False
 
@@ -13974,9 +15606,507 @@ def _kv_finish(run, base, u_pos, store, dict_index):
     return fix
 
 
+def _has_trusted_proper_noun(run, store, dict_index):
+    """
+    その並びに、**信用してよい固有名詞**が居るか（項目48-RN・
+    2026-09-05・うにさんの報告「以前も言ったが、**地名と人名判定の
+    優先度を下げなければいけない**」）。
+
+    48-OR は①（異様か判定する）で「解析の言う固有名詞を特別扱い
+    しない」と決めた。だが**同じ判定を、止まる門が見ていなかった**
+    ——「固有名詞が混じっていたら判定しない」型の門が、
+    **信用できない札**（`右田`＝地名・`ブル`＝人名。どちらも
+    カタカナ語や漢字列を割った跡）でも降りていた。
+    48-OR が①で開けたはずの道が、ここで塞がっていた（学び22）。
+
+    ★★ **判定は借りるだけ。新しい判定は作らない**（48-GN）——
+    `oddness._proper_noun_downgradable`（そもそも落としてよい形か）と
+    `oddness._proper_noun_is_trusted`（信用してよいか）の2本を、
+    ①が見ているのと**同じ材料**で呼ぶ。
+
+    **守る門はこれを使わない**——48-JL（登録した姓を守る）・
+    48-CS（`_is_whole_proper_noun`）・地名の接尾は、
+    「本人の語・登録した姓を守る」持ち場なので今までどおり。
+    """
+    if not any('固有名詞' in ((t[1] or '') if len(t) > 1 else '')
+               for t in run):
+        return False            # そもそも固有名詞が居ない
+    if dict_index is None:
+        # **世の読みが引けないときは判定できない**——`_proper_noun_is_trusted`
+        # の4つの出どころのうち2つ（カタカナの扱い・世の読み）が
+        # 効かないので、当て推量かどうかを言えない。
+        # ★★ **分からないときは今までどおり**（止める側＝守る側）。
+        # 実機は必ず渡す（`correct_line` の引数）ので、これで落ちるのは
+        # 作り物の試験だけ
+        return True
+    try:
+        import oddness as _odd
+    except Exception:
+        return True             # 分からないときは今までどおり（止める側）
+    for _i, t in enumerate(run):
+        if '固有名詞' not in ((t[1] or '') if len(t) > 1 else ''):
+            continue
+        try:
+            if not _odd._proper_noun_downgradable(run, _i):
+                return True     # 落としてよい形ですらない＝守る
+            if _odd._proper_noun_is_trusted(
+                    (t[0], t[1], (t[2] if len(t) > 2 else '')),
+                    store, dict_index):
+                return True
+        except Exception:
+            return True
+    return False
+
+
+def _known_head_kanji(head, store):
+    """
+    **既知の頭を漢字に決める**（項目48-RK）。無理なら None。
+
+    ★★ 順番は「本人の語 → 世の中の語」。本人の語彙に**立った**表記が
+    在るならそれ（`かんい` は種の語彙に `簡易` が在る）。無ければ
+    同梱の費用表の表記を **段（`kango_tier`）で絞り**、
+    **(段, 費用) の順で先頭を採る**（★★ CLAUDE.md「候補が複数でも
+    優先度の高い1つに決める」）——`かんい` は 簡易(段2) が
+    官位・冠位(段3) に勝つ。
+    """
+    try:
+        from vocabulary import entry_is_solid as _solid
+        for e in store.lookup(head):
+            sf = e.get('surface') or ''
+            if _solid(e) and len(sf) == 2 and all(is_kanji(c) for c in sf):
+                return sf
+    except Exception:
+        pass
+    best = None
+    for sf in (table_surfaces_for_reading(head) or ()):
+        if len(sf) != 2 or not all(is_kanji(c) for c in sf):
+            continue
+        t = _kango_tier_of(sf)
+        if t > 2:
+            continue                # 段3＝専門・文語。頭には採らない
+        c = _table_cost(sf)
+        key = (t, c if c is not None else 10 ** 9, sf)
+        if best is None or key < best[0]:
+            best = (key, sf)
+    return best[1] if best else None
+
+
+_QUOTE_OPEN = '「『“"‘'
+_QUOTE_CLOSE = '」』”"’'
+
+
+def _fix_known_head_compound(run, store, tokenize_fn, dict_index,
+                             find_readings=None, max_dist=1.6,
+                             before='', after=''):
+    """
+    **既知の頭で割り、残りを直し、2字漢語＋2字漢語に決める**
+    （項目48-RK・2026-09-05・うにさんの指定）:
+
+        「`かんいりゅうりょく`——`かんい` は候補の先頭で 簡易、
+          `りゅうりょく` は打ち間違いで 入力 かもと出る。
+          **ここまで揃うなら 簡易入力 に導いてよいはず**」
+
+    F2 の単位は 48-RI で `かんい｜りゅうりょく` に切れているのに、
+    **エンジンはその切り方を知らなかった**（48-GN の食い違い）。
+    芯・窓は「連続まるごと」と助詞での区切り（48-PI）しか試さない。
+
+        かんいりゅうりょく → **簡易入力**
+
+    ### 門（**熟語＋熟語の形だけ**に絞る）
+
+        H  既知の読み・**3字以上**（本人の語彙で立つ／世の読み）
+           ——48-RI と同じ形。**R まるごとが語なら割らない**
+        T  **4字以上**・頭が小書きでない
+        H の漢字  `_known_head_kanji`（本人の語 → 段と費用）
+        T の直し  **既存のかな連続の道**——`find_readings` で
+                  **1手以内**の読みにし、`_convert_odd_kana_run` で漢字
+        両方      **2字の漢語で、段 ≤ 2**（`kango_tier` が知っている）
+        複合      `oddness.is_odd_run(H+T)` が **[]**
+
+    ★★ **非対称**（頭が既知のときだけ）。逆向き（T が既知で H を
+    直す）は作らない——`きょじえ` 単独は `きょぞう` に直るので
+    `きょじえかくらん → 巨像攪乱` を作ってしまう。
+
+    戻り値: 直した表記か None。
+    """
+    if not run or len(run) < 7:
+        return None
+    # ★★ **かぎ括弧にちょうど囲まれた読みは「引用」**——触らない
+    # （項目48-RK・実機メモで測って足した門）。うにさんのメモは
+    # **誤字の話を書いたメモ**なので、読みを括弧に入れて引く形が出る:
+    #
+    #     「やがいぶんしょう」という誤入力  → **「野外文章」という誤入力**
+    #     「かんいりゅうりょく」を確認しました → **「簡易入力」を…**
+    #
+    # 直すと**文の意味が壊れる**（「誤入力」の例が正しい形になる）。
+    # 48-LS「読みの並記は書きたい形」と同じ考え方——
+    # **括弧はかなで書きたい意図の証拠**。
+    if before in _QUOTE_OPEN and after in _QUOTE_CLOSE and before:
+        return None
+    if find_readings is None:
+        # **同じ1本を使う**（48-GN）——呼び手が持っていない道
+        # （`_reopen_odd_chunk`）からも同じ手で探す
+        try:
+            from vocabulary import find_known_readings_flex as find_readings
+        except Exception:
+            return None
+    if not all(is_hiragana(c) for c in run):
+        return None
+    try:
+        import kango_tier as _kt
+        import oddness as _odd
+    except Exception:
+        return None
+    # **まるごとが語なら割らない**
+    try:
+        if store.has_reading(run):
+            return None
+    except Exception:
+        pass
+    for hl in range(min(len(run) - 4, 6), 2, -1):
+        head, tail = run[:hl], run[hl:]
+        if tail[0] in _SMALL_KANA_HEADS:
+            continue
+        known_head = False
+        try:
+            known_head = bool(store.has_reading(head))
+        except Exception:
+            known_head = False
+        if not known_head and dict_index is not None:
+            try:
+                known_head = bool(dict_index.is_world_reading(head))
+            except Exception:
+                known_head = False
+        if not known_head:
+            continue
+        hk = _known_head_kanji(head, store)
+        if not hk or _kt.tier(hk) > 2:
+            continue
+        # --- T を既存の道で直す（1手以内・同じ上限）---
+        best_t = None
+        try:
+            cands = list(find_readings(tail, store, max_dist))
+        except Exception:
+            cands = []
+        for rd, dist, edits in cands[:8]:
+            if edits > 1 or not rd:
+                continue
+            # ★★ **字を落とす直しは採らない**（測って足した門・48-RK）。
+            # 長さが変わる直し＝挿入か脱落で、**残りの一部を捨てて**
+            # 熟語に見せかけることになる。自分で作った反例で出た:
+            #     かんいけいさんき → **簡易計算**（`き` を落とした）
+            #     ほぞんとひょうじ → **保存表示**（助詞 `と` を飲んだ）
+            # 的（`りゅうりょく → にゅうりょく`・
+            # `にゅうりゅく → にゅうりょく`）は**どちらも同じ長さ**。
+            if len(rd) != len(tail):
+                continue
+            try:
+                got = _convert_odd_kana_run(rd, store, dict_index)
+            except Exception:
+                got = None
+            if not got:
+                continue
+            tk = got[0] if isinstance(got, tuple) else got
+            if not tk or len(tk) != 2 or not all(is_kanji(c) for c in tk):
+                continue
+            if _kt.tier(tk) > 2:
+                continue
+            best_t = tk
+            break
+        if not best_t:
+            continue
+        whole = hk + best_t
+        try:
+            if _odd.is_odd_run(whole, tokenize_fn, store=store,
+                               dict_index=dict_index):
+                continue        # できた形そのものが異様なら採らない
+        except Exception:
+            continue
+        _trace('かな連続',
+               f'{run!r} → {whole!r}（既知の頭 {head!r}＝{hk!r} で割り、'
+               f'残り {tail!r} を直して {best_t!r}・項目48-RK）')
+        return whole
+    return None
+
+
+def _kana_run_is_odd_by_grammar(run, dict_index, store):
+    """
+    **そのかな連続に①が立っているか**（項目48-RW・2026-09-05）。
+
+    かな連続の①は `oddness.is_odd_run`（漢字・カタカナの対）ではなく
+    **48-KS の品詞文法**（`pos_grammar.odd_kana_spans`）で立つ——画面の
+    紫（`_odd_spans_for_line`）と同じ判定を借りる（48-GN。ここで別の
+    判定を書かない）。連続をまるごと覆う印が在れば True。
+    """
+    if not run or dict_index is None:
+        return False
+    if os.environ.get('CN_POS_ODD') == '0':
+        return False
+    try:
+        import pos_grammar as _pg
+        for a, b in _pg.odd_kana_spans(run, dict_index, store):
+            if a <= 0 and b >= len(run):
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _convert_fixed_kana_run(text, store, dict_index):
+    """
+    **A の道で直した読み（かな→かな）を、正しく打ったかなと同じ変換の道に
+    通す**（項目48-RW'・2026-09-05）。
+
+        おくゆくこてい → おくゆきこてい（読みは直った）   → **奥行固定**
+        かすくにん   → かくにん                           → **確認**
+
+    正しく打った `おくゆきこてい`・`かくにん` は 48-LD（語＋語で組む）・
+    48-MI（かなのまま残った漢語を変換）で漢字になるのに、**打ち間違えて
+    直された読みはかなのまま**だった——変換の道は**元の行**のかな連続しか
+    見ないから。同じ2つの関数を、直した読みだけに掛ける（判定は借りる。
+    新しい判定は作らない）。打ち間違いの手（48-KV・う挿入…）は掛けない
+    ——直しに直しを重ねると連鎖する。
+    戻り値: 変換した字。変わらなければ None。
+    """
+    if (not text or store is None or dict_index is None
+            or not all(is_hiragana(c) or c == 'ー' for c in text)):
+        return None
+    # ★★ **直した読みは、正しく打った読みより証拠が弱い**——測って絞った
+    # （2026-09-05・readcheck）。最初は 48-KX'（語幹＋接尾）と 48-MI を
+    # そのまま掛けたら、育ちで `きょううせい → きょうせい → **今日性**`、
+    # 初期で `ちゅうし → 中止`・`きゅうけい → 休憩` のように**同音の顔を
+    # 決めてしまう形が 60 件**出た（材料の表記と違う顔＝当て推量）。
+    # 掛けるのは 48-MI だけ、しかも**その読みの漢字の顔がただ1つ**か、
+    # **本人の語彙にその表記が solid で在る**ときだけ。語幹＋接尾は掛けない
+    fixes = []
+    try:
+        got = _kango_kana_fixes(text, store, dict_index) or []
+    except Exception:
+        got = []
+    for f in got:
+        if len(f) < 3 or f[0] >= f[1]:
+            continue
+        seg = text[f[0]:f[1]]
+        ok = False
+        try:
+            if any(e.get('surface') == f[2] and e.get('count', 0) >= 2
+                   for e in store.lookup(seg)):
+                ok = True
+            elif len(_kanji_faces_for_reading(seg, store, dict_index)) == 1:
+                ok = True
+        except Exception:
+            ok = False
+        if not ok:
+            continue
+        if any(not (f[1] <= s0 or f[0] >= e0) for s0, e0, _x in fixes):
+            continue
+        fixes.append((f[0], f[1], f[2]))
+    if not fixes:
+        # **そのまま語＋語で組める**（48-LD の「そのまま」の枝と同じ判定
+        # `_two_word_faces`——`おくゆきこてい → 奥行固定`）。門も同じ:
+        # 連なりそのものが語彙の語なら 48-MI の持ち場・機能語の並びなら
+        # 触らない・同じ字の連続（連打の跡）は触らない
+        try:
+            if any(e.get('count', 0) >= 2 for e in store.lookup(text)):
+                return None
+            if _is_functional_strict(text):
+                return None
+        except Exception:
+            return None
+        if any(text[x] == text[x + 1] for x in range(len(text) - 1)):
+            return None
+        faces = _two_word_faces(text, 2, store)
+        if len(faces) == 1:
+            fx = next(iter(faces))
+            return fx if fx != text else None
+        return None
+    chars = list(text)
+    for s, e, fx in sorted(fixes, reverse=True):
+        chars[s:e] = list(fx)
+    out = ''.join(chars)
+    return out if out != text else None
+
+
+def _hand_boundaries_ok(tok_info, alts_per_tok, rd, fixed, bounds_in_fixed):
+    """
+    **手を当てていない「読みの立つ語」の読みの中に、組の境目を置かない**
+    （項目48-RV''・2026-09-05・うにさんの指定「品詞の判定やつながりを
+    重要視してください」）。
+
+    `背中セク` を `はいなかせく` に開き、手で `はいなかよく` にして
+    `ハイ｜仲良く` に組む——境目 2 は `背中` の読み `はいなか` の**中**。
+    手は断片 `セク` に当てたのに、組は手を当てていない `背中` の読みを
+    切り直している。これは当て推量（48-ND「書かれ方は変えない」を
+    **読みの切れ目**にも当てる）。
+
+    守るのは**読みの立つ語**だけ——48-OR で格下げした固有名詞（`田部井`・
+    `右田`）は守らない（`たぶ｜いどう`・`みぎ｜だぶるくりっく` は IME の
+    切り方が間違っていた的）。**手が触った語**も守らない（`解析課背中セク`
+    の `背中` は手で `が`・`ながく` に変わる側）。境目が手の中に落ちる
+    ときは意見なし。
+
+    tok_info:        [(表記, 読みが立つか), ...]（塊のトークン順・格下げ後）
+    alts_per_tok:    トークンごとの読みの候補（`rd` はこの積のどれか）
+    rd / fixed:      開いた読み／手を当てた読み
+    bounds_in_fixed: 組の境目（`fixed` の上の位置）の並び
+    戻り値: True＝置いてよい（または判断できない＝意見なし）
+    """
+    if (not tok_info or not alts_per_tok
+            or len(tok_info) != len(alts_per_tok) or not bounds_in_fixed):
+        return True
+
+    # rd をトークンに沿って割る。読みの候補で当たればそれを、当たらない
+    # **漢字の語**は「残りのトークンが揃う長さ」を取る（開いた読みには
+    # `kanji_guess` の1字ずつの音訓〔はい＋なか〕から来たものが在り、
+    # トークンの候補（せなか）とは揃わない——**後ろの断片の読み（せく）
+    # は確定しているので、そこから逆算できる**）
+    n_tok = len(alts_per_tok)
+
+    def _align(k, pos):
+        if k == n_tok:
+            return [] if pos == len(rd) else None
+        alts = alts_per_tok[k]
+        for a in alts:
+            if a and rd.startswith(a, pos):
+                rest = _align(k + 1, pos + len(a))
+                if rest is not None:
+                    return [(pos, pos + len(a))] + rest
+        sf = tok_info[k][0]
+        if sf and any(is_kanji(c) for c in sf):
+            for ln in range(1, len(rd) - pos + 1):
+                rest = _align(k + 1, pos + ln)
+                if rest is not None:
+                    return [(pos, pos + ln)] + rest
+        return None
+
+    spans = _align(0, 0)
+    if spans is None:
+        return True                     # 揃え方が分からない＝意見なし
+    try:
+        import difflib as _dl
+        ops = _dl.SequenceMatcher(None, rd, fixed,
+                                  autojunk=False).get_opcodes()
+    except Exception:
+        return True
+    touched = set()
+    for tag, i1, i2, _j1, _j2 in ops:
+        if tag != 'equal':
+            touched.update(range(i1, i2))
+    guarded = [(a, b) for (sf, known), (a, b) in zip(tok_info, spans)
+               if known and b - a >= 2
+               and not any(a <= p < b for p in touched)]
+    if not guarded:
+        return True
+    for hl in bounds_in_fixed:
+        q = None
+        for tag, i1, i2, j1, j2 in ops:
+            if j1 <= hl <= j2:
+                if tag == 'equal':
+                    q = i1 + (hl - j1)
+                elif hl == j1:
+                    q = i1
+                elif hl == j2:
+                    q = i2
+                break
+        if q is None:
+            continue                    # 境目が手の中＝意見なし
+        for a, b in guarded:
+            if a < q < b:
+                return False
+    return True
+
+
+def _born_positions(before, after):
+    """
+    **手が変えた位置**（`after` の中の添字の集合・項目48-RQ・2026-09-05）。
+
+        かいせきかせなかせく → かいせきがながく   {4, 6}（2つの が）
+        りゅうりょく → にゅうりょく               {0}
+
+    手の種類を問わず、**2つの読みの差分**から採る（どの手が生んだかは
+    問わない——「その位置の字は打たれたままではない」ことだけが要る）。
+    同じ読みなら空。
+    """
+    if not before or not after or before == after:
+        return set()
+    try:
+        import difflib as _dl
+        out = set()
+        for tag, _i1, _i2, j1, j2 in _dl.SequenceMatcher(
+                None, before, after, autojunk=False).get_opcodes():
+            if tag != 'equal':
+                out.update(range(j1, j2))
+        return out
+    except Exception:
+        return set()
+
+
+def _word_born_particle_fix(run, store, dict_index, tokenize_fn):
+    """
+    **印のキーの隣を叩いた形を巻き戻し、語＋（手が生んだ1字格助詞）＋語
+    に組めるなら、それを採る**（項目48-RQ・2026-09-05・うにさんの指定
+    「背中セクよりも先に、せ が ゛ の隣接打ち間違いを疑う。解析課の か が
+    が に繋がれば接続詞として自然で、後ろの文とも繋がる」）。
+
+        かいせきかせなかせく  →  かいせき[か゛]な[か゛]く
+                              →  かいせきがながく  →  解析が長く
+
+    A/B の道（かな連続）の**最後の手**——48-PI・48-RK と同じ構え
+    （この連続で何も直らなかったときだけ）。D の道（異様の塊）は
+    `_reopen_odd_chunk` → `_convert_odd_kana_run(born=…)` で**同じ門**を
+    通る（48-GN——判定は `_convert_odd_kana_run` の中の1か所）。
+
+    仮説は `_mark_slip_repairs`（48-FX／48-OM）を借りる。**同じ誤りの
+    繰り返し（×2）も1つの仮説**として作る（1回のものを先に・費用順）。
+    受け入れは `_convert_odd_kana_run(only_born_particle=True)`——
+    語＋助詞＋語の枝**だけ**を開く（丸ごと1語・語＋語の枝は、この道では
+    開かない。そちらは `rebuild_window_core` の持ち場）。
+    """
+    if not run or len(run) < 6 or store is None or dict_index is None:
+        return None
+    try:
+        if _chunk_is_intact(run, tokenize_fn):
+            return None                     # 48-KI の入口
+    except Exception:
+        pass
+    variants = []
+    seen = {run}
+    try:
+        for v1 in _mark_slip_repairs(run):
+            if v1 not in seen:
+                seen.add(v1)
+                variants.append(v1)
+        for v1 in list(variants):
+            for v2 in _mark_slip_repairs(v1):
+                if v2 not in seen:
+                    seen.add(v2)
+                    variants.append(v2)
+    except Exception:
+        return None
+    for v in variants:
+        born = _born_positions(run, v)
+        if not born:
+            continue
+        try:
+            conv = _convert_odd_kana_run(
+                v, store, dict_index, born=born,
+                tokenize_fn=tokenize_fn, only_born_particle=True)
+        except Exception:
+            conv = None
+        if conv and conv[0] and conv[0] != run:
+            _rep = '・同じ誤りの繰り返し' if len(born) > 1 else ''
+            _trace('かな連続', f'{run!r} → {v!r}（印のキーの隣{_rep}）'
+                               f'に開き、語＋手が生んだ助詞＋語 で '
+                               f'{conv[0]!r}（項目48-RQ）')
+            return conv[0]
+    return None
+
+
 def _convert_odd_kana_run(text, store, dict_index, strict_anchor=False,
                           index_anchor=False,
-                          vocab_only=False, short_head=False):
+                          vocab_only=False, short_head=False,
+                          born=None, keep_head=None, tokenize_fn=None,
+                          only_born_particle=False):
     """
     **異様と判定した かな連続を、漢字に変換する**（項目48-KV・⑤）。
 
@@ -14034,16 +16164,33 @@ def _convert_odd_kana_run(text, store, dict_index, strict_anchor=False,
     def _tail_kana_ok(i):
         """位置 i から先が機能語・1字の格助詞だけで埋まるか。"""
         ok = [False] * (n + 1)
+        multi = [False] * (n + 1)   # 2字以上の機能語を使った道が在るか
         ok[i] = True
         for j in range(i, n):
             if not ok[j]:
                 continue
             if text[j] in _p1:
                 ok[j + 1] = True
+                if multi[j]:
+                    multi[j + 1] = True
             for ln in range(2, min(10, n - j) + 1):
                 if text[j:j + ln] in _funcs:
                     ok[j + ln] = True
-        return ok[n]
+                    multi[j + ln] = True
+        if not ok[n]:
+            return False
+        # **尾が接頭の お で終わる形は無い**（項目48-RV・2026-09-05・
+        # `由良仮名 → 有料かお`——`かお` を 助詞か＋接頭お の機能語の並びと
+        # 認めていた。お は後ろに語が要る）
+        if i < n and text[n - 1] == 'お':
+            return False
+        # **1字の助詞だけの尾は、2字までは認めない**（同・`有料かや`——
+        # か＋や。48-RS「1字の機能語だけの説明は認めない」を尾にも。
+        # 1字の尾（`〜に`・`〜を`）はよい。2字以上なら 2字以上の機能語
+        # （して・になる・ます…）を1つは使うこと）
+        if n - i >= 2 and not multi[n]:
+            return False
+        return True
 
     def _content_piece(frag):
         """区切り1つぶんの表記（語彙優先・無ければ辞書の先頭）。
@@ -14233,7 +16380,8 @@ def _convert_odd_kana_run(text, store, dict_index, strict_anchor=False,
         # 名詞の直後には来ない。参考＋になる の に は格助詞）
         if _idx and not _noun_tail_start(text[ln1:]):
             continue
-        if not _weak and not _short and _tail_kana_ok(ln1):
+        if (not _weak and not _short and not only_born_particle
+                and _tail_kana_ok(ln1)):
             out = head + text[ln1:]
             return (out, ln1) if out != text else None
         # **広げた錨（2字の漢語）は、(い) の枝へは渡さない**（項目48-MK）。
@@ -14250,10 +16398,47 @@ def _convert_odd_kana_run(text, store, dict_index, strict_anchor=False,
         # 後期 に置き換えた）・`きゃらくたででぃすぷれい → キャラクタで
         # ディスプレイ`（重複打鍵の で を助詞と読んだ）が出た。的の
         # `解析課背中セク → 解析が長く` は 48-ND(b) でも落ちる。
-        # `_gap` は 0 だけ（枝は残してある。開けるときは 1 も回す）
-        for _gap in (0,):
+        # `_gap` は 0 と 1（項目48-RQ・2026-09-05・うにさんの指定
+        # 「背中セクよりも先に、せ が ゛ の隣接打ち間違いを疑う。解析課の
+        # か が が に繋がれば接続詞として自然で、後ろの文とも繋がる」）。
+        # **1 は「手が生んだ助詞」のときだけ開ける**——N2 を閉じた2件
+        # （`うづる**に**行きます`・`きゃらくた**で**でぃすぷれい`）は
+        # **打たれたままの助詞**だった。今回の的 `かいせき**が**ながく` の
+        # が は か＋せ（゛の隣）から手が生んだ字。**手が、語の境目に
+        # ちょうど格助詞を生む**のは偶然では起きにくい——それが
+        # 「接続詞としてより自然」の中身。門は6つ（全部が立つときだけ）:
+        #   (i)   助詞の位置が `born`（手が変えた位置）に入っている
+        #   (ii)  その字が1字の格助詞（`_p1`）
+        #   (iii) 左は実績2以上の錨（弱い先頭・索引の錨では開けない）。
+        #         元の塊の頭が漢字で手を当てていないなら、その表記を保つ
+        #         （`keep_head`——解析 を 会席・懐石 にしない・48-IU）
+        #   (iv)  右は強い語（`_strong_piece`）
+        #   (v)   組んだ読み全体が `_looks_like_valid_japanese`
+        #   (vi)  助詞の直後の字が助詞と同じ（でで）なら開けない
+        #         （重複打鍵の持ち場）
+        for _gap in (0, 1):
             if _gap and (ln1 >= n or text[ln1] not in _p1):
                 continue
+            if _gap:
+                if not born or ln1 not in born:
+                    continue                                    # (i)
+                if _weak or _idx or not any(
+                        e.get('count', 0) >= 2 for e in entries):
+                    continue                                    # (iii)
+                if ln1 + 1 < n and text[ln1 + 1] == text[ln1]:
+                    continue                                    # (vi)
+                if tokenize_fn is None:
+                    continue                                    # (v)
+                try:
+                    if not _looks_like_valid_japanese(text, tokenize_fn):
+                        continue
+                except Exception:
+                    continue
+            elif only_born_particle:
+                continue            # この呼び手は 48-RQ の枝だけを使う
+            _head_use = head
+            if _gap and keep_head and keep_head[0] == first:
+                _head_use = keep_head[1]
             _base = ln1 + _gap
             for ln2 in range(2, min(10, n - _base) + 1):
                 _frag = text[_base:_base + ln2]
@@ -14267,13 +16452,49 @@ def _convert_odd_kana_run(text, store, dict_index, strict_anchor=False,
                     piece = _content_piece(_frag)
                 if piece is None:
                     continue
+                # **2つ目がかなだけなら部品ではない**（項目48-RV・2026-09-05・
+                # `由良仮名 → 有料かお`——語彙に在るかな表記 `かお` を2つ目の
+                # 語に採っていた）。かなのまま残す部分は尾の門
+                # （`_tail_kana_ok`）が見る所で、語の組み立ての部品は
+                # 漢字かカタカナに限る（`_two_word_faces` と同じ考え）
+                if all(is_hiragana(c) or c == 'ー' for c in piece):
+                    continue
+                # **読みが2字以下の部品に手の変更が掛かっているなら採らない**
+                # （項目48-RV・`由良仮名 → 有料カニ`——`かな` の な を に に
+                # 変えて `カニ`。半分が作り物の2字は証拠にならない。手が触って
+                # いない2字（`入力ミス` の ミス）と、3字以上（`タブ移動して` の
+                # いどう）は今までどおり）
+                if (born and ln2 <= 2
+                        and any(_base <= _p < _base + ln2 for _p in born)):
+                    continue
+                # ★★ **品詞のつながり**（項目48-RV'・2026-09-05・うにさんの
+                # 指定「品詞の判定やつながりを重要視してください」）。
+                # 助詞を挟まない 語＋語 は**名詞＋名詞（複合名詞）**だけ。
+                # `背中セク → はいながく → ハイ＋長く`（名詞に形容詞の
+                # 連用形が直付き）は語ではない。`解析が長く` は が を挟む
+                # （`_gap == 1`）ので用言が続いてよい
+                if not _gap and tokenize_fn is not None:
+                    try:
+                        _tp = tokenize_fn(piece)
+                    except Exception:
+                        _tp = None
+                    if _tp:
+                        _pp = (_tp[0][1] or '')
+                        if (not _pp.startswith('名詞')
+                                or _pp.startswith('名詞:非自立')):
+                            continue
                 # **漢字の短い先頭は、2つ目が世の中のカタカナ語のときだけ**
                 # （項目48-OR(c)）
                 if _short_kanji and piece != _world_katakana_piece(_frag):
                     continue
                 if not _tail_kana_ok(_base + ln2):
                     continue
-                out = head + text[ln1:_base] + piece + text[_base + ln2:]
+                out = (_head_use + text[ln1:_base] + piece
+                       + text[_base + ln2:])
+                if _gap:
+                    _trace('かな連続', f'{text!r} → 語＋手が生んだ助詞'
+                                       f'（{text[ln1]}）＋語 で {out!r}'
+                                       f'（項目48-RQ）')
                 return (out, ln1) if out != text else None
     return None
 
@@ -15176,6 +17397,142 @@ def _insert_na_ni(line, tokenize_fn):
     return out
 
 
+#: **人を「を」で受けない動詞**（項目48-SA・2026-09-06）。語幹 → 五段の
+#: 活用の列（'' は一段）。'サ変' は 名詞:サ変接続 の語。閉じた小さな表——
+#: **叙述・記述の動詞**だけ（話す・語る・述べる・言う・書く・読む・記す・
+#: 伝える・説明・報告・記述）。「人を呼ぶ／探す／見る」は正しい形なので
+#: 入れない（うにさんの指定「`都築を話す`、人名/を話す、というのは文が
+#: 成立していない」）
+_NO_PERSON_OBJECT_VERBS = {
+    '話': 'さしすせそ', '語': 'らりるれろ', '書': 'かきくけこ',
+    '読': 'まみむめも', '言': 'わいうえお', '記': 'さしすせそ',
+    '述べ': '', '伝え': '', '説明': 'サ変', '報告': 'サ変', '記述': 'サ変',
+}
+
+
+def _verb_takes_no_person_object(tok):
+    """そのトークンが、人を を で受けない叙述の動詞か（48-SA の表）。"""
+    sf, pos = (tok[0] or ''), (tok[1] or '')
+    for stem, row in _NO_PERSON_OBJECT_VERBS.items():
+        if not sf.startswith(stem):
+            continue
+        rest = sf[len(stem):]
+        if row == 'サ変':
+            if rest == '' and pos.startswith('名詞:サ変接続'):
+                return True
+            continue
+        if not pos.startswith('動詞'):
+            continue
+        if row == '':
+            if rest in ('', 'る'):
+                return True
+            continue
+        if rest and (rest[0] in row or rest[0] in 'っいん'):
+            return True
+    return False
+
+
+def _person_object_fixes(line, store, tokenize_fn, dict_index=None):
+    """
+    **人名（姓）＋ を ＋ 叙述の動詞 は文が成立しない**（項目48-SA・
+    2026-09-06・うにさんの指定「`都築を話す`、人名/を話す、というのは
+    文が成立していない」）。
+
+        都築を話す → **続きを話す**
+
+    ①（品詞のつながり）: 解析が `都築` を人名:姓と読み、直後が `を`、
+    その直後が **話す・語る・書く・読む…**（人を目的語に取らない
+    叙述の動詞・`_NO_PERSON_OBJECT_VERBS`）なら、その姓は**同音の
+    普通語の変換違い**。② 姓の読み（つづき）に開き、③ 手は要らない
+    （読みは正しい）、④ 顔は 本人の語彙の solid → 索引の顔（段1が
+    ただ1つ） → 同梱の表の先頭（費用最小・漢字を含む・固有名詞でない）。
+    顔が無ければ**紫だけ**（①は立てる）。
+
+    門: 漢字だけの姓／**本人の語彙にその表記が solid なら意見しない**
+    （登録した姓・48-JL）／直した塊に異様さが残らないこと。
+    戻り値: [(始まり, 終わり, 直した表記, 種別), ...]
+    """
+    if tokenize_fn is None or not line or 'を' not in line:
+        return []
+    try:
+        toks = [t for t in tokenize_fn(line) if t[0]]
+    except Exception:
+        return []
+    out = []
+    for k in range(len(toks) - 2):
+        a, b, c = toks[k], toks[k + 1], toks[k + 2]
+        ap = a[1] or ''
+        sf = a[0] or ''
+        if '固有名詞' not in ap or '人名' not in ap:
+            continue
+        if len(sf) < 2 or not all(is_kanji(ch) for ch in sf):
+            continue
+        if (b[0] or '') != 'を' or not (b[1] or '').startswith('助詞'):
+            continue
+        if not _verb_takes_no_person_object(c):
+            continue
+        try:
+            if int(a[4]) != int(b[3]) or int(b[4]) != int(c[3]):
+                continue
+        except Exception:
+            continue
+        from morphology import katakana_to_hiragana as _k2h
+        rd = _k2h(a[2] or '') if len(a) > 2 else ''
+        if not rd or not all(is_hiragana(ch) for ch in rd):
+            continue
+        try:
+            ents = list(store.lookup(rd))
+        except Exception:
+            ents = []
+        if any(e.get('surface') == sf and e.get('count', 0) >= 2
+               for e in ents):
+            continue                    # 登録した姓（48-JL）——意見しない
+        _trace('型', f'{sf!r}（人名:姓）＋を＋{c[0]!r}（叙述の動詞）は文が'
+                     f'成立しない。同音の普通語の変換違いと見る（項目48-SA）')
+        face = None
+        solid = sorted({e.get('surface') for e in ents
+                        if e.get('count', 0) >= 2 and e.get('surface')
+                        and e.get('surface') != sf})
+        if len(solid) == 1:
+            face = solid[0]
+        if face is None and dict_index is not None:
+            try:
+                face = _index_face(rd, store, dict_index)
+            except Exception:
+                face = None
+        if face is None:
+            try:
+                _tf = [x for x in table_surfaces_for_reading(rd)
+                       if x != sf and any(is_kanji(ch) for ch in x)]
+            except Exception:
+                _tf = []
+            if _tf:
+                face = _tf[0]           # 費用の低い順の先頭
+        s0, e0 = int(a[3]), int(a[4])
+        if face is None or face == sf:
+            if (s0, e0) not in _ODD_PENDING:
+                _ODD_PENDING.append((s0, e0))
+            continue
+        fixed = line[:s0] + face + line[e0:]
+        try:
+            import oddness as _odd_sa
+            if _odd_sa.is_odd_run(fixed[s0:int(c[4])], tokenize_fn,
+                                  store=store, dict_index=dict_index):
+                if (s0, e0) not in _ODD_PENDING:
+                    _ODD_PENDING.append((s0, e0))
+                continue
+            _t2 = [t for t in tokenize_fn(fixed) if t[0]]
+            if any((t[0] == face and '固有名詞' in (t[1] or ''))
+                   for t in _t2):
+                if (s0, e0) not in _ODD_PENDING:
+                    _ODD_PENDING.append((s0, e0))
+                continue
+        except Exception:
+            continue
+        out.append((s0, e0, face, 'その他'))
+    return out
+
+
 def _katakana_go_after_fixes(line, tokenize_fn):
     """
     **カタカナのサ変名詞に直付きの接尾「語」は「後」**（項目48-PQ・
@@ -15831,6 +18188,46 @@ def _compose_kana_run_fixes(line, store, dict_index=None, with_head=False):
     return out
 
 
+def _two_word_faces(v, lo_a, store):
+    """
+    かな連なり v を「語（実績 lo_a 以上）＋語（実績2以上）」に割る
+    （48-LD の中身を持ち上げたもの・項目48-RW'・2026-09-05。
+    `_kana_run_hand_fixes` の入れ子だったが、**直した読みを変換の道に
+    通す** `_convert_fixed_kana_run` からも同じ判定を借りるため）。
+    両半分とも**3字以上**（2字のかけらは 差し退化・再度医科 の junk を
+    作った・実測）。どちらの半分も表記が優勢（2位の20倍）なときだけ。
+    戻り値: {表記: 実績}
+    """
+    got = {}
+    if store is None or not v:
+        return got
+    for sp in range(3, len(v) - 2):
+        va, vb = v[:sp], v[sp:]
+        try:
+            sa = sorted(((e.get('count', 0), e.get('surface'))
+                         for e in store.lookup(va)
+                         if e.get('count', 0) >= lo_a
+                         and e.get('surface')), reverse=True)
+            sb = sorted(((e.get('count', 0), e.get('surface'))
+                         for e in store.lookup(vb)
+                         if e.get('count', 0) >= 2
+                         and e.get('surface')), reverse=True)
+        except Exception:
+            continue
+        if not sa or not sb:
+            continue
+        if len(sa) > 1 and sa[0][0] < 20 * sa[1][0]:
+            continue
+        if len(sb) > 1 and sb[0][0] < 20 * sb[1][0]:
+            continue
+        if not any(is_kanji(c) for c in sa[0][1]) \
+                or not any(is_kanji(c) for c in sb[0][1]):
+            continue
+        face = sa[0][1] + sb[0][1]
+        got[face] = max(got.get(face, 0), min(sa[0][0], sb[0][0]))
+    return got
+
+
 def _kana_run_hand_fixes(line, store, dict_index=None):
     """
     **項目48-LD: 素のかな連なりに手を1つ加えると、優勢な単位**
@@ -15909,37 +18306,11 @@ def _kana_run_hand_fixes(line, store, dict_index=None):
             continue
 
         def _two_word(v, lo_a):
-            """v を「語（実績 lo_a 以上）＋語（実績2以上）」に割る。
-            両半分とも**3字以上**（2字のかけらは 差し退化・再度医科 の
-            junk を作った・実測）。どちらの半分も表記が優勢（2位の
-            20倍）なときだけ。戻り値: {表記: 実績}"""
-            got = {}
-            for sp in range(3, len(v) - 2):
-                va, vb = v[:sp], v[sp:]
-                sa = sorted(((e.get('count', 0), e.get('surface'))
-                             for e in store.lookup(va)
-                             if e.get('count', 0) >= lo_a
-                             and e.get('surface')), reverse=True)
-                sb = sorted(((e.get('count', 0), e.get('surface'))
-                             for e in store.lookup(vb)
-                             if e.get('count', 0) >= 2
-                             and e.get('surface')), reverse=True)
-                if not sa or not sb:
-                    continue
-                if len(sa) > 1 and sa[0][0] < 20 * sa[1][0]:
-                    continue
-                if len(sb) > 1 and sb[0][0] < 20 * sb[1][0]:
-                    continue
-                # **両半分とも漢字を含む表記のときだけ**（まるいかっこ →
-                # 丸いカッコ・ながい → 長い〔これから が かなのまま〕の
-                # ような、かな書きの言い回しへの当て推量を作らない・実測)
-                if not any(is_kanji(c) for c in sa[0][1]) \
-                        or not any(is_kanji(c) for c in sb[0][1]):
-                    continue
-                face = sa[0][1] + sb[0][1]
-                got[face] = max(got.get(face, 0),
-                                min(sa[0][0], sb[0][0]))
-            return got
+            """語（実績 lo_a 以上）＋語（実績2以上）。判定は
+            `_two_word_faces`（持ち上げた・項目48-RW'）の1本——
+            「両半分とも漢字を含む表記」（まるいかっこ → 丸いカッコ・
+            ながい → 長い の当て推量を作らない）もそちらに在る。"""
+            return _two_word_faces(v, lo_a, store)
 
         # **そのままで「語＋語」に割れて読める形は、壊す対象ではない**
         # （ひきつぎしりょう ＝ ひきつぎ82＋しりょう21。手の版は
@@ -15956,6 +18327,12 @@ def _kana_run_hand_fixes(line, store, dict_index=None):
                            f'組んだ・⑤変換が既定・項目48-LD）')
                     out.append((a0, j, fix0, 'かな入力'))
             continue
+        # ★★ **回数を廃したので、この敷居は越えられない**
+        # （項目48-QG'）。`base_count` も `faces` の count も 2 が
+        # 上限で、`need` は 10 以上。＝**実績で立つ面は無くなり**、
+        # 表（世の中で1語か）と索引の顔で立つ面だけが残る。
+        # 倒れる先は「面が無い → None／紫」＝安全側。
+        # **初期状態では前からそうだった**（初期の count は 1〜3）。
         need = max(10, 20 * base_count)
         faces = {}
         seen = set()
@@ -16521,6 +18898,17 @@ def _d42_free_kanji(run):
     return any(len(t[0]) == 1 and t[0] in free for t in run)
 
 
+def _d42_has_yougen(text, tokenize_fn):
+    """切り直した形に**用言（動詞・形容詞）**が居るか（項目48-SW）。"""
+    if not text or tokenize_fn is None:
+        return False
+    try:
+        toks = list(tokenize_fn(text) or ())
+    except Exception:
+        return False
+    return any((t[1] or '').startswith(('動詞', '形容詞')) for t in toks)
+
+
 def _d42_covered(text, store):
     """
     切り直した形が、**語彙の語と1字の助詞だけ**で埋まっているか。
@@ -16683,6 +19071,9 @@ def _resegment_fixes(line, tokenize_fn, store, dict_index=None,
             # 数え方は異様ではない
             if '数' in pos[-1] or '助数詞' in pos[-1]:
                 continue
+            # （頭が数詞の連なり〔`十六茶`＝十｜六｜茶〕を数え方として外すのは
+            #   **測って外した**——設計42 の的 `二階席 → に解析` も 二｜階｜席 で
+            #   頭が数詞。`十六茶` の紫は残す・項目48-SW'）
             if i > 0 and '数' in (tokens[i - 1][1] or ''):
                 continue
             if not any('接尾' not in p and '数' not in p
@@ -16691,7 +19082,19 @@ def _resegment_fixes(line, tokenize_fn, store, dict_index=None,
             # **固有名詞が混じっていたら判定しない**（`田無駅`
             # `玉子五十個入`の`入`）。48-JL の「姓の保護」と同じ考え——
             # 辞書に無くて当然の名前を異様と呼ばない。
-            if any('固有名詞' in p for p in pos):
+            # ★★ ただし**信用できる札のときだけ**（項目48-RN）——
+            # `右田`・`ブル` のような当て推量で降りると、48-OR が
+            # ①で開けた道がここで塞がる（学び22）。
+            # **1字の名詞＋接尾は語の作り**（項目48-SW・2026-09-06。
+            # 車用・紙製・目印。`車用 → 来る迷う`・`腰楽 → 越しらく` は
+            # 育ちで実測。1字だから「立っていない」のではなく、接尾が
+            # 付いて1語になっている）
+            # **読みの立つ名詞＋接尾は語の作り**（48-SW'。`二つ目`・`三つ目`
+            # は 二つ(名詞)＋目(接尾) で紫が立っていた。1字に限らない）
+            if (L == 2 and '接尾' in pos[1] and run[0][0]
+                    and (len(run[0]) <= 5 or run[0][5])):
+                continue
+            if _has_trusted_proper_noun(run, store, dict_index):
                 continue
             # **何にでも自由に付く1字**（位置・区画・集合）が居るなら
             # 異様ではない（`欄内` `前の`）。**表は `oddness` のものを
@@ -16718,6 +19121,12 @@ def _resegment_fixes(line, tokenize_fn, store, dict_index=None,
             try:
                 cut = _cut(reading, store)
             except Exception:
+                cut = None
+            # **切り直しは名詞（＋助詞）の並びであること**（項目48-SW）。
+            # 設計42 は「読みを語の境目で切り直す」道で、名詞の連なりを
+            # 別の名詞の連なりにする。用言（来る・迷う）に読み替えたら、
+            # それは切り直しではなく当て推量
+            if cut and _d42_has_yougen(cut, tokenize_fn):
                 cut = None
             if not cut or cut == surface or cut == reading \
                     or not any(is_kanji(c) or is_katakana(c) for c in cut) \
@@ -16844,7 +19253,9 @@ def _lc_hand_unit_fix(run, tokens, i, L, store, dict_index, tokenize_fn,
         shape_ok = head_ok and all(p.startswith('名詞') for p in pos[1:])
     if not shape_ok:
         return None
-    if any('固有名詞' in p or '数' in p for p in pos):
+    # 固有名詞は**信用できる札のときだけ**降りる（項目48-RN）
+    if any('数' in p for p in pos) \
+            or _has_trusted_proper_noun(run, store, dict_index):
         return None
     if any(x in pos[0] for x in ('接尾', '非自立')):
         return None
@@ -16957,6 +19368,12 @@ def _lc_hand_unit_fix(run, tokens, i, L, store, dict_index, tokenize_fn,
         # 1語であること」のほう。
         if _peel_one_suffix(r, 2, store, dict_index=dict_index):
             return None
+    # ★★ **回数を廃したので、この敷居は越えられない**（項目48-QG'）。
+    # `base_count` も面の count も 2 が上限で、`need` は 10 以上。
+    # ＝**実績で立つ面は無くなり**、表（世の中で1語か・48-MP）と
+    # 索引の顔（48-OJ）で立つ面だけが残る。倒れる先は「面が無い →
+    # None／紫」＝安全側。**初期状態では前からそうだった**。
+    # 直し先を裁く側は、末尾の**競合の見張り**を費用表へ移した（48-QG'）。
     need = max(10, 20 * base_count)
     # で挟みの形では2語の組を作らない——「で は だ の打ち間違い」の
     # 仮説は**全体が1語**という主張。後ろを残す組（サイト以下・
@@ -17087,23 +19504,46 @@ def _lc_hand_unit_fix(run, tokens, i, L, store, dict_index, tokenize_fn,
                            f'なので紫だけ（項目48-LC）')
         return ('紫', a, b)
     fix, (v, _face_cnt) = ranked[0]
-    # **競合の見張り**: 同じ長さ・2手以内の語彙の読みに、直し先と
-    # 同等以上の実績があるなら、1手で見えた答えが最良とは限らない
-    # （`好き任`: 1手の せきにん＝責任 より、2手の かくにん＝確認
-    #   1061 のほうが優勢——設計27 が実績で決める持ち場）。
+    # **競合の見張り**: 同じ長さ・2手以内の語彙の読みに、直し先より
+    # **世の中で一般的な表記**があるなら、1手で見えた答えが最良とは
+    # 限らない（`好き任`: 1手の せきにん＝責任 より、2手の
+    # かくにん＝確認 のほうが優勢——設計27 が決める持ち場）。
     # 身を引いて紫だけ残す（判定は立った・決めるのは向こう）。
+    #
+    # ★★ **証拠を「回数」から「同梱の表の費用」へ移した**
+    # （項目48-QG'・2026-09-05）。もとは `_rc >= max(_face_cnt, need)`
+    # ——**相手の使用回数**が直し先の実績と床（10以上）を上回るか、
+    # だった。回数を廃した今、`_rc` は 1 か 2 にしかならず、床 10 を
+    # 越えられない＝**この見張りは黙って死ぬ**。**死ぬ先は
+    # 「そのまま直す」＝壊す側**なので、置き換えないわけにいかない。
+    #
+    # 新しい証拠は `_table_cost`（`seed_japanese_cost.txt.gz`・
+    # **小さいほど世の中でよく使う**）。相手が **この人の語として
+    # 立っていて**（solid）、その表記が直し先と同じかそれ以上に
+    # 一般的なら、身を引く。表に無い相手は証拠にしない
+    # （知らないものを「一般的だ」とは言わない）。
     try:
         from vocabulary import find_known_readings_flex as _fkr
+        from vocabulary import entry_is_solid as _solid
+        _fix_cost = _table_cost(fix)
         for _r0, _o0, _e0, _d0 in readings:
             for _r2, _c2, _n2 in _fkr(_r0, store, max_edits=2):
-                if _c2 <= 2.0 and _r2 != _r0 and _r2 != v \
-                        and len(_r2) == len(_r0):
-                    _rc = max([e.get('count', 0)
-                               for e in store.lookup(_r2)] or [0])
-                    if _rc >= max(_face_cnt, need):
+                if not (_c2 <= 2.0 and _r2 != _r0 and _r2 != v
+                        and len(_r2) == len(_r0)):
+                    continue
+                for _e2 in store.lookup(_r2):
+                    _s2 = _e2.get('surface') or ''
+                    if _s2 == fix or not _solid(_e2):
+                        continue
+                    _rc2 = _table_cost(_s2)
+                    if _rc2 is None:
+                        continue
+                    if _fix_cost is None or _rc2 <= _fix_cost:
                         _trace('読み繋ぎ',
-                               f'{surface!r} → 2手以内に実績 {_rc} の '
-                               f'{_r2!r} が競るので紫だけ（項目48-LC）')
+                               f'{surface!r} → 2手以内に、より一般的な '
+                               f'{_s2!r}（費用 {_rc2}／直し先 {fix!r} は '
+                               f'{_fix_cost}）が競るので紫だけ'
+                               f'（項目48-LC・48-QG\'）')
                         return ('紫', a, b)
     except Exception:
         pass
@@ -17131,8 +19571,11 @@ def _lm_zero_edge_fix(run, tokens, i, store, dict_index, tokenize_fn,
     for p in pos:
         if not (p.startswith('名詞') or p == '動詞:自立'):
             return None
-        if '固有名詞' in p or '数' in p or '接尾' in p or '非自立' in p:
+        if '数' in p or '接尾' in p or '非自立' in p:
             return None
+    # 固有名詞は**信用できる札のときだけ**降りる（項目48-RN）
+    if _has_trusted_proper_noun(run, store, dict_index):
+        return None
     if run[0][4] != run[1][3]:
         return None
     if any(len(t) > 5 and not t[5] for t in run):
@@ -17176,6 +19619,17 @@ def _lm_zero_edge_fix(run, tokens, i, store, dict_index, tokenize_fn,
             or not all(is_hiragana(c) or c == 'ー' for c in reading):
         return None
     base = max([e.get('count', 0) for e in store.lookup(reading)] or [0])
+    # ★★ **恒偽になった**（項目48-QG'・回数を廃した）。メモリ上の
+    # `count` は写し（solid なら 2・そうでなければ 1）なので `base` は
+    # 最大 2、`need` は最小 10 ——`count >= need` は**もう成立しない**。
+    # ＝下の `faces` は必ず空になり、`if not faces: return None` で
+    # **この道は丸ごと黙る**（倒れる先は None＝触らない・安全側）。
+    # 兄弟（16226・17233）は「表と索引の顔で立つ面だけが残る」＝
+    # 目減りで済むが、**ここには代わりの面の供給元が無い**。
+    # 初期状態では前から成立しなかった（種 2・辞書 1 で need 10 に
+    # 届かない）ので、失うのは**育ちの直りだけ**——この機械は
+    # 育ちの直りを数えない（★★「初期状態でどうなるかが大切」）。
+    # 生かし直すなら証拠を world・費用表へ寄せる（測ってから）。
     need = max(10, 20 * base)
     faces = {}
     for k in range(len(reading)):
@@ -17300,6 +19754,12 @@ def _run_reading_merge_fixes(line, tokenize_fn, store, dict_index=None,
                                 and all(is_hiragana(c) or c == 'ー'
                                         for c in reading)):
                             continue
+                        # ★★ 回数を廃したので、`base_count` が 1 以上の
+                        # ときは越えられない敷居になる（項目48-QG'）。
+                        # `base_count == 0`（＝その読みでは何も立って
+                        # いない）のときだけ `need = 2`＝**立っているか**
+                        # に落ちて、今までどおり働く。倒れる先は
+                        # 「面が無い」＝安全側。
                         base_count = max(
                             [e.get('count', 0)
                              for e in store.lookup(reading)] or [0])
@@ -17370,7 +19830,9 @@ def _run_reading_merge_fixes(line, tokenize_fn, store, dict_index=None,
                 continue
             if '接頭' in pos[-1]:
                 continue
-            if any('固有名詞' in p or '数' in p for p in pos):
+            # 固有名詞は**信用できる札のときだけ**降りる（項目48-RN）
+            if any('数' in p for p in pos) \
+                    or _has_trusted_proper_noun(run, store, dict_index):
                 continue
             # 読みが立っていること（janome の推測読みでは判定しない）
             if any(len(t) > 5 and not t[5] for t in run):
@@ -17421,28 +19883,34 @@ def _run_reading_merge_fixes(line, tokenize_fn, store, dict_index=None,
             #   ・後ろは**接尾**（状態・資料などの一般名詞は不可）
             #   ・手は**う挿入**だけ（濁点は 符号化 → 不幸化 の誤爆を
             #     作り、勝ちが無かったので入れていない）
-            #   ・**優勢の比**: 直し先が、元の読みの語の **20倍以上**
-            #     使われていること（★★⑤「一般的か」を数字にした形。
-            #     二値の「語彙に在れば触らない」だと、打鍵テストから
-            #     学習された 囚虜(6) が的を隠す——終了(554) は届く）
+            #   ・**優勢**: 書かれている語が**この人の語として立って
+            #     いない**こと（`_base_reading_is_own_word`）。
+            #
+            #     ★★ もとは「回数が **20倍以上**」だった（項目48-KU）。
+            #     回数の記録をやめた（48-QG）ので 20倍は二度と越えられ
+            #     ない。残るのは前半——**書かれている語をまだ使って
+            #     いないとき**（もとの `base_count == 0`）だけ通す形。
+            #     費用の差で言い直す案は**測って外した**（詳しくは
+            #     `_base_reading_is_own_word` の説明。`巨大化 → 強大化`
+            #     の化けを作った）。
             if (L == 2 and '接尾' in pos[1]
                     and len(run[0][0]) >= 2
                     and all(is_kanji(c) for c in run[0][0])):
                 ra = katakana_to_hiragana(run[0][2] or '')
                 if ra and len(ra) >= 3 and all(
                         is_hiragana(c) or c == 'ー' for c in ra):
-                    base_count = max(
-                        [e.get('count', 0) for e in store.lookup(ra)]
-                        or [0])
-                    need = max(2, 20 * base_count)
+                    # **書かれている語がこの人の語なら、そもそも見ない**
+                    # （項目48-QG'。輪の中で毎回聞かない——同じ答えしか
+                    #   返らないので、輪に入る前に決める）
+                    _ku_ok = not _base_reading_is_own_word(ra, store)
                     done = False
-                    for k2 in range(len(ra)):
+                    for k2 in range(len(ra)) if _ku_ok else ():
                         if ra[k2] not in _KU_O_DAN:
                             continue
                         v = ra[:k2 + 1] + 'う' + ra[k2 + 1:]
                         faces = sorted({
                             e['surface'] for e in store.lookup(v)
-                            if e.get('count', 0) >= need
+                            if e.get('count', 0) >= 2
                             and e['surface'] != run[0][0]})
                         if len(faces) != 1:
                             continue
@@ -17451,7 +19919,8 @@ def _run_reading_merge_fixes(line, tokenize_fn, store, dict_index=None,
                             continue
                         _trace('読み繋ぎ',
                                f'{surface!r} → {fix!r}（{ra!r} に う を'
-                               f'戻すと {v!r}・優勢{need}以上・項目48-KU）')
+                               f'戻すと {v!r}・書かれている語は立って'
+                               f'いない・項目48-KU／48-QG\'）')
                         out.append((a, b, fix))
                         done = True
                         break
@@ -17751,7 +20220,50 @@ def _decided_spans(line, decisions):
     return out
 
 
-def _odd_spans_for_line(line, tokenize_fn, taken, decisions=None,
+def visible_odd_spans(line, odd_spans, decisions):
+    """
+    **画面に出す紫だけを残す**（項目48-QY・2026-09-05）。
+    **紫下げの門は、これ1本**（48-GN——同じ判定を2か所に書かない）。
+
+    ### なぜエンジンから描画側へ移したか
+
+    もとは `_odd_spans_for_line` の中で間引いていた。だが
+    `decisions.leave_odd_alone`（紫を下げるだけの台帳・48-QU）は
+    **補正の答えを1バイトも変えない**のに、間引きがエンジン側に在ると
+    「印を1つ下ろす」ために**解析をやり直す**しかなかった:
+
+        `_leave_odd_alone` → `_after_decision` → `_reanalyze_all`
+        → 全タブの控えを捨てて `_prev_lines` を空にする
+        → 全行が `_blank_result`（補正色も網掛けも紫も無い）になり、
+          **色の消えた画面が一度出てから**塗り直される
+
+    うにさんの報告そのもの——「**他の行の補正の色が一度消えて
+    再度つく**」（2026-09-05）。**捨てる理由が無い。**
+
+    印だけの門を描画側へ移せば、下げ／取り消しは**塗り直すだけ**で済む。
+
+    ### 掛ける場所（学び22——1つ漏れるとそこだけ紫が出続ける）
+
+    画面へ紫を塗る口は**アプリに1か所しか無い**
+    （`tag_add('odd')` は全ファイルで `app.py` の1か所）。そこに掛ける。
+    `_odd_span_at`・F2 の「この文字列は正しい」・実画面の見張り
+    （`probe_odd_protect` / `probe_odd_color`）は**塗ったタグを読む**ので
+    自動で追従する。**紫を数える道具は `correct_line` に `decisions` を
+    渡していない**ので、前も後も素通し＝ものさしの数字は動かない。
+
+    `odd_spans` も `_decided_spans` も**原文の上の位置**なので、
+    座標系はそのまま合う。
+    """
+    if not odd_spans:
+        return []                      # 紫が無い行では何もしない（費用）
+    drop = _decided_spans(line, decisions)
+    if not drop:
+        return list(odd_spans)
+    return [(a, b) for a, b in odd_spans
+            if not any(not (b <= s0 or a >= e0) for s0, e0 in drop)]
+
+
+def _odd_spans_for_line(line, tokenize_fn, taken,
                         store=None, dict_index=None, reasons_out=None):
     """
     **異様と見た範囲を紫で見せるための位置**（項目48-IR・2026-08-23）。
@@ -17771,15 +20283,21 @@ def _odd_spans_for_line(line, tokenize_fn, taken, decisions=None,
     消えるが、「なぜ直したのか」を聞かれるのはまさにそこなので、
     理由の側には残す。**答えは1文字も変えない**（積むだけ）。
 
-    **うにさんが「もう直さない」と決めた範囲にも立てない**
-    （2026-08-28・項目48-KO）:
+    **うにさんが「もう直さない」と決めた範囲を落とすのは、ここではない**
+    （2026-08-28・項目48-KO → **48-QY で描画側へ移した**・2026-09-05）:
 
         「候補の一番下から、**もう直さないと選択学習したものは、
           紫の色がつかないように**して」
 
     紫は「**異様だと判定した**」という印（CLAUDE.md ★★）なので、
     本人が「これでよい」と決めた文字列に立て続けるのは、判定として
-    間違っている。**決めた側が上。** `_decided_spans` を見る。
+    間違っている。**決めた側が上。**
+
+    ★★ ただし**それは「見せるか」の話**であって、判定そのものでは
+    ない。だからここは**素の紫**を返し、間引きは `visible_odd_spans`
+    が画面の直前で1回だけ行う（理由はあちらの説明）。
+    **この関数は `decisions` を受け取らない**——受け取ると
+    「門はここにも在る」と読まれ、いつか2か所に増える（48-GN）。
     """
     if not line or tokenize_fn is None:
         return []
@@ -17892,8 +20410,10 @@ def _odd_spans_for_line(line, tokenize_fn, taken, decisions=None,
                 if not (a <= s0 and e0 <= b)]
         kept.append((a, b))
     kept.sort()
-    # 直せた範囲（taken）と、**もう直さないと決められた範囲**を外す
-    drop = list(taken) + _decided_spans(line, decisions)
+    # 直せた範囲（taken）を外す。**「もう直さない」と決められた範囲は
+    # ここでは外さない**——`visible_odd_spans` が画面の直前で外す
+    # （項目48-QY）
+    drop = list(taken)
     return [(a, b) for a, b in kept
             if not any(not (b <= s0 or a >= e0) for s0, e0 in drop)]
 
@@ -18001,8 +20521,12 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                 'details': details,
                 'spans': spans,
                 'original_spans': original_spans,
-                'unsure_spans': inner.get('unsure_spans', []),
-                'odd_spans': [],
+                # **内側の印を外の行の位置へ写す**（項目48-RU）——
+                # 捨てると、同じ行の別の塊の紫まで消える
+                'unsure_spans': _map_inner_spans(
+                    line, inner['original'], inner.get('unsure_spans', [])),
+                'odd_spans': _map_inner_spans(
+                    line, inner['original'], inner.get('odd_spans', [])),
             }
 
     _dk = _misplaced_dakuten_fixes(line, store)
@@ -18037,8 +20561,12 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                 'details': details,
                 'spans': spans,
                 'original_spans': original_spans,
-                'unsure_spans': inner.get('unsure_spans', []),
-                'odd_spans': [],
+                # **内側の印を外の行の位置へ写す**（項目48-RU）——
+                # 捨てると、同じ行の別の塊の紫まで消える
+                'unsure_spans': _map_inner_spans(
+                    line, inner['original'], inner.get('unsure_spans', [])),
+                'odd_spans': _map_inner_spans(
+                    line, inner['original'], inner.get('odd_spans', [])),
             }
 
     # --- 設計40: 伸ばし棒（ー）の打ち間違いを戻す（項目48-JS）-------
@@ -18077,8 +20605,12 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                 'details': details,
                 'spans': spans,
                 'original_spans': original_spans,
-                'unsure_spans': inner.get('unsure_spans', []),
-                'odd_spans': [],
+                # **内側の印を外の行の位置へ写す**（項目48-RU）——
+                # 捨てると、同じ行の別の塊の紫まで消える
+                'unsure_spans': _map_inner_spans(
+                    line, inner['original'], inner.get('unsure_spans', [])),
+                'odd_spans': _map_inner_spans(
+                    line, inner['original'], inner.get('odd_spans', [])),
             }
 
     # --- 項目48-KV: 場違いな大書き（Shift の押し忘れ）を小書きに ----
@@ -18132,6 +20664,11 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
         if not any(not (_kg2[1] <= s0 or _kg2[0] >= e0)
                    for s0, e0, _f0, _c0 in _kv):
             _kv.append(_kg2)
+    # 項目48-SA（人名＋を＋叙述の動詞 → 同音の普通語）も同じ口に。
+    for _pj in _person_object_fixes(line, store, tokenize_fn, dict_index):
+        if not any(not (_pj[1] <= s0 or _pj[0] >= e0)
+                   for s0, e0, _f0, _c0 in _kv):
+            _kv.append(_pj)
     # 項目48-NK（異様な1字の漢字を、読みのかなに開く）も同じ口に。
     for _o1 in _open_odd_single_kanji(line, tokenize_fn):
         if not any(not (_o1[1] <= s0 or _o1[0] >= e0)
@@ -18190,8 +20727,12 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                 'details': details,
                 'spans': spans,
                 'original_spans': original_spans,
-                'unsure_spans': inner.get('unsure_spans', []),
-                'odd_spans': [],
+                # **内側の印を外の行の位置へ写す**（項目48-RU）——
+                # 捨てると、同じ行の別の塊の紫まで消える
+                'unsure_spans': _map_inner_spans(
+                    line, inner['original'], inner.get('unsure_spans', [])),
+                'odd_spans': _map_inner_spans(
+                    line, inner['original'], inner.get('odd_spans', [])),
             }
 
     # --- 設計41: かな連続の頭の1字を隣のキーで戻す（項目48-JT）-----
@@ -18229,8 +20770,12 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                 'details': details,
                 'spans': spans,
                 'original_spans': original_spans,
-                'unsure_spans': inner.get('unsure_spans', []),
-                'odd_spans': [],
+                # **内側の印を外の行の位置へ写す**（項目48-RU）——
+                # 捨てると、同じ行の別の塊の紫まで消える
+                'unsure_spans': _map_inner_spans(
+                    line, inner['original'], inner.get('unsure_spans', [])),
+                'odd_spans': _map_inner_spans(
+                    line, inner['original'], inner.get('odd_spans', [])),
             }
 
     # --- 設計42: 読みを語の境目で切り直す（項目48-JV）-------------
@@ -18280,8 +20825,12 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                 'details': details,
                 'spans': spans,
                 'original_spans': original_spans,
-                'unsure_spans': inner.get('unsure_spans', []),
-                'odd_spans': [],
+                # **内側の印を外の行の位置へ写す**（項目48-RU）——
+                # 捨てると、同じ行の別の塊の紫まで消える
+                'unsure_spans': _map_inner_spans(
+                    line, inner['original'], inner.get('unsure_spans', [])),
+                'odd_spans': _map_inner_spans(
+                    line, inner['original'], inner.get('odd_spans', [])),
             }
 
     # --- 設計43: 助詞をはさんだ読みを1語へ寄せる（項目48-JZ）--------
@@ -18324,8 +20873,12 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                 'details': details,
                 'spans': spans,
                 'original_spans': original_spans,
-                'unsure_spans': inner.get('unsure_spans', []),
-                'odd_spans': [],
+                # **内側の印を外の行の位置へ写す**（項目48-RU）——
+                # 捨てると、同じ行の別の塊の紫まで消える
+                'unsure_spans': _map_inner_spans(
+                    line, inner['original'], inner.get('unsure_spans', [])),
+                'odd_spans': _map_inner_spans(
+                    line, inner['original'], inner.get('odd_spans', [])),
             }
 
     # かな入力では濁点・半濁点が独立したキーなので、
@@ -18425,7 +20978,7 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                 'original_spans': [],
                 'unsure_spans': inner.get('unsure_spans', []),
                 'odd_spans': _odd_spans_for_line(
-                    line, tokenize_fn, (), decisions=decisions,
+                    line, tokenize_fn, (),
                     store=store, dict_index=dict_index),
             }
         corrected = inner['corrected']
@@ -18452,8 +21005,11 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
             'details': details,
             'spans': spans,
             'original_spans': original_spans,
-            'unsure_spans': inner.get('unsure_spans', []),
-            'odd_spans': [],
+            # **内側の印を外の行の位置へ写す**（項目48-RU）
+            'unsure_spans': _map_inner_spans(
+                line, inner['original'], inner.get('unsure_spans', [])),
+            'odd_spans': _map_inner_spans(
+                line, inner['original'], inner.get('odd_spans', [])),
         }
 
     # --- 括弧のつもりで打った、同じキーのかな（゜…む／ゆ…よ）---
@@ -18496,8 +21052,11 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
             'details': details,
             'spans': spans,
             'original_spans': original_spans,
-            'unsure_spans': inner.get('unsure_spans', []),
-            'odd_spans': [],
+            # **内側の印を外の行の位置へ写す**（項目48-RU）
+            'unsure_spans': _map_inner_spans(
+                line, inner['original'], inner.get('unsure_spans', [])),
+            'odd_spans': _map_inner_spans(
+                line, inner['original'], inner.get('odd_spans', [])),
         }
 
     # --- かなで書いたアルファベットの読み（`エフ2 → F2`）---
@@ -18536,10 +21095,12 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
             'details': details,
             'spans': spans,
             'original_spans': original_spans,
-            'unsure_spans': inner.get('unsure_spans', []),
-            # 位置が動いているので、内側の印はそのまま渡せない
-            # （括弧の道と同じ扱い）。
-            'odd_spans': [],
+            # 位置が動いているので、**写して**渡す（項目48-RU。
+            # 前は「そのまま渡せない」と捨てていた）
+            'unsure_spans': _map_inner_spans(
+                line, inner['original'], inner.get('unsure_spans', [])),
+            'odd_spans': _map_inner_spans(
+                line, inner['original'], inner.get('odd_spans', [])),
         }
 
     tokens = tokenize_fn(line)
@@ -19070,7 +21631,8 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                 if not _sr:
                     continue
                 _cg = compose_from_intruded(
-                    chunk, [_sr], store, dict_index, tokenize_fn)
+                    chunk, [_sr], store, dict_index, tokenize_fn,
+                    prev_char=(line[m_start - 1] if m_start > 0 else ''))
                 if _cg and _cg != chunk:
                     _trace('造語', f'{chunk!r} → {_cg!r}'
                                    f'（設計18・かな混じりの語連続）')
@@ -19128,7 +21690,8 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                 _cg = compose_from_intruded(
                     chunk, [r for r, _k in reading_combos_with_rank(
                         chunk, dict_index)[:6]],
-                    store, dict_index, tokenize_fn)
+                    store, dict_index, tokenize_fn,
+                    prev_char=(line[m_start - 1] if m_start > 0 else ''))
                 if _cg:
                     _trace('漢字塊', f'{chunk!r} → {_cg!r}（造語めいた'
                                      f'複合を開いて組み直した）')
@@ -19394,6 +21957,16 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
             # （うにさんの指定「補正候補はより一般的なほうを優先」）。
             # フォールバックが何も出さなければ、元の結果を使う
             # （メモ帳・見切れます等、この道が拾っていた補正を守る）。
+            #
+            # ★★ **恒真になった**（項目48-QG'）。`_usage_count` は
+            # 1 か 2 なので `_weak_guess` は常に True ＝ **当てた語が
+            # 何であれ、必ずフォールバックとも比べる**。
+            # `_USAGE_MIN` の4か所のうち、ここだけは倒れる先が
+            # 「決めない」ではなく「**別の直しを採る**」。ただし
+            # 対象は異様と判定した塊だけで、フォールバック側にも
+            # 「文全体では読める並びなら直さない」門が掛かっている。
+            # **初期状態では前から常に True**（count 1〜3）なので、
+            # 変わるのは育ちのときだけ。
             _weak_guess = (guess is not None
                            and _usage_count(guess[2], store) < _USAGE_MIN)
             if not guess or _weak_guess:
@@ -20159,6 +22732,35 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
         find_hiragana_runs(line, allow_adjacent_kanji=True),
         known=_split_known))
     _psplit_seen = set()
+    # **行全体で立つ かな連続の①**（項目48-SC・2026-09-06）。窓だけを
+    # 見ると説明が付いて見える形（`もみと`＝もみ＋と）でも、行の連続
+    # まるごと（`もみとにもどります`）には印が立つ。48-LU に「この窓は
+    # 異様と確かめてある」を渡すのに使う（判定は 48-KS の1本）
+    _line_odd_kana = []
+    if dict_index is not None and os.environ.get('CN_POS_ODD') != '0':
+        try:
+            import pos_grammar as _pg_lo
+            _line_odd_kana = list(_pg_lo.odd_kana_spans(line, dict_index,
+                                                        store))
+        except Exception:
+            _line_odd_kana = []
+
+    def _lu_scope(a0, b0, text0):
+        """
+        **48-LU に渡す範囲**（項目48-SC・2026-09-06）。窓 [a0,b0) を
+        覆う「行全体の①（48-KS）」の範囲が在り、そこに別の直しが
+        掛かっていなければ、**その範囲まるごと**を渡す（窓が
+        `たぶいご`＝既知語＋短い残り に切られていても、連続 `たぶいごうして`
+        で組める）。戻り値: (始まり, 終わり, ①が立っているか, 行頭か, 文字列)
+        """
+        for _sa, _sb in _line_odd_kana:
+            if _sa <= a0 and b0 <= _sb:
+                if any(not (_sb <= r0[0] or _sa >= r0[1])
+                       for r0 in replacements):
+                    break
+                return (_sa, _sb, True,
+                        not line[:_sa].strip(' \t\u3000'), line[_sa:_sb])
+        return (a0, b0, False, not line[:a0].strip(' \t\u3000'), text0)
 
     def _psplit_retry(run, run_start, run_end, pending_ff, uns_mark):
         """
@@ -20215,15 +22817,76 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
 
     while _psplit_work:
         run_start, run_end, run = _psplit_work.pop(0)
+        # **数字の直後の助数詞（かな）は連続の頭に入れない**（項目48-TG・
+        # 2026-09-06。`5つ中5つちょっと` の `つちょっと` を 48-IT が
+        # 「機能語の並びとして異様」と見て `つ` を落とした。数字＋助数詞は
+        # 数え方で、その先が連続の頭）
+        if (run_start > 0 and line[run_start - 1] in '0123456789０１２３４５６７８９'):
+            for _cnt in _KANA_COUNTERS:
+                if run.startswith(_cnt) and len(run) > len(_cnt):
+                    run_start += len(_cnt)
+                    run = run[len(_cnt):]
+                    break
+            if not run:
+                continue
         if any(not (run_end <= s0 or run_start >= e0)
                for s0, e0 in taken_all):
             continue
         if _is_before_honorific(line, run_end):
             continue
-        # 伸ばし言葉・擬音の形は話し言葉なので触らない（2026-08-08）
+        # 伸ばし言葉・擬音の形は話し言葉なので触らない（2026-08-08）。
+        # **①（48-KS）が連続まるごとに立っているなら通す**（項目48-SC・
+        # `すくろーるごのみえた`——ー を含むだけで擬音扱いになり、外来語の
+        # 頭が組み直しに届かなかった。擬音・叫び声は 48-KS が説明の付く
+        # 形として除いているので、①が立つものは擬音ではない）
         if _is_expressive_kana_run(run):
-            _trace('窓', f'{run!r} → 伸ばし・擬音の形なので触らない')
-            continue
+            # **①（48-KS）が連続まるごとに立っているなら、語の列として
+            # 組む道（48-LU）だけを通す**（項目48-SI・2026-09-06）。48-SC で
+            # 「①が立つなら通す」と窓の輪まで開けたら、ローマ字の `かーそね` の
+            # 窓 `かーそ` に従来の探索が `かーど` を当てて、外来語の道
+            # （カーソル）を横取りした（実機メモ3行・実測）。伸ばしを含む
+            # 連続は外来語の持ち場なので、窓の輪は今までどおり通さない
+            _cov = [(_sa, _sb) for _sa, _sb in _line_odd_kana
+                    if _sa <= run_start and run_end <= _sb]
+            # **伸ばし（ー）を含まない形**（小書きの母音だけ——ふぁしりてぃ・
+            # いんたちちぇんじ）で①が立つなら、**窓の輪を今までどおり通す**
+            # （項目48-SI'。外来語の道が先に当たる。48-LU は輪の中で最後に
+            # 当たる。7巡目の readcheck の外来語の直り 60〜70 はここから）。
+            # 横取りが起きたのは ー を含む `かーそね` だけ
+            if _cov and 'ー' not in run:
+                _cov = []
+                _lu_pass = True
+            else:
+                _lu_pass = False
+            _lu_x = None
+            if _cov and not (run_start > 0 and (
+                    line[run_start - 1].isdigit()
+                    or line[run_start - 1] in '０１２３４５６７８９')) \
+                            and not any(not (_cov[0][1] <= r0[0]
+                                     or _cov[0][0] >= r0[1])
+                                for r0 in replacements):
+                try:
+                    _lu_x = _lu_compose_odd_run(
+                        line[_cov[0][0]:_cov[0][1]], store,
+                        input_method=input_method, tokenize_fn=tokenize_fn,
+                        context_vec=context_vec, dict_index=dict_index,
+                        odd_known=True,
+                        bare_head=not line[:_cov[0][0]].strip(' \t\u3000'))
+                except Exception:
+                    _lu_x = None
+            if _lu_x and not (decisions and decisions.blocks(
+                    line[_cov[0][0]:_cov[0][1]], _lu_x)):
+                _trace('窓', f'{line[_cov[0][0]:_cov[0][1]]!r} → {_lu_x!r}'
+                             f'（伸ばしを含む連続に①。語の列として組み直し・'
+                             f'項目48-SI）')
+                replacements.append((_cov[0][0], _cov[0][1], _lu_x,
+                                     'かな入力'))
+                lu_taken.append((_cov[0][0], _cov[0][1]))
+                taken_all.append((_cov[0][0], _cov[0][1]))
+                continue
+            if not _lu_pass:
+                _trace('窓', f'{run!r} → 伸ばし・擬音の形なので触らない')
+                continue
         # 直後に！？♡が付く短いかなの並びは叫び声・合図
         if (run_end - run_start) <= 5 \
                 and _followed_by_shout_mark(line, run_end):
@@ -20341,6 +23004,52 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
         # 後始末）。先に当てると `まいす`（マイナスの脱字）が `ます` に
         # なり、従来なら直っていた語を取り上げてしまう（初期状態の
         # readcheck で実測・マイナス 3件）。
+        # **語の表を使わず、機能語・活用・名前＋敬称だけで説明が付く連続は
+        # 触らない**（項目48-SQ・2026-09-06）。**48-TH（同日）: 用言の活用も**
+        # ——`やめたら`（やめる＋たら）・`ひどくて`（ひどい＋くて）は芯が
+        # 「読めない」として `やたら`・`ひとくち` にした。表の語を名詞の
+        # 部品には使わず、動詞・形容詞の活用の根拠にだけ使う読み
+        # （`stems_only`）。名詞を敷き詰める読みは readcheck の直りを失う
+        # （48-SQ の実測）ので使わない。`処分のしやすさ` は し＋やす＋さ、
+        # `たかちゃん` は 名前＋敬称——内容語が1つも無いので、語彙で直すものが
+        # 無い。古い分解（explain_cores）が `しやす` を窓に切って芯が `いやす`
+        # に直し、芯が `たかちゃん` を `あかちゃん` にしていた。
+        # **最初は「①（48-KS）が立たない連続」を全部止めた**が、①は語の表で
+        # 短い読みを敷き詰めて説明するので、readcheck の直りを 初期 −77・
+        # 育ち −183 失った（`きゅうずいを`＝きゅう＋ずい＋を）。**語を使わない
+        # 読み**（`no_words=True`）に狭めた。語彙の語で切れた窓
+        # （token_windows）は今までどおり
+        # **機能語だけの並び**（`いいですよわね`・`ににして`）は 48-IT
+        # （機能語の並びの異様は要素で直す）の持ち場なので、ここでは
+        # 見ない——`_is_all_functional` が True の連続は通す
+        _sq_readable = False
+        if (source != 'token_windows' and len(run) >= 3
+                and not _is_all_functional(run)):
+            try:
+                import pos_grammar as _pg_sq
+                _sq_kw = dict(after_kanji=run_after_kanji,
+                              before_kanji=(run_end < len(line)
+                                            and is_kanji(line[run_end])))
+                _sq_pure = _pg_sq.explain_kana_run(run, no_words=True,
+                                                   **_sq_kw)
+                _sq_stems = (not _sq_pure) and _pg_sq.explain_kana_run(
+                    run, stems_only=True, **_sq_kw)
+            except Exception:
+                _sq_pure = _sq_stems = False
+            if _sq_pure:
+                _trace('かな連続', f'{run!r} → 機能語・活用・名前＋敬称だけで'
+                                 f'説明が付く（内容語が無い）ので触らない'
+                                 f'（項目48-SQ）')
+                continue
+            if _sq_stems:
+                # **用言の活用で説明が付く連続は「読める」**（項目48-TH）。
+                # 触らないのではなく、芯を「明らかに自然になる直しだけ」の
+                # 側に置く——`やめたら`・`ひどくて` は残り、`すねると → すると`
+                # （うにさんの的。拗ねる＋と でも文にならない）は通る
+                _sq_readable = True
+                _trace('かな連続', f'{run!r} → 用言の活用と機能語で説明が'
+                                 f'付く。芯は明らかに自然になる直しだけ'
+                                 f'（項目48-TH）')
         pending_ff = []
         # 48-PI: この連続で付けた紫の始まり（区切るときに取り消す）
         _psplit_uns_mark = len(unsure_spans)
@@ -20390,7 +23099,8 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
             window_readable = _tokens_all_known_in_span(
                 tokens, a, b, partial_start=True, partial_end=True,
                 after_kanji=(a > 0 and is_kanji(line[a - 1])))
-            if window_readable and not _kana_run_explained(window):
+            if window_readable and not _kana_run_explained(
+                    window, before_kanji=(b < len(line) and is_kanji(line[b]))):
                 _trace('窓', f'{window!r} → 解析は読めると言うが、かなの語と'
                              f'機能語では説明できない（項目48-IS）。読めない扱い')
                 window_readable = False
@@ -20486,7 +23196,9 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
             # 逆に「たんほ」「ほらい」のような壊れた列は読めないので、
             # 色や補正の対象として残る。
             if _looks_like_valid_japanese(window, tokenize_fn) \
-                    and _kana_run_explained(window):
+                    and _kana_run_explained(
+                        window, before_kanji=(b < len(line)
+                                              and is_kanji(line[b]))):
                 # ここも敷居にする（項目48-AE）。
                 window_readable = True
                 _trace('窓', f'{window!r} → 単体でも読める。'
@@ -20587,7 +23299,9 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                     tokens, a, b, nearby_words=nearby_words,
                     recent_words=recent_words),
                 after_kanji=(a > 0 and is_kanji(line[a - 1])),
-                readable_hint=window_readable,
+                readable_hint=(window_readable or _sq_readable),
+                before_kanji=(max(b, run_end) < len(line)
+                              and is_kanji(line[max(b, run_end)])),
                 # **窓はこの直前で連続の終わりまで伸ばしてある**
                 # （window_ext = line[a:max(b, run_end)]）。伸ばした
                 # 窓は必ず連続の末尾（助詞）を含むので、`b` が
@@ -20746,17 +23460,21 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                 _lu_ok = not (a > 0 and (line[a - 1].isdigit()
                                          or line[a - 1] in '０１２３４５６７８９'))
                 _lu = None
+                _lu_a, _lu_b, _lu_odd, _lu_head, _lqw = _lu_scope(
+                    a, max(b, run_end), window_ext)
                 if _lu_ok:
                     _lu = _lu_compose_odd_run(_lqw, store,
                                               input_method=input_method,
                                               tokenize_fn=tokenize_fn,
-                                              context_vec=context_vec)
+                                              context_vec=context_vec,
+                                              dict_index=dict_index,
+                                              odd_known=_lu_odd,
+                                              bare_head=_lu_head)
                 if _lu:
                     _trace('窓', f'{_lqw!r} → {_lu!r}（語の列として'
                                  f'組み直し・見本なし・項目48-LU）')
-                    replacements.append((a, max(b, run_end), _lu,
-                                         'かな入力'))
-                    lu_taken.append((a, max(b, run_end)))
+                    replacements.append((_lu_a, _lu_b, _lu, 'かな入力'))
+                    lu_taken.append((_lu_a, _lu_b))
                     continue
                 _lq = _lq_attested_insertion(line, a, max(b, run_end),
                                              window_ext,
@@ -20771,7 +23489,8 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                         _lq2 = _lu_compose_odd_run(
                             _lq, store, input_method=input_method,
                             tokenize_fn=tokenize_fn,
-                            context_vec=context_vec)
+                            context_vec=context_vec, dict_index=dict_index,
+                            bare_head=_lu_head)
                     if _lq2:
                         _trace('窓', f'{_lq!r} → {_lq2!r}（直した読みを'
                                      f'語の列として組み直し・項目48-LU）')
@@ -20791,6 +23510,62 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                 if _psplit_retry(run, run_start, run_end, pending_ff,
                                  _psplit_uns_mark):
                     break
+                # **48-RQ**（2026-09-05）: ここまでで何も直らなかった。
+                # **印のキーの隣（せ＝゛ の隣・同じ誤りの繰り返しも）を
+                # 巻き戻し、語＋手が生んだ1字格助詞＋語 に組めるなら採る**
+                # （`かいせきかせなかせく → 解析が長く`）。48-PI・48-RK と
+                # 同じ構え——この連続で何も直らなかったときだけの最後の手。
+                # 48-RK より先に置く（うにさんの指定「先に疑う」。仮説が
+                # 作れない連続では何もしないので、48-RK の的は横取りしない）
+                _wbp = _word_born_particle_fix(run, store, dict_index,
+                                               tokenize_fn)
+                if _wbp is not None and not (
+                        decisions and decisions.blocks(run, _wbp)):
+                    replacements.append((run_start, run_end, _wbp,
+                                         'かな入力'))
+                    hiragana_taken.append((run_start, run_end))
+                    conv_taken.append((run_start, run_end))
+                    del unsure_spans[_psplit_uns_mark:]
+                    break
+                # **48-RK**（2026-09-05）: ここまでで何も直らなかった。
+                # **既知の頭で割って、残りを直して熟語＋熟語に決める**
+                # （`かんいりゅうりょく → 簡易入力`）。48-PI と同じ構え
+                # ——**この連続で何も直らなかったときだけ**の最後の手。
+                _khc = _fix_known_head_compound(
+                    run, store, tokenize_fn, dict_index, find_readings,
+                    max_dist,
+                    before=(line[run_start - 1] if run_start > 0 else ''),
+                    after=(line[run_end] if run_end < len(line) else ''))
+                if _khc is not None and not (
+                        decisions and decisions.blocks(run, _khc)):
+                    replacements.append((run_start, run_end, _khc,
+                                         'かな入力'))
+                    hiragana_taken.append((run_start, run_end))
+                    # **長さの検査から外す**（`conv_taken`）。かなを
+                    # 漢字の熟語に組むと必ず縮む（9字 → 4字）ので、
+                    # 「差は2字まで」の検査に落ちる。48-LU の組み直しと
+                    # 同じ扱い——**長さの代わりの砦は、両方が段2以下の
+                    # 2字漢語で、できた形が異様でないこと**（あちらは
+                    # 「読みの列の完全な組み上がり」）
+                    conv_taken.append((run_start, run_end))
+                    del unsure_spans[_psplit_uns_mark:]
+                    break
+                # **48-RW（測って外した・2026-09-05）**: ①が立っている
+                # かな連続を、異様の塊と同じ受け皿（`_reopen_odd_chunk(
+                # as_kana_run を立てて）`）に通してみた。漢字欄 `田部井号して →
+                # タブ移動して`・`札ん港になる → 参考になる` が直るのに
+                # かな欄 `たぶいごうして`・`さつんこうになる` が紫のままなのは
+                # 受け皿が無いからで、通せば届くはず——**通したら壊れた**:
+                #     たぶいごうして   → **タブ以後かして**（う→か・1.0）
+                #     さつんこうになる → **チサ積んこうになる**（頭に ち を足す脱字）
+                # 受け皿は**費用順で最初に組めた変種**を採る。漢字欄では
+                # 「書かれ方」の門 (b)(c)（漢字を減らさない・漢字だけの塊は
+                # 長くならない）が悪い変種を落としていたが、かなだけの塊には
+                # その門が**何も言わない**。足りないのは**④の選び方**——
+                # 組めた変種を全部集め、部品の品詞（名詞だけ）・尾の形
+                # （サ変＋して／助詞＋用言）・手の種類（打った字を読み替える
+                # 手を、字を足す手より上）で選び、上位2つが拮抗なら紫のまま。
+                # `as_kana_run` の口は残してある（呼び手はまだ無い）
                 _trace('窓', f'{window!r} → 直せないので色だけ付ける')
                 # edge_word（既知語＋短い残り）の窓は、直せなかった
                 # ときに色も付けない。「よろしくお（ねがいします）」の
@@ -20798,6 +23573,28 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                 # 可能性が高いため（実機からの指定）。
                 unsure_spans.append((a, b))
             else:
+                # **①が連続まるごとに立っているなら、その範囲で組み直す**
+                # （項目48-SC。初期状態の `たぶいごうして` は窓が `たぶいご`
+                # ＝既知語（タブ）＋短い残り に切られ、ここで見送られていた）
+                _lu_a, _lu_b, _lu_odd, _lu_head, _lqw = _lu_scope(
+                    a, max(b, run_end), window_ext)
+                _lu = None
+                if _lu_odd and not (a > 0 and (
+                        line[a - 1].isdigit()
+                        or line[a - 1] in '０１２３４５６７８９')):
+                    _lu = _lu_compose_odd_run(_lqw, store,
+                                              input_method=input_method,
+                                              tokenize_fn=tokenize_fn,
+                                              context_vec=context_vec,
+                                              dict_index=dict_index,
+                                              odd_known=True,
+                                              bare_head=_lu_head)
+                if _lu:
+                    _trace('窓', f'{_lqw!r} → {_lu!r}（語の列として'
+                                 f'組み直し・①の範囲・項目48-LU/48-SC）')
+                    replacements.append((_lu_a, _lu_b, _lu, 'かな入力'))
+                    lu_taken.append((_lu_a, _lu_b))
+                    continue
                 _trace('窓', f'{window!r} → 直せず、既知語＋短い残りの形'
                              f'なので色も付けない')
         # 後始末: 機能語の並びの異様（項目48-IT）。語の直しが重なって
@@ -20813,6 +23610,43 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
             unsure_spans[:] = [(s_, e_) for s_, e_ in unsure_spans
                                if e_ <= _pa or s_ >= _pb]
 
+    # **48-RW'**（2026-09-05）: A の道で直した読み（かな→かな）を、正しく
+    # 打ったかなと同じ変換の道（48-LD・48-MI）に通す。`おくゆくこてい →
+    # おくゆきこてい` で止まっていたものが `奥行固定` に、`かすくにん →
+    # かくにん` が `確認` に——正しく打てば漢字になるのに、直されると
+    # 読みのままだった食い違いを無くす
+    for _ri in range(len(replacements)):
+        _rr = replacements[_ri]
+        if len(_rr) < 4:
+            continue
+        _rs, _re, _rn, _rc = _rr[0], _rr[1], _rr[2], _rr[3]
+        if (_rc != 'かな入力' or not _rn or _rn == line[_rs:_re]
+                or not all(is_hiragana(c) or c == 'ー' for c in _rn)):
+            continue
+        # **窓だけ直したときは、かな連続まるごとで見る**——`おくゆくこてい`
+        # は窓 `おくゆく` だけが `おくゆき` に直る。変換の道は `おくゆきこてい`
+        # まるごと（語＋語）で組むので、直した窓を含むかな連続全体を作って渡す。
+        # 連続の中に別の置き換えが在れば触らない
+        _rs2, _re2 = _rs, _re
+        while _rs2 > 0 and is_hiragana(line[_rs2 - 1]):
+            _rs2 -= 1
+        while _re2 < len(line) and is_hiragana(line[_re2]):
+            _re2 += 1
+        if any(_rj != _ri and len(replacements[_rj]) >= 2
+               and not (replacements[_rj][1] <= _rs2
+                        or replacements[_rj][0] >= _re2)
+               for _rj in range(len(replacements))):
+            _rs2, _re2 = _rs, _re
+        _whole = line[_rs2:_rs] + _rn + line[_re:_re2]
+        _cv = _convert_fixed_kana_run(_whole, store, dict_index)
+        if _cv and _cv != _whole and not (decisions
+                                          and decisions.blocks(_whole, _cv)):
+            _trace('かな連続', f'{_whole!r} → {_cv!r}（直した読みを変換の道に'
+                               f'通した・項目48-RW\'）')
+            replacements[_ri] = (_rs2, _re2, _cv, _rc) + tuple(_rr[4:])
+            conv_taken.append((_rs2, _re2))
+            if (_rs2, _re2) not in hiragana_taken:
+                hiragana_taken.append((_rs2, _re2))
     spans = find_editable_spans(line, tokens)
 
     for start, end, surface, reading, is_known_word in spans:
@@ -20845,7 +23679,8 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                     dict_index=dict_index, attest_text=line,
                     after_text=line[end:end + 4],
                     prev_text=line[max(0, start - 1):start])
-                if _hp is not None and _hp[0] != surface                         and len(_hp[0]) == len(surface):
+                if _hp is not None and _hp[0] != surface \
+                        and len(_hp[0]) == len(surface):
                     replacements.append((start, end, _hp[0], _hp[1]))
                 continue
             # 語尾を切り離した結果、語幹が短すぎるなら触らない。
@@ -21579,7 +24414,7 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
         out['unsure_spans'] = unsure_spans
         _why_out = []
         out['odd_spans'] = _odd_spans_for_line(line, tokenize_fn, (),
-                                               decisions, store, dict_index,
+                                               store, dict_index,
                                                reasons_out=_why_out)
         out['odd_reasons'] = _why_out
         return out
@@ -21612,6 +24447,13 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
         # 直後に括弧でその表記が並ぶ形（しょくじけん（食事券））は、
         # 読みを見せるためにわざとかなで書いたもの。回14の規則の
         # 逆向き。全ての道が通るこの場に置く（学び22）。
+        # ★★ **かぎ括弧の門を、ここ（最終検査）に置くのは測って外した**
+        # （項目48-RK'・2026-09-05）。「括弧にちょうど囲まれた塊は
+        # 引用だから触らない」を全部の道に掛けたところ、**readcheck の
+        # 直りが 1,971 → 1,652（−319）**になった——ものさしの材料が
+        # **語を括弧で囲んだ形**なので、正しい直しまで丸ごと止まる。
+        # 引用の守りは `_fix_known_head_compound` の中（かなの連なりを
+        # まるごと漢字に組む手）**だけ**に置いてある。
         if _reading_spelled_in_bracket(line, start, end, tokenize_fn):
             _trace('置換', f'{original!r} → {new_surface!r} は、直後の'
                            f'括弧に表記が並ぶ読みの並記なので触らない')
@@ -21678,7 +24520,7 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
         out['unsure_spans'] = unsure_spans
         _why_out = []
         out['odd_spans'] = _odd_spans_for_line(line, tokenize_fn, (),
-                                               decisions, store, dict_index,
+                                               store, dict_index,
                                                reasons_out=_why_out)
         out['odd_reasons'] = _why_out
         return out
@@ -21712,7 +24554,7 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
         if not any(not (b <= s0 or a >= e0) for s0, e0 in original_spans)]
     _why_out = []
     final_odd = _odd_spans_for_line(line, tokenize_fn, original_spans,
-                                    decisions, store, dict_index,
+                                    store, dict_index,
                                     reasons_out=_why_out)
 
     return {
