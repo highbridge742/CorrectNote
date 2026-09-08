@@ -18829,8 +18829,11 @@ class CorrectNoteApp:
         if not a or not b:
             return False
         try:
-            na = os.path.normcase(os.path.abspath(a))
-            nb = os.path.normcase(os.path.abspath(b))
+            # CorrectNote は Windows 用なので、テストを動かす OS に
+            # かかわらず Windows と同じく大文字小文字を区別しない。
+            # os.path.normcase だけでは Linux の CI で小文字化されない。
+            na = os.path.normcase(os.path.abspath(a)).casefold()
+            nb = os.path.normcase(os.path.abspath(b)).casefold()
         except Exception:
             return a == b
         if na == nb:
@@ -18844,8 +18847,8 @@ class CorrectNoteApp:
         try:
             if os.path.basename(na) != os.path.basename(nb):
                 return False
-            return (os.path.normcase(os.path.realpath(a))
-                    == os.path.normcase(os.path.realpath(b)))
+            return (os.path.normcase(os.path.realpath(a)).casefold()
+                    == os.path.normcase(os.path.realpath(b)).casefold())
         except Exception:
             return False
 
