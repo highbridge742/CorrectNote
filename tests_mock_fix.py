@@ -21,7 +21,7 @@
 **走らせる入口は `tests_mock.py` のまま。**
 """
 import corrector as C
-from vocabulary import VocabularyStore, find_known_readings_flex
+from vocabulary import VocabularyStore, find_known_readings_flex, dup_repair_enabled
 from seed_vocabulary import load_seed
 
 from tests_mock_common import build_store, mock_tokenize
@@ -582,7 +582,7 @@ def test_attested_candidates():
 
     from candidates import build_candidates, build_range_candidates
     from units import _merge_kana_runs
-    from vocabulary import VocabularyStore, find_known_readings_flex
+    from vocabulary import VocabularyStore, find_known_readings_flex, dup_repair_enabled
 
     print('--- 項目48-P（メモの語を候補に／かなを繋ぐ） ---')
 
@@ -783,7 +783,7 @@ def test_halfwidth_guards():
 
     import halfwidth as H
     import loanword as LW
-    from vocabulary import VocabularyStore, find_known_readings_flex
+    from vocabulary import VocabularyStore, find_known_readings_flex, dup_repair_enabled
 
     print('--- 検証レポート 2-E / 2-F（半角経路） ---')
     store = build_store()
@@ -874,7 +874,8 @@ def test_halfwidth_guards():
     for typed in ('lanetarium', 'Panetarium', 'Pllanetarium',
                   'Planetariumm', 'Pklanetarium'):
         check(f'並べた誤字が直る（{typed}）',
-              LW.fix_english_word(typed, hstore), 'Planetarium')
+              LW.fix_english_word(typed, hstore),
+              None if typed in ('Pllanetarium', 'Planetariumm') and not dup_repair_enabled() else 'Planetarium')
     check('正しい綴りは触らない',
           LW.fix_english_word('Planetarium', hstore), None)
 

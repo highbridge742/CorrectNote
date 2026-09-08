@@ -49,7 +49,8 @@
     ・イ形容詞の活用（い・く・くて・かった・ければ・さ・そう）
     ・語の表からの活用推定——**表の語が「い」で終わればイ形容詞、
       ウ段で終われば動詞**とみなし、語幹＋活用形も語として認める
-      （わるい → わるかった、もどる → もどった）
+      （わるい → わるかった、もどる → もどった）。ただし同梱辞書が
+      形容動詞と示す語はイ形容詞にしない（48-VU）。同形のイ形容詞は残す
     ・形の変わらない品詞（名詞・代名詞・副詞・連体詞・接続詞・
       感動詞・助詞）は**表との完全一致**でそのまま置ける
 
@@ -365,6 +366,15 @@ def _gen_steps(run, i):
     return out
 
 
+def _possible_i_adjective(word):
+    # 48-VU: 形容動詞の基本形を、末尾が「い」というだけでイ形容詞にしない。
+    # 同形のイ形容詞が辞書にあれば許す。その他の語の推定は従来どおり。
+    from morphology import dictionary_base_pos
+    kinds = dictionary_base_pos(word)
+    return (not kinds or any(p.split(',')[0] == '形容詞' for p in kinds)
+            or not any(p.startswith('名詞,形容動詞語幹,') for p in kinds))
+
+
 def _looks_verb(word, words):
     """
     その表記は**用言（動詞）の形**か（項目48-MR・2026-08-31）。
@@ -482,6 +492,18 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
         # `入れ|ちいさい`（`入れていない` の壊れた形）まで説明が
         # 付いてしまい、**本物の異様を取りこぼす**（実測。この形は
         # 下のイ形容詞の枝でも同じ理由で断っている）。
+        # 48-VY: 形容動詞語幹＋「さ」は名詞。未然形の「さ」と区別する。
+        # 漢字に続く送り仮名も含め、辞書の基本形・全品詞で裏付ける。
+        # 普通名詞に「さ」を付ける推定や、語ごとの例外表は作らない。
+        if kanji_stem:
+            from morphology import dictionary_base_pos
+            for k in range(min(12, n)):
+                if run[k] != 'さ':
+                    continue
+                base = kanji_stem + run[:k]
+                if any(p.startswith('名詞,形容動詞語幹,')
+                       for p in (dictionary_base_pos(base) or ())):
+                    stack.append((k + 1, 'Bw'))
         if kanji_stem:
             for k in range(1, min(6, n) + 1):
                 w0 = kanji_stem + run[:k]
@@ -491,7 +513,8 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
             # 漢字の語幹の動詞・形容詞（動く・早い）を活用させた形
             for k in range(0, min(4, n)):
                 stem = kanji_stem + run[:k]
-                if stem + 'い' in words and k < n:
+                if (stem + 'い' in words and k < n
+                        and _possible_i_adjective(stem + 'い')):
                     stack.append((k, 'IST'))
                 for u, row in _GODAN_ROW.items():
                     if stem + u not in words or k >= n:
@@ -622,6 +645,7 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
                 # **1字の形容詞語幹は閉じた組**（よい・ない・こい・すい。48-TH''''）——
                 # が＋い／が＋く（害・学）のような名詞の偶然が語幹に見えていた
                 if (st in ('Bf', 'Bk') and j < n and (stem + 'い') in words
+                        and _possible_i_adjective(stem + 'い')
                         and (not stems_only or ((stem + 'く') in words
                                                 and (ln >= 2 or stem in 'よなこす')))):
                     stack.append((j, 'IST'))

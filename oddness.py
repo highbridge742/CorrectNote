@@ -712,10 +712,24 @@ def in_reading_gloss(text, p):
     return bool(is_reading_gloss(text, j + 1))
 
 
-def _katakana_word_known(surf, dict_index=None):
+def _katakana_word_known(surf, dict_index=None, spelling=False):
     """
     その**カタカナ語が、世の中に在る**か（項目48-OR・2026-09-03／
     **出どころを増やした 48-OY・同日**）。
+
+    ★★ `spelling=True` は「**その綴りが在るか**」を聞く形
+    （項目48-TY・2026-09-07）。**費用表だけは外す。**理由は下の
+    48-RO の注記のとおり——費用表は読みごとにカタカナ綴りを
+    **作って**持っているので、**綴りの証拠にならない**。
+    聞き分けが要るのは、**この判定が向きの違う2つに使われている**から:
+
+        異様か（紫を立てるか）  読めなければ「意見なし＝守る側」。
+                                 広く採るのが安全（48-OY で足した）
+        **生やしてよいか**       採ると**書いていないカタカナを画面に
+        （48-SU の門）           出す**。広く採るのは危険な側
+
+    同じ問いに見えて、**間違えたときに壊れる向きが逆**。だから
+    出どころの数を引数1つで分ける（判定を2つ書かない・48-GN）。
 
     `クリック` `ドラッグ` `スクロール` は在る。`リュク` `カミス` は無い。
 
@@ -767,12 +781,17 @@ def _katakana_word_known(surf, dict_index=None):
             return True
     except Exception:
         pass
-    try:
-        import corrector as _C
-        if _C._table_cost(surf) is not None:
-            return True
-    except Exception:
-        pass
+    if not spelling:
+        # ★★ **綴りを聞かれているときは、費用表を証拠にしない**
+        # （項目48-TY）。うにさんの実機 `使用シュワー → 使用シヤワー`——
+        # `シヤワー` を語だと言ったのは**この表だけ**だった
+        # （AI の表・外来語の表・世の読みは、3つとも「無い」と言っていた）。
+        try:
+            import corrector as _C
+            if _C._table_cost(surf) is not None:
+                return True
+        except Exception:
+            pass
     if dict_index is not None:
         try:
             from morphology import katakana_to_hiragana as _h

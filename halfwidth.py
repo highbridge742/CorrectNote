@@ -236,6 +236,14 @@ def looks_like_halfwidth_input(text, min_len=4):
     if not text or len(text) < min_len:
         return False
 
+    # 48-VR: 記号を添えた既知の英単語も、意図した英字列。
+    # 数字や別の英字の途中から切り出さず、同梱の英語辞書を共有する。
+    # 半角補正の最小長と同じ4字以上で見る（短い打鍵断片とは分ける）。
+    import re
+    if any(_is_dictionary_english(m.group()) for m in re.finditer(
+            r'(?<![A-Za-z0-9])[A-Za-z]{4,}(?![A-Za-z0-9])', text)):
+        return False
+
     # 日本語を含む場合は、半角モードの打ち間違いではなく
     # 意図した半角混じりの文章とみなす
     for ch in text:
@@ -698,6 +706,51 @@ def romaji_to_kana(text):
     return ''.join(out), converted, target
 
 
+def _is_dictionary_english(text):
+    """
+    ★★ **その並びは、英語の辞書に載っている語そのものか**（項目48-TX）。
+
+    載っているなら、**打ち間違いではなく、そう書いたもの**。
+    ①（異様か）が立っていないので、その先へ進めない
+    （`corrector._chunk_is_intact` と同じ考え方・48-KI）。
+
+    ★ **掛けてあるのは `correct_romaji` の中だけ**（検品で指摘・
+    2026-09-07）。かな配列として読む道（`correct_halfwidth`）には
+    掛けていない——**そちらは英単語 236,938 語を全部当てて 0件**
+    だったため（`tools_local/probe_english_romaji.py` の兄弟の測り）。
+    かな配列は英字の並びをかなに置き換えるので、英単語がたまたま
+    日本語として意味を成すことがまず無い。
+
+    出どころは `loanword._english_seed_all()`——**既に在る名簿**
+    （SCOWL size 60・米英の両方・6文字以上）。これは元から
+    「**触らない語の一覧**」として置かれているもので、
+    新しい判定も新しい表も作らない（48-GN・48-RG）。
+
+    なぜ要るか（実測・うにさんの語彙で `_english_seed_all` を全部当てた）:
+
+        ローマ字として読み直されて化ける英単語  **278語**
+          attention → あっ天地オン ／ challenge → 直感 ／
+          automation → アウトライン ／ emission → エミッション ／
+          detention → で天地オン ／ amazon → アマゾン …
+
+    `Amazon`（頭が大文字）は 2026-08-09 に止めてあるが、
+    **小文字で書く語**はここを素通りしていた。
+
+    ★ 代わりに失うもの: 英語に入った日本語（`daikon`・`banzai`・
+      `chanson`）を、かな入力モードを忘れて打った回。**戻せなくなる**。
+      それでも**壊さない ＞ 直る**——`attention` が壊れるのは
+      「打った文字が消える」側で、`daikon` が直らないのは
+      「打った文字がそのまま残る」側。
+    """
+    if not text:
+        return False
+    try:
+        import loanword as _lw
+        return text.lower() in _lw._english_seed_all()
+    except Exception:
+        return False       # 名簿が無ければ意見なし（今までどおり）
+
+
 def correct_romaji(text, store, find_readings, max_dist=1.6, min_len=4,
                    judge=None):
     """
@@ -727,6 +780,10 @@ def correct_romaji(text, store, find_readings, max_dist=1.6, min_len=4,
         return None
     # ローマ字は英字だけで構成される
     if not all(ch.isalpha() or ch == '-' for ch in text):
+        return None
+    # ★★ **英語の辞書に載っている語は、そう書いたもの**（項目48-TX）。
+    # ①（異様か）が立たないので、ここから先へは進めない。
+    if _is_dictionary_english(text):
         return None
 
     kana, n_conv, n_target = romaji_to_kana(text)

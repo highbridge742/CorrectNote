@@ -254,6 +254,7 @@ class SessionStore:
                 scroll=t.get('scroll', 0.0) or 0.0,
                 title=t.get('title'),
                 bookmarks=t.get('bookmarks'),
+                top=t.get('top'),  # 48-VI: 保存した表示行番号も復元する
             ))
         if not clean:
             return False

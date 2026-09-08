@@ -235,6 +235,174 @@ for text in KEEP_CASES:
         failed += 1
         print(f'[NG] {text!r} が {got!r} に変えられた')
 
+# 48-VK/VL: seedだけでは見えない、初回辞書取り込み後の挙動も測る。
+from janome_import import import_from_janome
+initial_store = VocabularyStore()
+load_seed(initial_store)
+import_from_janome(initial_store)
+initial_tok = C.make_tokenizer(initial_store)
+from vocabulary import dup_repair_enabled
+review_keep = [
+    '初めでした。', 'これが初めでした。', '新しい生活の初めでした。',
+    '初めでしたが、楽しめました。', '眺めでした。', '控えでした。',
+    '初めてでした。', '強めでした。', '見ていませんでした。',
+]
+if not dup_repair_enabled():
+    review_keep += ['クリッック', 'ファイイル', 'プラネタリウウム', 'keybooard']
+for method in ('kana', 'romaji'):
+    for text in review_keep:
+        got = C.correct_line(text, initial_store, initial_tok,
+                             find_known_readings_flex, input_method=method)['corrected']
+        if got != text:
+            failed += 1
+            print(f'[NG] 48-VK/VL {method}: {text!r} -> {got!r}')
+print('[確認] 初期状態の文法と重複設定を両入力方式で検査')
+
+# 48-VO: 品詞・単位の読み直しを実際の Janome と補正結果の両方で検査。
+import morphology as _mpos
+_pos_clean = ('電動爪切り', '自動爪切り', '超軽量爪切り', '十六個',
+              'お湯よりに感じました', '東京よりに住む', '爪切りを使う',
+              '爪を切り、手を洗う', 'お湯より熱い', '見つかるようになる')
+for method in ('kana', 'romaji'):
+    for text in _pos_clean:
+        result = C.correct_line(text, initial_store, initial_tok,
+                                find_known_readings_flex, input_method=method)
+        if result['corrected'] != text or result.get('odd_spans'):
+            failed += 1
+            print('[NG] 48-VO', method, text, result['corrected'], result.get('odd_spans'))
+for text, surface, expected in (
+        ('お湯よりに感じました','より','名詞'),
+        ('お湯より熱い','より','助詞'),
+        ('東京よりの便り','より','助詞'),
+        ('電動爪切り','爪切り','名詞'),
+        ('爪を切り、手を洗う','切り','動詞'),
+        ('十六個','十六','名詞')):
+    matches = [t for t in _mpos.tokenize(text) if t.surface == surface]
+    if len(matches) != 1 or matches[0].pos != expected:
+        failed += 1
+        print('[NG] 48-VO POS', text, surface, expected)
+print('[確認] 48-VO 文脈の品詞・単位と自然文の印を検査')
+
+# 48-VQ: 未然形＋接尾動詞の受身・使役を、本文の補正まで通す。
+for method in ('kana', 'romaji'):
+    for text in ('名詞で示されるものが存在しないことを表す限定詞である。構文で表される。',
+                 '示される', '書かせられる', '読まされる', '食べさせる',
+                 '文書に示されていないことを確認します。'):
+        result = C.correct_line(text, initial_store, initial_tok,
+                                find_known_readings_flex, input_method=method)
+        if result['corrected'] != text or result.get('odd_spans'):
+            failed += 1
+            print('[NG] 48-VQ', method, text, result['corrected'], result.get('odd_spans'))
+for text, expected in (('示される',True), ('書かせられる',True),
+                       ('示すれる',False), ('示されるない',False),
+                       ('書かれるます',False), ('書かせるられる',False)):
+    if C._chunk_is_intact(text, initial_tok) != expected:
+        failed += 1
+        print('[NG] 48-VQ 活用の入口', text)
+print('[確認] 48-VQ 受身・使役と不正な活用の反例を検査')
+
+# 48-VR: 普通名詞＋派生接尾辞と、記号付きの既知英語を実データで検証。
+for method in ('kana','romaji'):
+    for text in ('規則性','周期性','規則的','共通化','name:example','type:integer','status:unknown'):
+        result=C.correct_line(text,initial_store,initial_tok,find_known_readings_flex,input_method=method)
+        if result['corrected']!=text or result.get('odd_spans'):
+            failed+=1
+            print('[NG] 48-VR',method,text,result['corrected'],result.get('odd_spans'))
+for text in ('規則性','周期性','規則的'):
+    if not C._chunk_is_intact(text,initial_tok):
+        failed+=1
+        print('[NG] 48-VR 派生語の入口',text)
+print('[確認] 48-VR 派生語と英字の構造を検査')
+
+
+
+
+# 48-VS: 述語用法と連体用法を実解析・全補正経路で確認する。
+for method in ('kana', 'romaji'):
+    for text in ('同じだけの', '同じくらいの量', '同じぐらい食べる',
+                 '同じにする', '同じです', '同じなのに', '同じ本', '同じようにする'):
+        result = C.correct_line(text, initial_store, initial_tok,
+                                find_known_readings_flex, input_method=method)
+        if result['corrected'] != text or result.get('odd_spans'):
+            failed += 1
+            print('[NG] 48-VS', method, text, result['corrected'], result.get('odd_spans'))
+print('[確認] 48-VS 述語用法と連体用法を検査')
+
+# 48-VU: 形容動詞をイ形容詞として活用させない。実辞書の全品詞を使う。
+import pos_grammar as _pg_vu
+for word, expected in (('きれい',False), ('嫌い',False), ('よい',True), ('すい',True)):
+    if _pg_vu._possible_i_adjective(word) != expected:
+        failed += 1
+        print('[NG] 48-VU 形容詞の種類',word)
+for text, expected in (('きれくない',False), ('きれいだった',True),
+                       ('あつかった',True), ('よかった',True)):
+    if _pg_vu.explain_kana_run(text) != expected:
+        failed += 1
+        print('[NG] 48-VU 活用の接続',text)
+for text in ('きれいだった','嫌いだった','美しかった','読みづらかった'):
+    for method in ('kana','romaji'):
+        result=C.correct_line(text,initial_store,initial_tok,find_known_readings_flex,input_method=method)
+        if result['corrected'] != text or result.get('odd_spans') or result.get('unsure_spans'):
+            failed += 1
+            print('[NG] 48-VU 正常な活用',method,text,result)
+print('[確認] 48-VU 形容動詞とイ形容詞の活用を検査')
+
+# 48-VY: 辞書の形容動詞語幹から名詞化し、助詞へ接続する。
+for stem, run, expected in (('異様','さについて',True), ('便利','さの',True),
+                            ('静','かさの',True), ('作業','さの',False),
+                            ('便利','さをに',False)):
+    if _pg_vu.explain_kana_run(run, after_kanji=True, kanji_stem=stem,
+                             no_words=True) != expected:
+        failed += 1
+        print('[NG] 48-VY 名詞化',stem,run)
+for text in ('異様さについて考える','便利さについて考える','不自然さについて考える'):
+    for method in ('kana','romaji'):
+        result=C.correct_line(text,initial_store,initial_tok,find_known_readings_flex,input_method=method)
+        if result['corrected'] != text or result.get('odd_spans') or result.get('unsure_spans'):
+            failed += 1
+            print('[NG] 48-VY 正常な名詞化',method,text,result)
+print('[確認] 48-VY 名詞化と助詞の接続を検査')
+
+# 48-VZ: 画面の未補正・誤補正を初期状態で直接検証する。
+from dict_index import DictIndex
+idx = DictIndex(cache_path=None)
+idx.ensure_built()
+for text, expected in (('さいたいか','最大化'), ('さいでいか','最大化'),
+                       ('きょでいか','巨大化'), ('追い焚き可能','追い焚き可能')):
+    for method in ('kana','romaji'):
+        r=C.correct_line(text,initial_store,initial_tok,find_known_readings_flex,
+                         input_method=method,dict_index=idx)
+        if r['corrected']!=expected or r.get('odd_spans') or r.get('unsure_spans'):
+            failed+=1;print('[NG] 48-VZ',method,text,r)
+for text in ('こうりつか','じどうか','さいかいか','しょうせい'):
+    if C._kana_run_hand_fixes(text,initial_store,idx):
+        failed+=1;print('[NG] 48-VZ 正常な語を読み替えた',text)
+for text, expected in (('こうりさか','効率化'),
+       ('小売り坂\tこうりさか ⇒ こうりつか\t効率化','効率化'),
+       ('居で以下\tきょでいか ⇒ きょだいか\t巨大化','巨大化')):
+    r=C.correct_line(text,initial_store,initial_tok,find_known_readings_flex,
+                     input_method='kana',dict_index=idx)
+    if r['corrected'].split('\t')[0] != expected:
+        failed+=1;print('[NG] 48-VZ 再解析が補正を覆した',text,r['corrected'])
+if not C._arrow_respell('映します ⇒ 移します', initial_tok, idx):
+    failed+=1;print('[NG] 48-VZ 元からある同音の指定を失った')
+_source_token = C._CORRECTION_SOURCE.set('こうりさか ⇒ こうりつか')
+try:
+    if C._arrow_respell('効率化 ⇒ 効率か', initial_tok, idx):
+        failed+=1;print('[NG] 48-VZ 補正が作った矢印を指定にした')
+finally:
+    C._CORRECTION_SOURCE.reset(_source_token)
+if C._CORRECTION_SOURCE.get() is not None:
+    failed+=1;print('[NG] 48-VZ 最初の本文が残っている')
+# 接尾辞付きの候補だけが普通の一語を押しのけない。
+for text, expected in (('いゅうせい','修正'),('こょうじ','表示'),
+                       ('けんさか','検索'),('しゃしか','写真'),('だんだか','段々')):
+    r=C.correct_line(text,initial_store,initial_tok,find_known_readings_flex,
+                     input_method='kana',dict_index=idx)
+    if r['corrected'] != expected:
+        failed+=1;print('[NG] 48-VZ 普通の一語との比較',text,r['corrected'])
+print('[確認] 48-VZ 画面の実例と再解析を検査')
+
 print()
 if failed:
     print(f'[NG] {failed} 件が期待どおりではありませんでした')

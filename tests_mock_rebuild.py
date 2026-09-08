@@ -65,10 +65,17 @@ def run_rebuild_cases():
     cost_far, edits_far = weighted_edit_distance('たんほ', 'たんご')
     check('配列上で遠い取り違えも1箇所として数える', edits_far, 1)
     check('遠い取り違えのほうが高くつく', cost_far > cost_near, True)
+    # ★★ **重複打鍵の直しは 2026-09-08 から既定オフ**（項目48-VH・
+    # うにさんの指定「**同一キーの連続重複を1つに補正する機能自体を
+    # 無効にしてください。無効でしばらく様子を見て問題がなければ
+    # 機能削除します**」）。**消さずに、意図を裏返して残す**——
+    # 削るときに何を削るのかが、ここを読めば分かる。
+    # 戻すのは `CN_NO_DUP=0`（**import より前**に置くこと。
+    #  `vocabulary._REPEAT_GAP_COST` は読み込みのときに決まる）。
     cost_rep, edits_rep = weighted_edit_distance('たああんご', 'たんご')
     cost_ins, _e = weighted_edit_distance('たかさんご', 'たんご')
-    check('同じキーの連打は、別々の余計な打鍵より安い',
-          cost_rep < cost_ins, True)
+    check('48-VH 連打の割引は外してある（余計な打鍵と同じ額）',
+          cost_rep == cost_ins, True)
     check('連打は取り除いた文字数ぶんの訂正', edits_rep, 2)
 
     # --- 語彙からの引き当て ---
@@ -77,7 +84,8 @@ def run_rebuild_cases():
         return got[0][0] if got else None
 
     check('たんほ → たんご', first('たんほ'), 'たんご')
-    check('たああんご → たんご', first('たああんご'), 'たんご')
+    check('48-VH たああんご は引き当てない（連打の巻き戻しは既定オフ）',
+          first('たああんご'), None)
     check('つあがり → つながり', first('つあがり'), 'つながり')
     check('ちながり → つながり', first('ちながり'), 'つながり')
     check('自分自身は候補に含めない',
@@ -188,8 +196,8 @@ def run_rebuild_cases():
           _fix('単語のつあがり'), '単語のつあがり')
     check('遠い置き換えは、実績が圧倒的でも通さない（項目48-FX）',
           _fix('たんほの繋がり'), 'たんほの繋がり')
-    check('語頭を取り残さない（たたんご にならない）',
-          _fix('たああんごの繋がり'), 'たんごの繋がり')
+    check('48-VH たああんご は直さない（連打の巻き戻しは既定オフ）',
+          _fix('たああんごの繋がり'), 'たああんごの繋がり')
     check('ちながり→つながり（既知語＋助詞 の残りを芯にする）',
           _fix('たんごのちながり'), 'たんごのつながり')
 
@@ -763,8 +771,11 @@ def run_rebuild_cases():
           _fix_d('カニ打ちでの補正'), 'かな打ちでの補正')
     check('かな地腕の補正 → かな打ちでの補正（ちう→うち＋助詞）',
           _fix_d('かな地腕の補正'), 'かな打ちでの補正')
-    check('叶う父での補正 → かな打ちでの補正（連打畳み＋語の組）',
-          _fix_d('叶う父での補正'), 'かな打ちでの補正')
+    # ★ 48-VH: `叶う父`（かなうち**ち**）は連打畳みが要る形なので、
+    #   既定オフでは直らない。`カニ打ち`・`かな地腕` の2つは
+    #   連打とは別の道なので**今までどおり直る**（すぐ上）。
+    check('48-VH 叶う父 は直さない（連打畳みは既定オフ）',
+          _fix_d('叶う父での補正'), '叶う父での補正')
     check('正しい かな打ちでの補正 は触らない',
           _fix_d('かな打ちでの補正'), 'かな打ちでの補正')
 
@@ -1089,17 +1100,17 @@ def run_rebuild_cases():
     def _tok_skip_space(line):
         return [t for t in mock_tokenize(line) if t[0].strip()]
 
-    # **材料を `たんほ` から `たああんご` に替えた**（項目48-FX）。
-    # `たんほ → たんご` はかな入力では触らなくなったので、
-    # 「補正箇所に色が付くか」を測る材料にならない。
-    # 連打の巻き戻し（たああんご → たんご）は今までどおり直る。
-    _r5 = _C.correct_line('　たああんごの繋がりです', st2, mock_tokenize,
+    # **材料を2度替えている**——`たんほ`（項目48-FX でかな入力では
+    # 触らなくなった）→ `たああんご`（**項目48-VH で連打の巻き戻しが
+    # 既定オフ**）→ `ちながり`。ここは「補正箇所にだけ色が付くか」を
+    # 測る場所なので、**そのとき直る材料**でなければ意味がない。
+    _r5 = _C.correct_line('　たんごのちながりです', st2, mock_tokenize,
                           find_known_readings_flex)
     _t5, _u5 = _bsu(_r5, _tok_skip_space)
     check('先頭スペース行でも行全体は suspect にならない',
           [u['kind'] for u in _u5][:1], ['plain'])
     check('補正箇所には suspect が付く',
-          any(u['kind'] == 'suspect' and u['text'] == 'たああんご'
+          any(u['kind'] == 'suspect' and u['text'] == 'ちながり'
               for u in _u5), True)
 
     return all_ok

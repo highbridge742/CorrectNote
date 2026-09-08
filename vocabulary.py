@@ -305,10 +305,70 @@ class VocabularyStore:
         """
         return getattr(self, '_shape_revision', 0)
 
-    def _invalidate_cache(self):
-        """語彙が変わったときにキャッシュを破棄する。"""
+    def shape_revision_ja(self):
+        """
+        **日本語の語の顔ぶれ**が変わった回数（項目48-UR・2026-09-07）。
+
+        `shape_revision` と同じだが、**英単語（読みが `en:` で始まるもの）の
+        出し入れでは進まない**。
+
+        なぜ要るか: 起動のたびにメモから英単語を覚え直す
+        （`_learn_english_from_tabs`。実機で 143語）ので `shape_revision` が
+        必ず進み、**文脈語彙の控えが丸ごと捨てられて作り直しになる**
+        （実測で 1.01 秒。起動のたび）。ところが文脈語彙の抽出が語彙に
+        聞くのは `store.has_reading(かなの読み)` と `store.lookup(かなの読み)`
+        だけで、**`en:` の読みは日本語の読みと一致しようがない**——
+        英単語をいくら足しても**答えは1文字も変わらない**。
+
+        ★★ **控えの鍵は、その計算が本当に見ているものだけにする。**
+        見ていないものまで鍵に入れると、変わっていないのに作り直す。
+        """
+        return getattr(self, '_shape_revision_ja', 0)
+
+    def english_readings(self):
+        """
+        **`en:` で始まる読みの一覧**（項目48-VC・2026-09-07）。
+
+        英単語は「読み→表記」の入れ物に `en:` を付けて入っている
+        （`loanword.ENGLISH_PREFIX`）。それを引くのに
+        **読みを全部なめて `startswith` する**と、25,000 件の走査になる。
+
+        起動のたびの覚え直し（`relearn_english_from_texts`）は
+        1語ずつ足すので**控えがそのたびに捨てられ**、
+        `_english_vocabulary` が **120 回**作り直されていた
+        （`startswith` が **285万回**・実測 0.69 秒）。
+
+        ここは**足す／消すときに手で直す**（走査は最初の1回だけ）。
+        `load` で入れ物ごと作り直したら `None` に戻す。
+        """
+        s = getattr(self, '_en_readings', None)
+        if s is None:
+            s = self._en_readings = {r for r in self._by_reading
+                                     if str(r).startswith('en:')}
+        return s
+
+    def _note_english_reading(self, reading, gone=False):
+        """`en:` の読みの控えを直す（作っていなければ何もしない）。"""
+        s = getattr(self, '_en_readings', None)
+        if s is None or not str(reading).startswith('en:'):
+            return
+        if gone:
+            s.discard(reading)
+        else:
+            s.add(reading)
+
+    def _invalidate_cache(self, reading=None):
+        """語彙が変わったときにキャッシュを破棄する。
+
+        `reading` を渡すと、**英単語（`en:`）かどうか**を見分けて
+        `shape_revision_ja` を進めるかどうかを決める（項目48-UR）。
+        渡さなければ**両方進める**（＝今までどおり・安全側）。
+        """
         self._revision = getattr(self, '_revision', 0) + 1
         self._shape_revision = getattr(self, '_shape_revision', 0) + 1
+        if reading is None or not str(reading).startswith('en:'):
+            self._shape_revision_ja = getattr(
+                self, '_shape_revision_ja', 0) + 1
         self._readings_cache = None
         self._surfaces_cache = None
         self._prefixes_cache = None
@@ -387,6 +447,15 @@ class VocabularyStore:
                 # 分類を持って回るので、変わったら作り直させる。
                 self._shape_revision = getattr(
                     self, '_shape_revision', 0) + 1
+                # ★★ **日本語の顔ぶれの側も進める**（項目48-UR'・
+                # 検品で指摘・2026-09-07）。文脈語彙の控えは
+                # `shape_revision_ja` で見分けるので、ここを進めないと
+                # **分類が変わっても控えが古いまま**になる
+                # ——`(表記, 分類)` を持って回っているのに。
+                # 英単語（`en:`）はもともと文脈語彙に入らないので除く。
+                if not str(reading).startswith('en:'):
+                    self._shape_revision_ja = getattr(
+                        self, '_shape_revision_ja', 0) + 1
             # **件数は変わらないが、中身は変わった**（項目48-BT）。
             # ここを数えないと、敷居に届いた語がその場では直し先に
             # 入らない（`cachecheck.py` で見つけた）。
@@ -412,7 +481,8 @@ class VocabularyStore:
                 # （項目48-DA）。
                 entry['world'] = int(world)
             self._by_reading[reading][surface] = entry
-            self._invalidate_cache()
+            self._note_english_reading(reading)
+            self._invalidate_cache(reading)
             return True
 
     def remove(self, reading, surface):
@@ -432,7 +502,8 @@ class VocabularyStore:
         del entries[surface]
         if not entries:
             del self._by_reading[reading]
-        self._invalidate_cache()
+            self._note_english_reading(reading, gone=True)
+        self._invalidate_cache(reading)
         return True
 
     # `demote_homophones`（選ばれなかった表記の実績を 0.2 倍にする）は
@@ -685,6 +756,7 @@ class VocabularyStore:
                 _set_solid(e, bool(e.get('solid')))
             self._by_reading[e['reading']][e['surface']] = e
         self.legacy_on_disk = legacy
+        self._en_readings = None        # 入れ物ごと作り直した（項目48-VC）
         self._invalidate_cache()
 
 
@@ -955,19 +1027,25 @@ def build_context_vocab_cached(all_lines, store, cache, attested_out=None):
         return {}
 
     try:
-        store_size = store.shape_revision()
+        # ★★ **英単語の出し入れでは作り直さない**（項目48-UR）。
+        # ここの抽出が語彙に聞くのは**かなの読み**だけなので、
+        # `en:` の読みが増えても減っても答えは変わらない。
+        store_size = store.shape_revision_ja()
     except Exception:
         try:
-            store_size = len(store.to_list())
+            store_size = store.shape_revision()
         except Exception:
-            store_size = -1
+            try:
+                store_size = len(store.to_list())
+            except Exception:
+                store_size = -1
     if cache.get('_store_size') != store_size:
         cache.clear()
         cache['_store_size'] = store_size
 
-    def _extract(line):
+    def _extract(toks):
         out = []
-        for tok in tokenize(line):
+        for tok in toks:
             if tok.is_skippable:
                 continue
             if len(tok.surface) < 2:
@@ -984,7 +1062,7 @@ def build_context_vocab_cached(all_lines, store, cache, attested_out=None):
             out.append((tok.reading, (tok.surface, entry['category'])))
         return out
 
-    def _extract_all(line):
+    def _extract_all(toks):
         """
         **メモに実際に書かれている**（読み, 表記）を全部集める。
 
@@ -997,7 +1075,7 @@ def build_context_vocab_cached(all_lines, store, cache, attested_out=None):
         候補は選び直しの材料でしかないので、自動補正より広く取る。
         """
         out = []
-        for tok in tokenize(line):
+        for tok in toks:
             if tok.is_skippable or len(tok.surface) < 2:
                 continue
             if not tok.has_reading or not tok.reading:
@@ -1015,7 +1093,21 @@ def build_context_vocab_cached(all_lines, store, cache, attested_out=None):
             continue
         got = cache.get(line)
         if got is None or (want_attested and len(got) < 2):
-            got = (_extract(line), _extract_all(line))
+            # ★★ **1行を1回だけ刻む**（項目48-TR・2026-09-07）。
+            # `_extract` と `_extract_all` が**それぞれ `tokenize(line)` を
+            # 呼んでいた**ので、控えに無い行は**2回**形態素解析していた。
+            # 5,000行のファイルを開くと 10,000回になり、
+            # **開くまで14秒**（測った・profile では
+            # `build_context_vocab_cached` が `_analyze` の 99%）。
+            # 刻んだ結果は同じなので、**1回刻んで2つに渡す**。
+            # 出てくるものは1文字も変わらない。
+            # ★ **この並びと Token は、2つの関数が共有する**（48-TR）。
+            # どちらの中でも **Token の属性へ代入しない・並びを組み替えない**
+            # こと。正規化が要るなら、その場で新しい値をローカルに作る
+            # （`oddness.downgraded_tokens` と同じ——書き換えず作り直す）。
+            # 並びのほうは形で止める（`tuple` なので `pop`・`sort` は例外）。
+            _toks = tuple(tokenize(line))
+            got = (_extract(_toks), _extract_all(_toks))
             cache[line] = got
         elif not isinstance(got, tuple):
             got = (got, [])
@@ -1084,15 +1176,42 @@ _GAP_COST = 2.6
 # 「たああんご」のように同じキーを続けて打ってしまう連打は
 # 打ち間違いの中でも起きやすいので、安く数える。
 #
-# **測るための切り替え**（2026-08-28・うにさんの検討「2連続同じ
-# 文字は、効果がなければ廃止する。2度同じキーを押すのは意図して
-# いるところが大きい」）。`CN_NO_DUP=1` のとき、連打の特別扱いを
-# 外して、ふつうの「余分な打鍵」（_GAP_COST）と同じ額にする。
-# 掛かる先は5か所全部（下界の floor・weighted_edit_distance の
-# _del_cost・trie の del_cost・trie の下界）——この定数を1つ
-# 動かせば全部そろう（同じ判定を2度書かない・48-GN）。
+# ★★ **重複打鍵の直しは、既定オフ**（項目48-VH・2026-09-08・
+# うにさんの指定）。
+#
+# > 「**同一キーの連続重複を1つに補正する機能自体を無効にして
+# >   ください。無効でしばらく様子を見て問題がなければ機能削除します**」
+#
+# 2026-08-28 の検討「2連続同じ文字は、効果がなければ廃止する。
+# **2度同じキーを押すのは意図しているところが大きい**」の続き。
+# 栓はその時から在り、**全部の道に掛かっている**——ここでは
+# 連打の特別扱いを外して、ふつうの「余分な打鍵」（`_GAP_COST`）と
+# 同じ額にする。掛かる先は5か所全部（下界の floor・
+# `weighted_edit_distance` の `_del_cost`・trie の `del_cost`・
+# trie の下界）——この定数を1つ動かせば全部そろう（48-GN）。
+#
+# **戻すときは環境変数**: `CN_NO_DUP=0` で 2026-09-08 より前の挙動。
+# 様子見のあいだ、両方を測れるようにしてある。
+#: 既定で重複打鍵の直しを使うか。**うにさんの指定でオフ**。
+DUP_REPAIR_DEFAULT_ON = False
+
+
+def dup_repair_enabled():
+    """
+    **重複打鍵（同じ字が2度 → 1つ消す）の直しを使うか。**
+
+    ★ **決めているのはこの1か所**（48-GN）。`corrector` 側の
+    `_dup_repair_enabled` もここを呼ぶ。環境変数が置かれていれば
+    それを優先する（`CN_NO_DUP=1` オフ／`CN_NO_DUP=0` オン）。
+    """
+    v = os.environ.get('CN_NO_DUP')
+    if v is not None:
+        return v != '1'
+    return DUP_REPAIR_DEFAULT_ON
+
+
 _REPEAT_GAP_COST = 0.6
-if os.environ.get('CN_NO_DUP') == '1':
+if not dup_repair_enabled():
     _REPEAT_GAP_COST = _GAP_COST
 
 # **隣どうしの入れ替え**（順序違い）。SPEC の「誤打の種類」に

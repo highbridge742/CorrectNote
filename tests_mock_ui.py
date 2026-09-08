@@ -553,9 +553,19 @@ def run_settings_cases():
     _r = _cl('たんほの繋がり', im='kana')
     check('たんほ→たんご は、かな入力では直さない（項目48-FX）',
           _r['corrected'], 'たんほの繋がり')
+    # ★★ **重複打鍵の直しは 2026-09-08 から既定オフ**（項目48-VH・
+    # うにさんの指定「**同一キーの連続重複を1つに補正する機能自体を
+    # 無効にしてください。無効でしばらく様子を見て問題がなければ
+    # 機能削除します**」）。**消さずに、意図を裏返して残す**——
+    # 削るときに何を削るのかが、ここを読めば分かる。
+    # 戻すのは `CN_NO_DUP=0`（**import より前**に置くこと。
+    #  `vocabulary._REPEAT_GAP_COST` は読み込みのときに決まる）。
     _r = _cl('たああんごの繋がり')
-    check('たああんご→たんご（同じキーの連打を取り除く）',
-          _r['corrected'], 'たんごの繋がり')
+    check('48-VH たああんご は直さない（連打の巻き戻しは既定オフ）',
+          _r['corrected'], 'たああんごの繋がり')
+    import vocabulary as _v_dup
+    check('48-VH 栓は 1 か所で決めている（既定オフ）',
+          _v_dup.dup_repair_enabled(), False)
     _r = _cl('たんごのちながり')
     check('ちながり→つながり（助詞を剥がした芯で照合する）',
           _r['corrected'], 'たんごのつながり')
@@ -3155,6 +3165,175 @@ def test_refit_broken_units_48pv():
     else:
         print('..  カタカナ2字の表の検品（判定の材料が無いので飛ばす）')
 
+    print('--- 項目48-TO/TP/TQ（ドロップ・同じファイル・タブの右クリック）---')
+    # うにさんの指定（2026-09-07）:
+    #   ・ファイルをアプリにドロップしたら、新規タブにテキスト情報を表示する
+    #   ・同一のファイルを開いた場合は、タブを増やさず、重複するタブを表示する
+    #   ・タブを右クリックしたらメニューを出し、「エクスプローラで選択」で
+    #     フォルダを開いて該当のファイルが選択された状態にする
+    import app as _A_to
+    _src_to = _io4.open('app.py', encoding='utf-8').read()
+    _App = _A_to.CorrectNoteApp
+
+    # 48-TP **開く道は1本**（学び22——門は全部の道に掛ける）
+    check('48-TP ファイルを開く入口は `_open_paths` 1つ',
+          'def _open_paths(' in _src_to
+          and _src_to.count('self._open_paths(') >= 2, True)
+    check('48-TP 「開く…」も同じ入口を通る',
+          "askopenfilename(" in _src_to
+          and _src_to.index('def open_file(') < _src_to.index(
+              'self._open_paths([path])'), True)
+    check('48-TP 重複の判定は1か所（`_find_tab_by_path`）',
+          _src_to.count('def _find_tab_by_path(') == 1
+          and _src_to.count('self._find_tab_by_path(') == 1, True)
+
+    # 同じファイルかの見分け（大文字小文字・相対・空）
+    import os as _os_to
+    _here = _os_to.path.abspath('app.py')
+    check('48-TP 大文字小文字の違いは同じファイル',
+          _App._same_file(_here, _here.upper()), True)
+    check('48-TP 相対でも同じファイル',
+          _App._same_file('app.py', _here), True)
+    check('48-TP 別のファイルは別',
+          _App._same_file(_here, _os_to.path.abspath('session.py')), False)
+    check('48-TP 無題どうしを同じ扱いにしない',
+          (_App._same_file(None, None), _App._same_file('', 'x')),
+          (False, False))
+
+    # 48-TO ドロップの受け——**窓の手続きから Tk を触らない**
+    check('48-TO ドロップの仕掛けが在る（SetWindowSubclass ＋ DragAcceptFiles）',
+          'def _setup_file_drop(' in _src_to
+          and 'SetWindowSubclass' in _src_to
+          and 'DragAcceptFiles' in _src_to, True)
+    check('48-TO ★ 手続きの中では Tk を呼ばず、受け皿に積むだけ',
+          'self._drop_queue.append(got)' in _src_to
+          and 'def _drain_drop_queue(' in _src_to, True)
+    _proc = _src_to[_src_to.index('def _on_message('):
+                    _src_to.index('self._drop_proc = SUBCLASSPROC')]
+    check('48-TO 手続きの中に root. の呼び出しが1つも無い',
+          'self.root' in _proc, False)
+    check('48-TO 閉じるときに差し替えを外す',
+          'def _teardown_file_drop(' in _src_to
+          and 'self._teardown_file_drop()' in _src_to[
+              _src_to.index('def _on_close('):], True)
+    check('48-TO ctypes の戻り値の型を決めている（64bit のハンドルを切らない）',
+          'DragQueryFileW.restype' in _src_to
+          and 'DefSubclassProc.restype' in _src_to, True)
+    check('48-TO 道の長さは先に聞く（決め打ちの入れ物で黙って切らない）',
+          'need = shell32.DragQueryFileW(wparam, i, None, 0)' in _src_to
+          and 'create_unicode_buffer(need + 1)' in _src_to, True)
+
+    # テキストでないもの・フォルダは開かない
+    check('48-TO テキストでないファイルは開かない（NUL を見る）',
+          "b'\\x00' in raw[:8192]" in _src_to, True)
+    check('48-TO フォルダは開かない', "os.path.isdir(path)" in _src_to, True)
+
+    # 48-TQ タブの右クリックは、このアプリの一覧に揃える
+    check('48-TQ 右クリックは `_make_dropdown`（tk.Menu の popup を作らない）',
+          'def _on_tab_right_press(' in _src_to
+          and 'self._make_dropdown(self._tab_menu_items(' in _src_to
+          and 'tk_popup' not in _src_to, True)
+    check('48-TQ 札の3か所すべてに結ぶ（文字・✕・枠）',
+          "for _w in (f, lb, x):" in _src_to
+          and "_w.bind('<Button-3>'," in _src_to, True)
+    check('48-TQ エクスプローラへは1つの文字列で渡す（空白を含む道）',
+          """'explorer /select,"%s"' % path""" in _src_to, True)
+    check('48-TQ 今見ているタブの道は current_file が本物',
+          'def _tab_path(' in _src_to
+          and 'index == self.session.active and self.current_file' in _src_to,
+          True)
+
+    # ---- 検品で見つかって塞いだ穴（2026-09-07）
+    check("48-TO' 行末を均す（開いて保存で CR が増えない）",
+          "text.replace(_cr + _lf, _lf).replace(_cr, _lf)" in _src_to
+          and '.splitlines(' not in _src_to[
+              _src_to.index('def _read_text_file('):
+              _src_to.index('def _place_in_new_tab(')], True)
+    check("48-TO'' 2度掛けない／失敗したら掛けた分を外す／管理者でも通す",
+          "if getattr(self, '_drop_proc', None) is not None:" in _src_to
+          and 'ChangeWindowMessageFilterEx' in _src_to
+          and _src_to.count('self._teardown_file_drop()') == 2, True)
+    check("48-TP' 新しい本文には、前のタブの当て直しを掛けない",
+          'self._pending_scroll = 0.0' in _src_to[
+              _src_to.index('def _place_in_new_tab('):
+              _src_to.index('def _open_paths(')], True)
+    # ★★ **本文を入れ替える道すべてで、前の文書に結び付いたものを下ろす**
+    _pl = _src_to[_src_to.index('def _place_in_new_tab('):
+                  _src_to.index('def _open_paths(')]
+    _ld = _src_to[_src_to.index('def _load_active_tab('):]
+    _ld = _ld[:_ld.index("self.editor.insert('1.0', tab.get('text'")]
+    check("48-TP'' ファイルを開く道で下ろす（自動反映と F2 の的）",
+          'self._autofix_reset()' in _pl
+          and 'self._clear_f2_target()' in _pl, True)
+    check("48-TP'' タブを移る道でも下ろす（学び22。v1.6.0 から在った穴）",
+          'self._autofix_reset()' in _ld
+          and 'self._clear_f2_target()' in _ld, True)
+    check("48-TP'' 落とす前に一覧を閉じる（焦点が動くと的が残る）",
+          'self._close_dropdown()' in _src_to[
+              _src_to.index('def _on_files_dropped('):], True)
+    # ---- 48-TW **窓は本体だけではない**（学び22——門は全部の道に掛ける）
+    check('48-TW 掛ける口が分かれている（本体以外の窓にも掛けられる）',
+          'def _attach_file_drop(' in _src_to
+          and 'def _detach_file_drop(' in _src_to, True)
+    check('48-TW 簡易入力の窓にも掛ける',
+          'self._quick_drop_hwnds = self._attach_file_drop(win)' in _src_to,
+          True)
+    _qc = _src_to[_src_to.index('def _close_quick_capture('):]
+    _qc = _qc[:_qc.index('def ', 10)]
+    check('48-TW 閉じるときに外す——**destroy の前**（死んだ番号を残さない）',
+          '_detach_file_drop' in _qc
+          and _qc.index('_detach_file_drop') < _qc.index('win.destroy()'),
+          True)
+    check('48-TW 同じ窓に2度掛けない（控えに在る番号は飛ばす）',
+          'if h in self._drop_hwnds:' in _src_to, True)
+    check('48-TW 行き先は窓によらず同じ1本（48-GN——窓ごとに書き分けない）',
+          _src_to.count('self._open_paths(list(paths))'), 1)
+    check('48-TW 掛け直しのときも、前の窓の分を外してから手放す',
+          '_detach_file_drop' in _src_to[
+              _src_to.index('def _open_quick_capture('):
+              _src_to.index("win = tk.Toplevel(self.root)")], True)
+
+    # ★★ **裏のスレッドで語彙を書き換えない**（48-TT・検品で止められた）。
+    # `VocabularyStore` は錠前を持たないので、主スレッドが辞書を回している
+    # 最中に出し入れすると落ちる。覚え直しは主スレッドのまま。
+    check('48-TT 裏のスレッドは語彙を書き換えない',
+          'self._learn_english_from_tabs' not in _src_to[
+              _src_to.index('def _start_warmup('):
+              _src_to.index('def _poll_warmup(')], True)
+    check('48-TT 覚え直しは主スレッド（_poll_warmup）で',
+          'self._learn_english_from_tabs()' in _src_to[
+              _src_to.index('def _poll_warmup('):
+              _src_to.index('def _apply_vocab_restore(')], True)
+    check('48-TT 覚え直したあとの解析は、裏で回す入口へ渡す',
+          'self._warm_then_analyze()' in _src_to[
+              _src_to.index('def _poll_warmup('):
+              _src_to.index('def _apply_vocab_restore(')], True)
+    check('48-TT 覚え直しの中身は1か所（loanword を呼ぶのは1つの関数だけ）',
+          _src_to.count('from loanword import relearn_english_from_texts')
+          == 1, True)
+    check("48-TT' 下ごしらえの最中は解析へ進まない",
+          "if getattr(self, '_warmup', None) is not None:" in _src_to[
+              _src_to.index('def _analyze_if_changed('):
+              _src_to.index('def _analyze(')], True)
+    _csrc48tv = _io4.open('corrector.py', encoding='utf-8').read()
+    _lsrc48tv = _io4.open('loanword.py', encoding='utf-8').read()
+    check('48-TV 語彙を読み損ねたとき、空の表を控えに焼き付けない',
+          'return []' in _csrc48tv[
+              _csrc48tv.index('def _romaji_reading_table('):
+              _csrc48tv.index('def _romaji_reading_table(') + 1600]
+          and _lsrc48tv.count('return {}       # 同上') == 1, True)
+    check('48-TV 覚え直しに失敗したら知らせる（黙って英単語を失わない）',
+          '英単語の覚え直しに失敗しました' in _src_to, True)
+    check('48-TS ファイルを開く道も、下ごしらえを裏で回す入口を通る',
+          'self._warm_then_analyze()' in _src_to[
+              _src_to.index('def _open_paths('):
+              _src_to.index('def _setup_file_drop(')]
+          and "self._analyze_cause = 'ファイルを開く'" in _src_to, True)
+    check('48-TS きっかけの名前は呼び手が決めていればそれを使う',
+          _src_to.count("or 'タブの切り替え')") == 2, True)
+    check("48-TP''' realpath は最後の手段（切れた道で固まらない）",
+          'os.path.basename(na) != os.path.basename(nb)' in _src_to, True)
+
     print('--- 項目48-TM（消えたときの記録は、本文と命運を共にする）---')
     # うにさんの指定（2026-09-07）「**本文にない履歴が問題**であって、
     # アプリ内に打った文字の情報が残ることは構いません。
@@ -4004,3 +4183,837 @@ def test_privacy_no_counts_48qg_48qh_48qj():
           (['縦シュー'], ['本語'], False, True))
 
     return all_ok
+
+
+def test_quick_autofix_undo_48vd():
+    """
+    ★★ **簡易入力の自動補正を取り消せること**（項目48-VD・
+    うにさんの報告・2026-09-07「簡易入力で自動補正された場合、
+    それを取り消す手段がない」）。
+
+    見るのは2つ。
+
+      **(a) 並びを書く場所が1つ**（48-GN）——メモ欄と簡易入力の
+      どちらの一覧も `_autofix_menu_items` を呼ぶこと。片方だけを
+      直したときに、ここで止まる。
+
+      **(b) 台帳を渡す道が揃っている**（学び22）——`correct_line`
+      を呼ぶところは**全部** `decisions=` を渡すこと。渡していない
+      道が1本でも在ると、そこでは「この補正は不要」が効かず、
+      元へ戻しても次の解析でまた直る（今回の不具合そのもの）。
+
+    実機（Tk）は要らない。**文字と AST だけ**で測る。
+    振る舞いは `tools_local/probe_quick_undo.py` と
+    `tools_local/probe_autofix_menu_pair.py`。
+    """
+    import ast as _ast
+    import io as _io
+
+    print('--- 項目48-VD（簡易入力の自動補正を取り消す） ---')
+    all_ok = True
+
+    def check(label, got, want):
+        nonlocal all_ok
+        ok = (got == want)
+        all_ok = all_ok and ok
+        print(f'{"OK " if ok else "NG "}{label}')
+        if not ok:
+            print(f'      得た値: {got!r}   期待: {want!r}')
+
+    src = _io.open('app.py', encoding='utf-8').read()
+    tree = _ast.parse(src)
+    funcs = {}
+    for node in _ast.walk(tree):
+        if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+            funcs[node.name] = node
+
+    def calls_in(name, callee):
+        fn = funcs.get(name)
+        if fn is None:
+            return None
+        return any(isinstance(x, _ast.Call)
+                   and isinstance(x.func, _ast.Attribute)
+                   and x.func.attr == callee
+                   for x in _ast.walk(fn))
+
+    def body(name):
+        i = src.index('def %s(' % name)
+        j = src.index(chr(10) + '    def ', i + 1)
+        return src[i:j]
+
+    # ---- (a) 並びは1か所 ------------------------------------
+    check('48-VD 並びを組み立てる口が在る',
+          '_autofix_menu_items' in funcs, True)
+    for _name in ('_editor_dropdown_items', '_open_quick_dropdown'):
+        check(f'48-VD {_name} が同じ口を呼ぶ（48-GN）',
+              calls_in(_name, '_autofix_menu_items'), True)
+    # ラベルは自動補正の口にしか無い（欄ごとに書き分けていない）。
+    # ※ 分割表示の**補正欄**は別の仕掛け（`unit['detail']` から
+    #   `_reject_correction` を呼ぶ。メモ欄には原文が残っている
+    #   ので戻す物が無い）。そちらは数えない。
+    _mi = body('_autofix_menu_items')
+    _ed = body('_editor_dropdown_items')
+    _qd = body('_open_quick_dropdown')
+    for _lab in ('― 自動補正 ―', 'この補正は不要（',
+                 'は今後直さない', '元の入力に戻す（'):
+        check(f'48-VD ラベル {_lab!r} は自動補正の口だけが持つ',
+              (_lab in _mi, _lab in _ed, _lab in _qd),
+              (True, False, False))
+
+    # ---- (b) 台帳は全部の道へ（学び22） ----------------------
+    _calls = [x for x in _ast.walk(tree)
+              if isinstance(x, _ast.Call)
+              and ((isinstance(x.func, _ast.Name)
+                    and x.func.id == 'correct_line')
+                   or (isinstance(x.func, _ast.Attribute)
+                       and x.func.attr == 'correct_line'))]
+    _no_dec = [x.lineno for x in _calls
+               if not any(k.arg == 'decisions' for k in x.keywords)]
+    check('48-VD correct_line を呼ぶ道は全部 decisions を渡す',
+          _no_dec, [])
+    # 数え漏れの見張り: いま在るのは4本（起動時の下見・簡易入力・
+    # メモ欄の解析・貼り付けの下見）。**減ったら気づく**。
+    check('48-VD correct_line を呼ぶ道が減っていない',
+          len(_calls) >= 4, True)
+
+    # ---- 控えの名簿は面ごとに分かれている ---------------------
+    check('48-VD 面を決める口が在る（_autofix_pane）',
+          '_autofix_pane' in funcs and '_autofix_pane_of' in funcs,
+          True)
+    _pane = body('_autofix_pane')
+    check('48-VD 面の口は**属性名**を返す（_autofix_reset が差し替える）',
+          "'_autofix_records'" in _pane
+          and "'_quick_autofix_records'" in _pane, True)
+    check('48-VD 簡易入力の名簿は別に持つ（保存する原文に混ぜない）',
+          'self._quick_autofix_records = []' in src, True)
+    check('48-VD 保存の原文はメモ欄の名簿だけを読む',
+          '_autofix_live_records()' in body('editor_source_text'), True)
+
+    # ---- 設計33 はメモ欄だけ ---------------------------------
+    _reset = body('_autofix_reset')
+    check('48-VD 設計33 の確定はメモ欄のときだけ（面で括る）',
+          '_design33_flush' in _reset
+          and "if key == '_autofix_records':" in _reset, True)
+
+    # ---- 窓の一生 ---------------------------------------------
+    _qc = body('_close_quick_capture')
+    check('48-VD 閉じるときの片付けは **destroy の前**（48-TW と同じ）',
+          '_autofix_reset' in _qc
+          and _qc.index('_autofix_reset') < _qc.index('win.destroy()'),
+          True)
+    check('48-VD 窓を建てる／掴み直す両方で控えを空にする',
+          body('_open_quick_capture').count(
+              'self._quick_autofix_records = []'), 2)
+
+    # ---- 自動反映が控えを作り、色は塗り直す -------------------
+    _apply = body('_apply_quick_autofix')
+    check('48-VD 簡易入力の自動反映が控えを作る',
+          '_autofix_remember' in _apply, True)
+    check('48-VD 「元の入力に戻す」を使った行は上書きしない',
+          "if rec is not None and rec['manual']:" in _apply, True)
+    check('48-VD 2周目に original を書き換えない（原文の化けを防ぐ）',
+          "rec['original']" in _apply, False)
+    check('48-VD 色は控えから塗り直す（付けっぱなしにしない）',
+          '_repaint_autofix_tags(w=text_widget)' in _apply
+          and "text_widget.tag_add(" not in _apply, True)
+
+    # ---- Ctrl+Z も同じ道 --------------------------------------
+    check('48-VD 簡易入力の Ctrl+Z を束ねている',
+          "text.bind('<Control-z>', self._on_quick_ctrl_z)" in src,
+          True)
+    check('48-VD Ctrl+Z は _undo_autofix を通る（Tk の取り消しではない）',
+          calls_in('_on_quick_ctrl_z', '_undo_autofix'), True)
+    check('48-VD 控えが無ければ素通し（ふつうの取り消しを殺さない）',
+          'return None' in body('_on_quick_ctrl_z'), True)
+
+    # ---- 判断を書いたら簡易入力も塗り直す ----------------------
+    check('48-VD 台帳を書いたら簡易入力も解析し直す（学び22）',
+          calls_in('_after_decision', '_analyze_quick'), True)
+
+    return all_ok
+
+
+def run_review_regressions_48vi_vm():
+    """保存の故障・表示行の往復・重複オフを、実際の処理で確かめる。"""
+    import ast
+    import os
+    import tempfile
+    from pathlib import Path
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from session import SessionStore, new_tab
+    import loanword
+    from vocabulary import VocabularyStore
+    from seed_vocabulary import load_seed
+
+    all_ok = True
+    def check(label, got, want):
+        nonlocal all_ok
+        ok = got == want
+        all_ok = all_ok and ok
+        print(('OK ' if ok else 'NG ') + label)
+        if not ok:
+            print('    got:', repr(got), 'want:', repr(want))
+
+    tree = ast.parse(Path('app.py').read_text(encoding='utf-8'))
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef)
+               and n.name == 'CorrectNoteApp')
+    method = next(n for n in cls.body if isinstance(n, ast.FunctionDef)
+                  and n.name == '_write_to_file')
+    namespace = {'os': os}
+    exec(compile(ast.Module(body=[method], type_ignores=[]), 'app.py', 'exec'), namespace)
+    save = namespace['_write_to_file']
+    with tempfile.TemporaryDirectory() as directory:
+        dest = Path(directory) / 'memo.txt'
+        original = b'original document'
+        def editor(text='new document'):
+            return SimpleNamespace(editor_source_text=lambda: text, _dirty=True,
+                                   current_file='old-path', _refresh_title=lambda: None,
+                                   status=SimpleNamespace(config=lambda **kw: None),
+                                   _save_session=lambda: None)
+        real_fdopen = os.fdopen
+        class FailingStream:
+            def __init__(self, fd, *args, **kwargs):
+                self.stream = real_fdopen(fd, *args, **kwargs)
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                self.stream.close()
+                if stage == 'close':
+                    raise OSError('simulated close failure')
+            def __getattr__(self, key):
+                return getattr(self.stream, key)
+            def write(self, text):
+                if stage == 'write':
+                    self.stream.write(text[:3])
+                    raise OSError('simulated disk full')
+                return self.stream.write(text)
+            def flush(self):
+                if stage == 'flush':
+                    raise OSError('simulated flush failure')
+                return self.stream.flush()
+
+        for stage in ('write', 'flush', 'close', 'replace', 'encoding'):
+            dest.write_bytes(original)
+            fake = editor('new\ud800text' if stage == 'encoding' else 'new document')
+            with patch('os.fdopen', FailingStream):
+                if stage == 'replace':
+                    with patch('os.replace', side_effect=OSError('simulated replace failure')):
+                        ok = save(fake, str(dest))
+                else:
+                    ok = save(fake, str(dest))
+            check('48-VJ ' + stage + ' failure keeps original',
+                  (ok, dest.read_bytes(), fake._dirty, fake.current_file),
+                  (False, original, True, 'old-path'))
+            check('48-VJ ' + stage + ' cleans temporary file',
+                  sorted(p.name for p in Path(directory).iterdir()), ['memo.txt'])
+        fake = editor('new document\n')
+        check('48-VJ successful overwrite', save(fake, str(dest)), True)
+        check('48-VJ completed document and saved state',
+              (dest.read_bytes(), fake._dirty), (b'new document', False))
+        fresh = Path(directory) / 'new.txt'
+        check('48-VJ first save', save(editor(), str(fresh)), True)
+
+        state_path = str(Path(directory) / 'session.json')
+        state = SessionStore(state_path)
+        state.tabs = [new_tab(text='example', top=120, scroll=0.5)]
+        state.save()
+        restored = SessionStore(state_path)
+        restored.load()
+        check('48-VI top survives save/load', restored.current()['top'], 120)
+        state.tabs[0].pop('top')
+        state.save()
+        restored.load()
+        check('48-VI old session keeps scroll fallback',
+              (restored.current()['top'], restored.current()['scroll']), (None, 0.5))
+
+    store = VocabularyStore()
+    load_seed(store)
+    for enabled in (False, True):
+        with patch.dict(os.environ, {'CN_NO_DUP': '0' if enabled else '1'}):
+            for typed, restored in (('クリッック', 'クリック'), ('ファイイル', 'ファイル'),
+                                    ('プラネタリウウム', 'プラネタリウム')):
+                check('48-VL duplicate setting ' + str(enabled) + ' ' + typed,
+                      loanword.fix_katakana_word(typed, store), restored if enabled else None)
+    for enabled in (False, True):
+        with patch.dict(os.environ, {'CN_NO_DUP': '0' if enabled else '1'}):
+            for typed in ('keybooard', 'keyboarrd', 'keyboaard'):
+                check('48-VL English duplicate setting ' + str(enabled) + ' ' + typed,
+                      loanword.fix_english_word(typed, store), 'keyboard' if enabled else None)
+            check('48-VL legitimate doubled letters survive',
+                  loanword.fix_english_word('bookkeeper', store), None)
+    return all_ok
+
+
+def run_pos_context_48vo():
+    """文脈の判定は同形語の反例と、位置・読みの保存まで見る。"""
+    from morphology import Token, contextualize_tokens
+    from unittest.mock import patch
+    good = True
+
+    def check(label, value):
+        nonlocal good
+        print('OK' if value else 'NG', '48-VO', label)
+        good = good and bool(value)
+
+    def token(word, pos, sub, start, reading='', known=True):
+        return Token(word, pos, word, reading or word, start, start+len(word), known, sub)
+
+    for next_word, next_pos, expected in (
+            ('に', '助詞', '名詞'), ('だ', '助動詞', '名詞'),
+            ('です', '助動詞', '名詞'), ('遠い', '形容詞', '助詞'),
+            ('の', '助詞', '助詞'), ('による', '助詞', '助詞')):
+        original = [token('東京','名詞','固有名詞:地域:一般',0),
+                    token('より','助詞','格助詞:一般',2),
+                    token(next_word,next_pos,'',4)]
+        got = contextualize_tokens(original)
+        check('より＋'+next_word, got[1].pos == expected)
+        check('元の解析を汚さない', original[1].pos == '助詞')
+    # 空白をまたいだ判断、読みを言えない未知語からの断定はしない。
+    for known, start in ((False,4),(True,5)):
+        original = [token('未知','名詞','一般',0,known=known),
+                    token('より','助詞','格助詞:一般',2), token('に','助詞','格助詞',start)]
+        check('未知語・空白で断定しない', contextualize_tokens(original)[1].pos == '助詞')
+    with patch('seed_japanese.is_unit', side_effect=lambda w: w == '爪切り'):
+        original = [token('電動','名詞','一般',0,'でんどう'),
+                    token('爪','名詞','一般',2,'つめ'),
+                    token('切り','名詞','接尾:一般',3,'きり')]
+        got = contextualize_tokens(original)
+        check('既知の複合名詞', [t.surface for t in got] == ['電動','爪切り'])
+        check('範囲と読み', (got[1].start,got[1].end,got[1].reading) == (2,5,'つめきり'))
+        original[2].pos = '動詞'
+        check('連用形の動詞を名詞にしない', len(contextualize_tokens(original)) == 3)
+        original[2].pos = '名詞'; original[1].pos_sub = '固有名詞:人名:姓'
+        check('名前の分類を消さない', len(contextualize_tokens(original)) == 3)
+    with patch('seed_japanese.is_unit', return_value=True):
+        for head, tail in (('銅','色'), ('かく','ら')):
+            original = [token(head,'名詞','一般',0),
+                        token(tail,'名詞','接尾:一般',len(head))]
+            check('名詞化でない接尾辞をまとめない '+head+tail,
+                  len(contextualize_tokens(original)) == 2)
+    original = [token('十','名詞','数',0,'じゅう'), token('六','名詞','数',1,'ろく'),
+                token('茶','名詞','一般',2,'ちゃ')]
+    got = contextualize_tokens(original)
+    check('連続した数詞の単位', [(t.surface,t.pos_sub) for t in got] == [('十六','数'),('茶','一般')])
+    check('数の読みも維持', got[0].reading == 'じゅうろく' and got[0].end == 2)
+    original[1].start=2; original[1].end=3
+    check('別欄の数を結ばない', contextualize_tokens(original)[0].surface == '十')
+    return good
+
+
+def run_drag_edges_48vp():
+    """実カーソルを動かさず、モニター座標と連続ドラッグを再現する。"""
+    import ast
+    import types
+    from pathlib import Path
+    from unittest.mock import patch
+    import ctypes
+    tree = ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
+    wanted = {'_edge_warp', '_drag_motion', '_warp_pointer'}
+    methods = [n for n in ast.walk(tree)
+               if isinstance(n, ast.FunctionDef) and n.name in wanted]
+    env = {'sys': types.SimpleNamespace(platform='win32')}
+    exec(compile(ast.Module(body=methods, type_ignores=[]), 'app.py', 'exec'), env)
+
+    class Pane:
+        def winfo_pointerx(self): return self.left + 100
+        def winfo_pointery(self): return self.py
+        def winfo_rootx(self): return self.left
+        def winfo_rooty(self): return self.top
+        def winfo_height(self): return self.height
+        def winfo_width(self): return 900
+        def winfo_screenheight(self): return 1440
+        def event_generate(self, *args, **kwargs): self.fallback = True
+
+    class Drag:
+        DRAG_WARP_EDGE = 64
+        DRAG_WARP_TOLERANCE = 60
+        DRAG_WARP_SKIP_MAX = 8
+        _overview = None
+        _edge_warp = env['_edge_warp']
+        _drag_motion = env['_drag_motion']
+        def _warp_pointer(self, w, x, y):
+            self.warps += 1
+            w.py = w.top + y
+            return 'sync'
+        def _scroll_cursor_restore(self): self.restored = True
+        def _get_line_height(self): return 20
+        def _on_wheel_units(self, n): self.lines += n
+
+    try:
+        # 主画面／背の低い副画面／上に置いた副画面／下に置いた副画面／
+        # 画面外にはみ出す欄／小さい欄。それぞれ上下へ20回、戻しを跨ぐ。
+        cases = [((0, 0, 1920, 1400), 100, 1100),
+                 ((1920, 0, 3840, 1040), 100, 900),
+                 ((0, -1080, 1920, -40), -980, 900),
+                 ((0, 1440, 1920, 2480), 1540, 900),
+                 ((0, 0, 1920, 1040), -1200, 2100),
+                 ((0, 0, 1920, 1040), 400, 100)]
+        for area, top, height in cases:
+            env['monitor_work_area'] = lambda x, y, a=area: a
+            for direction in (-1, 1):
+                w = Pane()
+                w.left, w.top, w.height = area[0], top, height
+                w.py = (max(top, area[1]) + min(top + height, area[3])) // 2
+                a = Drag()
+                a.warps = a.lines = 0
+                a._drag = dict(widget=w, mode='scroll', start_x=100,
+                               start_y=w.py-top, last_y=w.py-top, accum=0)
+                expected = 0
+                for _ in range(20):
+                    previous = w.py
+                    w.py = area[1] + 2 if direction < 0 else area[3] - 2
+                    expected += w.py - previous
+                    event = types.SimpleNamespace(x=100, y=w.py-top)
+                    a._drag_motion(event, w)
+                    assert a.warps == _ + 1, (area, top, direction, a.warps)
+                    assert area[1]+64 < w.py < area[3]-64
+                    # warp生成イベント／手を止めた報せではスクロールしない。
+                    before = a.lines
+                    a._drag_motion(event, w)
+                    assert a.lines == before
+                assert a.lines == -int(expected / 20), (a.lines, expected)
+                assert not a._drag.get('no_warp')
+        # API失敗を同期成功と誤認しない。Tkの代替経路も確認する。
+        w = Pane()
+        w.left = w.top = 0
+        for result, expected in ((1, 'sync'), (0, 'async')):
+            native = types.SimpleNamespace(user32=types.SimpleNamespace(
+                SetCursorPos=lambda x, y, r=result: r))
+            with patch.object(ctypes, 'windll', native, create=True):
+                assert env['_warp_pointer'](None, w, 20, 30) == expected
+        # 取得できない環境では従来の画面サイズを使える。
+        env['monitor_work_area'] = lambda x, y: None
+        w.height, w.py = 1300, 1438
+        a._edge_warp({}, w, types.SimpleNamespace(x=100))
+        assert 64 < w.py < 1375
+    except Exception as exc:
+        print('NG 48-VP 右ドラッグ:', repr(exc))
+        return False
+    print('OK 48-VP: 6配置×上下×20回、静止、API失敗、取得失敗')
+    return True
+
+
+def run_passive_48vq():
+    """Janomeなしでも活用情報のある列を入口で検証する。"""
+    def tokens(parts):
+        out, start = [], 0
+        for surface, pos, infl in parts:
+            out.append((surface, pos, surface, start, start+len(surface), True, infl))
+            start += len(surface)
+        return out
+    a = ('示さ', '動詞:自立', '未然形')
+    b = ('れる', '動詞:接尾', '基本形')
+    cases = [([a,b], True),
+             ([('書か','動詞:自立','未然形'),
+               ('せ','動詞:接尾','未然形'),('られる','動詞:接尾','基本形')], True),
+             ([('示す','動詞:自立','基本形'),b], False),
+             ([('示し','動詞:自立','連用形'),b], False),
+             ([('示さ','名詞:一般',''),b], False),
+             ([a,b,('ない','助動詞','基本形')], False),
+             ([a,b,('ます','助動詞','基本形')], False),
+             ([a,b,('られる','動詞:接尾','基本形')], False)]
+    ok = True
+    for parts, expected in cases:
+        text = ''.join(p[0] for p in parts)
+        ts = tokens(parts)
+        got = C._chunk_is_intact(text, lambda _: ts)
+        good = got == expected
+        ok = ok and good
+        print(('OK' if good else 'NG'), '48-VQ', text, got)
+    # 読み・活用の証拠が欠ける解析は、同じ表記でも決めつけない。
+    ts = tokens([a,b])
+    for damaged in ([ts[0][:5]+(False,ts[0][6]),ts[1]],
+                    [ts[0][:6],ts[1][:6]]):
+        good = not C._chunk_is_intact('示される', lambda _: damaged)
+        ok = ok and good
+        print(('OK' if good else 'NG'), '48-VQ 情報不足を完成形にしない')
+    from morphology import Token, contextualize_tokens
+    for head, reading, base, gap, expected in (
+            ('読ま','よま','読む',0,'接尾'), ('待た','また','待つ',0,'接尾'),
+            ('飲ま','のま','飲む',0,'接尾'), ('話さ','はなさ','話す',0,'自立'),
+            ('食べ','たべ','食べる',0,'自立'), ('見','み','見る',0,'自立'),
+            ('読ま','よま','読む',1,'自立')):
+        end = len(head)
+        ts = [Token(head,'動詞',base,reading,0,end,True,'自立','未然形'),
+              Token('さ','動詞','する','さ',end+gap,end+gap+1,True,'自立','未然レル接続'),
+              Token('れる','動詞','れる','れる',end+gap+1,end+gap+3,True,'接尾','基本形')]
+        result = contextualize_tokens(ts)
+        good = result[1].pos_sub == expected and [(t.surface,t.start,t.end) for t in result] == [(t.surface,t.start,t.end) for t in ts]
+        ok = ok and good
+        print(('OK' if good else 'NG'), '48-VQ 使役受身の文脈',head,gap)
+    return ok
+
+
+def run_structured_words_48vr():
+    from unittest.mock import patch
+    import halfwidth as H
+    import seed_japanese
+    def pair(a, ap, ar, b, bp, br):
+        return [(a,ap,ar,0,len(a),True,''),
+                (b,bp,br,len(a),len(a+b),True,'')]
+    cases = [
+        ('規則','名詞:一般','きそく','性','名詞:接尾:一般','せい',True),
+        ('規則','名詞:一般','きそく','的','名詞:接尾:形容動詞語幹','てき',True),
+        ('小売り','名詞:サ変接続','こうり','坂','名詞:接尾:一般','ざか',False),
+        ('囚虜','名詞:一般','しゅうりょ','時','名詞:接尾:副詞可能','じ',False),
+        ('規則','名詞:固有名詞:人名','きそく','性','名詞:接尾:一般','せい',False),
+        ('規則','名詞:一般','きそく','性','名詞:接尾:一般','しょう',False)]
+    ok=True
+    for *args, expected in cases:
+        ts=pair(*args); text=args[0]+args[3]
+        # 語幹だけを辞書語にする。完成形の辞書保護と取り違えない。
+        with patch.object(seed_japanese,'is_unit',side_effect=lambda w: w==args[0]):
+            got=C._chunk_is_intact(text,lambda _:ts)
+        good=got==expected;ok=ok and good
+        print(('OK' if good else 'NG'),'48-VR 派生語',text,got)
+    # ローカル辞書に依らず、既知語と打鍵の断片を区別する形を確認。
+    with patch.object(H,'_is_dictionary_english',side_effect=lambda w:w.lower() in {'example','integer','unknown'}):
+        for text, expected in (('name:example',False),('type:integer',False),
+                               ('status:unknown',False),('(Example)',False),
+                               ('md@i(4l)h',True),('md[ki)4l)h',True)):
+            got=H.looks_like_halfwidth_input(text)
+            good=got==expected;ok=ok and good
+            print(('OK' if good else 'NG'),'48-VR 英字の構造',text,got)
+    return ok
+
+
+def run_contextual_predicate_48vs():
+    from morphology import Token, contextualize_tokens
+    ok = True
+    for head, known, gap, tail, pos, sub, base, expected in (
+        ('同じ', True, 0, 'だけ', '助詞', '副助詞', 'だけ', '名詞'),
+        ('おなじ', True, 0, 'くらい', '助詞', '副助詞', 'くらい', '名詞'),
+        ('同じ', True, 0, 'に', '助詞', '格助詞:一般', 'に', '名詞'),
+        ('同じ', True, 0, 'な', '助動詞', '', 'だ', '名詞'),
+        ('同じ', True, 0, 'です', '助動詞', '', 'です', '名詞'),
+        ('同じ', True, 0, '本', '名詞', '一般', '本', '連体詞'),
+        ('同じ', True, 0, 'よう', '名詞', '非自立:助動詞語幹', 'よう', '連体詞'),
+        ('同じ', True, 1, 'だけ', '助詞', '副助詞', 'だけ', '連体詞'),
+        ('同じ', False, 0, 'だけ', '助詞', '副助詞', 'だけ', '連体詞'),
+        ('この', True, 0, 'だけ', '助詞', '副助詞', 'だけ', '連体詞'),
+        ('大きな', True, 0, 'に', '助詞', '格助詞:一般', 'に', '連体詞')):
+        start = len(head) + gap
+        ts = [Token(head, '連体詞', head, head, 0, len(head), known),
+              Token(tail, pos, base, tail, start, start+len(tail), True, sub)]
+        got = contextualize_tokens(ts)
+        good = (got[0].pos == expected and
+                [(t.surface,t.start,t.end) for t in got] ==
+                [(t.surface,t.start,t.end) for t in ts] and
+                contextualize_tokens(got) == got)
+        ok = ok and good
+        print(('OK' if good else 'NG'), '48-VS 述語用法',head,tail,gap,known)
+    return ok
+
+
+def run_tab_scroll_48vt():
+    from types import SimpleNamespace
+    from app import CorrectNoteApp
+    calls = []
+    fake = SimpleNamespace(
+        _syncing=False, _font_swap=False,
+        result_gutter=SimpleNamespace(sync_yview=lambda *a: calls.append('result')),
+        editor_gutter=SimpleNamespace(sync_yview=lambda *a: calls.append('editor')),
+        v_scrollbar=SimpleNamespace(set=lambda *a: calls.append('bar')),
+        editor=object(), result_view=object(),
+        _update_header_visibility=lambda *a: calls.append('header'),
+        _on_view_moved=lambda: calls.append('moved'),
+        _sync_partner_to_line=lambda *a: calls.append('reverse'))
+    CorrectNoteApp._on_result_scroll(fake, '0.0', '1.0')
+    ok = calls == ['result']
+    print(('OK' if ok else 'NG'), '48-VT 補正欄の再描画は入力欄を動かさない', calls)
+    calls.clear(); fake._syncing=True
+    CorrectNoteApp._on_result_scroll(fake, '0.0', '1.0')
+    ok = ok and not calls
+    return ok
+
+
+def run_lexical_pos_48vu():
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    import morphology as M
+    import pos_grammar as P
+    ok = True
+
+    def check(label, got, expected):
+        nonlocal ok
+        good = got == expected
+        ok = ok and good
+        print(('OK' if good else 'NG'), '48-VU', label, got)
+
+    class Dictionary:
+        def lookup(self, raw, matcher):
+            assert M._TOKENIZE_LOCK.locked()
+            if raw.decode('utf-8') == 'よい':
+                return [(0, 'よ', 0, 0, 0), (1, 'よい', 0, 0, 0),
+                        (2, 'よい', 0, 0, 0), (3, 'よい', 0, 0, 0)]
+            if raw.decode('utf-8') == '読み':
+                return [(4, '読み', 0, 0, 0)]
+            return [(0, 'よ', 0, 0, 0)]  # 接頭部分の一致は完全一致ではない。
+
+        def lookup_extra(self, key):
+            assert M._TOKENIZE_LOCK.locked()
+            return {1: ('名詞,一般,*,*', '*', '*', 'よい', '', ''),
+                    2: ('動詞,自立,*,*', '*', '連用形', 'よう', '', ''),
+                    3: ('形容詞,自立,*,*', '*', '基本形', 'よい', '', ''),
+                    4: ('動詞,自立,*,*', '*', '連用形', '読む', '', '')}[key]
+
+    M.dictionary_base_pos.cache_clear()
+    try:
+        with patch.object(M, 'HAS_JANOME', True), patch.object(
+                M, '_TOKENIZER', SimpleNamespace(sys_dic=Dictionary(), matcher=object())):
+            check('先頭候補だけでなく同形の形容詞も残す',
+                  M.dictionary_base_pos('よい'), frozenset(('名詞,一般,*,*', '形容詞,自立,*,*')))
+            check('連用形を基本形として扱わない', M.dictionary_base_pos('読み'), frozenset())
+            check('部分一致しかない語は判定不能', M.dictionary_base_pos('よいもの'), None)
+            check('空文字', M.dictionary_base_pos(''), None)
+            with patch.object(Dictionary, 'lookup', side_effect=SystemExit(1)):
+                check('辞書の終了例外でも継続する', M.dictionary_base_pos('失敗'), None)
+        with patch.object(M, 'HAS_JANOME', False):
+            check('辞書がない環境', M.dictionary_base_pos('未登録'), None)
+    finally:
+        M.dictionary_base_pos.cache_clear()
+
+    # 同形のイ形容詞がある場合を落とさず、形容動詞の活用だけを区別する。
+    kinds = {'きれい': frozenset(('名詞,形容動詞語幹,*,*',)),
+             'あつい': frozenset(('名詞,形容動詞語幹,*,*','形容詞,自立,*,*')),
+             '嫌い': frozenset(('名詞,形容動詞語幹,*,*',))}
+    P._load_tables()
+    with patch.object(M, 'dictionary_base_pos', side_effect=kinds.get), patch.object(
+            P, '_TABLES', (frozenset(kinds), set(), set())):
+        check('形容動詞からイ形容詞の活用を作らない', P.explain_kana_run('きれくない'), False)
+        check('同形のイ形容詞の過去形', P.explain_kana_run('あつかった'), True)
+        check('漢字の語幹でも同じ判定', P.explain_kana_run('かった', after_kanji=True, kanji_stem='嫌'), False)
+        check('形容動詞の述語は残す', P.explain_kana_run('きれいだった'), True)
+        check('未知の派生語の推定は残す', P._possible_i_adjective('未知語'), True)
+    return ok
+
+
+def run_view_latency_48vv():
+    from types import SimpleNamespace
+    from app import CorrectNoteApp as A, LineNumberGutter as G
+    class Scheduler:
+        def __init__(self): self.jobs={};self.serial=0
+        def after(self,delay,fn):
+            self.serial+=1;self.jobs[self.serial]=(delay,fn);return self.serial
+        def after_cancel(self,job):self.jobs.pop(job,None)
+    class Harness(A):
+        def __init__(self):
+            self.root=Scheduler();self.calls=[];self.marked=False
+            self.editor_gutter=self.result_gutter=SimpleNamespace(redraw=lambda:self.calls.append('paint'))
+        def _clamp_zoom_to_workarea(self):pass
+        def _schedule_whitespace_paint(self):self.calls.append('space')
+        def _mark_typed_from_shadow(self):self.marked=True
+        def _warm_then_analyze(self):self.calls.append('warm')
+        def editor_source_text(self):return '本文\n'*10000
+        def _use_analysis_cache(self,text,lines):self.calls.append('cache');return self.cached
+        def _schedule_analysis_chunk(self):self.calls.append('chunk queued')
+    h=Harness();ok=True
+    for _ in range(100):h._on_resize()
+    ok=ok and not h.calls and len(h.root.jobs)==1
+    h._analyze_units_only=True;h._analyze_chunk()
+    ok=ok and h.calls==['chunk queued']
+    h.calls.clear();h._analyze();ok=ok and not h.calls
+    h._resume_tab_analysis();ok=ok and not h.calls
+    h.root.jobs.clear();h._view_change_until=0;h.cached=True
+    h._resume_tab_analysis();ok=ok and h.calls==['cache'] and h.marked
+    h.calls.clear();h.cached=False;h._resume_tab_analysis()
+    ok=ok and h.calls==['cache','warm']
+    h.calls.clear();h._finish_resize();ok=ok and h.calls==['paint','paint','space']
+    calls=[]
+    class Target:
+        def index(self,i):return {'end-1c':'100000.0','@0,0':'70000.0','@0,499':'70024.0'}[i]
+        def winfo_height(self):return 500
+        def dlineinfo(self,i):calls.append(i);return (0,0,20,20,15)
+    class Gutter:
+        target=Target();bookmarks={70010};font='font'
+        def __getitem__(self,k):return 60
+        def delete(self,*a):pass
+        def create_text(self,*a,**kw):pass
+        def create_oval(self,*a,**kw):pass
+    G.redraw(Gutter())
+    ok=ok and len(calls)==25 and calls[0]=='70000.0' and calls[-1]=='70024.0'
+    print(('OK' if ok else 'NG'),'48-VV 10万行のガターは可視25行だけ・サイズ変更100回を統合・解析を待機・控えを優先')
+    return ok
+
+
+def run_tab_render_48vw():
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    import app
+    class View:
+        def __init__(self):self.text='';self.inserts=0;self.tags={}
+        def config(self,**kw):pass
+        def delete(self,*a):self.text='';self.tags={}
+        def insert(self,index,text):self.inserts+=1;self.text+=text
+        def tag_add(self,tag,*ranges):self.tags.setdefault(tag,[]).extend(ranges)
+        def yview(self):return (0,1)
+    class Harness(app.CorrectNoteApp):
+        def __init__(self):
+            self.root=SimpleNamespace(focus_get=lambda:None)
+            self.store=SimpleNamespace(_tokenize_fn=lambda text:[])
+            self.choices=None;self.editor=View();self.result_view=View();self._syncing=False
+            self.editor_gutter=self.result_gutter=SimpleNamespace(sync_yview=lambda *a:None)
+            self._analyze_units_only=True;self._analyze_todo=[0,1,2];self._analyze_pos=1
+            self.line_results=[dict(original='元',corrected='補正'),dict(original='未準備',corrected='直し'),dict(original='',corrected='',pending=True)]
+            self._units_cache={('元','補正'):('選択済み',[dict(kind='chosen',start=0,end=4)])}
+        def _sync_partner_to_line(self,*a):pass
+        def _paint_whitespace(self):pass
+    h=Harness()
+    with patch.object(app,'build_line_units',side_effect=AssertionError('描画中に解析した')):
+        h._render_corrected()
+    ok=(h.result_view.text=='選択済み\n直し\n' and h.result_view.inserts==1
+        and h.line_units[1:]==[[],[]] and h.result_view.tags['chosen']==['1.0','1.4']
+        and ('未準備','直し') not in h._units_cache)
+    # 統合表示も、未準備の行は表示中の本文を残して分割処理へ任せる。
+    h.unified_autofix_on=lambda:False
+    h._suspect_units_cache={('元','補正',False):('元',[])}
+    with patch.object(app,'build_suspect_units',side_effect=AssertionError('統合表示で解析した')):
+        h._build_editor_units()
+    ok=ok and h.line_texts==['元','未準備','']
+    # 二つの本文の控えを混ぜず、戻ったときにだけ復元する。
+    first=h._units_cache;h._analyze_text='一つ目';h._suspect_units_cache={'original':1}
+    h._swap_tab_units('二つ目');ok=ok and not h._units_cache
+    second={('別','別'):('別',[])};h._units_cache=second;h._analyze_text='二つ目'
+    h._swap_tab_units('一つ目\n');ok=ok and h._units_cache is first and h._suspect_units_cache=={'original':1}
+    h._invalidate_units_cache();ok=ok and not h._tab_units_cache and not h._units_cache
+    for i in range(10):
+        h._analyze_text=str(i);h._units_cache={i:[]};h._swap_tab_units(str(i+1))
+    ok=ok and len(h._tab_units_cache)<=3
+    print(('OK' if ok else 'NG'),'48-VW 描画中に全行を再解析しない・一括挿入・タブ別の控えと破棄')
+    return ok
+
+
+def run_window_drag_48vx():
+    from types import SimpleNamespace
+    from app import CorrectNoteApp as A
+    class Root:
+        def __init__(self):self.jobs={};self.serial=0;self.moves=[];self.flushes=0
+        def after(self,ms,fn):self.serial+=1;self.jobs[self.serial]=fn;return self.serial
+        def after_idle(self,fn):return self.after(0,fn)
+        def after_cancel(self,job):self.jobs.pop(job,None)
+        def geometry(self,value):self.moves.append(value)
+        def state(self):return 'normal'
+        def update_idletasks(self):self.flushes+=1
+    class Harness(A):
+        def __init__(self):
+            self.root=Root();self.pressed=True;self.paints=0
+            self.editor_gutter=self.result_gutter=SimpleNamespace(redraw=self._redraw_window_now)
+        def _window_drag_button_down(self):return self.pressed
+        def _redraw_window_now(self):self.paints+=1
+        def _schedule_analysis_chunk(self):self.root.after(100,self._analyze_chunk)
+        def _clamp_zoom_to_workarea(self):pass
+    h=Harness();h._begin_native_window_drag()
+    h._view_change_until=0;h._last_interaction=0;h._analyze_units_only=True
+    for _ in range(100):
+        h._analyze_yields=1000;h._analyze_chunk();h._poll_window_drag()
+    ok=h._view_changing() and h._interacting() and h.paints==0
+    h._finish_resize();h._paint_whitespace();h._after_view_moved();h._bg_step()
+    ok=ok and h.paints==0
+    h.pressed=False;h._poll_window_drag();h._view_change_until=0
+    ok=ok and not h._view_changing()
+    # フォールバックも、ドラッグ中にアイドル処理や全窓再描画を強制しない。
+    h._win_drag=(10,20)
+    for i in range(100):
+        h._on_window_drag(SimpleNamespace(x_root=100+i,y_root=200+i));h._apply_window_drag()
+    ok=ok and len(h.root.moves)==100 and h.root.flushes==0 and h.paints==0
+    h._win_drag_to=(600,700);h._end_window_drag()
+    ok=ok and h.root.moves[-1]=='+600+700' and h.paints==1 and h._win_drag is None
+    # 同じ幅・高さの通知では、折り返しを塗り直さない。
+    h.root.jobs.clear();event=SimpleNamespace(widget='editor',width=800,height=600)
+    h._on_resize(event);job=h._resize_paint_job
+    for _ in range(100):h._on_resize(event)
+    ok=ok and h._resize_paint_job==job and len(h.root.jobs)==1
+    # OSタイトルバーのConfigureも、ウインドウ移動の待機に結び付く。
+    h.pressed=True
+    for x in (100,101):
+        h._note_interaction(SimpleNamespace(widget=h.root,type='22',x=x,y=100,width=800,height=600))
+    ok=ok and h._native_window_drag
+    print(('OK' if ok else 'NG'),'48-VX OS/Tk移動中は解析と再描画を待機・同寸法の通知を無視・最後の位置を反映')
+    return ok
+
+
+def run_nominal_suffix_48vy():
+    """名詞化の接続、送り仮名、辞書なし、普通名詞への過剰適用を検査。"""
+    import morphology as M
+    import pos_grammar as P
+    from unittest.mock import patch
+    P._load_tables()
+    kinds = {'便利': frozenset(('名詞,形容動詞語幹,*,*',)),
+             '静か': frozenset(('名詞,形容動詞語幹,*,*',)),
+             '作業': frozenset(('名詞,サ変接続,*,*',))}
+    ok = True
+    with patch.object(M, 'dictionary_base_pos', side_effect=kinds.get):
+        for stem, run, expected in (
+                ('便利', 'さの', True), ('便利', 'さを', True),
+                ('便利', 'さが', True), ('便利', 'さについて', True),
+                ('静', 'かさの', True), ('静', 'さの', False),
+                ('作業', 'さの', False), ('未知', 'さの', False),
+                ('便利', 'さっ', False), ('便利', 'さをに', False)):
+            actual = P.explain_kana_run(run, after_kanji=True,
+                                       kanji_stem=stem, no_words=True)
+            if actual != expected:
+                print('[NG] 48-VY', stem, run, actual, expected)
+                ok = False
+    print('48-VY 名詞化の接続:', ok)
+    return ok
+
+
+def run_screen_repairs_48vz():
+    import corrector as C
+    import morphology as M
+    import pos_grammar as P
+    import seed_japanese as S
+    from unittest.mock import patch
+    from types import SimpleNamespace
+    ok = True
+    def check(label, actual, expected):
+        nonlocal ok
+        if actual != expected:
+            ok = False
+            print('[NG] 48-VZ', label, actual, expected)
+    store = SimpleNamespace(lookup=lambda r: [])
+    faces = {'さいだい':['最大'], 'さいてい':['最低'],
+             'じどう':['児童','自動'], 'さいたい':['妻帯']}
+    index = SimpleNamespace(surfaces_for_reading=lambda r: faces.get(r, []))
+    units = {'最大化','最低化','自動化'}
+    methods = []
+    def near(ch, input_method=None):
+        methods.append(input_method)
+        return [('だ',0.3),('て',0.8)] if ch == 'た' else []
+    with patch.object(S,'is_unit',side_effect=lambda s:s in units), \
+         patch.object(C,'_na_adj_ka_word',return_value=False), \
+         patch.object(C,'_table_cost',side_effect=lambda s: {'最大化':100,'最低化':200}.get(s)), \
+         patch.object(C,'_is_functional_strict',return_value=False), \
+         patch.object(P,'explain_kana_run',return_value=False), \
+         patch('kana_layout.nearby_candidates',side_effect=near):
+        check('元の語でも全表記を照合', C._known_suffix_word_faces('じどうか',store,index), [('自動化',1,3)])
+        check('語幹だけ存在する架空の派生は不可', C._known_suffix_word_faces('さいたいか',store,index), [])
+        check('候補が複数でも先頭に決める', C._kana_run_hand_fixes('さいたいか',store,index,input_method='romaji'), [(0,5,'最大化','かな入力')])
+        check('正常な語は読み替えない', C._kana_run_hand_fixes('じどうか',store,index), [])
+        check('入力方式を候補探索へ渡す', set(methods), {'romaji'})
+    def compound(last_known=True, gap=0):
+        return [M.Token('書き','動詞','書く','かき',0,2,True,'自立','連用形'),
+                M.Token('込み','動詞','込む','こみ',2+gap,4+gap,last_known,'自立','連用形'),
+                M.Token('可能','名詞','可能','かのう',4+gap,6+gap,True,'形容動詞語幹')]
+    with patch.object(S,'is_unit',side_effect=lambda s:s=='書き込み'):
+        tokens=M.contextualize_tokens(compound())
+        check('既知の連用形複合語を名詞にする',[(t.surface,t.pos,t.start,t.end) for t in tokens], [('書き込み','名詞',0,4),('可能','名詞',4,6)])
+        check('未知の動詞は結合しない',len(M.contextualize_tokens(compound(False))),3)
+        check('空白をまたいで結合しない',len(M.contextualize_tokens(compound(gap=1))),3)
+    seen=[]
+    @C._with_correction_source
+    def nested(line):
+        seen.append(C._CORRECTION_SOURCE.get())
+        if line=='original': return nested('generated')
+        return line
+    check('入れ子でも最初の本文',nested('original'),'generated')
+    check('入れ子の文脈',seen,['original','original'])
+    check('終了時に本文を破棄',C._CORRECTION_SOURCE.get(),None)
+    @C._with_correction_source
+    def failing(line): raise ValueError('test')
+    try: failing('private text')
+    except ValueError: pass
+    check('例外時も本文を破棄',C._CORRECTION_SOURCE.get(),None)
+    print('48-VZ 画面の補正・名詞化・入力方式・元の本文:',ok)
+    return ok

@@ -76,7 +76,8 @@ from tests_mock_ui import (
     test_refit_broken_units_48pv,
     test_unit_reading_and_rows_20260904,
     test_pos_from_row_context_48qc_48qd,
-    test_privacy_no_counts_48qg_48qh_48qj)
+    test_privacy_no_counts_48qg_48qh_48qj,
+    test_quick_autofix_undo_48vd)
 from tests_mock_memory import (
     run_choice_cases,
     run_decision_cases,
@@ -521,7 +522,35 @@ if __name__ == '__main__':
     print()
     ok128 = test_privacy_no_counts_48qg_48qh_48qj()
     print()
-    print('ALL OK:', ok1 and ok2 and ok3 and ok4 and ok5 and ok6 and ok7
+    ok129 = test_quick_autofix_undo_48vd()
+    print()
+    from tests_mock_ui import run_review_regressions_48vi_vm
+    ok130 = run_review_regressions_48vi_vm()
+    from tests_mock_ui import run_pos_context_48vo
+    ok131 = run_pos_context_48vo()
+    from tests_mock_ui import run_drag_edges_48vp
+    ok132 = run_drag_edges_48vp()
+    from tests_mock_ui import run_passive_48vq
+    ok133 = run_passive_48vq()
+    from tests_mock_ui import run_structured_words_48vr
+    ok134 = run_structured_words_48vr()
+    from tests_mock_ui import run_contextual_predicate_48vs
+    ok135 = run_contextual_predicate_48vs()
+    from tests_mock_ui import run_tab_scroll_48vt
+    ok136 = run_tab_scroll_48vt()
+    from tests_mock_ui import run_lexical_pos_48vu
+    ok137 = run_lexical_pos_48vu()
+    from tests_mock_ui import run_view_latency_48vv
+    ok138 = run_view_latency_48vv()
+    from tests_mock_ui import run_tab_render_48vw
+    ok139 = run_tab_render_48vw()
+    from tests_mock_ui import run_window_drag_48vx
+    ok140 = run_window_drag_48vx()
+    from tests_mock_ui import run_nominal_suffix_48vy
+    ok141 = run_nominal_suffix_48vy()
+    from tests_mock_ui import run_screen_repairs_48vz
+    ok142 = run_screen_repairs_48vz()
+    all_ok = (ok1 and ok2 and ok3 and ok4 and ok5 and ok6 and ok7
           and ok8 and ok9 and ok10 and ok11 and ok12 and ok13 and ok14
           and ok15 and ok16 and ok17 and ok18 and ok19 and ok20 and ok21
           and ok22 and ok23 and ok24 and ok25 and ok26 and ok27
@@ -530,4 +559,6 @@ if __name__ == '__main__':
           and ok39 and ok40 and ok41 and ok42 and ok43 and ok44 and ok45
           and ok46 and ok47 and ok48 and ok49 and ok50 and ok51 and ok52
           and ok53 and ok54 and ok55 and ok56 and ok57 and ok58 and ok59
-          and ok60 and ok61 and ok62 and ok63 and ok64 and ok65 and ok66 and ok67 and ok68 and ok69 and ok70 and ok71 and ok72 and ok73 and ok74 and ok75 and ok76 and ok77 and ok78 and ok79 and ok80 and ok81 and ok82 and ok83 and ok84 and ok85 and ok86 and ok87 and ok88 and ok89 and ok90 and ok91 and ok92 and ok93 and ok94 and ok95 and ok96 and ok97 and ok98 and ok99 and ok100 and ok101 and ok102 and ok103 and ok104 and ok105 and ok106 and ok107 and ok108 and ok109 and ok110 and ok111 and ok112 and ok113 and ok114 and ok115 and ok116 and ok117 and ok118 and ok119 and ok120 and ok121 and ok122 and ok123 and ok124 and ok125 and ok126 and ok127 and ok128)
+          and ok60 and ok61 and ok62 and ok63 and ok64 and ok65 and ok66 and ok67 and ok68 and ok69 and ok70 and ok71 and ok72 and ok73 and ok74 and ok75 and ok76 and ok77 and ok78 and ok79 and ok80 and ok81 and ok82 and ok83 and ok84 and ok85 and ok86 and ok87 and ok88 and ok89 and ok90 and ok91 and ok92 and ok93 and ok94 and ok95 and ok96 and ok97 and ok98 and ok99 and ok100 and ok101 and ok102 and ok103 and ok104 and ok105 and ok106 and ok107 and ok108 and ok109 and ok110 and ok111 and ok112 and ok113 and ok114 and ok115 and ok116 and ok117 and ok118 and ok119 and ok120 and ok121 and ok122 and ok123 and ok124 and ok125 and ok126 and ok127 and ok128 and ok129 and ok130 and ok131 and ok132 and ok133 and ok134 and ok135 and ok136 and ok137 and ok138 and ok139 and ok140 and ok141 and ok142)
+    print('ALL OK:', all_ok)
+    sys.exit(0 if all_ok else 1)  # 48-VN: CIへ実際の成否を返す

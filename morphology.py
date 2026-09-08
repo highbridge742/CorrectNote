@@ -28,6 +28,7 @@ janome があれば正確に区切れる。無い場合も動くよう、
 """
 
 import threading
+from functools import lru_cache
 
 try:
     from janome.tokenizer import Tokenizer
@@ -398,8 +399,126 @@ def tokenize(line):
         return []
 
     if HAS_JANOME:
-        return _tokenize_janome(line)
+        return contextualize_tokens(_tokenize_janome(line))
     return _tokenize_fallback(line)
+
+
+@lru_cache(maxsize=8192)
+def dictionary_base_pos(surface):
+    """48-VU: 同梱辞書の完全一致から、基本形として可能な品詞の詳細をすべて返す。
+
+    単独解析の最上位だけでは同形語を落とすため、全エントリを読む。
+    未登録・辞書なし・読み出し失敗は None（判定材料なし）。
+    空集合は、登録はあるがこの表記を基本形とする品詞がない、という意味。
+    """
+    if not HAS_JANOME or not surface:
+        return None
+    try:
+        with _TOKENIZE_LOCK:
+            entries = [e for e in _TOKENIZER.sys_dic.lookup(
+                surface.encode('utf-8'), _TOKENIZER.matcher) if e[1] == surface]
+            if not entries:
+                return None
+            extras = [_TOKENIZER.sys_dic.lookup_extra(e[0]) for e in entries]
+        return frozenset(e[0] for e in extras if e[3] == surface)
+    except (Exception, SystemExit):
+        return None
+
+
+def contextualize_tokens(tokens):
+    """48-VO: 前後の接続と既知の複合語から、品詞と単位を確かめる。
+
+    文字列は変更しない。助詞の同形語は接続の証拠がある場合だけ選び直す。
+    名詞＋名詞化の接尾辞（爪＋切り等）は、同梱辞書が認めるまとまりだけを採る。
+    漢字だけの接尾辞や複数の「ら」まで一律に普通名詞へ変えることはしない。
+    解析不能時に語尾だけから品詞を決めることはしない。
+    """
+    out = list(tokens)
+    # 48-VS: 「同じ」は連体用法とナ形容詞の述語用法を兼ねる不規則語。
+    # 辞書の連体詞分類だけで「同じだけ／同じに／同じです」を拒まない。
+    # 名詞に直結する連体用法（同じ本・同じように）は元の分類を保つ。
+    for i in range(len(out) - 1):
+        a, b = out[i:i + 2]
+        if (a.pos == '連体詞' and a.base_form in ('同じ', 'おなじ')
+                and a.has_reading and b.has_reading and a.end == b.start
+                and ((b.pos == '助詞' and
+                      (b.pos_sub == '副助詞' or
+                       (b.pos_sub.startswith('格助詞') and b.surface == 'に')))
+                     or (b.pos == '助動詞' and b.base_form in ('だ', 'です')))):
+            out[i] = Token(a.surface, '名詞', a.base_form, a.reading,
+                           a.start, a.end, True, '形容動詞語幹')
+    for i in range(1, len(out) - 1):
+        a, t, b = out[i - 1:i + 2]
+        # 48-VQ: 五段の未然形＋さ＋れる（読まされる・待たされる）。
+        # IPAdicが「さ」を独立した「する」と読む場合は、使役の「す」へ。
+        # 一段の「食べされる」や、空白を挟む別の語には適用しない。
+        if (a.pos == '動詞' and a.pos_sub == '自立'
+                and a.infl_form == '未然形' and a.has_reading
+                and a.reading and a.reading[-1] in 'あかがただなばまらわ'
+                and not a.base_form.endswith('す')
+                and t.surface == 'さ' and t.pos == '動詞'
+                and t.pos_sub == '自立' and t.base_form == 'する'
+                and t.infl_form == '未然レル接続'
+                and b.pos == '動詞' and b.pos_sub == '接尾'
+                and b.base_form == 'れる' and t.has_reading and b.has_reading
+                and a.end == t.start and t.end == b.start):
+            out[i] = Token(t.surface, '動詞', 'す', t.reading,
+                           t.start, t.end, True, '接尾', '未然形')
+        if (t.surface == 'より' and t.pos == '助詞'
+                and a.pos == '名詞' and a.has_reading
+                and a.end == t.start and t.end == b.start
+                and ((b.pos == '助詞' and b.surface == 'に')
+                     or (b.pos == '助動詞' and b.surface in ('だ', 'です')))):
+            # 「東京よりに」は寄り（接尾辞）。比較の「東京より遠い」は別。
+            # 「東京よりの便り」は起点の格助詞とも読めるので決め直さない。
+            out[i] = Token(t.surface, '名詞', '寄り', t.reading,
+                           t.start, t.end, t.has_reading, '接尾:一般')
+    # 48-VZ: 連用形の列が既知の複合語を作り、ナ形容詞の述語に続くなら名詞用法。
+    # 語の途中（追い／焚き等）の境界を異様判定へ渡さない。
+    i = 0
+    while i < len(out):
+        j = i
+        while (j < len(out) and out[j].pos == '動詞'
+               and out[j].pos_sub == '自立' and out[j].infl_form == '連用形'
+               and out[j].has_reading and (j == i or out[j-1].end == out[j].start)):
+            j += 1
+        if (j - i >= 2 and j < len(out) and out[j].pos == '名詞'
+                and out[j].pos_sub == '形容動詞語幹' and out[j].has_reading
+                and out[j-1].end == out[j].start):
+            surface = ''.join(t.surface for t in out[i:j])
+            from seed_japanese import is_unit
+            if is_unit(surface) is True:
+                first, last = out[i], out[j-1]
+                token = Token(surface, '名詞', surface, ''.join(t.reading for t in out[i:j]),
+                              first.start, last.end, True, '一般')
+                out[i:j] = [token]
+                j = i + 1
+        i = max(i + 1, j)
+    merged = []
+    for t in out:
+        if merged and merged[-1].end == t.start:
+            a = merged[-1]
+            numeric = (a.pos == t.pos == '名詞'
+                       and a.pos_sub == t.pos_sub == '数')
+            compound = False
+            if (a.pos == t.pos == '名詞' and t.pos_sub.startswith('接尾')
+                    and a.has_reading and t.has_reading and not numeric
+                    and a.pos_sub in ('一般', 'サ変接続')
+                    and any('一' <= ch <= '鿿' for ch in t.surface)
+                    and any('ぁ' <= ch <= 'ゖ' for ch in t.surface)):
+                try:
+                    from seed_japanese import is_unit
+                    compound = is_unit(a.surface + t.surface) is True
+                except Exception:
+                    pass
+            if numeric or compound:
+                word = a.surface + t.surface
+                merged[-1] = Token(word, '名詞', word, a.reading + t.reading,
+                                   a.start, t.end, a.has_reading and t.has_reading,
+                                   '数' if numeric else '一般')
+                continue
+        merged.append(t)
+    return merged
 
 
 def _tokenize_janome(line):

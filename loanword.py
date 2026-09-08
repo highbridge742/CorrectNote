@@ -433,14 +433,71 @@ def typo_explains_seed_word(typed, reading):
                 continue
             near = typed[k]
             if near == ca:
-                return True             # 重複打鍵
+                from vocabulary import dup_repair_enabled
+                return dup_repair_enabled()  # 48-VL: カタカナも同じ設定
             if is_kana(near) and kana_key_distance(ca, near) < FAR:
                 return True             # 隣接キーが入り込んだ
         return False
     return True                         # 脱字・入替は形そのものが証拠
 
 
+#: **Shift を押し損ねると出る大書き** → 本来の小書き（JIS かな入力）。
+#
+# うにさんの指定（2026-09-08）「**シフトキー補正を進める**」。
+# JIS かな入力で小書き（ぁぃぅぇぉ っ ゃゅょ ゎ）は Shift が要る。
+# 押し損ねると大書きが出る——**誤字のいちばん太い族**:
+#
+#     インターネッ**ト** → インターネ**ツ**ト   タブレット → タブレ**ツ**ト
+#     ジャガイモ         → ジ**ヤ**ガイモ       ワイシャツ → ワイシ**ヤ**ツ
+#     セキュリティ       → セキュリテ**イ**     パーティー → パーテ**イ**ー
+_SHIFT_BIG_TO_SMALL = {
+    'あ': 'ぁ', 'い': 'ぃ', 'う': 'ぅ', 'え': 'ぇ', 'お': 'ぉ',
+    'つ': 'っ', 'や': 'ゃ', 'ゆ': 'ゅ', 'よ': 'ょ', 'わ': 'ゎ',
+}
+#: 一度に戻す位置の上限（組み合わせは 2^n 通り見る）。
+# 同梱の外来語 9,094 語で、小書きが4つ以上の語は1つも無い。
+_SHIFT_MAX_SPOTS = 3
+
+
+def _shift_restored_katakana(typed):
+    """
+    打った読みが「**Shift を押し損ねた外来語**」なら、その表記を返す。
+
+    `typed` は打った並びのひらがな。大書きの1つ以上を小書きへ戻して、
+    **同梱の外来語の名簿にそのまま在る**ものだけを採る。無ければ None。
+
+    ★★ **探索ではなく復元**（項目48-VF）。近い語を探しに行くと
+    `ウオーミング` が **`ウオーキング`（歩く）**になる——v1.6.0 が
+    実際にそうしていた。戻した綴りが名簿にそのまま在るときだけ採れば、
+    行き先は1つに決まり、意味の変わる化けは起きない。
+
+    ★ 語頭の小書きは日本語に無いので、先頭は戻さない。
+    ★ **戻す数が少ないほうを先に採る**（押し損ねは1回が普通）。
+    """
+    spots = [i for i in range(1, len(typed))
+             if typed[i] in _SHIFT_BIG_TO_SMALL]
+    if not spots or len(spots) > _SHIFT_MAX_SPOTS:
+        return None
+    try:
+        table = _katakana_seed_all()
+    except Exception:
+        return None
+    if not table:
+        return None
+    import itertools
+    for k in range(1, len(spots) + 1):
+        for combo in itertools.combinations(spots, k):
+            cand = list(typed)
+            for i in combo:
+                cand[i] = _SHIFT_BIG_TO_SMALL[typed[i]]
+            surface = table.get(''.join(cand))
+            if surface:
+                return surface
+    return None
+
+
 def _katakana_seed_all():
+
     """
     **辞書に載っているカタカナ語のぜんぶ**。戻り値: {読み: 表記}
 
@@ -761,11 +818,12 @@ def _katakana_vocabulary(store, min_count=2):
     try:
         readings = list(store._by_reading)
     except Exception:
-        try:
-            readings = sorted({(e.get('reading') or '')
-                               for e in store.to_list()} - {''})
-        except Exception:
-            readings = []
+        # ★ **受けが同じ辞書を回すのでは受けにならない**（項目48-TV）。
+        # ここへ来るのは「回している最中に中身が変わった」ときなので、
+        # `to_list()` も同じ辞書を回して同じように落ちる。
+        # **控えに空を焼き付けず**、その回は「意見なし」で返す
+        # （戻り値は {読み: カタカナ表記} の辞書）。
+        return {}
     for reading in readings:
         if not reading:
             continue
@@ -853,6 +911,49 @@ def fix_katakana_word(word, store, known_word=False,
     if typed in _katakana_seed_all():
         surface = _katakana_seed_all()[typed]
         return surface if surface != word else None
+    # ★★ **Shift の押し損ねは、下の門より先に戻す**（項目48-VF・
+    # 2026-09-08・うにさんの指定「シフトキー補正を進める」）。
+    #
+    # **順番がすべて。** 下の 48-UH の門は `seed_japanese` に聞くが、
+    # あの表は**崩れた綴りをそれ自体1語として持っている**——
+    # `is_unit('インターネツト')` も `is_unit('シヤワー')` も True
+    # （外来語 9,094 語から崩した 3,710 通りのうち **266通り**が True）。
+    # 門に先を譲ると「辞書に載っているから正しく書けている」と読まれ、
+    # **v1.6.0 が直していた 100 件が素通りしていた**
+    # （`インターネツト` `タブレツト` `セキュリテイ` `ジヤガイモ`
+    #  `ワイシヤツ` `パンフレツト` …。項目48-VE で見つかった）。
+    #
+    # ★ ここで**探索はしない**（`_shift_restored_katakana` の説明）。
+    _restored = _shift_restored_katakana(typed)
+    if _restored is not None:
+        return _restored if _restored != word else None
+
+    # ★★ **同梱の日本語の表にも聞く**（項目48-UH・2026-09-07）。
+    #
+    # 上の名簿（`seed_katakana`）は **9,094 語**しか無い。
+    # `tools_local/probe_seed_intact.py 800 kata` で、同梱の
+    # `seed_japanese` に在るカタカナ語を1語ずつ当てたら **29件**が
+    # 書き換えられていた:
+    #
+    #     ブッキング → **ハッキング**    ガートナー → **パートナー**
+    #     アライバル → **ライバル**      フローテーション → **ローテーション**
+    #     ノッティング → **バッティング** エリジウム → **イリジウム**
+    #     プレジデンツ → **プレジデント** ブリザーブド → **ブリザード**
+    #
+    # この関数の言い分は**「辞書に載っている語は、正しく書けている。
+    # 触らない」**（48-BE）。その「辞書」が片方の名簿だけだった。
+    # `seed_japanese` は**表記**を持つ表なので、カタカナに対しても
+    # 綴りの証拠になる（48-RO で費用表を外したのとは逆——
+    # あちらは読みから綴りを**作って**いた）。
+    #
+    # ★ 聞くのは**打った綴りそのもの**（`word`）。読み（`typed`）で
+    # 聞くと、同じ読みの別表記に引きずられる。
+    try:
+        import seed_japanese as _sj_kw
+        if _sj_kw.is_unit(word) is True:
+            return None
+    except Exception:
+        pass
 
     budget = allowed_edits(len(typed))
     best = None          # (距離, 読み)
@@ -860,7 +961,15 @@ def fix_katakana_word(word, store, known_word=False,
     ties = []            # best と同じ距離で並んだ読み（best を含む）
     _no_bar = typed.replace('ー', '')
     index = _indexed(store, '_katakana_index_cache', vocab)
-    for reading in _distance1_candidates(typed, vocab, index):
+    nearby = list(_distance1_candidates(typed, vocab, index))
+    from vocabulary import dup_repair_enabled
+    if not dup_repair_enabled():
+        from corrector import _is_repeat_collapse
+        if any(_is_repeat_collapse(typed, r) for r in nearby):
+            # 48-VL: 重複の候補だけ消すと、クリッックがクリニックへ
+            # 流れる。種・本人の語彙どちらでも、この入力の直しを止める。
+            return None
+    for reading in nearby:
         if abs(len(reading) - len(typed)) > budget:
             continue
         if short and len(reading) != len(typed) + 1:
@@ -963,7 +1072,8 @@ def _break_tie(readings, vocab, store, typed=''):
     2か所に書かない**（48-GN）。
     """
     def _repeat(reading):
-        if not typed or reading == typed:
+        from vocabulary import dup_repair_enabled
+        if not dup_repair_enabled() or not typed or reading == typed:
             return False
         try:
             from corrector import _is_repeat_collapse
@@ -1343,7 +1453,7 @@ def learn_english_words(text, store, category='英語'):
         # 既に知っている語の1文字違いなら、それは誤字なので覚えない。
         # 日本語側の「誤変換語を覚えない」（学び2）と同じ考え方。
         try:
-            if fix_english_word(word, store):
+            if fix_english_word(word, store, for_learning=True):
                 continue
         except Exception:
             pass
@@ -1461,7 +1571,7 @@ def relearn_english_from_texts(texts, store):
         if not (n >= 2 and neighbours.get(word, 0) == 0
                 and looks_like_english(word.lower())):
             try:
-                if fix_english_word(word, store):
+                if fix_english_word(word, store, for_learning=True):
                     continue
             except Exception:
                 pass
@@ -1501,16 +1611,17 @@ def _english_vocabulary(store, min_count=1):
 
     out = {}
     try:
-        readings = [r for r in store._by_reading
-                    if r.startswith(ENGLISH_PREFIX)]
+        # ★ **`en:` の読みは語彙が控えている**（項目48-VC）。
+        # 25,000 件をなめずに済む（覚え直しで 120 回呼ばれる）。
+        # 古い語彙（控えを持たない）でも動くよう、無ければ走査に戻す。
+        _er = getattr(store, 'english_readings', None)
+        if callable(_er):
+            readings = list(_er())
+        else:
+            readings = [r for r in store._by_reading
+                        if r.startswith(ENGLISH_PREFIX)]
     except Exception:
-        try:
-            readings = sorted({(e.get('reading') or '')
-                               for e in store.to_list()
-                               if (e.get('reading') or '').startswith(
-                                   ENGLISH_PREFIX)})
-        except Exception:
-            readings = []
+        return {}       # 同上（項目48-TV）。空を控えに焼き付けない
     for reading in readings:
         try:
             entries = store.lookup(reading)
@@ -1585,7 +1696,10 @@ def typo_explains_seed_english(typed, known):
         for k in (at - 1, at + 1):
             if not (0 <= k < len(typed)):
                 continue
-            if typed[k] == ca or _qwerty_near(ca, typed[k]):
+            if typed[k] == ca:
+                from vocabulary import dup_repair_enabled
+                return dup_repair_enabled()
+            if _qwerty_near(ca, typed[k]):
                 return True
         return False
     return True                         # 脱字・入替は形そのものが証拠
@@ -1651,7 +1765,9 @@ def _english_count(store, key):
         return 0
 
 
-def fix_english_word(word, store):
+# 48-VL: 学習時の誤字除外は、表示上の重複補正を切っても維持する。
+# オフ中に誤字を正しい語として覚えると、再びオンにしても直らなくなる。
+def fix_english_word(word, store, for_learning=False):
     """
     英単語1つを、覚えている語へ直す。
 
@@ -1721,6 +1837,10 @@ def fix_english_word(word, store):
                if key[i] == key[i - 1]}
     _hit = sorted(w for w in _folded
                   if w in vocab and not _same_word_family(key, w))
+    from vocabulary import dup_repair_enabled
+    if _hit and not (dup_repair_enabled() or for_learning):
+        # 48-VL: 英字にも同じ設定。一般の編集距離で別候補へ流さない。
+        return None
     if len(_hit) == 1:
         return _match_case(vocab[_hit[0]], word)
     # **回数だけでは「正しい」と認めない。**
