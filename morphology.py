@@ -195,10 +195,8 @@ class Token:
         self.reading = reading        # 読み（ひらがなに直したもの）
         self.start = start            # 行内の開始位置
         self.end = end                # 行内の終了位置
-        # **活用形**（連用形・連用タ接続…。2026-08-31・うにさんの指定
-        # 「活用変化しているものはその形で書く」）。**画面の説明に
-        # しか使わない**——補正の判断はここを見ない（見はじめると、
-        # janome の有無で答えが変わる）。janome が無いときは ''。
+        # 活用形（連用形・連用タ接続等）。品詞説明と文脈の接続判定で使う。
+        # 辞書がないときは空文字。未確認の活用形を推測で埋めない。
         self.infl_form = infl_form
         # janome が辞書から読みを引けたか。
         # 引けなかった語は辞書に無い＝誤字の可能性がある。
@@ -388,6 +386,170 @@ def normalize_marks(text, swap_across=False, dropped=None):
     return ''.join(out)
 
 
+@lru_cache(maxsize=4096)
+def colloquial_adjective_forms(line):
+    """48-WM: 終止・連体の「い」を小さく書いた、辞書で確かめられる形容詞。
+
+    文字数と原文位置は変えない。小書き母音一般を正しい語とする判定ではない。
+    仮の通常表記は解析だけに使い、原文へ書き戻さない。
+    """
+    if not HAS_JANOME or 'ぃ' not in line:
+        return ()
+    normal = line.replace('ぃ', 'い')
+    forms = []
+    for t in _tokenize_janome(normal):
+        original = line[t.start:t.end]
+        if (t.pos == '形容詞' and t.has_reading and t.infl_form == '基本形'
+                and len(original) >= 2 and original.endswith('ぃ')
+                and original[:-1] == t.surface[:-1]
+                and t.surface.endswith('い')):
+            forms.append((t.start, t.end, t.base_form, t.reading,
+                          t.pos_sub, t.infl_form))
+    return tuple(forms)
+
+
+def _restore_colloquial_adjectives(line, tokens):
+    if 'ぃ' not in line:
+        return tokens
+    forms = colloquial_adjective_forms(line)
+    if not forms:
+        return tokens
+    out = list(tokens)
+    for start, end, base, reading, sub, infl in reversed(forms):
+        indexes = [i for i, t in enumerate(out) if start <= t.start and t.end <= end]
+        if not indexes:
+            continue
+        first, last = indexes[0], indexes[-1]
+        if out[first].start != start or out[last].end != end:
+            continue
+        out[first:last + 1] = [Token(line[start:end], '形容詞', base, reading,
+                                    start, end, True, sub, infl)]
+    return out
+
+
+@lru_cache(maxsize=4096)
+def colloquial_auxiliary_forms(line):
+    """48-XR: 助動詞の未然形＋小書きぅを、本文を保って推量のうと読む。
+
+    GPT-6、2026-09-10。辞書で確かめた助動詞2個の境界だけを戻す。
+    擬音や未知語の中の小書き母音全体を正規化するものではない。
+    """
+    if not HAS_JANOME or 'ぅ' not in line:
+        return ()
+    normal = line.replace('ぅ', 'う')
+    tokens = _tokenize_janome(normal)
+    forms = []
+    for i, (a, b) in enumerate(zip(tokens, tokens[1:])):
+        following = tokens[i+2] if i+2 < len(tokens) else None
+        if (following is not None and b.end == following.start
+                and not (following.pos == '助詞' and following.has_reading)
+                and following.pos != '記号'):
+            continue
+        if (a.pos == b.pos == '助動詞' and a.has_reading and b.has_reading
+                and a.infl_form in ('未然形','未然ウ接続') and b.base_form == 'う'
+                and b.surface == 'う' and b.infl_form == '基本形'
+                and a.end == b.start and line[a.start:a.end] == a.surface
+                and line[b.start:b.end] == 'ぅ'):
+            forms.append(tuple((t.start,t.end,t.pos,t.base_form,t.reading,
+                                t.pos_sub,t.infl_form) for t in (a,b)))
+    return tuple(forms)
+
+
+def colloquial_auxiliary_normal_form(line):
+    """解析用の表記のみを返す。文字数・原文位置は維持する。"""
+    forms = colloquial_auxiliary_forms(line)
+    if not forms:
+        return line
+    chars = list(line)
+    for _a,b in forms:
+        chars[b[0]] = 'う'
+    return ''.join(chars)
+
+
+def _restore_colloquial_auxiliaries(line, tokens):
+    normal = colloquial_auxiliary_normal_form(line)
+    if normal == line:
+        return tokens
+    # 未知語が後続の「か」まで巻き込んでいても、通常表記の解析で
+    # 境界を取り直す。全トークンの表記は原文へ戻し、本文は変更しない。
+    return [Token(line[t.start:t.end],t.pos,t.base_form,t.reading,
+                  t.start,t.end,t.has_reading,t.pos_sub,t.infl_form)
+            for t in _tokenize_janome(normal)]
+
+
+@lru_cache(maxsize=4096)
+def _nominal_reading_evidence(reading):
+    from corrector import table_surfaces_for_reading
+    for sf in table_surfaces_for_reading(reading, limit=8):
+        ps=dictionary_base_pos(sf)
+        if ps and any(p.startswith(('名詞,一般,','名詞,サ変接続,')) for p in ps):
+            # 読みの境界だけを戻す。名詞の表記や同音語は選ばない。
+            return True
+    return False
+
+
+def _nominal_reading_tokens(text):
+    if _nominal_reading_evidence(text):
+        return [Token(text,'名詞',text,text,0,len(text),True,'一般')]
+    # 既知の連体詞・形容詞は名詞に混ぜない。後ろの名詞の読みが
+    # 辞書で確認できる位置だけで区切り、修飾語の品詞と原文位置を保つ。
+    prefix=[]
+    for t in _tokenize_janome(text)[:4]:
+        if not t.has_reading or not (t.pos=='連体詞' or
+                (t.pos=='形容詞' and t.infl_form=='基本形')):
+            break
+        if t.start!=(prefix[-1].end if prefix else 0):
+            break
+        prefix.append(t)
+        tail=text[t.end:]
+        if len(tail)>=2 and _nominal_reading_evidence(tail):
+            return prefix+[Token(tail,'名詞',tail,tail,t.end,len(text),True,'一般')]
+    return []
+
+
+def _restore_unknown_predicates(line, tokens):
+    """未知語に飲まれた格助詞と既知の述語を、原文のまま取り出す。"""
+    if not any(not t.has_reading and len(t.surface)>=4 for t in tokens):
+        return tokens
+    import re
+    out=list(tokens)
+    for match in re.finditer(r'[ぁ-ゖー]{8,}',line):
+        start,end=match.span();run=match.group()
+        if len(run)>80:
+            continue
+        ids=[i for i,t in enumerate(out) if start<=t.start and t.end<=end]
+        if not ids:
+            continue
+        lo,hi=ids[0],ids[-1]+1
+        old=out[lo:hi]
+        if old[0].start!=start or old[-1].end!=end or not any(not t.has_reading for t in old):
+            continue
+        for cut in range(2,len(run)-3):
+            if run[cut]!='を':
+                continue
+            head_tokens=_nominal_reading_tokens(run[:cut])
+            if not head_tokens:
+                continue
+            tail=_tokenize_janome(run[cut+1:])
+            if (not tail or not all(t.has_reading for t in tail)
+                    or tail[0].start!=0 or tail[-1].end!=len(run)-cut-1
+                    or tail[0].pos!='動詞' or tail[0].pos_sub!='自立'
+                    or len(tail[0].surface)<2):
+                continue
+            # 語尾に助動詞/接続助詞があり、述語として読める部分だけ。
+            if not any(t.pos=='助動詞' or (t.pos=='助詞' and t.pos_sub.startswith('接続助詞')) for t in tail[1:]):
+                continue
+            offset=start+cut+1
+            replacement=[Token(t.surface,t.pos,t.base_form,t.reading,t.start+start,t.end+start,
+                                t.has_reading,t.pos_sub,t.infl_form) for t in head_tokens]
+            replacement.append(Token('を','助詞','を','を',start+cut,offset,True,'格助詞:一般'))
+            replacement += [Token(t.surface,t.pos,t.base_form,t.reading,t.start+offset,t.end+offset,
+                                  t.has_reading,t.pos_sub,t.infl_form) for t in tail]
+            out[lo:hi]=replacement
+            break
+    return out
+
+
 def tokenize(line):
     """
     1行を形態素に分割する。
@@ -399,7 +561,11 @@ def tokenize(line):
         return []
 
     if HAS_JANOME:
-        return contextualize_tokens(_tokenize_janome(line))
+        tokens = _restore_colloquial_auxiliaries(line, _tokenize_janome(line))
+        tokens = _restore_colloquial_adjectives(line, tokens)
+        tokens = _restore_nominal_readings(line, tokens)
+        tokens = _restore_unknown_predicates(line, tokens)
+        return contextualize_tokens(tokens)
     return _tokenize_fallback(line)
 
 
@@ -425,6 +591,247 @@ def dictionary_base_pos(surface):
         return None
 
 
+
+@lru_cache(maxsize=8192)
+def dictionary_paradigms(surface):
+    """完全一致する辞書項の品詞・活用型・活用形・原形・読み。"""
+    if not HAS_JANOME or not surface:
+        return None
+    try:
+        with _TOKENIZE_LOCK:
+            entries=[e for e in _TOKENIZER.sys_dic.lookup(
+                surface.encode('utf-8'), _TOKENIZER.matcher) if e[1]==surface]
+            extras=[_TOKENIZER.sys_dic.lookup_extra(e[0]) for e in entries]
+        return tuple(dict.fromkeys((e[0], e[1], e[2], e[3], katakana_to_hiragana(e[4]))
+                                   for e in extras))
+    except (Exception, SystemExit):
+        return None
+
+
+@lru_cache(maxsize=8192)
+def dictionary_inflections(surface):
+    """表記の全辞書項。未登録は空tuple、辞書なし/失敗はNone。"""
+    forms=dictionary_paradigms(surface)
+    if forms is None:
+        return None
+    return tuple(dict.fromkeys((pos,form,base,reading)
+                 for pos,kind,form,base,reading in forms))
+
+
+# 48-WM: 文字を対象に取る用言。文字の説明という局所文脈に限って使う。
+# GPT-6による構造規則（2026-09-10）。商品名や誤字の置換表ではない。
+_TEXT_ACTION_BASES = frozenset(('書く', '読む', '打つ', '消す', '並べる',
+                                '入力', '表示', '削除', '挿入', '選択'))
+
+
+def _split_literal_character_objects(tokens):
+    """小書き文字＋を＋文字操作を、名詞（文字そのもの）と格助詞に分ける。"""
+    out = []
+    for i, t in enumerate(tokens):
+        b = tokens[i + 1] if i + 1 < len(tokens) else None
+        if (len(t.surface) == 2 and t.surface[0] in 'ぁぃぅぇぉゃゅょっゎ'
+                and t.surface[1] == 'を' and not t.has_reading
+                and b is not None and t.end == b.start and b.has_reading
+                and b.base_form in _TEXT_ACTION_BASES
+                and (b.pos == '動詞' or (b.pos == '名詞' and b.pos_sub == 'サ変接続'))):
+            char = t.surface[0]
+            out.append(Token(char, '名詞', char, char, t.start, t.start + 1, True, '一般'))
+            out.append(Token('を', '助詞', 'を', 'を', t.start + 1, t.end, True, '格助詞:一般'))
+        else:
+            out.append(t)
+    return out
+
+
+def _contextualize_expressive_adverbs(tokens):
+    """未知の短い伸ばし音＋と＋用言を、副詞の用法として読む。
+
+    GPT-6による構造規則、2026-09-10。既知名詞の再分類はしない。
+    綴りの実在性ではなく、発音を写す形と明示された係り先を証拠にする。
+    """
+    out = list(tokens)
+    for i in range(len(out) - 2):
+        t, particle, predicate = out[i:i + 3]
+        sf = t.surface
+        if (t.has_reading or t.pos != '名詞' or not sf.endswith(('ー', 'ッ'))
+                or not all('ァ' <= c <= 'ヶ' or c == 'ー' for c in sf)):
+            continue
+        stem = sf[:-1]
+        morae = sum(c not in 'ァィゥェォャュョ' for c in stem)
+        if not (1 <= morae <= 2) or not stem or stem[0] in 'ァィゥェォャュョッー':
+            continue
+        if (particle.surface != 'と' or particle.pos != '助詞'
+                or t.end != particle.start or particle.end != predicate.start
+                or not predicate.has_reading):
+            continue
+        adjectival = predicate.pos == '名詞' and predicate.pos_sub == '形容動詞語幹'
+        if predicate.pos == '名詞' and not adjectival:
+            adjectival = any(p.startswith('名詞,形容動詞語幹,')
+                             for p in (dictionary_base_pos(predicate.surface) or ()))
+        if predicate.pos not in ('動詞', '形容詞') and not adjectival:
+            continue
+        out[i] = Token(sf, '副詞', sf, katakana_to_hiragana(sf),
+                       t.start, t.end, False, '擬音文脈')
+        out[i+1] = Token('と', '助詞', 'と', 'と', particle.start,
+                         particle.end, True, '格助詞:一般')
+        if adjectival:
+            out[i+2] = Token(predicate.surface, '名詞', predicate.base_form,
+                             predicate.reading, predicate.start, predicate.end,
+                             True, '形容動詞語幹')
+    return out
+
+
+def _restore_nominal_readings(line, tokens):
+    """48-XH: 未知語に割れた名詞の読みを辞書の境界へ戻す。本文は保持。"""
+    if not any(not t.has_reading for t in tokens):
+        return tokens
+    import re
+    from reading_segments import short_nominal_reading
+    out = list(tokens)
+    for match in re.finditer(r'[ぁ-ゖー]+', line):
+        a, b = match.span()
+        selected = [i for i,t in enumerate(out) if a <= t.start and t.end <= b]
+        if not selected:
+            continue
+        lo, hi = selected[0], selected[-1] + 1
+        pieces = out[lo:hi]
+        if (pieces[0].start != a or pieces[-1].end != b
+                or not any(not t.has_reading for t in pieces)):
+            continue
+        evidence = short_nominal_reading(match.group())
+        if not evidence:
+            continue
+        head, tail, suffix, face = evidence
+        cut = a + len(head)
+        end = cut + len(tail)
+        suffix_tokens = _tokenize_janome(suffix) if suffix else []
+        if suffix and (not suffix_tokens or any(not t.has_reading for t in suffix_tokens)):
+            continue
+        positions = dictionary_base_pos(face) or ()
+        sub = 'サ変接続' if any(p.startswith('名詞,サ変接続,') for p in positions) else '一般'
+        first = pieces[0]
+        if first.surface == head and first.end == cut:
+            head_token = first
+        else:
+            head_token = Token(head, '名詞', head, head, a, cut, True, '一般')
+        restored = [head_token, Token(tail, '名詞', tail, tail, cut, end, True, sub)]
+        for t in suffix_tokens:
+            restored.append(Token(t.surface,t.pos,t.base_form,t.reading,
+                                  end+t.start,end+t.end,t.has_reading,t.pos_sub,t.infl_form))
+        out[lo:hi] = restored
+    return out
+
+
+def _restore_polite_aux_boundaries(tokens):
+    """48-XY: 動作句の途中で副詞になった丁寧語尾の区切りを戻す。
+
+    「を＋サ変名詞＋まして」では、後続の名詞のために「まして」が
+    副詞へ変わっても、直前の動作句の述語が欠けている。連用形の形容詞
+    に直結する場合も同じ助動詞接続として調べる。読点・空白や、
+    独立した節を始める「まして」はこの範囲に含まない。本文は変えない。
+    設計/反証: GPT-6、2026-09-11。
+    """
+    out=[]
+    for i,t in enumerate(tokens):
+        a=tokens[i-1] if i else None
+        before=tokens[i-2] if i>=2 else None
+        attached=bool(a and a.has_reading and a.end==t.start)
+        noun_action=bool(attached and a.pos=='名詞' and a.pos_sub=='サ変接続'
+            and before and before.end==a.start and before.pos=='助詞'
+            and before.pos_sub.startswith('格助詞'))
+        adjective=bool(attached and a.pos=='形容詞' and a.infl_form=='連用テ接続')
+        if (t.has_reading and t.pos=='副詞' and t.surface=='まして'
+                and (noun_action or adjective)):
+            out.extend((Token('まし','助動詞','ます','まし',t.start,t.start+2,True,'','連用形'),
+                        Token('て','助詞','て','て',t.start+2,t.end,True,'接続助詞','')))
+        else:
+            out.append(t)
+    return out
+
+
+def _contextualize_written_error_actions(tokens):
+    """48-XS: 誤りを表す文字単位の結果名詞を、するの口語用法で読む。
+
+    GPT-6の設計・反証（2026-09-10）。誤/脱/衍＋字/語/句/文は
+    書かれた結果と、その結果を生む行為の両方を指せる。辞書で一般名詞に
+    分類されても、直後がするの活用なら動作名詞として解釈する。
+    接頭要素だけで造語を認めず、全体が実辞書の普通名詞であることを要求。
+    """
+    out=list(tokens)
+    for i,(a,b) in enumerate(zip(out,out[1:])):
+        if (a.pos == '名詞' and a.pos_sub == '一般' and a.has_reading
+                and len(a.surface) == 2 and a.surface[0] in '誤脱衍'
+                and a.surface[1] in '字語句文'
+                and b.pos == '動詞' and b.base_form == 'する' and b.has_reading
+                and a.end == b.start
+                and any(p.startswith('名詞,一般,')
+                        for p in (dictionary_base_pos(a.surface) or ()))):
+            out[i]=Token(a.surface,a.pos,a.base_form,a.reading,a.start,a.end,
+                         a.has_reading,'サ変接続',a.infl_form)
+    return out
+
+
+@lru_cache(maxsize=8192)
+def _nominal_suffix_parts(surface):
+    """一般名詞＋一般接尾辞の辞書上の区切りを返す。語の名簿は増やさない。"""
+    if len(surface)<3 or not all('一'<=c<='鿿' for c in surface):
+        return None
+    head,suffix=surface[:-1],surface[-1]
+    readings={rd for pos,form,base,rd in dictionary_inflections(suffix) or ()
+              if pos.startswith('名詞,接尾,一般,') and base==suffix}
+    if len(readings)!=1:
+        return None
+    # 語幹は、辞書がその表記を一語として読める場合だけ採用する。
+    parts=_tokenize_janome(head) if HAS_JANOME else []
+    if (len(parts)!=1 or parts[0].surface!=head or not parts[0].has_reading
+            or parts[0].pos!='名詞' or parts[0].pos_sub not in ('一般','サ変接続','形容動詞語幹')):
+        return None
+    a=parts[0]
+    return (head,a.reading,a.pos_sub,a.infl_form,suffix,next(iter(readings)))
+
+
+def _restore_nominal_suffix_boundaries(tokens):
+    """一字＋複数字へ誤分割された名詞を、既知の語幹＋接尾辞で読み直す。"""
+    out=[]
+    for b in tokens:
+        if out:
+            a=out[-1]
+            if (a.end==b.start and len(a.surface)==1 and len(b.surface)>=2
+                    and a.has_reading and b.has_reading and a.pos==b.pos=='名詞'
+                    and a.pos_sub=='一般' and b.pos_sub in ('一般','サ変接続','形容動詞語幹')):
+                parts=_nominal_suffix_parts(a.surface+b.surface)
+                if parts is not None:
+                    head,rd,sub,form,suffix,suffix_rd=parts
+                    split=b.end-1
+                    out[-1]=Token(head,'名詞',head,rd,a.start,split,True,sub,form)
+                    out.append(Token(suffix,'名詞',suffix,suffix_rd,split,b.end,True,'接尾:一般'))
+                    continue
+        out.append(b)
+    return out
+
+
+def _restore_imperative_emphasis(tokens):
+    """命令形の終わりを伸ばす「い」を、継続の「いる」に取り違えない。"""
+    out=list(tokens)
+    for i in range(1,len(out)):
+        a,b=out[i-1:i+1]
+        if (a.pos!='動詞' or a.pos_sub!='自立' or not a.has_reading
+                or b.surface not in ('い','ぃ') or a.end!=b.start):
+            continue
+        nxt=out[i+1] if i+1<len(out) else None
+        if nxt is not None and not (nxt.pos=='記号' and nxt.surface in '。！？!?、」』'):
+            continue
+        entries=dictionary_inflections(a.surface) or ()
+        imperative=next(((form,base) for pos,form,base,rd in entries
+                        if pos.startswith('動詞,自立,') and form.startswith('命令')
+                        and rd==a.reading),None)
+        if imperative is None:
+            continue
+        form,base=imperative
+        out[i-1]=Token(a.surface,a.pos,base,a.reading,a.start,a.end,True,a.pos_sub,form)
+        out[i]=Token(b.surface,'助詞',b.surface,b.surface,b.start,b.end,True,'終助詞')
+    return out
+
+
 def contextualize_tokens(tokens):
     """48-VO: 前後の接続と既知の複合語から、品詞と単位を確かめる。
 
@@ -433,7 +840,10 @@ def contextualize_tokens(tokens):
     漢字だけの接尾辞や複数の「ら」まで一律に普通名詞へ変えることはしない。
     解析不能時に語尾だけから品詞を決めることはしない。
     """
-    out = list(tokens)
+    tokens = _restore_imperative_emphasis(tokens)
+    out = _restore_nominal_suffix_boundaries(_contextualize_written_error_actions(
+        _contextualize_expressive_adverbs(_restore_polite_aux_boundaries(
+            _split_literal_character_objects(list(tokens))))))
     # 48-VS: 「同じ」は連体用法とナ形容詞の述語用法を兼ねる不規則語。
     # 辞書の連体詞分類だけで「同じだけ／同じに／同じです」を拒まない。
     # 名詞に直結する連体用法（同じ本・同じように）は元の分類を保つ。
@@ -911,3 +1321,34 @@ if __name__ == '__main__':
             print(f'   {t.surface:8s} {t.pos:6s} {mark}')
         print('   補正対象:', find_correctable_spans(s))
         print()
+
+
+# 48-XX: 文語の準体法で、述語を含む節そのものを「を」で受けられる
+# 知覚・認識・期待・感情の述語。語の直し先ではなく項の取り方の分類。
+# GPT-6による設計/反証、2026-09-11。原形で共有し、活用形を列挙しない。
+# これは十分条件の小集合であり、全ての準体法を判定する表ではない。
+_CLAUSAL_OBJECT_BASES = frozenset("""
+知る しる 悟る さとる 認める みとめる 覚える おぼえる 思う おもう
+信じる しんじる 見る みる 聞く きく 感じる かんじる 感ずる かんずる
+待つ まつ 望む のぞむ 願う ねがう 喜ぶ よろこぶ 恐れる おそれる
+憂う うれう 惜しむ おしむ 悲しむ かなしむ 嫌う きらう
+""".split())
+
+
+@lru_cache(maxsize=4096)
+def allows_bare_clause_object(following):
+    """「風起こるを知る」のような、名詞化した節を受ける述語か。
+
+    低頻度の名詞/動詞連接を誤分割とする前に、この用法を残す。
+    未知語や別の文の知覚動詞を拾って保護範囲を広げない。
+    """
+    for part in tokenize(following):
+        if not part.has_reading or part.pos == '記号':
+            return False
+        if part.pos == '動詞':
+            return part.base_form in _CLAUSAL_OBJECT_BASES
+        # 心から・静かに等の修飾を越えて最初の述語を見る。別の述語や
+        # 文を越えて後方の知覚動詞まで探し続けることはしない。
+        if part.pos not in ('名詞', '助詞', '副詞', '連体詞', '接頭詞'):
+            return False
+    return False

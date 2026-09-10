@@ -44,10 +44,11 @@ find_homophone_replacements / find_particle_replacements など）が
 import functools
 import heapq
 import json
+import math
 import os
 from collections import defaultdict
 
-from kana_layout import nearby_candidates
+from kana_layout import nearby_candidates, MISSING_KEY_COST
 try:
     from kana_layout import ALL_KANA as _ALL_KANA
 except Exception:      # pragma: no cover
@@ -790,8 +791,9 @@ def find_known_readings_flex(typed, store, max_dist=1.6, max_edits=2,
         vocab_size = -1
     # **入力方式も鍵に入れる**（項目48-NJ）。同じ読みでも、
     # かな入力とローマ字入力では「近いキー」が違う。
+    from kana_layout import mark_slip_enabled
     key = (typed, vocab_size, max_dist, max_edits, beam_width,
-           input_method)
+           mark_slip_enabled(), input_method)
     cached = _FLEX_CACHE.get(key)
     if cached is not None:
         return cached
@@ -855,9 +857,18 @@ def _find_known_readings_flex_uncached(typed, store, max_dist=1.6,
     # 状態: (読みの木の節, 消費した入力の位置) -> (費用, 訂正数)
     beam = {(0, 0): (0.0, 0)}
     n = len(typed)
+    # 同じ入力位置の物理キー候補は、木の節ごとに作り直さない。
+    mark_steps = {}
+    from kana_layout import mark_slip_candidates, mark_slip_enabled
+    if input_method != 'romaji' and mark_slip_enabled():
+        for pos in range(n - 1):
+            options = mark_slip_candidates(typed[pos],typed[pos+1],max_dist)
+            if options:
+                mark_steps[pos] = options
 
-    # 1文字の脱字・重複を許すコスト（隣接キー押し間違いと同程度に扱う）
+    # 入力済み文字の削除と、未入力文字の補充を別の費用にする。
     SKIP_COST = 1.1
+    INSERT_COST = SKIP_COST if input_method == 'romaji' else MISSING_KEY_COST
     TRANSPOSE_COST = 0.6   # 入れ替わりは1回の訂正として扱う（人間には起きやすいため）
 
     for _ in range(n + max(2, n // 2) + 1):
@@ -891,13 +902,46 @@ def _find_known_readings_flex_uncached(typed, store, max_dist=1.6,
                     _relax((nxt, pos + 1), cost + d, new_edits)
                     progressed = True
 
+            # 48-XO: 濁点キーの隣を押したとき、表示2字は同じ2打から
+            # 生まれている。削除＋濁点補充ではなく、隣接1打の置換として
+            # 入力2字を消費し、語彙木の濁音1字へ進む。明示ローマ字は除く。
+            for cand_char,distance in mark_steps.get(pos,()):
+                nxt=kids.get(cand_char)
+                if nxt is not None:
+                    _relax((nxt,pos+2),cost+distance,edits+1)
+                    progressed=True
+
             # --- 脱字: 入力に無い1文字を語彙側が持っている（挿入で補う） ---
             # 語彙側だけ1文字進める（＝入力側の脱字を補う）。
             # 全かなを試すと遅すぎるので、**その節から実際に伸びている
             # 字だけ**を候補にする（＝木の子。以前は
             # `store.next_chars(prefix)` が同じ表を字で引いていた）。
-            for nxt in kids.values():
-                _relax((nxt, pos), cost + SKIP_COST, edits + 1)
+            # **日本語の後続予測を、脱字の枝選びに使う**。
+            # 直前2字→次字を最優先し、材料が無いときは直前1字→次字へ
+            # 戻る。これは異様判定後の復元にだけ使い、予測そのものを
+            # 異様判定には使わない。個人履歴も使わない。
+            try:
+                import ngram_yomi
+                prefix_text = trie.tail2[node]
+                ordered = ngram_yomi.order_next(prefix_text, kids.keys())
+            except Exception:
+                ordered = [(ch, 0, 0) for ch in kids]
+            strongest = max((count for _ch, count, _ctx in ordered),
+                            default=0)
+            for cand_char, count, context_len in ordered:
+                nxt = kids[cand_char]
+                # 同じ「1打の脱字」の中でだけ、日本語として続きやすい枝を
+                # 最大0.45だけ先にする。2字文脈を1字文脈より優先する。
+                prediction_cost = 0.45
+                if strongest and count:
+                    prediction_cost = min(
+                        0.45,
+                        0.12 * math.log(strongest / float(count)))
+                    if context_len == 1:
+                        prediction_cost += 0.08
+                _relax((nxt, pos),
+                       cost + INSERT_COST + prediction_cost,
+                       edits + 1)
                 progressed = True
 
             # --- 重複打鍵: 入力側だけ1文字進める（＝入力の余分な1文字を捨てる） ---
@@ -933,12 +977,30 @@ def _find_known_readings_flex_uncached(typed, store, max_dist=1.6,
         if prefix is not None and pos >= n:
             if tuple(i for i, c in enumerate(prefix)
                      if c == 'ー') != _bar_pos:
-                continue
+                # 48-XO: 濁点の合成で表示字数が減っても、長音の打鍵位置は
+                # 同じである。長音を削除/追加/移動したものとは区別する。
+                from kana_layout import keystrokes
+                def bar_keys(text):
+                    pos=0;locations=[]
+                    for ch in text:
+                        if ch=='ー':locations.append(pos)
+                        pos+=len(keystrokes(ch))
+                    return tuple(locations)
+                if input_method == 'romaji' or bar_keys(typed) != bar_keys(prefix):
+                    continue
             # 拗音・促音を開くだけの候補は作らない（にゃん→にやん）
             if _flattens_small_kana(typed, prefix):
                 continue
             results.append((prefix, cost, edits))
-    results.sort(key=lambda x: x[1])
+    if input_method != 'romaji' and len(results)>1:
+        from ngram_yomi import continuation_cost
+        predictions={r:continuation_cost(r) for r,c,e in results}
+        # 費用は採用上限にも使うため改変しない。同じ打鍵費用では
+        # 直前2字による後続予測を優先し、その後に編集数を比較する。
+        results.sort(key=lambda x:(x[1],predictions[x[0]] is None,
+            predictions[x[0]] if predictions[x[0]] is not None else 0.0,x[2]))
+    else:
+        results.sort(key=lambda x:x[1])
     return results
 
 
@@ -1552,11 +1614,12 @@ class _ReadingTrie:
     起動ごとに節の番号が変わる（項目48-DR の再発防止）。
     """
 
-    __slots__ = ('children', 'word', 'alphabet', 'minrem', 'maxrem')
+    __slots__ = ('children', 'word', 'tail2', 'alphabet', 'minrem', 'maxrem')
 
     def __init__(self, readings):
         self.children = [{}]
         self.word = [None]
+        self.tail2 = ['']
         children = self.children
         word = self.word
         for r in sorted(readings):
@@ -1567,6 +1630,7 @@ class _ReadingTrie:
                     nxt = len(children)
                     children.append({})
                     word.append(None)
+                    self.tail2.append((self.tail2[node] + ch)[-2:])
                     children[node][ch] = nxt
                 node = nxt
             word[node] = r

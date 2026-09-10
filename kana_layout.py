@@ -159,6 +159,29 @@ def keystrokes(kana):
     return (base, mark) if mark else (base,)
 
 
+# 48-XC・2026-09-10: 未入力キーの補充は、隣接・巻き込み・転置より後。
+MISSING_KEY_COST = 2.8
+
+
+def additional_kana_keys(typed, restored):
+    """補正後に増えるかな打鍵数の下限。濁点/半濁点も独立した1打。"""
+    def size(text):
+        total=0
+        for ch in text or '':
+            if 'ァ'<=ch<='ヶ':
+                ch=chr(ord(ch)-0x60)
+            total+=len(keystrokes(ch))
+        return total
+    return max(0,size(restored)-size(typed))
+
+
+def kana_repair_cost(typed, restored, cost, input_method='kana'):
+    """明示的な追加打鍵を、安い巻き戻し費用へ紛れ込ませない。"""
+    if input_method=='romaji':
+        return cost
+    return max(cost,MISSING_KEY_COST*additional_kana_keys(typed,restored))
+
+
 # 距離計算の対象になる全かな
 ALL_KANA = list(KANA_POSITIONS.keys()) + list(DAKUTEN_BASE.keys())
 ALL_KANA = list(dict.fromkeys(ALL_KANA))  # 重複除去（順序保持）
@@ -684,6 +707,29 @@ def mark_key_neighbors(mark='゛', max_dist=1.05):
         if _base_distance(c, mark) <= max_dist:
             out.append(c)
     return tuple(sorted(out))
+
+
+def mark_slip_enabled():
+    """測定用の既存設定を、芯と語彙木で共用する。"""
+    return os.environ.get('CN_MARK_SLIP','1') != '0'
+
+
+@functools.lru_cache(maxsize=2048)
+def mark_slip_candidates(base, pressed, max_dist=1.05):
+    """48-XO: 清音＋隣接キーを、清音＋濁点/半濁点の1打置換として読む。"""
+    if base in MARK_OF or len(keystrokes(pressed)) != 1:
+        return ()
+    out=[]
+    for marked, plain in DAKUTEN_BASE.items():
+        if plain != base:
+            continue
+        mark=MARK_OF[marked]
+        if pressed == mark:
+            continue  # 表記の結合であり、隣接誤打ではない。
+        distance=_base_distance(pressed,mark)
+        if distance <= min(max_dist,1.05):
+            out.append((marked,distance))
+    return tuple(sorted(out,key=lambda item:(item[1],item[0])))
 
 
 def build_candidate_map(text):

@@ -32,8 +32,8 @@ janome 内蔵辞書の読み索引。
 索引の構築には辞書全体の走査が必要で数秒かかるため、
 初回に構築したら JSON に保存し、次回からはそれを読み込む。
 
-このモジュールは候補づくり（candidates.py）専用であり、
-補正エンジンの判断には使わない（判断経路を増やさないため）。
+この索引は手動候補と自動補正の読み復元・候補確認で使う。
+空索引と使用可能な索引はresource_statusで区別する（48-WU）。
 """
 
 import json
@@ -95,9 +95,17 @@ def _should_prune(surface, pos, sub_pos, sub_sub_pos, cost):
     # **漢字2字の名詞は KANJI2_COST_LIMIT（5600）まで索引に持つ**
     # （項目48-OJ・2026-09-02）。`_should_exclude` は 4500 で切るので
     # 先に見る。族の決まりは `janome_import.is_two_kanji_noun` ただ1つ。
-    if (cost is not None and cost <= KANJI2_COST_LIMIT
-            and is_two_kanji_noun(surface, pos, sub_pos)):
-        return False
+    if is_two_kanji_noun(surface, pos, sub_pos):
+        if cost is not None and cost <= KANJI2_COST_LIMIT:
+            return False
+        # 費用は一般性そのものではない。版付きAI分類で一般語と確認した
+        # 二字名詞は索引に残す。個人語彙への追加や固有名詞の許可はしない。
+        try:
+            import kango_tier
+            if kango_tier.tier(surface) <= 2:
+                return False
+        except Exception:
+            pass
     if _should_exclude(surface, pos, sub_pos, sub_sub_pos, cost):
         return True
     if cost is not None and cost > _INDEX_COST_LIMIT:
@@ -106,7 +114,7 @@ def _should_prune(surface, pos, sub_pos, sub_sub_pos, cost):
 
 
 # キャッシュの形式が変わったら数字を上げる（古い索引を作り直させる）
-CACHE_VERSION = 7
+CACHE_VERSION = 9
 # 索引として最低限あるべき読みの数。これを下回るものは
 # 作りかけ・壊れた索引とみなして作り直す。
 # （空の索引が保存されると、候補が一切出ないのに
@@ -145,10 +153,22 @@ class DictIndex:
         # （`surfaces_for_reading(..., band=False)`）——造語の道が
         # `未提示 → 未定時`（未定 は帯）を作った（実測）
         self._band = None
+        self._inflected = {}
 
     @property
     def ready(self):
         return self._by_reading is not None
+
+    @property
+    def resource_status(self):
+        """追加読込なしで、使用できる読み索引の状態を報告する。"""
+        if self._by_reading is None:
+            state = 'not_initialized'
+        elif self._by_reading:
+            state = 'available'
+        else:
+            state = 'empty' if HAS_JANOME else 'missing_dependency'
+        return {'state': state, 'readings': len(self._by_reading or {})}
 
     def ensure_built(self, progress=None):
         """
@@ -158,7 +178,7 @@ class DictIndex:
         戻り値: 使えるようになったら True
         """
         if self.ready:
-            return True
+            return bool(self._by_reading)
         if self._load_cache():
             return True
         if not HAS_JANOME:
@@ -167,7 +187,7 @@ class DictIndex:
             return False
         self._build(progress)
         self._save_cache()
-        return True
+        return bool(self._by_reading)
 
     # ------------------------------------------------------------
     # 引く
@@ -188,6 +208,10 @@ class DictIndex:
             if _b:
                 got = [s for s in got if s not in _b]
         return got[:limit]
+
+    def inflected_surfaces_for_reading(self, reading):
+        """異様判定後の用言候補。一般名詞の頻度フィルターと混ぜない。"""
+        return tuple(self._inflected.get(reading, ()))
 
     def is_world_reading(self, reading):
         """
@@ -237,9 +261,18 @@ class DictIndex:
         by_surface = {}
         world = set()
         band = {}
+        inflected = {}
+        from inflected_lexicon import include_entry
         n = 0
         for surface, reading, pos, sub_pos, sub_sub_pos, cost in \
-                iter_janome_entries(min_len=1, max_len=8):
+                iter_janome_entries(min_len=1, max_len=18):
+            if include_entry(surface, reading, pos, sub_pos):
+                choices = inflected.setdefault(reading, {})
+                value = cost if cost is not None else 100000
+                choices[surface] = min(value, choices.get(surface, 100000))
+            # 従来の名詞/世の読み/逆引きの母集合は増やさない。
+            if len(surface) > 8:
+                continue
             if pos and pos not in _TARGET_POS:
                 continue
             if sub_pos and sub_pos in _EXCLUDE_SUB:
@@ -295,6 +328,9 @@ class DictIndex:
                             for s, v in by_surface.items()}
         self._world = world
         self._band = band
+        self._inflected = {rd: sorted(choices, key=lambda sf:
+                            (not any('一' <= c <= '鿿' for c in sf), choices[sf], sf))[:12]
+                           for rd, choices in inflected.items()}
 
     # ------------------------------------------------------------
     # キャッシュ
@@ -313,6 +349,7 @@ class DictIndex:
                            'by_reading': self._by_reading,
                            'by_surface': self._by_surface,
                            'world': sorted(self._world or ()),
+                           'inflected': self._inflected,
                            'band': {r: sorted(v) for r, v
                                     in (self._band or {}).items()}},
                           f, ensure_ascii=False)
@@ -328,11 +365,15 @@ class DictIndex:
                 data = json.load(f)
             if data.get('version') != CACHE_VERSION:
                 return False        # 古い形式は作り直す
+            inflected = data['inflected']
+            if not isinstance(inflected, dict):
+                return False
             by_reading = data['by_reading']
             by_surface = data['by_surface']
             # 空・極端に小さい索引は壊れているとみなして作り直す
             if len(by_reading) < _MIN_READINGS:
                 return False
+            self._inflected = inflected
             self._by_reading = by_reading
             self._by_surface = by_surface
             self._world = set(data.get('world') or ())

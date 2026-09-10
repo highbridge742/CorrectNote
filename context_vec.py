@@ -406,6 +406,21 @@ NEARBY_RADIUS = 2
 NEARBY_LIMIT = 12
 
 
+def nearby_reanalysis_lines(head, tail, previous_count, line_count,
+                            radius=NEARBY_RADIUS):
+    """行差分で本文を再利用できても、近傍が変わる行を返す（48-WQ）。
+
+    head/tailは非重複の共通前後部分。変更部分そのものは呼出側が扱う。
+    文書全体は走査せず、境界の上下radius行だけを返す。
+    """
+    if head == previous_count == line_count:
+        return []
+    before = range(max(0, head - radius), head)
+    after_start = line_count - tail
+    after = range(after_start, min(line_count, after_start + radius))
+    return list(before) + list(after)
+
+
 def build_nearby_words(line_count, index, words_of_line,
                        radius=NEARBY_RADIUS, limit=NEARBY_LIMIT):
     """

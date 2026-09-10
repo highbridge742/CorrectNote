@@ -5103,15 +5103,28 @@ def test_compose_48lu():
           'てる' in C.AUXILIARY_TAILS and 'でない' in C.AUXILIARY_TAILS, True)
     check('48-TG 数字の直後の助数詞（かな）は連続の頭に入れない',
           'for _cnt in _KANA_COUNTERS:' in src and 'つ' in C._KANA_COUNTERS, True)
-    check("48-SM 漢字を減らしてかな（カタカナも）を増やさない（48-ND (b) の線。素帰任 → 確認・引き月資料 → 引き継ぎ資料 を通し、炭酸度 → たんと・語彙素同士 → ボイス同士 を止める）",
+    check("48-SM 漢字を減らしてかな（カタカナも）を増やさない（48-ND (b) の線。余分な打鍵の除去と語境界の復元を認め、漢字語をかなの断片へ崩す置換を止める）",
           "if (sum(1 for _c in _repl if is_kanji(_c)) < _sm_nk" in src
           and '_kana = lambda _c: is_hiragana(_c) or is_katakana(_c)' in src, True)
     check('48-SU 世の語2つの複合のカタカナも語（ダブル＋クリック）',
           C._katakana_known_or_compound('ダブルクリック', None)
           and not C._katakana_known_or_compound('リュクカミス', None), True)
-    check('48-SR 数字の直後から始まる漢字の塊は数え方（造語の入口・1か所・呼び手2つが直前の字を渡す）',
+    # 別ループの m_start を漢字ループでも使う誤りを、文字列の個数で
+    # 正解にしていた。実際の引数式を異なる位置と行頭で評価する。
+    import ast as _ast_sr
+    _prev_sr = [kw.value for node in _ast_sr.walk(_ast_sr.parse(src))
+                if isinstance(node, _ast_sr.Call)
+                and isinstance(node.func, _ast_sr.Name)
+                and node.func.id == 'compose_from_intruded'
+                for kw in node.keywords if kw.arg == 'prev_char']
+    def _eval_prev_sr(m, k):
+        return sorted(eval(compile(_ast_sr.Expression(value), '<prev_char>', 'eval'),
+                           {'line':'012345', 'm_start':m, 'k_start':k})
+                      for value in _prev_sr)
+    check('48-SR 数量の直前の字は各ループの位置を使う（行頭は空）',
           'は数字の直後から始まる（数え方）ので' in src
-          and src.count("prev_char=(line[m_start - 1] if m_start > 0 else '')") == 2, True)
+          and _eval_prev_sr(2,5) == ['1','4']
+          and _eval_prev_sr(0,0) == ['',''], True)
     check('48-SU 生やすカタカナは世の語（48-LA の出口）',
           'def _new_katakana_known(' in src
           and "_why['生やしたカタカナが世の語ではない（48-SU）'] += 1" in src, True)
@@ -6716,7 +6729,7 @@ def test_convert_after_core_48nf():
     check('採るのは芯の範囲だけ（窓ごとは触らない）',
           'replacements.append((a + c_s, a + c_e, _core_conv,' in src, True)
     check('変換で縮む範囲は長さの検査から外す',
-          'lu_taken + conv_taken' in src, True)
+          'for spans in (lu_taken, conv_taken)' in src, True)
     # **同じ判定を2度書かない**（48-GN）——変換の中身は1か所
     check('変換そのものは書き写さない',
           src.count('def _convert_odd_kana_run'), 1)
@@ -6842,8 +6855,20 @@ def test_romaji_cost_wiring_48nj():
 
     src = open('vocabulary.py', encoding='utf-8').read()
     check('探索が入力方式を受け取る', 'input_method=None' in src, True)
-    check('控えの鍵にも入力方式が入る',
-          'beam_width,\n           input_method)' in src, True)
+    # キャッシュの書き方ではなく、入力方式ごとに結果が分離することを測る。
+    import vocabulary as V
+    from unittest.mock import Mock, patch
+    fake_store = Mock(); fake_store._by_reading = {}
+    V._FLEX_CACHE.clear()
+    with patch.object(V, '_find_known_readings_flex_uncached',
+                      side_effect=lambda *a, **kw: [kw['input_method']]) as search:
+        first = V.find_known_readings_flex('fixture', fake_store, input_method='kana')
+        second = V.find_known_readings_flex('fixture', fake_store, input_method='romaji')
+        again = V.find_known_readings_flex('fixture', fake_store, input_method='kana')
+        check('控えの鍵にも入力方式が入る',
+              (first, second, again, search.call_count),
+              (['kana'], ['romaji'], ['kana'], 2))
+    V._FLEX_CACHE.clear()
     csrc = open('corrector.py', encoding='utf-8').read()
     # **入口で1回だけ結ぶ**（呼び出しは何十か所もある・学び22）
     check('入口で1回だけ結ぶ', '入口で1回だけ結ぶ' in csrc, True)
@@ -6915,8 +6940,11 @@ def test_open_odd_single_kanji_48nk():
           'if not any(a <= start < b for a, b in marks):' in src, True)
     check('(2) 隣のかなと合わさって機能語になること',
           "'助詞' in (u[1] or '') or '助動詞' in (u[1] or '')" in src, True)
+    from types import SimpleNamespace
+    tail_tok=tok_of([('たり','助詞:並立助詞','たり')])
+    still_odd=SimpleNamespace(odd_spans=lambda text,tok:[(0,2)])
     check('(3) 開いたら異様さが消えること',
-          'if _odd_nk.odd_spans(opened, tokenize_fn):' in src, True)
+          C._open_one_kana('た李',1,'り',tail_tok,still_odd),None)
     check('同じ口（_kv）に載せている',
           'for _o1 in _open_odd_single_kanji(line, tokenize_fn):'
           in src, True)
@@ -7297,9 +7325,13 @@ def test_infl_connection_48nt():
     osrc = open('oddness.py', encoding='utf-8').read()
     check('判定は oddness に1つだけ（2度書かない）',
           osrc.count('def infl_mismatch') == 1, True)
+    import ast
+    odd_fn = next(n for n in ast.parse(osrc).body
+                  if isinstance(n, ast.FunctionDef) and n.name == 'is_odd_run')
+    odd_calls = {n.func.id for n in ast.walk(odd_fn)
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
     check('is_odd_run から呼んでいる',
-          'if infl_mismatch(a, b, _prev) or suffix_then_yougen(spans, i):'
-          in osrc, True)
+          {'infl_mismatch', 'suffix_then_yougen'} <= odd_calls, True)
     check('**印を位置順にそろえて出す**（重なりの併合が崩れる）',
           'out.sort(key=lambda t: (t[2], t[3]))' in osrc, True)
     return all_ok
@@ -7958,8 +7990,8 @@ def test_index_face_48oj():
 
     check('族の決まりは janome_import.is_two_kanji_noun ただ1つ',
           'def is_two_kanji_noun(' in ji and 'is_two_kanji_noun' in di, True)
-    check('索引は族を KANJI2_COST_LIMIT まで持つ',
-          'cost <= KANJI2_COST_LIMIT\n            and is_two_kanji_noun(' in di, True)
+    check('索引は漢字2字名詞の費用上限と一般語分類を使う',
+          'cost <= KANJI2_COST_LIMIT' in di and 'kango_tier.tier(surface) <= 2' in di, True)
     check('索引の並びは 段 → コスト',
           'pairs.sort(key=lambda cv: (_tier(cv[1]), cv[0], cv[1]))' in di, True)
     check('kango_tier.json は同梱の名簿に在る',
@@ -8002,7 +8034,7 @@ def test_index_face_48oj():
     check('帯を見ないのは compose・48-MI の門・(い) の辞書の先頭の3か所（helper 経由・定義1＋呼び手3）',
           src.count('_surfaces_no_band(dict_index, '), 4)
     check('索引が帯を持つ（dict_index._band）', 'self._band = band' in di, True)
-    check('索引の版は 7（帯を持つ形）', 'CACHE_VERSION = 7' in di, True)
+    check('索引の版は 9（用言・活用形の読みを共有）', 'CACHE_VERSION = 9' in di, True)
     check('造語の道: 手を当てた読みの語幹は直し先が1語のときだけ（48-OJ）',
           'が本人の語彙に無く、直し先' in src, True)
     check('形容動詞語幹＋化 は1語（48-OK・2か所）',
@@ -8123,7 +8155,7 @@ def test_pos_and_units_20260903():
     check('(e) 手は費用の安い順',
           'key=lambda r: _cost.get(r, 9.9))' in src, True)
     check("(e') 脱字（打っていない字を足す）は隣接キーより高い",
-          "_add(r, '誤打の型', 1.0 if r in _cheap else 1.5)" in src, True)
+          __import__('kana_layout').kana_repair_cost('あう', 'あいう', 1.5) > 1.5, True)
     check('(e) 幅は 1.4', C._CHUNK_NEAR_MAX, 1.4)
 
     # 編集距離（純粋関数）

@@ -702,6 +702,16 @@ def pos_lines(text, tokenize_fn=None, store=None, pos_hint=None,
             kata = None
         if kata:
             return [f'カタカナ語（{kata}）のかな書き']
+    # 48-XE: 壊れた分割で全体の品詞を言えなくても、辞書で裏付けられる
+    # 読みの前半を残す。原文表記の品詞確定とは区別して表示する。
+    if dict_index is not None and (_mora_cut(toks) is not None
+            or (len(toks)==1 and not toks[0][4])):
+        from reading_segments import known_reading_prefix
+        partial=known_reading_prefix(text,dict_index,allow_short=True)
+        if partial:
+            head,tail,major,surfaces=partial
+            return [f'{head} ＝ {major}の読み（候補: {"・".join(surfaces[:3])}）',
+                    f'{tail} ＝ {UNKNOWN_POS}（残りの範囲）']
     if len(toks) == 1:
         # **1語のときも同じ判定を通す**（学び22——片方だけに置くと
         # そちらを迂回する。`セク` 単独はこの道）

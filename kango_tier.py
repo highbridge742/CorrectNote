@@ -28,11 +28,13 @@
     段 2  一般語（書籍・新聞で普通に見るが、日常の頻度は低い） 過大・異動・端午
     段 3  それ以外（専門・法令・文語・稀語）。**表に載せない**   参向・鑽孔・馘首
 
-使う所は2つだけ:
+使う所:
   ・`dict_index` が、同じ読みの表記を **段 → コスト** の順に並べる
   ・`corrector._index_face` が「異様と判定したあと、優先度の高い1つに
     決める」ときの順位（CLAUDE.md ★★「候補が複数あっても、優先度の
     高い1つに決めて補正する」）
+  ・異様な長い読みに対し、普通名詞2語の候補同士の意味的な結び付きを
+    比べる（`compound_relations`）。誤入力と正解の対は保存しない
 
 **判定には使わない。** 「異様か」は別の判定（oddness・pos_grammar）が
 決める。ここは**決まったあとの順位**だけ。表が無ければ全部 段3
@@ -42,11 +44,12 @@ import json
 import os
 
 _TABLE = None
+_RELATIONS = None
 _MISSING = False
 
 
 def _load():
-    global _TABLE, _MISSING
+    global _TABLE, _RELATIONS, _MISSING
     if _TABLE is not None or _MISSING:
         return _TABLE
     here = os.path.dirname(os.path.abspath(__file__))
@@ -55,6 +58,7 @@ def _load():
             with open(path, encoding='utf-8') as f:
                 data = json.load(f)
             _TABLE = data.get('tiers') or {}
+            _RELATIONS = data.get('compound_relations') or []
             return _TABLE
         except Exception:
             continue
@@ -67,11 +71,29 @@ def available():
 
 
 def tier(surface):
-    """その表記の段（1・2）。表に無ければ 3。表が読めなければ 3。"""
+    """その表記の段（1・2）。既存表と版付き一般語分類に無ければ3。"""
     t = _load()
     if not t:
         return 3
     try:
-        return int(t.get(surface, 3))
+        value = int(t.get(surface, 3))
+        # 費用閾値で抽出した旧表に無い語も、版付きの一般語分類を参照する。
+        # 分類は意味関係の同じ名簿を共有し、語を別の表へ二重登録しない。
+        for relation in (_RELATIONS or ()):
+            ordinary = relation.get('ordinary_tier')
+            if ordinary in (1, 2) and (surface in relation.get('heads', ())
+                                      or surface in relation.get('tails', ())):
+                value = min(value, ordinary)
+        return value
     except Exception:
         return 3
+
+
+def affinity(left, right):
+    """AIが分類した一般語の意味群から、2語の結び付き（0～2）を返す。"""
+    _load()
+    for relation in (_RELATIONS or ()):
+        if (left in relation.get('heads', ())
+                and right in relation.get('tails', ())):
+            return 2
+    return 0

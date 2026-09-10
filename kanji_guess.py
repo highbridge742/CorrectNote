@@ -914,8 +914,8 @@ def ime_readings_for(text):
     """
     その表記について**打たれた読み**を返す（無ければ空）。
 
-    **落ちても無かったことにする。** 補正の本筋は逆算のままで、
-    ここは足すだけの道。落ちて全体が止まってはいけない。
+    保存済みの読みを最優先の材料として返す。今回の入力位置に
+    結び付いた確定対とは断定しない。取得に失敗した場合は逆算へ進む。
     """
     fn = _IME_READINGS_PROVIDER
     if fn is None or not text:
@@ -1096,6 +1096,24 @@ def _pattern_penalty(text, parts):
 
 def reading_combos_with_rank(text, dict_index=None, max_combos=MAX_COMBOS,
                              next_char=None):
+    """従来の読み・順位API。由来が必要な場合はwith_evidence版を使う。"""
+    return _reading_combos_with_rank(text, dict_index, max_combos, next_char)
+
+
+def reading_combos_with_evidence(text, dict_index=None, max_combos=MAX_COMBOS,
+                                 next_char=None):
+    """同じ一度の探索から、採用した読みの生成元を返す（48-WP）。
+
+    保存対を今回の確定対と偽らない。順位は従来APIと同一。
+    一字読みの辞書・音訓表の内訳や、今回の入力位置の証拠は未収録。
+    """
+    evidence = []
+    _reading_combos_with_rank(text, dict_index, max_combos, next_char, evidence)
+    return evidence
+
+
+def _reading_combos_with_rank(text, dict_index=None, max_combos=MAX_COMBOS,
+                              next_char=None, evidence=None):
     """
     reading_combos と同じだが、各組み合わせの
     「読みとしての確からしさ」を表す数値（rank）も一緒に返す。
@@ -1141,7 +1159,7 @@ def reading_combos_with_rank(text, dict_index=None, max_combos=MAX_COMBOS,
             # （`奥悠久子帝` は `帝` が読めず、ここで 0件だった）。
             # 対で切り分けた組み立て（segs）も同じ扱い。読めない字が
             # 対の中に覆われていれば、組み立ては作れている（48-HB）。
-            return _with_ime_readings(known, segs)
+            return _reading_result(known, segs, [], evidence)
         rs = _drop_okurigana_readings(text, i, ch, rs, next_char)
         rs = _trim_okurigana_from_readings(text, i, rs, next_char)
         per_char.append(rs[:3])
@@ -1172,9 +1190,28 @@ def reading_combos_with_rank(text, dict_index=None, max_combos=MAX_COMBOS,
     # 上位だけを探索する際に本命を取りこぼす
     # （実機で「素帰任」が「確認」に届かなくなった原因）。
     combos.sort(key=lambda prc: (prc[1], prc[2]))
-    return _with_ime_readings(
-        known,
-        _merge_by_rank(segs, [(r, rank) for r, rank, _changed in combos]))
+    return _reading_result(known, segs,
+                           [(r, rank) for r, rank, _changed in combos], evidence)
+
+
+def _reading_result(known, segments, guessed, evidence):
+    """並べ替え・重複除去で実際に残った経路を記録。追加探索はしない。"""
+    result = _with_ime_readings(known, _merge_by_rank(segments, guessed))
+    if evidence is not None:
+        # _merge_by_rankと同じ優先順。より低いrankの一字読みが勝つこともある。
+        origins = {}
+        tagged = ([(rank, 0, i, reading, 'saved_ime_segment_reconstruction')
+                   for i, (reading, rank) in enumerate(segments)]
+                  + [(rank, 1, i, reading, 'character_reading_reconstruction')
+                     for i, (reading, rank) in enumerate(guessed)])
+        for rank, _, _, reading, source in sorted(tagged):
+            origins.setdefault(reading, source)
+        for reading in known:
+            origins[reading] = 'saved_ime_pair'
+        for position, (reading, rank) in enumerate(result, 1):
+            evidence.append(dict(reading=reading, rank=rank, order=position,
+                                 source=origins[reading], occurrence_verified=False))
+    return result
 
 
 def _with_ime_readings(known, guessed):

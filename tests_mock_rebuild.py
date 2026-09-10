@@ -78,6 +78,30 @@ def run_rebuild_cases():
           cost_rep == cost_ins, True)
     check('連打は取り除いた文字数ぶんの訂正', edits_rep, 2)
 
+    # --- 48-WC: 一般日本語の1字・2字後続予測を脱字探索へ渡す ---
+    import ngram_yomi as _NY
+    _next2 = _NY.order_next('かん', ('じ', 'し', 'か', 'た'))
+    check('直前2字では3連表を使う', all(x[2] == 2 for x in _next2), True)
+    check('直前2字「かん」の後続は一般日本語の回数順',
+          [x[0] for x in _next2], ['じ', 'し', 'か', 'た'])
+    _next1 = _NY.order_next('ん', ('じ', 'し', 'か', 'た'))
+    check('直前1字では3連表から集計した2連を使う',
+          all(x[2] == 1 for x in _next1), True)
+
+    _pred_store = VocabularyStore()
+    for _reading in ('かんじ', 'かんし', 'かんか', 'かんた'):
+        _pred_store.add(_reading, _reading)
+    _pred = find_known_readings_flex('かん', _pred_store, max_edits=1,
+                                     input_method='kana')
+    check('脱字候補は直前2字の後続予測で順位を決める',
+          [x[0] for x in _pred], ['かんじ', 'かんし', 'かんか', 'かんた'])
+
+    _mark_store = VocabularyStore()
+    _mark_store.add('かが', 'かが')
+    check('濁音の濁点だけの脱字は1打として候補になる',
+          find_known_readings_flex('かか', _mark_store, max_edits=1,
+                                   input_method='kana')[0][0], 'かが')
+
     # --- 語彙からの引き当て ---
     def first(word):
         got = find_similar_readings(word, st)
@@ -496,11 +520,11 @@ def run_rebuild_cases():
           _fix('たｍｍごの繋がり'), '単語の繋がり')
     check('たｈｈの繋がり → たんの繋がり（ｈｈ→ん・枠が決める）',
           _fix('たｈｈの繋がり'), 'たんの繋がり')
-    # **枠を外すと決まらない**（＝黙る。`痰` を勝手に書かない）。
-    # 回数を廃したあとの正しい姿——判断がつかないものは触らない。
+    # 48-WT: 先頭の痰は短すぎるので除外し、登録済みの次点たんを採る。
+    # 先頭の不成立を候補ゼロとは扱わない。語の特例や回数による採用ではない。
     _LC.set_active(None)
-    check('枠が無ければ たｈｈ は決めない（痰 に化けない）',
-          _fix('たｈｈの繋がり'), 'たｈｈの繋がり')
+    check('枠が無くても先頭除外後は登録済みの次点たんを検査する',
+          _fix('たｈｈの繋がり'), 'たんの繋がり')
     _LC.set_active(_lc_tan)
     check('壊さない: ふつうにaabbと打つ',
           _fix('ふつうにaabbと打つ'), 'ふつうにaabbと打つ')

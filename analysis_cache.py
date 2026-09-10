@@ -166,7 +166,7 @@ import zlib
 #              1件も変わらない**のは今までどおり。
 # 2026-09-06a: 項目48-RZ〜48-SC（格助詞の連続・人名＋を＋叙述動詞・濁点の
 #              位置ずれ・語の列として組み直す道を起こした）で答えが変わる。
-ENGINE_STAMP = '2026-09-08i'   # 48-ME〜MN 一番下の守り・タブを跨がない範囲・う挿入・お/ごの接頭・かなの漢語を変換・長さと手・変換の錨に2字の漢語・かな連続を「を」で区切る・48-LC の床を2字の漢語で越える・音読みを形で見分ける・紫の誤検知2種・の でも区切る／横ずれは採らない・印の範囲だけ開く・組み立ての受け皿を手を当てた読みにも・**拗音の小書きどうし**・錨は先頭でなくてよい・**名詞どうしの複合は作れる**・**要素の1字（素辞項）**・連用形＋1字は見ない・**本道でも語の組み立て**・**書かれ方は変えない**・打ち切りは順を決めてから・直した読みをそのまま漢字へ・丸ごと1語の床を2へ・**ローマ字入力はローマ字の隣接キーだけを見る**・異様な1字の漢字をかなに開く・ナ形容詞の語幹＋動詞は異様／そこに に を入れる・数字の直後の連なりは触らない・打った読みの記録を門にしない・副詞＋に の後ろには用言・活用形の接続・漢字で書く既知語で芯を切る・複合辞は1語・**接尾辞＋用言**・未然形の誤爆を潰す・開いた読みの手当ても入力方式で・ナ形容詞の語幹は名簿で・**印を落としただけなら元に戻す**・**索引に2字漢語の帯と段（kango_tier）・索引の顔で決める（48-OJ）**・形容動詞語幹＋化（48-OK）・1字の ん と余分な隣のキー（48-OL）・印のキーの隣を開いた読みにも（48-OM）・名詞に続く機能語（48-ON）・**48-MI に索引の顔を既定 ON（48-OO）**・う の位置ずれ（48-OP）・田部井号して（48-OQ）・固有名詞は後段へ（48-OR）・F2 の単位（48-OS/OT）・**口語の縮約とら抜き（48-OU）**・1字の訓読み名詞＋動詞（48-OV）・感動詞＋格助詞だけ（48-OW）・名詞＋疑問の代名詞（48-OX）・**カタカナ語の出どころ（48-OY/OY')**・切り詰めは採らない（48-OZ）・組の余り（48-PA）・連打の畳みと伸ばし棒に①（48-PB/PB'）・**音訓表の穴を埋める（48-PE）**・読みの型の表（48-PD）・音訓の型で②の順位（48-PC）・読める読みが在ったら敷居を上げる（48-PF）・**文法の仕事をしている隙間は書き換えない（48-PG）**・尻尾まで変わる変換は漢語の変換ではない（48-PH）・**助詞のトークンで区切る（48-PI）**・よく使う語の動詞の活用（48-PJ）・**動詞基本形＋名詞は「読める」に数えない（48-PL）**・補助動詞は て形のあとだけ（48-PP）・てんの（48-PS）・接尾＋接尾（48-KZ(G)）・**余分な隣のキーは①が立つ塊だけ（48-PL(b')）**・直し先が語＋1字助詞なら採らない（48-PK）・カタカナのサ変＋語→後（48-PQ）・**異様の対の範囲だけを読みで置き換える受け皿（48-PO）**・読みの立たないカタカナ断片は塊に含める（48-PT）・**壊れた形の見本の並記に引きずられない（48-PX/PY）**・**回数と最終使用時刻を廃した solid モデル（48-QG）／使われぶりの弱まりを廃止・48-LC の競合の見張りを費用表へ（48-QG-dash）**・**て/で で繋がった活用の列はできあがっている（48-QV。`見ていない → 検定ない` を止めた）**・**連体詞＋名詞も同じ（48-QX。`同じ字 → 叔父時`）**・中黒の列挙は空白を飛ばして見る（48-QW。`実機メモ全タブ・ 同梱の見本`）・**紫下げの門を描画側へ（48-QY）**・**語＋手が生んだ1字格助詞＋語（48-RQ。`解析課背中セク → 解析が長く`）・同じ誤りの繰り返しは1つの仮説（48-RR）・1字の機能語だけの説明は7字以上には認めない（48-RS）・入れ子で通した行の紫を外の位置へ写す（48-RU・印だけ）**・**2語の組は名詞＋名詞・短い部品は世の中の1語・手を当てていない語の読みを切り直さない（48-RV）・直した読みを変換の道に通す（48-RW'）**・**学習は「変わったとき」だけ（48-RJ）**・**既知の頭で割って熟語＋熟語（48-RK。かんいりゅうりょく → 簡易入力）**・かなだけの動詞終止形＋名詞は当て推量（48-RL）・右端の既知語＋続く漢字（48-RM）・**固有名詞の当て推量を門にも通す（48-RN）**・**カタカナ2字の断片の表（48-RO。セクに印が立つ）**・**同梱の名簿を1語ずつ当てて見つけた門 約25個（48-TX〜48-VC。英単語のべた打ち・外来語の綴り・送り仮名・語の中の断片・押しすぎ・末尾の用言・カタカナ語の割られ方）**
+ENGINE_STAMP = '2026-09-11b'   # v1.8.0 / 48-XY〜YF: 文脈・活用・読み・編集の共有
 
 # 控えの形式の版。作りを変えたら上げる（古い控えは捨てられる）。
 CACHE_VERSION = 1
@@ -313,7 +313,11 @@ def _engine_source_stamp(app_dir):
                  'halfwidth.py', 'loanword.py', 'morphology.py',
                  'kanji_guess.py', 'context_vec.py', 'dict_index.py',
                  'okurigana.py', 'naturalness.py', 'charngram.py',
-                 'ngram_ja.py',
+                 'ngram_ja.py', 'ngram_yomi.py',
+                 'literal_examples.py', 'reading_segments.py',
+                 'contextual_repair.py', 'inflected_lexicon.py', 'reading_likelihood.py',
+                 'semantic_roles.py',
+                 'oddness.py', 'pos_grammar.py',
                  # **単語リストも補正の答えを変える**（項目48-BU で
                  # 触らない語を広げたら `callout` の扱いが変わった）。
                  # 中身だけ差し替えたときに気付けるよう、ここに置く。
@@ -348,6 +352,14 @@ def _ime_readings_stamp(ime_readings):
         return None
 
 
+def _morphology_backend():
+    try:
+        from morphology import HAS_JANOME
+        return 'janome' if HAS_JANOME else 'fallback'
+    except Exception:
+        return 'fallback'
+
+
 def build_fingerprint(app_dir, app_version, input_method, recent_words,
                       store=None, context_vec=None, dict_index=None,
                       decisions=None, choices=None, ime_readings=None):
@@ -366,6 +378,7 @@ def build_fingerprint(app_dir, app_version, input_method, recent_words,
         'app_version': app_version,
         'engine_sources': _engine_source_stamp(app_dir),
         'input_method': input_method,
+        'morphology_backend': _morphology_backend(),
         'vocab': _vocab_stamp(store),
         'context_vec': _context_vec_stamp(context_vec),
         'dict_index': _dict_index_stamp(dict_index),
@@ -377,6 +390,11 @@ def build_fingerprint(app_dir, app_version, input_method, recent_words,
     }
 
 
+# 48-WN: 正常/未完を取り違えないため、診断と停止理由も保存する。
+_RESULT_METADATA = ('analysis_status', 'stop_reason', 'diagnostic_cycle',
+                    'diagnostic_limit', 'diagnosis')
+
+
 def _pack(result):
     """
     1行ぶんの結果を、控えに残せる形にする。
@@ -386,7 +404,7 @@ def _pack(result):
     **鍵を増やしたら、ここと `_unpack` の両方に足すこと。**
     足し忘れると、その情報だけが控え経由で失われる。
     """
-    return {
+    packed = {
         'o': result.get('original', ''),
         'c': result.get('corrected', ''),
         'd': [list(x) for x in (result.get('details') or ())],
@@ -402,11 +420,16 @@ def _pack(result):
     }
 
 
+    from copy import deepcopy
+    packed['meta'] = {key: deepcopy(result[key]) for key in _RESULT_METADATA if key in result}
+    return packed
+
+
 def _unpack(item):
     """控えから1行ぶんの結果に戻す。"""
     original = item.get('o', '')
     corrected = item.get('c', '')
-    return {
+    result = {
         'original': original,
         'corrected': corrected,
         'changed': corrected != original,
@@ -417,6 +440,14 @@ def _unpack(item):
         'odd_spans': [tuple(x) for x in (item.get('od') or ())],
         'odd_reasons': [tuple(x) for x in (item.get('or') or ())],
     }
+
+
+    from copy import deepcopy
+    metadata = item.get('meta') or {}
+    if not isinstance(metadata, dict):
+        raise ValueError('invalid analysis result metadata')
+    result.update({key: deepcopy(metadata[key]) for key in _RESULT_METADATA if key in metadata})
+    return result
 
 
 def save(path, fingerprint, tabs):
@@ -443,6 +474,8 @@ def save(path, fingerprint, tabs):
     for text, results in (tabs or {}).items():
         if not text or results is None:
             continue
+        if any(r.get('analysis_status') == 'incomplete' for r in results):
+            continue        # 打ち切られた行を次回起動の完成済み結果にしない
         lines = text.split('\n')
         if len(lines) != len(results):
             continue        # 食い違っている控えは残さない
@@ -492,6 +525,8 @@ def load(path, fingerprint):
             text = entry['text']
             results = [_unpack(x) for x in entry['results']]
         except Exception:
+            continue
+        if any(r.get('analysis_status') == 'incomplete' for r in results):
             continue
         if len(text.split('\n')) != len(results):
             continue

@@ -240,6 +240,14 @@ def looks_like_halfwidth_input(text, min_len=4):
     # 数字や別の英字の途中から切り出さず、同梱の英語辞書を共有する。
     # 半角補正の最小長と同じ4字以上で見る（短い打鍵断片とは分ける）。
     import re
+    # 数値＋単位と、括弧内の別単位での表記は完成した数量表現。
+    # 数字の比率では、後ろの数量をかなキーと誤認するので構造で見る。
+    # 全体一致に限り、4du4 のような数字・英字の混在打鍵は除外しない。
+    _number = r'[+-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)'
+    _quantity = _number + r'\s*[A-Za-zµμ%°]+'
+    if re.fullmatch(_quantity + r'(?:\s*\(\s*' + _quantity + r'\s*\))?',
+                    normalize_zenkaku_input(text).strip()):
+        return False
     if any(_is_dictionary_english(m.group()) for m in re.finditer(
             r'(?<![A-Za-z0-9])[A-Za-z]{4,}(?![A-Za-z0-9])', text)):
         return False

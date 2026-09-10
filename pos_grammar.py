@@ -275,8 +275,38 @@ _PIECES = {
     ),
 }
 
+# 48-WK: て/でしまうの縮約は、しまうと同じワ行五段の活用を保つ。
+# 無声の音便には「ちゃ」、有声の音便には「じゃ」を接続する。
+# 連用形・一段語幹の既存の縮約にも否定・仮定・意向を補う。
+def _shimau_contraction_pieces(prefix):
+    return ((prefix + 'う', 'END'), (prefix + 'っ', 'TSU'),
+            (prefix + 'い', 'R'), (prefix + 'わ', 'MZ'),
+            (prefix + 'え', 'E'), (prefix + 'おう', 'END'))
+
+
+_PIECES['TSU'] += _shimau_contraction_pieces('ちゃ')
+_PIECES['N'] += _shimau_contraction_pieces('じゃ')
+_PIECES['R'] = tuple(dict.fromkeys(
+    _PIECES['R'] + _shimau_contraction_pieces('ちゃ')
+    + _shimau_contraction_pieces('じゃ')))
+
 # ます・た・て … は連用形にも一段語幹にも付く
 _PIECES['E'] = _PIECES['E'] + _PIECES['R']
+# 解析済みの未然形は、接続先が限定される（するの せ・さ・しよ）。
+_PIECES['MN'] = tuple(p for p in _PIECES['MZ'] if p[0] in ('ぬ', 'ん', 'ず', 'ずに'))
+_PIECES['MR'] = (('れ', 'E'), ('せ', 'E'))
+_PIECES['MO'] = (('う', 'END'),)
+_PIECES['COND'] = (('ば', 'END'),)
+
+
+def continuation_state(form):
+    """解析された動詞の活用形を、続きの接続状態にする。未対応はNone。"""
+    if form and form.startswith('命令'):
+        return 'END'
+    return {'連用形':'R', '未然形':'MZ', '未然ヌ接続':'MN',
+            '未然レル接続':'MR', '未然ウ接続':'MO', '仮定形':'COND',
+            '基本形':'END'}.get(form)
+
 
 # 終助詞は述語のあとにだけ（買った**ね** ○ ／ 語の途中には置かない）
 _PIECES['END'] = _PIECES['END'] + tuple(
@@ -399,9 +429,15 @@ def _looks_verb(word, words):
     return False
 
 
+def is_functional_noun(token):
+    """解析上の形式名詞と、文法の機能語の境界が一致するか。"""
+    return (len(token) > 1 and (token[1] or '').startswith('名詞:非自立')
+            and token[0] in _load_tables()[1])
+
+
 def explain_kana_run(run, after_kanji=False, before_kanji=None,
                      kanji_stem='', is_word=None, bare_head=False,
-                     no_words=False, stems_only=False):
+                     no_words=False, stems_only=False, initial_state=None):
     """
     **かな連続が、語の表＋機能語＋活用の文法で説明できるか。**
 
@@ -438,11 +474,22 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
                   説明が付いていた——行頭の も を助詞に読んでいたから。
                   行頭でなければ（前が漢字・読点・括弧）今までどおり
 
+    initial_state: 直前の活用状態が確定した場合の入口（R=連用形など）。
+                   Noneなら従来どおり文節の頭から読む。
+
     戻り値: True（説明が付く＝異様とは言えない）／False（付かない）。
     **False は異様の必要条件であって、単独の証拠にしない。**
     """
+    # 呼び手が直前の活用形を確定できるときだけ、その接続状態を使う。
+    if initial_state is not None and initial_state not in _PIECES and initial_state != 'Bw':
+        raise ValueError('unsupported grammatical state: ' + str(initial_state))
     if not run:
-        return True
+        return initial_state is None or initial_state in _ACCEPT
+    # 48-XR: 表示用の解析と同じ根拠で、口語の助動詞表記を読む。
+    # ここでは文字を書き換えず、後続の接続も通常の文法で検証する。
+    if 'ぅ' in run:
+        from morphology import colloquial_auxiliary_normal_form
+        run = colloquial_auxiliary_normal_form(run)
     _tbl_words, funcs, p1 = _load_tables()
     if not _tbl_words:
         return True                      # 表が無ければ意見なし
@@ -461,7 +508,7 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
         nouns = _NoWords()
         if no_words:
             words = nouns
-    if run in nouns or run in funcs:
+    if initial_state is None and (run in nouns or run in funcs):
         return True
     n = len(run)
     # 末尾の お/ご は、次の語の接頭辞（お待ちください・「なんだお前」の
@@ -472,7 +519,7 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
         ends.add(n - 1)                  # 次が漢字でないと分かれば読まない（48-TJ）
 
     seen = set()
-    stack = [(0, 'Bf')]
+    stack = [(0, initial_state or 'Bf')]
     if after_kanji:
         stack.append((0, 'S'))
         # 漢字の連続＋かなの頭が、表の語（思いがけず・引き継ぎ）。
@@ -552,6 +599,8 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
             continue
         # ε 遷移
         for st2 in _EPS.get(st, ()):
+            if initial_state is not None and st in ('R', 'E') and st2 == 'Bw':
+                continue  # 接続の検証では、途中の活用を名詞化して逃がさない
             # **stems_only では、裸の連用形・一段の語幹（R・E）から次の語へ
             # 進まない**（項目48-TH'''・2026-09-06）。連用形＋を（替えを）・
             # 連用形＋動詞（嗅ぎ替え）は文法としては立つが、この読みは
@@ -604,7 +653,9 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
                     # 助動詞の尾（てた・ます・ない…）は用言のあとにだけ——
                     # 文節の頭には立てない（`てた＋とおす`。漢字の直後の
                     # 連続の頭は 送り仮名＋尾 なので除く。48-TH''''）
-                    if (stems_only and _f in _ATAILS and st in ('Bf', 'Bk', 'Bn')
+                    if ((stems_only or initial_state is not None)
+                            and _f in _ATAILS and (st in ('Bf', 'Bk', 'Bn')
+                                                   or (initial_state == 'Bw' and st == 'Bw'))
                             and not (after_kanji and i == 0)):
                         continue
                     stack.append((i + ln, 'Ev' if (
@@ -760,14 +811,16 @@ def odd_kana_spans(line, dict_index=None, store=None):
     if not line:
         return []
     out0 = []
-    # **拗音・小書き母音の前は、ひらがな・括弧・行頭に限る**
-    # （項目48-KY・2026-08-29。うにさんの指定「小文字のひとつ前は
-    # 平仮名か、括弧に限ったりしませんか」）。`二ゅ力ミス` の 二ゅ。
-    # **促音 っ は除く**——漢字の語幹の送り仮名（打っ・持っ・戻っ）が
-    # 実機メモに100か所超あって全部正しい形（実測）。長音 ー のあとも
-    # 見ない（ふーっ の類）。
+    if dict_index is not None and store is not None and 'ー' in line:
+        from reading_segments import odd_partial_loanwords
+        from corrector import make_tokenizer
+        out0.extend((a,b) for a,b,_h,_t,_s in
+                    odd_partial_loanwords(line,dict_index,store,make_tokenizer(store)))
+    # 48-WM: 小書き母音は口語の語尾・文字の言及にも現れるため、
+    # 前接文字だけでは異様と断定しない。拗音の構造判定は分けて残す。
+    # 促音っは送り仮名にも使うので従来どおり対象外。
     for p, c in enumerate(line):
-        if c not in 'ゃゅょぁぃぅぇぉ':
+        if c not in 'ゃゅょ':
             continue
         prev = line[p - 1] if p > 0 else ''
         if not prev or _is_hira(prev) or prev == 'ー' \
@@ -841,6 +894,19 @@ def odd_kana_spans(line, dict_index=None, store=None):
                     ok = True
             except Exception:
                 pass
+        # 前の名詞と読点が、かな単独の解析で失われた並列を説明する。
+        # 補正側の共通入口と同じ判定を使い、印だけを後から隠さない。
+        if not ok and len(run)>=4 and run[-2]=='と':
+            try:
+                from corrector import _comma_nominal_context, make_tokenizer
+                if _comma_nominal_context(line,i0,run,make_tokenizer(store)):
+                    ok=True
+            except Exception:
+                pass
+        if not ok and not after:
+            from reading_segments import short_nominal_reading
+            if short_nominal_reading(run):
+                ok = True
         if not ok:
             out.append((i0, j))
     return out

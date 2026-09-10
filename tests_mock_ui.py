@@ -2382,6 +2382,11 @@ def run_icon_cases():
     # 0 のままだった（tools_local/probe_icon_win.py で実測）。
     win_fn = methods.get('_set_window_icons_win32')
     check('窓そのものに絵を付ける道がある（48-LY）', win_fn is not None, True)
+    hwnd_fn = methods.get('_window_hwnd_win32')
+    hwnd_src = ast.get_source_segment(src, hwnd_fn) if hwnd_fn else ''
+    check('HWNDを64bitのまま最上位窓まで辿る',
+          ('GetAncestor' in (hwnd_src or ''),
+           'c_void_p' in (hwnd_src or '')), (True, True))
     win_src = ast.get_source_segment(src, win_fn) if win_fn else ''
     check('WM_SETICON を送る', 'WM_SETICON' in (win_src or ''), True)
     check('.ico から寸法を指定して読む（256 を縮めた眠い絵にしない）',
@@ -2436,6 +2441,12 @@ def run_icon_cases():
               isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
               and n.func.id == '_set_app_user_model_id'
               for n in ast.walk(main_fn)), True)
+    appid_fn = next((n for n in tree.body
+                     if isinstance(n, ast.FunctionDef)
+                     and n.name == '_set_app_user_model_id'), None)
+    appid_src = ast.get_source_segment(src, appid_fn) if appid_fn else ''
+    check('exeでも同じタスクバーの名札を明示する',
+          "getattr(sys, 'frozen'" in (appid_src or ''), False)
 
     # --- 同梱の名簿（bundle_manifest.py ただ1つ） ---
     import bundle_manifest
@@ -3505,7 +3516,7 @@ def test_refit_broken_units_48pv():
           'born=(_born_positions(_rd, _v)' in _src5, True)
     check('48-RK より先に置いてある（先に疑う）',
           _src5.index('_wbp = _word_born_particle_fix(')
-          < _src5.index('_khc = _fix_known_head_compound(\n'), True)
+          < _src5.rindex('_khc = _fix_known_head_compound(\n'), True)
 
     print('--- 項目48-RU（入れ子で通した行の紫を捨てない） ---')
     # `・「解析課背中セク、」は、まず「背中セク」が…` で前の塊を直したら、
@@ -4863,7 +4874,7 @@ def run_tab_render_48vw():
     with patch.object(app,'build_line_units',side_effect=AssertionError('描画中に解析した')):
         h._render_corrected()
     ok=(h.result_view.text=='選択済み\n直し\n' and h.result_view.inserts==1
-        and h.line_units[1:]==[[],[]] and h.result_view.tags['chosen']==['1.0','1.4']
+        and h.line_units[1:]==[[],[]] and h.result_view.tags['chosen']==['1.0+0c','1.0+4c']
         and ('未準備','直し') not in h._units_cache)
     # 統合表示も、未準備の行は表示中の本文を残して分割処理へ任せる。
     h.unified_autofix_on=lambda:False

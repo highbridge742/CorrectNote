@@ -409,6 +409,27 @@ _SUFFIX_PAIR_OK = frozenset((
 ))
 
 
+def _nominal_action_head(surface,pos,reading):
+    """一字の名詞＋動作名詞を、訓読みだけで完成形と決めない。
+
+    形容動詞語幹の別解を持つ字は、名詞の目的語と修飾語幹を
+    この二語だけでは区別できない。既知の複合語や別の接続根拠に委ねる。
+    口語の名詞＋動詞の既存規則は変更しない。
+    """
+    if not _kun_noun_1(surface,pos,reading):
+        return False
+    from morphology import dictionary_base_pos
+    positions=dictionary_base_pos(surface)
+    if positions is None:
+        return False
+    return not any(p.startswith('名詞,形容動詞語幹,') for p in positions)
+
+
+def layout_position_pair(a, ap, b):
+    """48-XT: 区画名1字に位置名が付く名詞句。判定と完成形で共有。"""
+    return a in _LAYOUT_KANJI and _plain_noun(ap) and b in _POSITION_TAIL2
+
+
 def can_join(a, ap, b, bp, a_reading=''):
     """
     **A の後ろに B がその順でくっつけるか**。
@@ -438,11 +459,10 @@ def can_join(a, ap, b, bp, a_reading=''):
     if b in _SUFFIX_TAIL_FREE:
         return True
     # (3') **形容詞の語幹1字は名詞の頭に付く**（項目48-SN・2026-09-06。
-    #      強炭酸・厚爪対応・高濃度・低価格・長時間）。解析は `強` を
+    #      強風・高濃度・低価格・長時間）。解析は `強` を
     #      形容詞:自立（つよ）と切る。語幹1字＋名詞は複合名詞の**型**。
     #      解析が形容詞と言わない字（厚＝地域・薄・濃…）は閉じた名簿
-    #      `_ADJ_STEM_KANJI_1` で補う。うにさんの実機（web の商品説明
-    #      の貼り付け）で `強炭酸 → 今日探索`・`厚爪対応 → あつめ対応`
+    #      `_ADJ_STEM_KANJI_1` で補い、自然な複合語の分断を防ぐ。
     #      **動詞の連用形にも付く**（48-TE・2026-09-06。浅煎り・早起き・
     #      遅咲き・深煎り——形容詞語幹＋連用形の複合名詞。`浅煎りブレンド`
     #      に紫が立っていた）
@@ -538,10 +558,10 @@ def can_join(a, ap, b, bp, a_reading=''):
     #
     # (2) **後ろが動作性名詞** ＝ 目的語＋動作
     #       誤字補正・文字入力・挙動確認・全文走査
-    #     **前は2字以上**であること。1字では目的語にならない
-    #     （`素を帰任する` `経を補正する` とは言えない。
-    #       接頭辞なら上の (3) で先に通っている）。
-    if 'サ変接続' in bp and len(a) >= 2:
+    #     訓読みの一字名詞も目的語になる（本確認・水補給・技発動）。
+    #     名詞＋動詞の口語接続と同じ判定を使い、文字数だけで退けない。
+    #     音だけの一字断片は従来どおり別の根拠を必要とする。
+    if 'サ変接続' in bp and (len(a) >= 2 or _nominal_action_head(a, ap, a_reading)):
         return True
     # (2') **前が動作性名詞** ＝ 動作＋対象／結果物／場所
     #       **添付画像**・補正欄・選択切り替え・変換候補
@@ -582,13 +602,21 @@ def can_join(a, ap, b, bp, a_reading=''):
     #         置いても `月`(72) が通って `引き月資料` の的が消えた。
     if len(b) == 1 and b in _ELEMENT_KANJI and len(a) >= 2:
         return True
+    # 名詞に付く『例』は、その事柄の具体例を作る生産的な接尾用法。
+    # 要素の単位（素・辞・項）とは分け、前が名詞の場合に限る。
+    if b == '例' and _plain_noun(ap):
+        return True
     # (6-4') **位置・順序の2字の名詞**（最後・最初・先頭・直後…）も
     #        何の後ろにも付く（項目48-LJ・2026-08-30。うにさんの
     #        「補正の誤検知」——`文節最後の文字` の 文節最後 に印が
     #        立ち、設計27 が別読み（もんせつさいご）経由で `隣接最後`
     #        へ、そこを塞ぐと `文節正誤` へ引っぱった。「Aの最後」の
     #        略記はメモではふつうの形。閉じた文法の類として名簿にする)
-    if len(a) >= 2 and b in _POSITION_TAIL2:
+    # 48-XT: 行・列・欄などの区画名は1字でも位置の付加先になる。
+    # A列末尾の「列」を長さだけで断らない。一般の1字名詞や
+    # 人名へは広げず、既存の区画名と位置名の分類を共有する。
+    if b in _POSITION_TAIL2 and (len(a) >= 2
+            or layout_position_pair(a, ap, b)):
         return True
     # (6') **前が副詞になれる語**＝後ろを修飾する
     #       一番大切・最高品質・**一度無効**（項目48-KE で本物の副詞まで）
@@ -783,9 +811,8 @@ def _katakana_word_known(surf, dict_index=None, spelling=False):
         pass
     if not spelling:
         # ★★ **綴りを聞かれているときは、費用表を証拠にしない**
-        # （項目48-TY）。うにさんの実機 `使用シュワー → 使用シヤワー`——
-        # `シヤワー` を語だと言ったのは**この表だけ**だった
-        # （AI の表・外来語の表・世の読みは、3つとも「無い」と言っていた）。
+        # （項目48-TY）。この表だけが認めるカタカナ形は、
+        # 語の綴りが実在する証拠にはならない。
         try:
             import corrector as _C
             if _C._table_cost(surf) is not None:
@@ -960,8 +987,162 @@ def _proper_noun_downgradable(toks, i):
     return True
 
 
+def _fragment_has_parallel_noun_context(text, start, end, tokenize_fn):
+    """辞書未収録という証拠だけを、既存の名詞並列の正の証拠と照合する。"""
+    if not all('一' <= c <= '鿿' for c in text[start:end]):
+        return False
+    while start > 0 and '一' <= text[start-1] <= '鿿':
+        start -= 1
+    while end < len(text) and '一' <= text[end] <= '鿿':
+        end += 1
+    from corrector import _parallel_noun_context
+    return _parallel_noun_context(text, start, end, tokenize_fn)
+
+
+def shortcut_case_spans(text, tokens):
+    """キーの組合せ＋出＋名詞を、操作手段の格助詞の誤変換として検出。
+
+    GPT-6による構造規則（2026-09-10）。出力/出口の語中や出身表現は対象外。
+    """
+    if '出' not in text or '+' not in text:
+        return []
+    import re
+    chord = re.compile(r'(?<![A-Za-z0-9_])(?:(?:Ctrl|Control|Alt|Shift|Win|Cmd|Command|Option|Meta)\+)+'
+                       r'(?:[A-Za-z0-9]|F(?:[1-9]|1[0-9]|2[0-4])|Tab|Enter|Return|Esc|Escape|Space|Delete|Backspace|Home|End|PageUp|PageDown|Up|Down|Left|Right)$', re.I)
+    out = []
+    for a,b in zip(tokens,tokens[1:]):
+        if not (a[0] == '出' and a[2] == 'で' and a[5]
+                and (a[1] or '').startswith('名詞:接尾')
+                and a[4] == b[3] and b[5]
+                and (b[1] or '').startswith('名詞')
+                and not any(x in (b[1] or '') for x in ('接尾','非自立','固有名詞'))):
+            continue
+        if chord.search(text[max(0,a[3]-96):a[3]]):
+            out.append((a[3],a[4]))
+    return out
+
+
+_PROPERTY_BASE_SOURCE = None
+_PROPERTY_BASES = set()
+
+
+def ranked_property_prefix_spans(text, tokens, store=None):
+    """順位接頭辞＋動作名詞＋性の、裏付けのない付加を検出する（48-XB）。
+
+    GPT-6・2026-09-10。主/副は対象の順位を表すが、性が作る抽象的性質に
+    自由には付かない。文法上の絶対禁止ではなく、狭い語構成の異様判定。
+    既知の派生元・複合語に現れる派生元・別の既知語分割を先に照合する。
+    """
+    global _PROPERTY_BASE_SOURCE, _PROPERTY_BASES
+    words = _load()
+    if not words:
+        return []
+    out = []
+    for a,b,c in zip(tokens,tokens[1:],tokens[2:]):
+        if any(len(t)<6 for t in (a,b,c)):
+            continue
+        if not (a[0] in ('主','副') and '接頭' in (a[1] or '')
+                and len(b[0])==2 and 'サ変' in (b[1] or '') and b[5]
+                and c[0]=='性' and '接尾' in (c[1] or '')
+                and a[4]==b[3] and b[4]==c[3]):
+            continue
+        start,end=a[3],c[4]
+        whole=a[0]+b[0]+c[0];base=a[0]+b[0]
+        counterpart=('副' if a[0]=='主' else '主')+b[0]
+        if text[start:end]!=whole or not all('一'<=ch<='鿿' for ch in whole):
+            continue
+        # 大きな未知複合語の内部へ、この4文字だけの判断を広げない。
+        if ((start and '一'<=text[start-1]<='鿿')
+                or (end<len(text) and '一'<=text[end]<='鿿')):
+            continue
+        if whole in words or base in words or counterpart in words:
+            continue
+        if whole[:2] in words and whole[2:] in words:
+            continue
+        if _PROPERTY_BASE_SOURCE is not words:
+            _PROPERTY_BASES={w[:3] for w in words if len(w)>3 and w[0] in ('主','副')}
+            _PROPERTY_BASE_SOURCE=words
+        if base in _PROPERTY_BASES or counterpart in _PROPERTY_BASES:
+            continue
+        if store is not None:
+            try:
+                from vocabulary import entry_is_solid
+                reading=''.join(t[2] or '' for t in (a,b,c))
+                base_reading=''.join(t[2] or '' for t in (a,b))
+                if any(e.get('surface')==sf and entry_is_solid(e)
+                       for rd,sf in ((reading,whole),(base_reading,base))
+                       for e in store.lookup(rd)):
+                    continue
+            except Exception:
+                continue
+        out.append((a[0],b[0]+c[0],start,end))
+    return out
+
+
+def past_tail_kanji_spans(text, tokens):
+    """48-XP: 過去助動詞に直続する漢字1字を、語尾の文脈として判定。
+
+    裸の姓より機能語の接続を優先する限定的な推定。姓＋敬称や格助詞、
+    後続の名前を含む名詞句は対象外。設計/反証: GPT-6、2026-09-10。
+    """
+    import re
+    from pos_grammar import _PIECES
+    extensions={piece for piece,state in _PIECES['TA'] if len(piece)==1}
+    out=[]
+    for i in range(1,len(tokens)):
+        a,b=tokens[i-1],tokens[i]
+        if (len(a)<6 or len(b)<6 or a[4]!=b[3] or not a[5] or not b[5]
+                or a[0] not in ('た','だ') or not (a[1] or '').startswith('助動詞')
+                or len(b[0])!=1 or not ('一'<=b[0]<='鿿')
+                or not (b[1] or '').startswith('名詞') or b[2] not in extensions):
+            continue
+        # 「た」という引用や文字名には適用しない。活用する前項が必要。
+        if i<2 or tokens[i-2][4]!=a[3] or not (tokens[i-2][1] or '').startswith(('動詞','形容詞','助動詞')):
+            continue
+        # 肯定過去＋名詞は普通の連体修飾にもなる。まず否定過去と、
+        # 既にたり/だりがある並列だけで、機能語としての完結を優先する。
+        negative=tokens[i-2][0]=='なかっ' and (tokens[i-2][1] or '').startswith(('助動詞','形容詞'))
+        # 別の文・別欄の列挙を、現在の句の証拠にしない。
+        boundaries=list(re.finditer(r'[。！？!?\n\t]| {2,}|　',text[:a[3]]))
+        clause_start=boundaries[-1].end() if boundaries else 0
+        parallel=any(t[3]>=clause_start and t[0] in ('たり','だり')
+                     and (t[1] or '').startswith('助詞') for t in tokens[:i-1])
+        if not (negative or parallel):continue
+        right=text[b[4]:]
+        # 別欄の読み/正解は使わず、そこで現在の句の文脈を閉じる。
+        right=re.split(r'\t| {2,}|　',right,maxsplit=1)[0].lstrip()
+        if right and right[0] not in '、。，．!?！？;；)]）］」』':
+            continue
+        if in_reading_gloss(text,b[3]):
+            continue
+        out.append((a[3],b[3],b[4],b[2]))
+    return out
+
+
+def bare_katakana_modifier_spans(text,tokens):
+    """48-XQ: カタカナ2字のナ形容詞語幹＋独立した1拍の名詞の未接続。
+
+    既知の複合語・接尾辞は保持。誤打候補の有無を判定根拠にしない。
+    """
+    from morphology import dictionary_base_pos
+    out=[]
+    for a,b in zip(tokens,tokens[1:]):
+        if (len(a)<6 or len(b)<6 or not a[5] or not b[5] or a[4]!=b[3]
+                or len(a[0])!=2 or not all('ァ'<=c<='ヶ' or c=='ー' for c in a[0])
+                or len(b[0])!=1 or not ('一'<=b[0]<='鿿')
+                or (b[1] or '')!='名詞:一般' or len(b[2] or '')!=1):
+            continue
+        if not any(p.startswith('名詞,形容動詞語幹,') for p in (dictionary_base_pos(a[0]) or ())):
+            continue
+        if _run_is_word(text,a[3],b[4]) or can_join(a[0],a[1],b[0],b[1],a[2]) is not False:
+            continue
+        out.append((a[0],b[0],a[3],b[4]))
+    return out
+
+
 def is_odd_run(text, tokenize_fn, with_spans=False,
-               store=None, dict_index=None, skip_join=False):
+               store=None, dict_index=None, skip_join=False, complete_line=False,
+               reading_reasons_out=None):
     """
     **その塊に「その順ではくっつけない語の並び」があるか**。
 
@@ -999,6 +1180,7 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
     # ない（外すと 48-NA が 高橋佑 を「名詞どうし」と見て黙る。
     # 判定の順を変えるのではなく、**信じてよい固有名詞かどうか**を
     # 1か所で決める）。
+    source_tokens = list(toks)
     toks = downgraded_tokens(toks, store, dict_index)
     #: 対のループで**隣を見る**ために、並びをそのまま持っておく
     #: （項目48-OY'。カタカナの連なりの途中かどうか）
@@ -1016,6 +1198,29 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         pos = e0
     kanji = lambda c: '一' <= c <= '鿿'
     out = []
+    from reading_likelihood import nominal_slot_spans
+    for a,b,start,end in nominal_slot_spans(text,source_tokens):
+        if not in_reading_gloss(text,start):
+            out.append((a,b,start,end) if with_spans else (a,b))
+            if reading_reasons_out is not None:
+                reading_reasons_out[start,end] = '読みの並びと後続の「を」への接続から、語の区切りが不自然だと判定しました'
+    for a,b,start,end in bare_katakana_modifier_spans(text,source_tokens):
+        out.append((a,b,start,end) if with_spans else (a,b))
+    if complete_line:
+        for start,tail_start,end,reading in past_tail_kanji_spans(text,source_tokens):
+            a,b=text[start:tail_start],text[tail_start:end]
+            out.append((a,b,start,end) if with_spans else (a,b))
+    for a,b,start,end in ranked_property_prefix_spans(text,toks,store):
+        out.append((a,b,start,end) if with_spans else (a,b))
+    for a,b in shortcut_case_spans(text, toks):
+        out.append(('キー操作', '出（格助詞の位置）', a, b) if with_spans
+                   else ('キー操作', '出（格助詞の位置）'))
+    # 「の」の後ろが丁寧語か名詞句かは、切り出す前の文脈で決める。
+    # 部分文字列の末尾を、元の行の終わりと取り違えない。
+    if complete_line:
+        for root_start, tail_start, end, body in renyou_no_polite_spans(text,toks,tokenize_fn):
+            first=text[root_start:tail_start];last=text[tail_start:end]
+            out.append((first,last,root_start,end) if with_spans else (first,last))
     # **副詞＋に の後ろに用言が1つも無い**（項目48-NR）。対ではなく
     # 3語ぶんの並びを見るので、下の対のループとは別に置く。
     for i in range(1, len(spans) - 1):
@@ -1036,7 +1241,14 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         if in_reading_gloss(text, a_s):
             continue
         _prev = spans[i - 1][2] if i > 0 else None
-        if infl_mismatch(a, b, _prev) or suffix_then_yougen(spans, i):
+        if (infl_mismatch(a, b, _prev) or suffix_then_yougen(spans, i)
+                or noun_past_aux_mismatch(a, b, text, dict_index)
+                or polite_aux_mismatch(a, b)
+                or causative_aux_mismatch(a, b)
+                or passive_aux_mismatch(a, b)
+                or orphan_sokuon_mismatch(a, b, _prev)
+                or auxiliary_te_mismatch(a, b)
+                or contracted_aux_mismatch(a, b)):
             _one = (a[0], b[0], a_s, b_e) if with_spans else (a[0], b[0])
             # **同じ対を二重に出さない**（項目48-NY）。語の対の表
             # （`_PAIR`）と構造の判定が同じ所を指すことがある
@@ -1214,9 +1426,9 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         _b_split = _kata_run_continues(_tok_list, i + 1)
         _frag_hit = False
         for _fk, _other, _op, _o_known in (
-                (_is_unknown_fragment(a_sf, a_known, dict_index, _a_split),
+                (None if ap == "副詞:擬音文脈" else _is_unknown_fragment(a_sf, a_known, dict_index, _a_split),
                  b_sf, bp, b_known),
-                (_is_unknown_fragment(b_sf, b_known, dict_index, _b_split),
+                (None if bp == "副詞:擬音文脈" else _is_unknown_fragment(b_sf, b_known, dict_index, _b_split),
                  a_sf, ap, a_known)):
             if not _fk:
                 continue
@@ -1254,14 +1466,19 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
             if (_a_fk and a_sf and a_sf[-1] in _SMALL_KANA
                     and _b_fk == 'カタカナ断片'):
                 _frag_hit = True
+        if _frag_hit and _fragment_has_parallel_noun_context(text, a_s, b_e, tokenize_fn):
+            # 未知の漢字名詞について、未知断片/未知の名詞結合を重ねて異様としない。
+            # 活用・助詞接続の規則はこの分岐より前で検査済み。
+            continue
         if _frag_hit:
             out.append((a_sf, b_sf, a_s, b_e) if with_spans
                        else (a_sf, b_sf))
             continue
         # **漢字の名詞＋「し／する」の直付き**は異様（項目48-IX・2026-08-23・
         # うにさんの指定「`田部井号して` が異様と判定できれば」）。
-        # 「N する」と言えるのは動作性名詞（サ変接続）だけ。`号して`
-        # `誤字して` は、号・誤字 が動作ではないのに動詞が直付きしている。
+        # 動作名詞の解釈が無いままの「Nする」を検出する。辞書の一般名詞でも
+        # 口語の動作用法はあるため、morphologyの文脈判定を先に反映する。
+        # 旧説明の「誤字しては動作でない」は不適切（48-XSで訂正）。
         # **文法の類で除くもの**: 形容動詞語幹（`安定して`）、`〜化`
         # （化 がサ変を作る・`無効化して`）、`お／ご＋連用形＋する`
         # （敬語・`お渡しする`）、副詞にもなる語、数詞。カタカナ語は
@@ -1436,6 +1653,9 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
                     continue
             else:
                 continue                    # 形容詞・副詞・連体詞は見ない
+        if ((not a_known or not b_known) and ap.startswith('名詞') and bp.startswith('名詞')
+                and _fragment_has_parallel_noun_context(text, a_s, b_e, tokenize_fn)):
+            continue
         # **塊まるごとが表の語なら、その中の並びは異様ではない**
         # （項目48-IP）。解析は `同音異義語` を `同音|異義|語` と
         # 割るので (同音, 異義) の対だけを見ると表に無いが、
@@ -1708,6 +1928,257 @@ def suffix_then_yougen(spans, i):
     return True
 
 
+def renyou_no_polite_spans(text, toks, tokenize_fn=None):
+    """連用形の後ろに『の』が紛れ、丁寧語が途切れている形を調べる。"""
+    if 'の' not in text:
+        return []
+    import re
+    import pos_grammar as pg
+    from morphology import dictionary_base_pos
+    out=[]
+    for i,a in enumerate(toks):
+        verbal=(len(a)>6 and (a[1] or '').startswith('動詞:自立') and a[6]=='連用形')
+        nominal=(len(a)>6 and (a[1] or '').startswith('名詞:一般'))
+        if not (len(a)>6 and a[5] and (verbal or nominal) and text[a[4]:a[4]+1]=='の'):
+            continue
+        start=a[4]
+        m=re.match(r'の([ぁ-ゖー]{2,12})',text[start:])
+        body=m.group(1) if m else ''
+        end=start+len(m.group(0)) if m else start
+        if not body.startswith('ま'):
+            if not verbal:continue
+            # 変換で名詞になった尾は、その読みが丁寧語として成立する場合だけ。
+            if i+2>=len(toks):continue
+            n,b=toks[i+1],toks[i+2]
+            if not (n[0]=='の' and n[3]==start and n[4]==b[3]
+                    and (b[1] or '').startswith('名詞') and b[5]):continue
+            if any(p.startswith('名詞,') and not p.startswith(('名詞,接尾,','名詞,固有名詞,'))
+                   for p in (dictionary_base_pos(a[0]) or ())):continue
+            if i and toks[i-1][4]==a[3] and (toks[i-1][1] or '').startswith(('名詞','接頭詞')):
+                continue
+            body=b[2] or '';end=b[4]
+            if end<len(text) and ('ぁ'<=text[end]<='ゖ' or '一'<=text[end]<='鿿'):
+                continue
+        if not body.startswith('ま'):continue
+        # 丁寧語に見える部分が、元の既知名詞の途中なら切り取らない。
+        if any(t[5] and (t[1] or '').startswith('名詞') and t[3]<=start+1<end<t[4]
+               for t in toks):continue
+        if not pg.explain_kana_run(body,no_words=True,initial_state='R',
+                                   before_kanji=(end<len(text) and '一'<=text[end]<='鿿')):continue
+        if nominal:
+            if tokenize_fn is None:continue
+            candidate=text[:start]+body+text[end:]
+            if not any(len(t)>6 and t[5] and t[0]==a[0] and t[3]==a[3] and t[4]==a[4]
+                       and (t[1] or '').startswith('動詞:自立') and t[6]=='連用形'
+                       for t in tokenize_fn(candidate)):continue
+        if text[a[3]:end] in (_load() or ()):continue
+        out.append((a[3],start,end,body))
+    return out
+
+
+
+# 継続・結果状態の補助動詞。移動・方向・授受の動詞は、連用形に
+# 直結して複合動詞や敬語にもなるため、この規則には含めない。
+_TE_AUXILIARY_BASES = frozenset(('いる','居る','おる'))
+
+
+from functools import lru_cache
+
+
+@lru_cache(maxsize=4096)
+def _kana_nominal_alternative(text):
+    """同じ読み全体に名詞があるなら、かな内部の動詞分割だけで禁止しない。"""
+    if not (2<=len(text)<=16 and all('ぁ'<=c<='ゖ' or c=='ー' for c in text)):
+        return False
+    from corrector import table_surfaces_for_reading
+    from morphology import dictionary_base_pos
+    return any(any(p.startswith('名詞,') and '接尾' not in p
+                   for p in (dictionary_base_pos(sf) or ()))
+               for sf in table_surfaces_for_reading(text,limit=8))
+
+
+def auxiliary_te_mismatch(a,b):
+    """連用形を、て/でを介さず継続の補助動詞に直接つながない。"""
+    if len(a)<7 or not a[6].startswith('連用'):
+        return False
+    # 自立した語の名詞別解は残す。使役/受身の接尾動詞まで、同音の
+    # 短い名詞へ置き換えて接続を正当化しない。
+    if a[1].startswith('動詞:自立') and _kana_nominal_alternative(a[0]+b[0]):
+        return False
+    return aspect_auxiliary_needs_te(a,b)
+
+
+def aspect_auxiliary_needs_te(a,b):
+    """継続の補助動詞へ動詞を直結していないか。生成の検算とも共有する。"""
+    if (len(a)<7 or len(b)<7 or not a[5] or not b[5] or a[4]!=b[3]
+            or not a[1].startswith('動詞')
+            or not b[1].startswith('動詞:非自立')):
+        return False
+    from morphology import dictionary_inflections
+    entries=dictionary_inflections(b[0])
+    if not entries:
+        return False
+    bases={base for pos,form,base,rd in entries if pos.startswith('動詞,非自立,')}
+    if not bases or not bases.issubset(_TE_AUXILIARY_BASES):
+        return False
+    # 書き置く・飛び行く等が辞書に一語としてあれば、その複合動詞を残す。
+    compound=dictionary_inflections(a[0]+b[0])
+    if compound and any(pos.startswith('動詞,') for pos,form,base,rd in compound):
+        return False
+    return True
+
+
+def contracted_aux_mismatch(a,b):
+    """完了の口語縮約は格助詞の直後で自立した述語にならない。"""
+    if (len(a)<7 or len(b)<7 or a[4]!=b[3] or not a[5] or not b[5]
+            or not a[1].startswith('助詞:格助詞')
+            or a[0] not in ('を','に','へ','で','から','より','まで')
+            or not b[1].startswith('動詞:非自立')):
+        return False
+    from morphology import dictionary_inflections
+    entries=dictionary_inflections(b[0]) or ()
+    if any(pos.startswith(('名詞,','動詞,自立,')) for pos,form,base,rd in entries):
+        return False
+    bases={base for pos,form,base,rd in entries if pos.startswith('動詞,非自立,')}
+    return bool(bases and bases.issubset({'ちゃう','じゃう','ちまう','じまう'}))
+
+
+def orphan_sokuon_mismatch(a,b,previous):
+    """格助詞＋単独の促音＋自立動詞は、動詞の正しい活用として扱わない。"""
+    return bool(previous is not None and len(a)>=6 and len(b)>=6
+        and a[0]=='っ' and previous[4]==a[3] and a[4]==b[3]
+        and previous[1].startswith('助詞:格助詞')
+        and b[5] and b[1].startswith('動詞:自立'))
+
+
+def causative_aux_mismatch(a,b):
+    """使役の せる/させる は直前の動詞の活用型にも従う。"""
+    return _derivational_aux_mismatch(a,b,'causative')
+
+
+def passive_aux_mismatch(a,b):
+    """受身・可能の接続。口語のら抜きは成立する別解として残す。"""
+    return _derivational_aux_mismatch(a,b,'passive')
+
+
+def _derivational_aux_mismatch(a,b,auxiliary):
+    if (len(a)<7 or len(b)<7 or not a[5] or not b[5] or a[4]!=b[3]
+            or not b[1].startswith(('動詞:接尾','助動詞'))
+            or not a[1].startswith(('動詞','助動詞'))):
+        return False
+    from morphology import dictionary_paradigms
+    right=dictionary_paradigms(b[0])
+    left=dictionary_paradigms(a[0])
+    if not right or not left:
+        return False
+    allowed=('せる','させる') if auxiliary=='causative' else ('れる','られる')
+    bases={base for pos,kind,form,base,rd in right
+           if base in allowed and pos.startswith(('動詞,接尾,','助動詞,'))}
+    if not bases:
+        return False
+    considered=False
+    for pos,kind,form,base,rd in left:
+        # 表記が同じだけの別品詞を、文中の動詞の接続根拠にしない。
+        if pos.split(',')[0]!=a[1].split(':')[0]:
+            continue
+        group=('godan' if kind.startswith('五段') else
+               'ichidan' if kind.startswith('一段') else
+               'zahen' if kind.endswith('ズル') else
+               'sahen' if kind.startswith('サ変') else
+               'kahen' if kind.startswith('カ変') else None)
+        if group is None or (group=='zahen' and auxiliary=='causative'):
+            return False  # 文語等を現代語の禁止条件で決めない。
+        considered=True
+        if not form.startswith('未然') or form=='未然ウ接続':
+            continue
+        if auxiliary=='causative':
+            if 'せる' in bases and group=='godan':
+                return False
+            if 'せる' in bases and group=='sahen' and form=='未然レル接続':
+                return False
+            if 'させる' in bases and group in ('ichidan','kahen'):
+                return False
+        else:
+            if 'れる' in bases and group in ('godan','ichidan','kahen'):
+                return False
+            if 'れる' in bases and group=='sahen' and form=='未然レル接続':
+                return False
+            if 'られる' in bases and group in ('ichidan','kahen','zahen'):
+                return False
+            if 'られる' in bases and group=='sahen' and form=='未然ヌ接続':
+                return False
+    return considered
+
+
+
+def polite_aux_mismatch(a, b):
+    """48-XY: 丁寧のますは動詞の連用形に接続する。
+
+    活用した表記の辞書別解まで確かめる。名詞のまま直結した形や
+    基本形/音便形の接続を、候補の有無とは独立に調べる。
+    設計/反証: GPT-6、2026-09-11。
+    """
+    if (min(len(a),len(b))<7 or not a[5] or not b[5] or a[4]!=b[3]
+            or not b[1].startswith('助動詞') or b[0] not in ('ます','まし','ませ','ましょ')
+            or not a[1].startswith(('名詞','動詞','形容詞','助動詞'))):
+        return False
+    if a[1].startswith('動詞') and a[6]=='連用形':
+        return False
+    # かなで書いた一つの名詞を、語中のますだけで丁寧語と断定しない。
+    # 活用の途中に現れる接尾動詞までこの別解で守ることはしない。
+    if a[1].startswith(('名詞','助動詞','動詞:自立')) and _kana_nominal_alternative(a[0]+b[0]):
+        return False
+    from morphology import dictionary_inflections
+    forms=dictionary_inflections(a[0])
+    if forms is None:
+        return False
+    # サ変の「し」は未然形と連用形が同形。辞書の一部に未然形の項
+    # しかなくても、原形がするで対応する既知語なら連用形を失わない。
+    if any(pos.startswith('動詞,') and form=='未然形'
+           and base.endswith('する') and a[0]==base[:-2]+'し'
+           for pos,form,base,reading in forms):
+        return False
+    if any(form=='連用形' and (pos.startswith('動詞,') or
+            (pos.startswith('助動詞,') and base in ('れる','られる','せる','させる')))
+           for pos,form,base,reading in forms):
+        return False
+    return True
+
+
+def noun_past_aux_mismatch(a, b, text, dict_index=None):
+    """名詞に過去の「た」が直結する誤解析。語の途中・記号の注記は除く。"""
+    if len(a) < 5 or len(b) < 5:
+        return False
+    if not ((a[1] or '').startswith('名詞')
+            and (b[1] or '').startswith('助動詞') and b[0] == 'た'):
+        return False
+    if not (any('ぁ' <= c <= 'ゖ' or '一' <= c <= '鿿' for c in a[0])
+            or (a[0] and all(c == 'ー' for c in a[0]))):
+        return False
+    start, end = a[3], b[4]
+    while start > 0 and ('ぁ' <= text[start - 1] <= 'ゖ' or text[start - 1] == 'ー'):
+        start -= 1
+    while end < len(text) and ('ぁ' <= text[end] <= 'ゖ' or text[end] == 'ー'):
+        end += 1
+    whole = text[start:end]
+    # 長音だけのトークンは直前のかなと合わせて見る。記号単独の注記は除く。
+    if not any('ぁ' <= c <= 'ゖ' or '一' <= c <= '鿿' for c in text[start:b[3]]):
+        return False
+    # 助詞が続いても、名詞＋たに誤分割された一語の境界を保つ。
+    if whole in (_load() or ()) or text[a[3]:b[4]] in (_load() or ()):
+        return False
+    # 漢字の直後は送り仮名・活用末尾かもしれない。一語の読みとして
+    # 保護するのは独立したかな列だけ（語の一部を人名の読みなどで守らない）。
+    if (dict_index is not None and not (start > 0 and '一' <= text[start - 1] <= '鿿')
+            and all('ぁ' <= c <= 'ゖ' or c == 'ー' for c in whole)):
+        try:
+            if dict_index.is_world_reading(whole):
+                return False
+        except Exception:
+            pass
+    return True
+
+
 def infl_mismatch(a, b, prev=None):
     """
     **前の語の活用形に、後ろの品詞が続けない**か（項目48-NT）。
@@ -1824,10 +2295,12 @@ def odd_spans(text, tokenize_fn, reasons_out=None,
     渡さなければ何もしない（**答えは1文字も変わらない**）。
     """
     spans = []
-    for _a, _b, s, e in is_odd_run(text, tokenize_fn, with_spans=True,
-                                   store=store, dict_index=dict_index):
+    reading_reasons = {}
+    for _a, _b, s, e in is_odd_run(text, tokenize_fn, with_spans=True, complete_line=True,
+                                   store=store, dict_index=dict_index,
+                                   reading_reasons_out=reading_reasons):
         if reasons_out is not None:
-            reasons_out.append((s, e, f'「{_a}」と「{_b}」は続けて置けない'))
+            reasons_out.append((s, e, reading_reasons.get((s,e), f'「{_a}」と「{_b}」は続けて置けない')))
         if spans and s <= spans[-1][1]:
             spans[-1] = (spans[-1][0], max(spans[-1][1], e))
         else:

@@ -113248,3 +113248,85 @@ TRIGRAMS = {
     'ーーん': 192,
     'ーーー': 896,
 }
+
+
+# ============================================================
+# 読みの後続予測
+# ============================================================
+# 個人の入力履歴ではなく、上の同梱表だけから作る。候補生成側は
+# 「異様」と判定した読みを復元するときだけ使い、自然な文を補正対象に
+# する単独の根拠にはしない。reading_likelihood は原文の診断でも
+# 前後の3連を使い、品詞接続などの独立した根拠と合わせる。
+_BIGRAMS = None
+
+
+def _bigram_counts():
+    """3連表から、語中の「1字→次字」の回数を遅延構築する。"""
+    global _BIGRAMS
+    if _BIGRAMS is not None:
+        return _BIGRAMS
+    out = {}
+    for gram, count in TRIGRAMS.items():
+        if len(gram) != 3:
+            continue
+        left, right = gram[1], gram[2]
+        if left in '^$' or right in '^$':
+            continue
+        key = left + right
+        out[key] = out.get(key, 0) + count
+    _BIGRAMS = out
+    return out
+
+
+def next_count(prefix, char):
+    """
+    一般的な日本語で ``prefix`` の直後に ``char`` が来た回数を返す。
+
+    直前2字の3連を最優先し、表に無いときだけ直前1字の2連へ戻る。
+    戻り値の第2要素は使えた文脈長（2 / 1 / 0）。
+    """
+    if not prefix or not char:
+        return (0, 0)
+    if len(prefix) >= 2:
+        count = TRIGRAMS.get(prefix[-2:] + char, 0)
+        if count:
+            return (count, 2)
+    count = _bigram_counts().get(prefix[-1] + char, 0)
+    return (count, 1 if count else 0)
+
+
+def order_next(prefix, chars):
+    """次に来やすい字から並べ、各字を ``(字, 回数, 文脈長)`` で返す。"""
+    ranked = [(char,) + next_count(prefix, char) for char in chars]
+    ranked.sort(key=lambda item: (-item[2], -item[1], item[0]))
+    return ranked
+
+
+def continuation_cost(reading):
+    """後続文字の条件付き確率の平均負対数。既存3連表だけを使う。"""
+    import math
+    values=[]
+    for i in range(2,len(reading)):
+        prefix=reading[i-2:i]
+        options=_next_distribution(prefix)
+        if not options:
+            continue
+        total=sum(options.values())
+        count=options.get(reading[i],0)
+        values.append(-math.log((count+1.0)/(total+len(options)+1.0)))
+    return sum(values)/len(values) if values else None
+
+
+from functools import lru_cache as _lru_cache
+
+@_lru_cache(maxsize=1)
+def _all_next_distributions():
+    out={}
+    for g,n in TRIGRAMS.items():
+        if len(g)==3 and g[2] not in '^$':
+            out.setdefault(g[:2],{})[g[2]]=n
+    return out
+
+
+def _next_distribution(prefix):
+    return _all_next_distributions().get(prefix,{})

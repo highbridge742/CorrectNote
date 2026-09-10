@@ -294,6 +294,27 @@ class IMEReadings:
         self._trim()
         return True
 
+    def forget(self, surface, reading=None):
+        """指定した保存対だけを除く。Noneならその表記の全読みを除く。
+
+        戻り値は削除した読み数。保存と画面更新は呼出し側が行う。
+        語彙や補正判断には流さず、後のIME確定は再び記録できる。
+        """
+        old = self._pairs.get(surface)
+        if not old:
+            return 0
+        target = reading_to_hiragana(reading) if reading is not None else None
+        kept = [r for r in old if r != target] if target is not None else []
+        removed = len(old) - len(kept)
+        if not removed:
+            return 0
+        if kept:
+            self._pairs[surface] = kept
+        else:
+            del self._pairs[surface]
+        self._dirty = True
+        return removed
+
     def readings_for(self, surface):
         """
         その表記について、**打たれた読み**を新しい順で返す。

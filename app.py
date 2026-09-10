@@ -162,6 +162,37 @@ def has_fullwidth(text):
                for c in text)
 
 
+_TCL_COLUMN_WIDTH = {}
+
+
+def _python_text_position(widget, index):
+    """Tkが返す列番号をPython文字位置へ戻す。数値indexはTk由来として受ける。"""
+    native = str(index)
+    match = _re.fullmatch(r'(\d+)\.(\d+)', native)
+    if match is None:
+        native = widget.index(index)
+        match = _re.fullmatch(r'(\d+)\.(\d+)', native)
+    row, column = int(match.group(1)), int(match.group(2))
+    key = id(widget.tk)
+    width = _TCL_COLUMN_WIDTH.get(key)
+    if width is None:
+        width = int(widget.tk.call('string', 'length', '\U0001f600'))
+        _TCL_COLUMN_WIDTH[key] = width
+    if width == 1 or column == 0:
+        return row, column
+    # Tk 8.6の返す列はUTF-16単位。数値indexを再度Textへ渡すと、
+    # Tkの版によっては再解釈されるので、行全体の文字列から戻す。
+    line = widget.get(f'{row}.0', f'{row}.end')
+    prefix = line[:column].encode('utf-16-le', 'surrogatepass')[:column * 2]
+    return row, len(prefix.decode('utf-16-le', 'surrogatepass'))
+
+
+def _stable_text_index(widget, index):
+    """保存して後でTextに渡せる、行頭からの文字数による位置。"""
+    row, column = _python_text_position(widget, index)
+    return f'{row}.0+{column}c'
+
+
 def correct_line(line, store, context_vocab=None, decisions=None,
                  input_method='kana', context_vec=None, dict_index=None,
                  nearby_words=(), recent_words=()):
@@ -227,7 +258,7 @@ APP_TITLE = 'CorrectNote'
 # 「判断に迷った箇所」から**「不自然な文字列」**へ入れ替え（既定オン・
 # 補正が入った範囲には付けない）、**かな書きのアルファベット読みを
 # 英字に直す**（`エフ2 → F2`）、スクロール後の反映（項目48-IZ〜）。
-APP_VERSION = '1.7.0'
+APP_VERSION = '1.8.0'
 
 # 同梱する説明書のファイル名。exe の中に入れて持ち歩き、
 # 初回起動時に exe と同じフォルダへ書き出す
@@ -1212,6 +1243,29 @@ _WIN_DRAG_SLOP = 5
 
 
 class CorrectNoteApp:
+    @staticmethod
+    def _window_hwnd_win32(widget):
+        """Tk の部品から Windows の最上位窓の HWND を得る。
+
+        HWND は 64bit の値になり得る。ctypes の型を指定しない
+        ``GetParent`` では既定の 32bit 整数に切り詰められ、窓が
+        作られた場所しだいでアイコン設定が黙って失敗していた。
+        子窓の段数にも依存しない ``GetAncestor(GA_ROOT)`` を使う。
+        """
+        if sys.platform != 'win32' or widget is None:
+            return None
+        try:
+            import ctypes
+            u32 = ctypes.windll.user32
+            u32.GetAncestor.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+            u32.GetAncestor.restype = ctypes.c_void_p
+            widget.update_idletasks()
+            own = int(widget.winfo_id())
+            root = u32.GetAncestor(ctypes.c_void_p(own), 2)  # GA_ROOT
+            return int(root or own)
+        except Exception:
+            return None
+
     def _apply_window_icon(self):
         """
         窓・タスクバーのアイコンを付ける（項目48-JR）。
@@ -1288,8 +1342,7 @@ class CorrectNoteApp:
         try:
             import ctypes
             u32 = ctypes.windll.user32
-            widget.update_idletasks()
-            hwnd = u32.GetParent(widget.winfo_id())
+            hwnd = self._window_hwnd_win32(widget)
             if not hwnd:
                 return False
             IMAGE_ICON = 1
@@ -1680,6 +1733,12 @@ class CorrectNoteApp:
         # 「戻したら大きさが同じだった」道が残らないように口を2つ。
         # 収まっていればすぐ帰るので値段は付かない・学び22）。
         self.root.bind('<Map>', lambda e: self._clamp_zoom_to_workarea())
+        # Explorer が最小化からの復帰時にタスクバー表示を作り直す
+        # 場合にも、窓自身の大小アイコンを同じ入口から戻す。
+        self.root.bind(
+            '<Map>',
+            lambda e: self.root.after_idle(self._set_window_icons_win32),
+            add='+')
 
         self.editor.focus_set()
         # **変換の見張り**を始める（設計25(甲)・Windows のみ）。
@@ -2589,7 +2648,12 @@ class CorrectNoteApp:
         # （editor_source_text の説明を参照）。
         text = self.editor_source_text().rstrip('\n')
         try:
-            cursor = self.editor.index('insert')
+            cursor_row, cursor_col = _python_text_position(self.editor, 'insert')
+            source_lines = text.split('\n')
+            if 1 <= cursor_row <= len(source_lines):
+                shown_line = self.editor.get(f'{cursor_row}.0', f'{cursor_row}.end')
+                cursor_col = map_column(shown_line, source_lines[cursor_row - 1], cursor_col)
+            cursor = f'{cursor_row}.0+{cursor_col}c'
         except Exception:
             cursor = '1.0'
         try:
@@ -4216,8 +4280,9 @@ class CorrectNoteApp:
             return
         try:
             import ctypes
-            self.root.update_idletasks()
-            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+            hwnd = self._window_hwnd_win32(self.root)
+            if not hwnd:
+                return
             u32 = ctypes.windll.user32
             GWL_STYLE = -16
             WS_CAPTION = 0x00C00000
@@ -4238,6 +4303,9 @@ class CorrectNoteApp:
             # 枠の描き直しで色が既定に戻ることがあるので、
             # 固定色を掛け直す（ライトモードでもここで必ず通る）
             self._apply_border_color(hwnd)
+            # 枠の再構成後にも、窓自身が持つ大小の絵を掛け直す。
+            # 起動時と同じ入口を通し、タスクバーと Alt+Tab を揃える。
+            self._set_window_icons_win32()
         except Exception:
             pass
 
@@ -4939,14 +5007,14 @@ class CorrectNoteApp:
 
         target = None
         try:
-            target = self.editor.index('insert')
+            target = _stable_text_index(self.editor, 'insert')
         except Exception:
             target = None
         target = target or 'end-1c'
         try:
             # 差し込む前に**位置を確定させておく**。`end-1c` のような
             # 相対的な指定のままだと、差し込んだ後に指す場所が変わる。
-            start = self.editor.index(target)
+            start = _stable_text_index(self.editor, target)
             self.editor.insert(start, content)
             self.editor.mark_set('insert', f'{start}+{len(content)}c')
             self.editor.see('insert')
@@ -5199,7 +5267,7 @@ class CorrectNoteApp:
             for u in units:
                 if u['kind'] in ('suspect', 'chosen_hint'):
                     text_widget.tag_add(
-                        'suspect', f'{row}.{u["start"]}', f'{row}.{u["end"]}')
+                        'suspect', f"{row}.0+{u['start']}c", f"{row}.0+{u['end']}c")
 
         # 候補一覧の「－ 補正根拠 －」が読む（項目48-MD）。
         # **簡易入力の行は本体と別**なので、あちらの控え
@@ -5264,8 +5332,7 @@ class CorrectNoteApp:
         if fn is None:
             return False
         try:
-            cur_row, cur_col = (int(x) for x in
-                                text_widget.index('insert').split('.'))
+            cur_row, cur_col = _python_text_position(text_widget, 'insert')
         except Exception:
             cur_row, cur_col = -1, 0
         # いま生きている控えを、行番号で引ける形にしておく
@@ -5337,7 +5404,7 @@ class CorrectNoteApp:
                 if row == cur_row:
                     text_widget.mark_set(
                         'insert',
-                        f'{row}.{map_column(old, new_text, cur_col)}')
+                        f'{row}.0+{map_column(old, new_text, cur_col)}c')
                     break
         except Exception:
             return False
@@ -5485,8 +5552,7 @@ class CorrectNoteApp:
             return None
         try:
             index = text_widget.index(f'@{event.x},{event.y}')
-            row_s, col_s = index.split('.')
-            row, col = int(row_s), int(col_s)
+            row, col = _python_text_position(text_widget, index)
         except Exception:
             return None
         i = row - 1
@@ -5514,8 +5580,8 @@ class CorrectNoteApp:
             return
         try:
             text_widget.tag_add('hover',
-                                f'{row}.{unit["start"]}',
-                                f'{row}.{unit["end"]}')
+                                f"{row}.0+{unit['start']}c",
+                                f"{row}.0+{unit['end']}c")
         except Exception:
             pass
 
@@ -5555,8 +5621,8 @@ class CorrectNoteApp:
             try:
                 first = str(sel_ranges[0]).split('.')
                 last = str(sel_ranges[1]).split('.')
-                row1, col1 = int(first[0]), int(first[1])
-                row2, col2 = int(last[0]), int(last[1])
+                row1, col1 = _python_text_position(text_widget, sel_ranges[0])
+                row2, col2 = _python_text_position(text_widget, sel_ranges[1])
             except Exception:
                 row1 = row2 = -1
                 col1 = col2 = 0
@@ -5761,7 +5827,7 @@ class CorrectNoteApp:
             return
 
         try:
-            bbox = self._quick_text.bbox(f'{row}.{unit["start"]}')
+            bbox = self._quick_text.bbox(f"{row}.0+{unit['start']}c")
             if bbox:
                 x = self._quick_text.winfo_rootx() + bbox[0]
                 y = self._quick_text.winfo_rooty() + bbox[1] + bbox[3]
@@ -5782,8 +5848,8 @@ class CorrectNoteApp:
         text_widget = self._quick_text
         if text_widget is None:
             return
-        start = f'{row}.{unit["start"]}'
-        end = f'{row}.{unit["end"]}'
+        start = f"{row}.0+{unit['start']}c"
+        end = f"{row}.0+{unit['end']}c"
         try:
             text_widget.delete(start, end)
             text_widget.insert(start, cand['surface'])
@@ -5813,8 +5879,8 @@ class CorrectNoteApp:
         text_widget = self._quick_text
         if text_widget is None:
             return
-        start = f'{row}.{unit["start"]}'
-        end = f'{row}.{unit["end"]}'
+        start = f"{row}.0+{unit['start']}c"
+        end = f"{row}.0+{unit['end']}c"
         try:
             text_widget.delete(start, end)
             text_widget.insert(start, before_text)
@@ -6133,7 +6199,7 @@ class CorrectNoteApp:
             self.bookmarks.difference_update(_bad)
 
         try:
-            self.editor.mark_set('insert', tab.get('cursor', '1.0'))
+            self.editor.mark_set('insert', _stable_text_index(self.editor, tab.get('cursor', '1.0')))
             self.editor.see('insert')
         except Exception:
             pass
@@ -6834,6 +6900,8 @@ class CorrectNoteApp:
         m_learn.add_separator()
         # 保守用。通常は初回に自動で済むので、階層を1つ下げておく。
         m_maint = tk.Menu(m_learn, tearoff=0)
+        m_maint.add_command(label='保存したIMEの読み…',
+                            command=self.open_ime_readings_dialog)
         m_maint.add_command(label='語彙を追加…',
                             command=self.open_vocab_dialog)
         m_maint.add_command(label='文章から学習…',
@@ -7666,7 +7734,7 @@ class CorrectNoteApp:
             cur = None
         s_off = len(text) - len(text.lstrip(' 	　'))
         e_off = len(text.rstrip(' 	　'))
-        tight = (f'{row}.{s_off}', f'{row}.{e_off}')
+        tight = (f'{row}.0+{s_off}c', f'{row}.0+{e_off}c')
         if cur == (w.index(head), w.index(tail)) and e_off > s_off                 and (s_off, e_off) != (0, len(text)):
             a, b = tight
             msg = f'{row} 行目の中身（前後の空白を除く）を選びました'
@@ -8206,7 +8274,7 @@ class CorrectNoteApp:
             return
         try:
             self.editor.tag_add(self.TYPED_TAG,
-                                f'{row}.{start}', f'{row}.{end}')
+                                f'{row}.0+{start}c', f'{row}.0+{end}c')
         except Exception:
             pass
 
@@ -8233,8 +8301,8 @@ class CorrectNoteApp:
         want = start
         for i in range(0, len(ranges), 2):
             try:
-                a = str(ranges[i]).split('.')
-                b = str(ranges[i + 1]).split('.')
+                a = _python_text_position(self.editor, ranges[i])
+                b = _python_text_position(self.editor, ranges[i + 1])
             except Exception:
                 continue
             if int(a[0]) != row or int(b[0]) != row:
@@ -8282,8 +8350,8 @@ class CorrectNoteApp:
             return out
         for i in range(0, len(ranges), 2):
             try:
-                a = str(ranges[i]).split('.')
-                b = str(ranges[i + 1]).split('.')
+                a = _python_text_position(self.editor, ranges[i])
+                b = _python_text_position(self.editor, ranges[i + 1])
                 if int(a[0]) == row == int(b[0]):
                     out.append((int(a[1]), int(b[1])))
             except Exception:
@@ -9017,6 +9085,13 @@ class CorrectNoteApp:
                        + [None] * (len(lines) - tail - head)
                        + (prev_results[len(prev) - tail:] if tail else []))
             todo = list(range(head, len(lines) - tail))
+            # 48-WQ: 本文が同じでも、上下の文脈が変われば答えは古い。
+            # build_nearby_wordsと同じ半径で、境界の再利用行だけ戻す。
+            from context_vec import nearby_reanalysis_lines
+            affected = nearby_reanalysis_lines(head, tail, len(prev), len(lines))
+            for index in affected:
+                results[index] = None
+            todo.extend(affected)
             # 改行の挿入・行の削除で行数が変わった場合、ブックマークの
             # 行番号もそれに合わせてずらす（実機からの要望）。
             # head/tail は上で数えた「変わっていない行数」と同じ基準
@@ -9907,12 +9982,12 @@ class CorrectNoteApp:
                     prev = ci
                     tag = f'{kind}_{"ab"[(n - 1) % 2]}'
                     batch.setdefault(tag, []).extend(
-                        (f'{li}.{ci}', f'{li}.{ci + 1}'))
+                        (f'{li}.0+{ci}c', f'{li}.0+{ci + 1}c'))
                     if ci in edges and kind == 'ws_tab':
                         # 折り返しの境目に来たタブ。帯が右端まで
                         # 伸びるので消す（項目48-II／48-IJ）
                         batch.setdefault(self.WS_NOBOX, []).extend(
-                            (f'{li}.{ci}', f'{li}.{ci + 1}'))
+                            (f'{li}.0+{ci}c', f'{li}.0+{ci + 1}c'))
             # **前と同じなら、指1本触れない**（項目48-MB）。
             # 消してから組むと、組む途中の `display lineend`
             # （`_wrap_edge_columns`）が Tk に画面を作り直させるので、
@@ -9990,7 +10065,7 @@ class CorrectNoteApp:
                 e = str(w.index(f'{idx} display lineend'))
                 if w.compare(e, '>=', logical):
                     break                      # 折り返していない／最後
-                ln, col = e.split('.')
+                ln, col = _python_text_position(w, e)
                 if int(ln) != li:
                     break
                 # **その桁の文字**が伸ばされる（画素で確かめた。
@@ -10424,6 +10499,11 @@ class CorrectNoteApp:
 
     def _analyze_chunk(self):
         self._analyze_job = None
+        # 48-WR: 入力後の本文確認が予約中なら、旧本文の結果を進めない。
+        # _analyze_if_changedが同じ本文なら再開、違う本文なら差分を作る。
+        # 矢印キーでもこの確認を通るため、ここで本文全体を取得しない。
+        if getattr(self, '_after_id', None) is not None:
+            return
         if self._view_changing():
             self._schedule_analysis_chunk()
             return
@@ -11101,7 +11181,7 @@ class CorrectNoteApp:
         仮置きの「補正なし」として描かれる）。
         """
         try:
-            saved_cursor = self.editor.index('insert')
+            saved_cursor = _stable_text_index(self.editor, 'insert')
             had_focus = (self.root.focus_get() is self.editor)
         except Exception:
             saved_cursor, had_focus = None, False
@@ -11180,7 +11260,7 @@ class CorrectNoteApp:
                     line, _raw, self.decisions):
                 if any(o_s < f_e and f_s < o_e for f_s, f_e in _fixed):
                     continue
-                self.editor.tag_add('odd', f'{row}.{o_s}', f'{row}.{o_e}')
+                self.editor.tag_add('odd', f'{row}.0+{o_s}c', f'{row}.0+{o_e}c')
             if not result['changed'] or not _intact:
                 continue
             # 補正エンジンが返す original_spans は、元テキスト上での
@@ -11191,7 +11271,7 @@ class CorrectNoteApp:
             if len(spans) == len(result['details']):
                 for start, end in spans:
                     self.editor.tag_add('suspect',
-                                        f'{row}.{start}', f'{row}.{end}')
+                                        f'{row}.0+{start}c', f'{row}.0+{end}c')
                 continue
             # 濁点の分離を合成した行では、元テキスト上の位置に
             # 対応付けられないため original_spans が空になる。
@@ -11202,8 +11282,8 @@ class CorrectNoteApp:
                 if pos < 0:
                     continue
                 self.editor.tag_add('suspect',
-                                    f'{row}.{pos}',
-                                    f'{row}.{pos + len(typed_frag)}')
+                                    f'{row}.0+{pos}c',
+                                    f'{row}.0+{pos + len(typed_frag)}c')
                 cursor = pos + len(typed_frag)
 
         if self._layout_is_unified():
@@ -11930,7 +12010,7 @@ class CorrectNoteApp:
                 return False
 
         try:
-            cursor_col = int(self.editor.index('insert').split('.')[1])
+            cursor_col = _python_text_position(self.editor, 'insert')[1]
         except Exception:
             cursor_col = 0
 
@@ -12050,7 +12130,7 @@ class CorrectNoteApp:
                     continue
                 src_line = self.line_results[row - 1].get('original') or ''
                 self.editor.mark_set(
-                    'insert', f'{row}.{map_column(src_line, text, cursor_col)}')
+                    'insert', f'{row}.0+{map_column(src_line, text, cursor_col)}c')
                 self.editor.see('insert')
                 break
         except Exception:
@@ -12101,8 +12181,8 @@ class CorrectNoteApp:
             for rec, row in records:
                 for start, end, kind, _before in rec['spans']:
                     tag = 'autofixed' if kind == 'fixed' else 'autochosen'
-                    wid.tag_add(tag, f'{row}.{start}',
-                                f'{row}.{end}')
+                    wid.tag_add(tag, f'{row}.0+{start}c',
+                                f'{row}.0+{end}c')
             wid.tag_raise('autofixed')
             wid.tag_raise('autochosen')
         except Exception:
@@ -12138,7 +12218,7 @@ class CorrectNoteApp:
             return
         start, end, kind, before = span
         try:
-            current = wid.get(f'{row}.{start}', f'{row}.{end}')
+            current = wid.get(f'{row}.0+{start}c', f'{row}.0+{end}c')
         except Exception:
             return
         if not before or before == current:
@@ -12148,8 +12228,8 @@ class CorrectNoteApp:
         rec = self._autofix_record_for_row(row, w)
         try:
             wid.edit_separator()
-            wid.delete(f'{row}.{start}', f'{row}.{end}')
-            wid.insert(f'{row}.{start}', before)
+            wid.delete(f'{row}.0+{start}c', f'{row}.0+{end}c')
+            wid.insert(f'{row}.0+{start}c', before)
             wid.edit_separator()
         except Exception:
             return
@@ -12387,7 +12467,7 @@ class CorrectNoteApp:
         try:
             self.result_view.tag_configure('f2_focus', background=bg)
             self.result_view.tag_add(
-                'f2_focus', f'{row}.{span[0]}', f'{row}.{span[1]}')
+                'f2_focus', f'{row}.0+{span[0]}c', f'{row}.0+{span[1]}c')
             self.result_view.tag_raise('f2_focus')
         except Exception:
             pass
@@ -12974,7 +13054,7 @@ class CorrectNoteApp:
                 for u in units:
                     if u['kind'] in tag_ranges:
                         tag_ranges[u['kind']].extend(
-                            (f'{row}.{u["start"]}', f'{row}.{u["end"]}'))
+                            (f"{row}.0+{u['start']}c", f"{row}.0+{u['end']}c"))
 
             # 本文は1回で渡す。行ごとの挿入・タグ付けでTkを往復しない。
             self.result_view.insert('1.0', '\n'.join(self.line_texts))
@@ -14302,8 +14382,8 @@ class CorrectNoteApp:
         if tgt.get('widget') is not getattr(self, 'editor', None):
             return None
         row = tgt['row']
-        start = f'{row}.{tgt["start"]}'
-        end = f'{row}.{tgt["end"]}'
+        start = f"{row}.0+{tgt['start']}c"
+        end = f"{row}.0+{tgt['end']}c"
         try:
             # 候補を出した後に本文が変わっている場合は当てにしない
             if self.editor.get(start, end) != tgt.get('text', ''):
@@ -14813,8 +14893,7 @@ class CorrectNoteApp:
                 pass
         try:
             pos = tw.index('insert')
-            r, c = pos.split('.')
-            row, col = int(r), int(c)
+            row, col = _python_text_position(tw, pos)
         except Exception:
             return 'break'
         i = row - 1
@@ -14932,7 +15011,7 @@ class CorrectNoteApp:
         ev.widget = tw
         ev.x = ev.y = 0
         try:
-            box = tw.bbox(f'{row}.{unit["start"]}')
+            box = tw.bbox(f"{row}.0+{unit['start']}c")
             if box:
                 ev.x, ev.y = box[0], box[1] + box[3]
         except Exception:
@@ -14950,7 +15029,7 @@ class CorrectNoteApp:
                   else '#ffd9a0')
             tw.tag_configure('f2_focus', background=bg)
             tw.tag_add('f2_focus',
-                       f'{row}.{unit["start"]}', f'{row}.{unit["end"]}')
+                       f"{row}.0+{unit['start']}c", f"{row}.0+{unit['end']}c")
             tw.tag_raise('f2_focus')
         except Exception:
             pass
@@ -15012,7 +15091,7 @@ class CorrectNoteApp:
         if qt is None:
             return None
         try:
-            row, col = (int(x) for x in qt.index('insert').split('.'))
+            row, col = _python_text_position(qt, 'insert')
         except Exception:
             return None
         rec = self._autofix_record_for_row(row, w=qt)
@@ -15026,7 +15105,7 @@ class CorrectNoteApp:
         # **戻すものが無ければ素通し**（`_undo_autofix` は黙って帰るので、
         # ここで 'break' を返すと Ctrl+Z が効かない欄になってしまう）。
         try:
-            if qt.get(f'{row}.{span[0]}', f'{row}.{span[1]}') == span[3]:
+            if qt.get(f'{row}.0+{span[0]}c', f'{row}.0+{span[1]}c') == span[3]:
                 return None
         except Exception:
             return None
@@ -15082,8 +15161,7 @@ class CorrectNoteApp:
             return ''
         try:
             index = tw.index(f'@{event.x},{event.y}')
-            row_s, col_s = index.split('.')
-            row, col = int(row_s), int(col_s)
+            row, col = _python_text_position(tw, index)
             line = tw.get(f'{row}.0', f'{row}.end')
         except Exception:
             return ''
@@ -15409,8 +15487,8 @@ class CorrectNoteApp:
         row, unit = hit
         self._set_pane_cursor(self.result_view, 'hand2')
         self.result_view.tag_add('hover',
-                                 f'{row}.{unit["start"]}',
-                                 f'{row}.{unit["end"]}')
+                                 f"{row}.0+{unit['start']}c",
+                                 f"{row}.0+{unit['end']}c")
 
     def _on_result_leave(self, event=None):
         self.result_view.tag_remove('hover', '1.0', 'end')
@@ -15420,8 +15498,7 @@ class CorrectNoteApp:
         """マウス位置にある語の単位を返す。無ければ None。"""
         try:
             index = self.result_view.index(f'@{event.x},{event.y}')
-            row_s, col_s = index.split('.')
-            row, col = int(row_s), int(col_s)
+            row, col = _python_text_position(self.result_view, index)
         except Exception:
             return None
         i = row - 1
@@ -15656,8 +15733,8 @@ class CorrectNoteApp:
             try:
                 first = str(sel[0]).split('.')
                 last = str(sel[1]).split('.')
-                r1, c1 = int(first[0]), int(first[1])
-                r2, c2 = int(last[0]), int(last[1])
+                r1, c1 = _python_text_position(widget, sel[0])
+                r2, c2 = _python_text_position(widget, sel[1])
                 if r1 == r2 and c2 > c1:
                     row, col1, col2 = r1, c1, c2
             except Exception:
@@ -15667,8 +15744,7 @@ class CorrectNoteApp:
             # 選択が無ければ、カーソルのある語を対象にする
             try:
                 pos = widget.index('insert')
-                r, c = pos.split('.')
-                row, col1 = int(r), int(c)
+                row, col1 = _python_text_position(widget, pos)
             except Exception:
                 return 'break'
             col2 = None
@@ -16077,7 +16153,7 @@ class CorrectNoteApp:
                 continue
             r2, s2, e2 = got
             try:
-                widget.tag_add('f2_next', f'{r2}.{s2}', f'{r2}.{e2}')
+                widget.tag_add('f2_next', f'{r2}.0+{s2}c', f'{r2}.0+{e2}c')
             except Exception:
                 pass
 
@@ -16327,8 +16403,8 @@ class CorrectNoteApp:
         try:
             widget.focus_set()
             widget.tag_remove('sel', '1.0', 'end')
-            widget.mark_set('insert', f'{row}.{end}')
-            widget.insert(f'{row}.{end}', ch)
+            widget.mark_set('insert', f'{row}.0+{end}c')
+            widget.insert(f'{row}.0+{end}c', ch)
             if widget is self.editor:
                 # 打った1文字なので印を付ける（項目48-X）
                 self._mark_typed(row, end, end + len(ch))
@@ -16410,7 +16486,7 @@ class CorrectNoteApp:
         try:
             widget.tag_remove('f2_focus', '1.0', 'end')
             widget.tag_add('f2_focus',
-                           f'{row}.{new_start}', f'{row}.{new_end}')
+                           f'{row}.0+{new_start}c', f'{row}.0+{new_end}c')
             widget.tag_raise('f2_focus')
         except Exception:
             pass
@@ -16441,8 +16517,8 @@ class CorrectNoteApp:
         try:
             widget.focus_set()
             widget.tag_remove('sel', '1.0', 'end')
-            widget.delete(f'{row}.{start}', f'{row}.{end}')
-            widget.mark_set('insert', f'{row}.{start}')
+            widget.delete(f'{row}.0+{start}c', f'{row}.0+{end}c')
+            widget.mark_set('insert', f'{row}.0+{start}c')
         except Exception:
             return 'break'
         self._after_f2_edit(widget)
@@ -16543,7 +16619,7 @@ class CorrectNoteApp:
             target_widget.tag_configure('f2_focus', background=bg)
             target_widget.tag_add(
                 'f2_focus',
-                f'{row}.{unit["start"]}', f'{row}.{unit["end"]}')
+                f"{row}.0+{unit['start']}c", f"{row}.0+{unit['end']}c")
             target_widget.tag_raise('f2_focus')
         except Exception:
             pass
@@ -16572,7 +16648,7 @@ class CorrectNoteApp:
         ev.widget = widget
         ev.x = ev.y = 0
         try:
-            box = widget.bbox(f'{row}.{unit["start"]}')
+            box = widget.bbox(f"{row}.0+{unit['start']}c")
         except Exception:
             box = None
         if box:
@@ -16658,8 +16734,8 @@ class CorrectNoteApp:
             try:
                 first = str(sel[0]).split('.')
                 last = str(sel[1]).split('.')
-                row1, col1 = int(first[0]), int(first[1])
-                row2, col2 = int(last[0]), int(last[1])
+                row1, col1 = _python_text_position(self.editor, sel[0])
+                row2, col2 = _python_text_position(self.editor, sel[1])
             except Exception:
                 row1 = row2 = -1
                 col1 = col2 = 0
@@ -16721,8 +16797,8 @@ class CorrectNoteApp:
         row, unit = hit
         try:
             self.editor.tag_add('hover',
-                                f'{row}.{unit["start"]}',
-                                f'{row}.{unit["end"]}')
+                                f"{row}.0+{unit['start']}c",
+                                f"{row}.0+{unit['end']}c")
         except Exception:
             pass
 
@@ -16764,8 +16840,7 @@ class CorrectNoteApp:
         """
         try:
             index = self.editor.index(f'@{event.x},{event.y}')
-            row_s, col_s = index.split('.')
-            row, col = int(row_s), int(col_s)
+            row, col = _python_text_position(self.editor, index)
         except Exception:
             return None
         # **単位の採りどころは1本**（項目48-RB）——統合／分割の違いは
@@ -17129,14 +17204,14 @@ class CorrectNoteApp:
                 rng = self.editor.tag_nextrange('odd', idx, f'{row}.end')
                 if not rng:
                     return None
-                a, b = str(rng[0]), str(rng[1])
-                ca = int(a.split('.')[1])
-                cb = int(b.split('.')[1])
+                a, b = rng[0], rng[1]
+                ca = _python_text_position(self.editor, a)[1]
+                cb = _python_text_position(self.editor, b)[1]
                 if ca < end and start < cb:
                     if cb - ca < 2:
                         return None
-                    return (ca, cb, self.editor.get(a, b))
-                idx = b
+                    return (ca, cb, self.editor.get(f'{row}.0+{ca}c', f'{row}.0+{cb}c'))
+                idx = f'{row}.0+{cb}c'
         except Exception:
             return None
 
@@ -17319,7 +17394,7 @@ class CorrectNoteApp:
         _auto = self.autofix_span_at(row, unit['start'], unit['end'])
         _now = ''
         if _auto is not None and _auto[3]:
-            _now = self.editor.get(f'{row}.{_auto[0]}', f'{row}.{_auto[1]}')
+            _now = self.editor.get(f'{row}.0+{_auto[0]}c', f'{row}.0+{_auto[1]}c')
         items.extend(self._autofix_menu_items(row, _auto))
 
         seen = set()
@@ -17411,7 +17486,7 @@ class CorrectNoteApp:
             return
 
         try:
-            bbox = self.editor.bbox(f'{row}.{unit["start"]}')
+            bbox = self.editor.bbox(f"{row}.0+{unit['start']}c")
             if bbox:
                 x = self.editor.winfo_rootx() + bbox[0]
                 y = self.editor.winfo_rooty() + bbox[1] + bbox[3]
@@ -17464,14 +17539,14 @@ class CorrectNoteApp:
         戻すと言われた以上は、次に同じ語を書いたときにも
         戻っていてほしいはずなので、記憶ごと取り消す。
         """
-        start = f'{row}.{unit["start"]}'
-        end = f'{row}.{unit["end"]}'
+        start = f"{row}.0+{unit['start']}c"
+        end = f"{row}.0+{unit['end']}c"
         try:
             self.editor.delete(start, end)
             self.editor.insert(start, before_text)
             self.editor.tag_remove('sel', '1.0', 'end')
             self.editor.tag_add('sel', start,
-                                f'{row}.{unit["start"] + len(before_text)}')
+                                f"{row}.0+{unit['start'] + len(before_text)}c")
         except Exception:
             return
         if record is not None and record in self._editor_changes:
@@ -17608,13 +17683,13 @@ class CorrectNoteApp:
             try:
                 _sa, _sb = int(cand['span'][0]), int(cand['span'][1])
                 _base = cand.get('base') or self.editor.get(
-                    f'{row}.{_sa}', f'{row}.{_sb}')
+                    f'{row}.0+{_sa}c', f'{row}.0+{_sb}c')
                 unit = dict(unit, start=_sa, end=_sb, text=_base,
                             base=_base, reading='')
             except Exception:
                 pass
-        start = f'{row}.{unit["start"]}'
-        end = f'{row}.{unit["end"]}'
+        start = f"{row}.0+{unit['start']}c"
+        end = f"{row}.0+{unit['end']}c"
         if self.unified_autofix_on():
             # 自動反映が効いているときは、本文（原文）は書き換えない。
             # 選んだことを記録するだけにして、画面への反映は
@@ -17633,7 +17708,7 @@ class CorrectNoteApp:
                 text=f'「{unit["base"]}」→「{cand["surface"]}」に直しました')
             self._analyze()
             return
-        new_end = f'{row}.{unit["start"] + len(cand["surface"])}'
+        new_end = f"{row}.0+{unit['start'] + len(cand['surface'])}c"
         try:
             self.editor.delete(start, end)
             self.editor.insert(start, cand['surface'])
@@ -17739,8 +17814,8 @@ class CorrectNoteApp:
             try:
                 first = str(sel_ranges[0]).split('.')
                 last = str(sel_ranges[1]).split('.')
-                row1, col1 = int(first[0]), int(first[1])
-                row2, col2 = int(last[0]), int(last[1])
+                row1, col1 = _python_text_position(self.result_view, sel_ranges[0])
+                row2, col2 = _python_text_position(self.result_view, sel_ranges[1])
             except Exception:
                 row1 = row2 = -1
                 col1 = col2 = 0
@@ -17906,7 +17981,7 @@ class CorrectNoteApp:
 
         # 語の直下に出す（取れなければクリック位置の下）
         try:
-            bbox = self.result_view.bbox(f'{row}.{unit["start"]}')
+            bbox = self.result_view.bbox(f"{row}.0+{unit['start']}c")
             if bbox:
                 x = self.result_view.winfo_rootx() + bbox[0]
                 y = self.result_view.winfo_rooty() + bbox[1] + bbox[3]
@@ -18328,7 +18403,7 @@ class CorrectNoteApp:
             idx = text.find(target, idx + 1)
         if best is None:
             return
-        start, end = f'{row}.{best}', f'{row}.{best + len(target)}'
+        start, end = f'{row}.0+{best}c', f'{row}.0+{best + len(target)}c'
         try:
             self.result_view.tag_remove('sel', '1.0', 'end')
             self.result_view.tag_add('sel', start, end)
@@ -18623,6 +18698,65 @@ class CorrectNoteApp:
     # ------------------------------------------------------------
     # 語彙の追加
     # ------------------------------------------------------------
+    def open_ime_readings_dialog(self):
+        """保存対を選んで削除する。表示は最大300対に絞る。"""
+        dlg = tk.Toplevel(self.root)
+        dlg.title('保存したIMEの読み')
+        dlg.configure(bg=BG)
+        dlg.transient(self.root)
+        self._place_dialog(dlg, 580, 440)
+        query = tk.StringVar(master=dlg)
+        message = tk.StringVar(master=dlg)
+        tk.Label(dlg, text='表記または読みで検索できます。削除後は読みを推測し直します。',
+                 bg=BG, fg=INK).pack(anchor='w', padx=12, pady=8)
+        entry = tk.Entry(dlg, textvariable=query)
+        entry.pack(fill='x', padx=12)
+        frame = tk.Frame(dlg, bg=BG)
+        frame.pack(fill='both', expand=True, padx=12, pady=8)
+        tree = ttk.Treeview(frame, columns=('surface', 'reading'), show='headings',
+                            selectmode='extended')
+        tree.heading('surface', text='表記')
+        tree.heading('reading', text='読み')
+        bar = ttk.Scrollbar(frame, orient='vertical', command=tree.yview)
+        tree.configure(yscrollcommand=bar.set)
+        bar.pack(side='right', fill='y')
+        tree.pack(side='left', fill='both', expand=True)
+        rows = {}
+        def refresh(*unused):
+            for item in tree.get_children():
+                tree.delete(item)
+            rows.clear()
+            needle = query.get().strip()
+            total = 0
+            for surface, readings in self.ime_readings.pairs().items():
+                for reading in readings:
+                    if needle and needle not in surface and needle not in reading:
+                        continue
+                    total += 1
+                    if len(rows) < 300:
+                        item = tree.insert('', 'end', values=(surface, reading))
+                        rows[item] = (surface, reading)
+            message.set(f'{len(rows)} / {total} 対を表示')
+        def remove_selected():
+            selected = [rows[i] for i in tree.selection() if i in rows]
+            if not selected:
+                return
+            count = sum(self.ime_readings.forget(surface, reading)
+                        for surface, reading in selected)
+            if not count:
+                return
+            saved = self.ime_readings.save()
+            self._ime_pairs_dirty = False
+            self._reanalyze_all()
+            refresh()
+            message.set(f'{count} 対を削除しました。' if saved else
+                        f'{count} 対をメモリから削除しました。保存できなかったため次の保存時に再試行します。')
+        tk.Label(dlg, textvariable=message, bg=BG, fg=INK).pack(anchor='w', padx=12)
+        tk.Button(dlg, text='選択した読みを削除', command=remove_selected).pack(pady=10)
+        query.trace_add('write', refresh)
+        refresh()
+        entry.focus_set()
+
     def open_vocab_dialog(self):
         dlg = tk.Toplevel(self.root)
         dlg.title('語彙を追加')
@@ -19569,9 +19703,10 @@ def _set_app_user_model_id():
     自分の名札を先に名乗ると、自分の絵で並ぶ。
 
     **窓を作る前に呼ぶこと**（あとからでは効かない）。
-    exe（`frozen`）では要らない——exe 自身が名札になる。
+    exe でも同じ名札を明示する。Explorer が起動経路によって exe 名、
+    ショートカット、Python のどれを先に見ても同じアプリとして扱う。
     """
-    if sys.platform != 'win32' or getattr(sys, 'frozen', False):
+    if sys.platform != 'win32':
         return
     try:
         import ctypes

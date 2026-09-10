@@ -219,7 +219,8 @@ if __name__ == '__main__':
         ('もんたい', True, 'もんだい'),
         ('しゆうせい', True, 'しゅうせい'),
         # --- 脱字（押し忘れ） ---
-        ('もじにゅうりょ', True, 'もじにゅうりょく'),
+        # 未入力キーの補充は後順位。費用上限で採用しない場合もある。
+        ('もじにゅうりょ', False, None),
         ('じにゅうりょく', True, 'もじにゅうりょく'),
         # --- 余分な打鍵（押しすぎ・重複） ---
         ('もじにゅううりょく', True, 'もじにゅうりょく'),
@@ -261,7 +262,7 @@ if __name__ == '__main__':
         # --- もとからあるケース ---
         ('もばにゅうりょく', True, 'もじにゅうりょく'),
         ('もじなゅうりょく', True, 'もじにゅうりょく'),
-        ('もじにうりょく', True, 'もじにゅうりょく'),
+        ('もじにうりょく', False, None),
         ('もじにゅうのりょく', True, 'もじにゅうりょく'),
         ('もじにゅりうょく', True, 'もじにゅうりょく'),
         ('ぱそみんは、', True, 'パソコンは、'),
@@ -560,5 +561,67 @@ if __name__ == '__main__':
           and ok46 and ok47 and ok48 and ok49 and ok50 and ok51 and ok52
           and ok53 and ok54 and ok55 and ok56 and ok57 and ok58 and ok59
           and ok60 and ok61 and ok62 and ok63 and ok64 and ok65 and ok66 and ok67 and ok68 and ok69 and ok70 and ok71 and ok72 and ok73 and ok74 and ok75 and ok76 and ok77 and ok78 and ok79 and ok80 and ok81 and ok82 and ok83 and ok84 and ok85 and ok86 and ok87 and ok88 and ok89 and ok90 and ok91 and ok92 and ok93 and ok94 and ok95 and ok96 and ok97 and ok98 and ok99 and ok100 and ok101 and ok102 and ok103 and ok104 and ok105 and ok106 and ok107 and ok108 and ok109 and ok110 and ok111 and ok112 and ok113 and ok114 and ok115 and ok116 and ok117 and ok118 and ok119 and ok120 and ok121 and ok122 and ok123 and ok124 and ok125 and ok126 and ok127 and ok128 and ok129 and ok130 and ok131 and ok132 and ok133 and ok134 and ok135 and ok136 and ok137 and ok138 and ok139 and ok140 and ok141 and ok142)
+    import unittest
+    from tests_reanalysis_contract import ReanalysisContractTests
+    contract_result = unittest.TextTestRunner().run(
+        unittest.defaultTestLoader.loadTestsFromTestCase(ReanalysisContractTests))
+    from tests_ime_removal import IMERemovalTests
+    ime_result = unittest.TextTestRunner().run(
+        unittest.defaultTestLoader.loadTestsFromTestCase(IMERemovalTests))
+    from tests_colloquial_connection import ColloquialConnectionTests
+    colloquial_result = unittest.TextTestRunner().run(
+        unittest.defaultTestLoader.loadTestsFromTestCase(ColloquialConnectionTests))
+    from tests_replacement_contract import ReplacementContractTests
+    replacement_result = unittest.TextTestRunner().run(
+        unittest.defaultTestLoader.loadTestsFromTestCase(ReplacementContractTests))
+    from tests_candidate_fallback import CandidateFallbackTests
+    fallback_result = unittest.TextTestRunner().run(
+        unittest.defaultTestLoader.loadTestsFromTestCase(CandidateFallbackTests))
+    from tests_small_vowels import SmallVowelTests
+    small_vowel_result = unittest.TextTestRunner().run(
+        unittest.defaultTestLoader.loadTestsFromTestCase(SmallVowelTests))
+    from tests_result_state import ResultStateTests
+    state_result = unittest.TextTestRunner().run(
+        unittest.defaultTestLoader.loadTestsFromTestCase(ResultStateTests))
+    from tests_reading_evidence import ReadingEvidenceTests
+    reading_evidence_result = unittest.TextTestRunner().run(
+        unittest.defaultTestLoader.loadTestsFromTestCase(ReadingEvidenceTests))
+    from tests_nearby_invalidation import NearbyInvalidationTests
+    nearby_result = unittest.TextTestRunner().run(
+        unittest.defaultTestLoader.loadTestsFromTestCase(NearbyInvalidationTests))
+    from tests_input_pending import InputPendingTests
+    input_pending_result = unittest.TextTestRunner().run(
+        unittest.defaultTestLoader.loadTestsFromTestCase(InputPendingTests))
+    from tests_replacement_acceptor import ReplacementAcceptorTests
+    acceptor_result = unittest.TextTestRunner().run(
+        unittest.defaultTestLoader.loadTestsFromTestCase(ReplacementAcceptorTests))
+    from tests_dictionary_status import DictionaryStatusTests
+    dictionary_result = unittest.TextTestRunner().run(
+        unittest.defaultTestLoader.loadTestsFromTestCase(DictionaryStatusTests))
+    from tests_preserved_head import PreservedHeadTests
+    preserved_result = unittest.TextTestRunner().run(
+        unittest.defaultTestLoader.loadTestsFromTestCase(PreservedHeadTests))
+    from tests_literal_examples import LiteralExampleTests
+    from tests_reading_boundary import ReadingBoundaryTests, IntrudedStrokeTests
+    from tests_short_reading import ShortReadingTests
+    from tests_partial_engine import PartialEngineTests
+    from tests_partial_reading import PartialReadingTests
+    from tests_continuation import ContinuationTests
+    from tests_missing_key_priority import MissingKeyPriorityTests, MarkSlipSearchTests
+    from tests_property_prefix import PropertyPrefixTests
+    from tests_head_semantics import HeadSemanticsTests
+    from tests_expressive_context import ExpressiveContextTests
+    from tests_shortcut_case import ShortcutCaseTests
+    from tests_parallel_evidence import ParallelEvidenceTests
+    from tests_reading_likelihood import ReadingLikelihoodTests
+    from tests_contextual_repair import ContextualRepairTests
+    from tests_polite_connection import PoliteConnectionTests
+    from tests_unknown_clauses import UnknownClauseTests
+    from tests_semantic_roles import SemanticRoleTests
+    from tests_contextual_tail import ContextualTailTests, BareModifierTests, WrittenErrorActionTests, SahenHomophoneTests, LayoutPositionTests
+    context_suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(c)
+        for c in (UnknownClauseTests, SemanticRoleTests, PoliteConnectionTests, ReadingLikelihoodTests, ContextualRepairTests, ContextualTailTests, BareModifierTests, WrittenErrorActionTests, SahenHomophoneTests, LayoutPositionTests, LiteralExampleTests, ReadingBoundaryTests, IntrudedStrokeTests, ShortReadingTests, PartialEngineTests, PartialReadingTests, ContinuationTests, MissingKeyPriorityTests, MarkSlipSearchTests, PropertyPrefixTests, HeadSemanticsTests, ExpressiveContextTests, ShortcutCaseTests, ParallelEvidenceTests))
+    context_result = unittest.TextTestRunner().run(context_suite)
+    all_ok = context_result.wasSuccessful() and preserved_result.wasSuccessful() and dictionary_result.wasSuccessful() and acceptor_result.wasSuccessful() and input_pending_result.wasSuccessful() and nearby_result.wasSuccessful() and reading_evidence_result.wasSuccessful() and state_result.wasSuccessful() and small_vowel_result.wasSuccessful() and fallback_result.wasSuccessful() and replacement_result.wasSuccessful() and all_ok and contract_result.wasSuccessful() and ime_result.wasSuccessful() and colloquial_result.wasSuccessful()
     print('ALL OK:', all_ok)
     sys.exit(0 if all_ok else 1)  # 48-VN: CIへ実際の成否を返す
