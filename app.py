@@ -9499,8 +9499,6 @@ class CorrectNoteApp:
             _lo_shape = f'差分 前{head}行一致・後{tail}行一致・やり残し{len(leftover)}行'
         try:
             self._trace_analysis(_lo_cause or '打鍵の差分', len(lines), len(todo), _lo_shape)
-            if _lo_cause is None and _lo_had and (len(lines) > 10) and (len(todo) >= max(10, int(len(lines) * 0.8))):
-                self._trace_analysis_dump('説明の付かない全行解析')
         except Exception:
             pass
         dependencies=analysis_async.state_key(self)
@@ -9663,9 +9661,9 @@ class CorrectNoteApp:
         """
         解析1回ぶんの記録を輪の控えに足す（項目48-LO・最新40件）。
 
-        画面には出さない。`_trace_analysis_dump` が書き出すときだけ
-        人の目に触れる。1件は文字列1本（数十バイト）なので、
-        打鍵のたびに取っても重さは無い。
+        画面やファイルには出さず、実行中のメモリだけに保持する。
+        1件は文字列1本（数十バイト）なので、打鍵のたびに取っても
+        重さは無い。
         """
         import time as _t
         tr = getattr(self, '_analyze_trace', None)
@@ -9674,34 +9672,6 @@ class CorrectNoteApp:
         tr.append(f'{_t.strftime("%H:%M:%S")}  きっかけ={cause}  '
                   f'本文{lines_n}行  対象{todo_n}行  {shape}')
         del tr[:-40]
-
-    def _trace_analysis_dump(self, reason):
-        """
-        直近の解析の記録を `解析の記録.txt` へ書き出す（項目48-LO）。
-
-        **説明の付かない全行解析**（きっかけの印が無いのに、本文の
-        8割以上が対象になった）が起きた瞬間に呼ばれる。写しで再現
-        できない実機だけの症状を、次にファイルで読むための仕掛け。
-        書けなくても何も起きない（記録のために本体を止めない）。
-        """
-        try:
-            path = os.path.join(app_dir(), '解析の記録.txt')
-            old = ''
-            try:
-                if os.path.exists(path) \
-                        and os.path.getsize(path) < 200_000:
-                    with open(path, 'r', encoding='utf-8') as f:
-                        old = f.read()
-            except Exception:
-                old = ''
-            import time as _t
-            head = (f'--- {_t.strftime("%Y-%m-%d %H:%M:%S")} '
-                    f'{reason}（v{APP_VERSION}） ---\n')
-            body = '\n'.join(getattr(self, '_analyze_trace', ())) + '\n'
-            with open(path, 'w', encoding='utf-8') as f:
-                f.write(old + head + body)
-        except Exception:
-            pass
 
     def _use_analysis_cache(self, text, lines):
         """Restore compatible completed values; submit only missing display units."""
