@@ -51,10 +51,18 @@ class NearbyInvalidationTests(unittest.TestCase):
                     self.assertIn(after,affected,(old,new,before,after))
 
     def test_actual_analyze_discards_nearby_results_and_keeps_distant_results(self):
+        self._exercise_actual_context({}, {}, [3,4,5,6,7])
+
+    def test_whole_document_context_change_discards_distant_results_too(self):
+        self._exercise_actual_context({'old':1}, {'new':1}, list(range(10)))
+
+    def _exercise_actual_context(self,old_context,new_context,expected):
         tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
         methods=[n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name=='_analyze']
         remap=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='remap_pending_lines')
-        scope={}
+        import analysis_async
+        import tab_analysis
+        scope={"analysis_async":analysis_async,"tab_analysis":tab_analysis}
         exec(compile(ast.Module(body=[remap,methods[0]],type_ignores=[]),'app.py','exec'),scope)
         class Ready(Exception):pass
         old=['line'+str(i) for i in range(10)]
@@ -65,15 +73,16 @@ class NearbyInvalidationTests(unittest.TestCase):
         h=SimpleNamespace(_view_changing=lambda:False,_cancel_analysis_job=lambda:None,
             _mark_typed_from_shadow=lambda:None,editor_source_text=lambda:'\n'.join(current),
             _analyze_text='\n'.join(old),_prev_lines=old,line_results=original,
-            _analyze_todo=[],_analyze_pos=0,store=object(),
+            _analyze_todo=[],_analyze_pos=0,_analyze_ctx=old_context,store=SimpleNamespace(revision=lambda:0),settings={'input_method':'kana'},
             _shift_bookmarks=lambda *a:None,_trace_analysis=lambda *a:None,
             _blank_result=lambda line:dict(original=line,corrected=line,pending=True),
             _visible_first=visible)
-        with patch('vocabulary.build_context_vocab_cached',return_value={}):
+        with patch.object(analysis_async,'context',return_value={'context':new_context}):
             with self.assertRaises(Ready):scope['_analyze'](h)
-        self.assertEqual(captured,[3,4,5,6,7])
-        self.assertIs(h.line_results[2],original[2])
-        self.assertIs(h.line_results[8],original[8])
+        self.assertEqual(captured,expected)
+        if old_context==new_context:
+            self.assertIs(h.line_results[2],original[2])
+            self.assertIs(h.line_results[8],original[8])
         self.assertTrue(all(h.line_results[i]['pending'] for i in captured))
 
 

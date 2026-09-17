@@ -11,7 +11,9 @@ class InputPendingTests(unittest.TestCase):
         tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
         wanted={'_analyze_chunk','_analyze_if_changed'}
         functions=[n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name in wanted]
-        cls.scope={}
+        import analysis_async
+        import analysis_work_app as input_work
+        cls.scope={'analysis_async':analysis_async,'input_work':input_work}
         exec(compile(ast.Module(body=functions,type_ignores=[]),'app.py','exec'),cls.scope)
 
     def test_old_slice_stops_until_input_check(self):
@@ -24,12 +26,22 @@ class InputPendingTests(unittest.TestCase):
     def test_same_text_resumes_unfinished_work_without_reanalysis(self):
         calls=[]
         h=SimpleNamespace(_after_id='input-check',editor_source_text=lambda:'same',
-            _analyze_text='same',_analyze_pos=1,_analyze_todo=[0,1,2],_analyze_job=None,
+            settings={'input_method':'kana'},_analyze_text='same',_analyze_pos=1,_analyze_todo=[0,1,2],_analyze_job=None,
             _schedule_analysis_chunk=lambda:calls.append('resume'),
             _analyze=lambda:calls.append('rebuild'))
+        h._analyze_dependencies=self.scope['analysis_async'].state_key(h)
+        h._analyze_work=self.scope['input_work'].token(h)
         self.scope['_analyze_if_changed'](h)
         self.assertEqual(calls,['resume'])
         self.assertIsNone(h._after_id)
+
+    def test_same_text_with_changed_dependencies_rebuilds(self):
+        calls=[]
+        h=SimpleNamespace(settings={'input_method':'kana'},_after_id='input-check',
+            editor_source_text=lambda:'same',_analyze_text='same',
+            _analyze_dependencies=('old',),_analyze=lambda:calls.append('rebuild'))
+        self.scope['_analyze_if_changed'](h)
+        self.assertEqual(calls,['rebuild'])
 
     def test_changed_text_rebuilds_instead_of_resuming_old_todo(self):
         calls=[]

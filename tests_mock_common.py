@@ -308,3 +308,11 @@ def mock_tokenize(line):
         out.append((w, '名詞:一般', reading, i, j, False))
         i = j
     return out
+
+
+def with_duplicate_repair(function, *args, **kwargs):
+    """Legacy repair examples explicitly enable the optional repeated-key operation."""
+    import os
+    from unittest.mock import patch
+    with patch.dict(os.environ, {'CN_NO_DUP': '0'}):
+        return function(*args, **kwargs)

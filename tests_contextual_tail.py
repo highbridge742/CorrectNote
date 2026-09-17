@@ -151,8 +151,9 @@ class WrittenErrorActionTests(unittest.TestCase):
         for noun in ('誤字','脱字','衍字','脱文'):
             a=M.Token(noun,'名詞',noun,'ごじ',0,2,True,'一般')
             b=M.Token('し','動詞','する','し',2,3,True,'自立','連用形')
-            with patch.object(M,'dictionary_base_pos',return_value={'名詞,一般,*,*'}):
-                out=M._contextualize_written_error_actions([a,b])
+            with patch.object(M,'dictionary_base_pos',return_value={'名詞,一般,*,*'}), \
+                 patch.object(M,'native_suru_form',side_effect=lambda sf,form,rd,*args:(sf,form,rd)==('し','連用形','し')):
+                out=M._contextualize_nominal_actions([a,b])
             self.assertEqual(out[0].pos_sub,'サ変接続')
             self.assertEqual((out[0].surface,out[0].reading,out[0].start,out[0].end),
                              (noun,'ごじ',0,2))
@@ -162,7 +163,7 @@ class WrittenErrorActionTests(unittest.TestCase):
         a=M.Token('誤語','名詞','誤語','ごご',0,2,True,'一般')
         b=M.Token('し','動詞','する','し',2,3,True,'自立','連用形')
         with patch.object(M,'dictionary_base_pos',return_value=None):
-            self.assertEqual(M._contextualize_written_error_actions([a,b]),[a,b])
+            self.assertEqual(M._contextualize_nominal_actions([a,b]),[a,b])
 
     def test_other_nouns_or_non_action_context_keep_original_pos(self):
         import morphology as M
@@ -173,7 +174,7 @@ class WrittenErrorActionTests(unittest.TestCase):
             a=M.Token(noun,'名詞',noun,'ごじ',0,2,True,'一般')
             b=M.Token('し',pos,base,'し',start,start+1,known,'自立','連用形')
             with patch.object(M,'dictionary_base_pos',return_value={'名詞,一般,*,*'}):
-                self.assertEqual(M._contextualize_written_error_actions([a,b]),[a,b])
+                self.assertEqual(M._contextualize_nominal_actions([a,b]),[a,b])
 
 
 class SahenHomophoneTests(unittest.TestCase):

@@ -20,6 +20,7 @@
 `tests_mock.py` から分けたもの（2026-08-20・項目48-GQ）。
 **走らせる入口は `tests_mock.py` のまま。**
 """
+from tests_mock_common import with_duplicate_repair
 import corrector as C
 from vocabulary import VocabularyStore, find_known_readings_flex
 from seed_vocabulary import load_seed
@@ -372,7 +373,7 @@ def run_rebuild_cases():
     check('よろしくお→よろしく は切り詰め',
           _C._is_repeat_collapse('よろしくお', 'よろしく'), False)
     check('たたんごの繋がり → たんごの繋がり',
-          _fix('たたんごの繋がり'), 'たんごの繋がり')
+          with_duplicate_repair(_fix, 'たたんごの繋がり'), 'たんごの繋がり')
 
     # --- 2回目の実機確認で出た誤爆の再発防止（2026-08-08・4回目） ---
     print('--- 2回目の実機確認で出た誤爆の再発防止 ---')
@@ -606,7 +607,7 @@ def run_rebuild_cases():
     # 効いて直らない。**テストが通っても実機で直っているとは
     # 限らない。** 実機側は `realcheck.py` で数えること。
     check('目もち長 → メモ帳（挿入を含む誤変換・**mock のみ**）',
-          _fix('目もち長'), 'メモ帳')
+          with_duplicate_repair(_fix, '目もち長'), 'メモ帳')
     check('乳リュク → 入力', _fix('乳リュク'), '入力')
     check('文字乳リュク → 文字入力（前に漢字があっても拾う）',
           _fix('文字乳リュク'), '文字入力')

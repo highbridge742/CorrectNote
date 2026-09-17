@@ -223,9 +223,10 @@ if __name__ == '__main__':
         ('もじにゅうりょ', False, None),
         ('じにゅうりょく', True, 'もじにゅうりょく'),
         # --- 余分な打鍵（押しすぎ・重複） ---
-        ('もじにゅううりょく', True, 'もじにゅうりょく'),
-        ('ぱそここん', True, 'パソコン'),
-        ('もんじにゅうりょく', True, 'もじにゅうりょく'),
+        ('もじにゅううりょく', False, 'もじにゅううりょく'),
+        ('ぱそここん', False, 'ぱそここん'),
+        # 48-ABS: んは左右のキーに隣接しない。既知語でも削除しない。
+        ('もんじにゅうりょく', False, 'もんじにゅうりょく'),
         # --- 半角モードのまま打ってしまった入力 ---
         ('md@i(4l)h', True, '文字入力'),
         ('md[ki)4l)h', True, '文字入力'),   # 半角＋隣接キー誤打
@@ -601,6 +602,32 @@ if __name__ == '__main__':
     from tests_preserved_head import PreservedHeadTests
     preserved_result = unittest.TextTestRunner().run(
         unittest.defaultTestLoader.loadTestsFromTestCase(PreservedHeadTests))
+    from tests_selection_context import SelectionContextTests
+    from tests_attested_nouns import AttestedNounTests
+    from tests_action_notes import ActionNoteTests
+    from tests_kana_action_repair import KanaActionRepairTests
+    from tests_compound_meaning import CompoundMeaningTests
+    from tests_native_action_roles import NativeActionRoleTests
+    from tests_mai_connection import MaiConnectionTests
+    from tests_native_adjuncts import NativeAdjunctTests
+    from tests_lexical_usage import LexicalUsageTests
+    from tests_duplicate_policy import DuplicatePolicyTests
+    from tests_adnominal_readings import AdnominalReadingTests
+    from tests_predicate_conversion import PredicateConversionTests
+    from tests_euphonic_literal_boundaries import EuphonicLiteralBoundaryTests
+    from tests_source_fragment_entry import SourceFragmentEntryTests
+    from tests_native_nominal_context import NativeNominalContextTests
+    from tests_native_phrase_context import NativePhraseContextTests
+    from tests_quotation_and_position import QuotationAndPositionTests
+    from tests_native_adverbials import NativeAdverbialTests
+    from tests_word_mentions import WordMentionTests
+    from tests_repair_boundaries import RepairBoundaryTests
+    from tests_subject_roles import SubjectRoleTests
+    from tests_resolved_diagnostic import ResolvedDiagnosticTests
+    from tests_unattached_marks import UnattachedMarkTests
+    from tests_mark_usage import MarkUsageTests
+    from tests_subject_valency import SubjectValencyTests
+    from tests_wordform_mentions import WordformMentionTests
     from tests_literal_examples import LiteralExampleTests
     from tests_reading_boundary import ReadingBoundaryTests, IntrudedStrokeTests
     from tests_short_reading import ShortReadingTests
@@ -619,8 +646,33 @@ if __name__ == '__main__':
     from tests_unknown_clauses import UnknownClauseTests
     from tests_semantic_roles import SemanticRoleTests
     from tests_contextual_tail import ContextualTailTests, BareModifierTests, WrittenErrorActionTests, SahenHomophoneTests, LayoutPositionTests
+    from tests_spec_contracts import WorkContracts,CandidateContracts
+    from tests_tab_analysis import CompletedTabTests
+    from tests_background_ownership import BackgroundOwnershipTests
+    from tests_application_cache import ApplicationCacheTests
+    from tests_initial_setup import InitialSetupTests
+    from tests_reading_rows import ReadingRowsTests
+    from tests_native_reading_extensions import NativeReadingExtensionsTests
+    from tests_negative_degree_context import NegativeDegreeContextTests
+    from tests_action_nominal_context import ActionNominalContextTests
+    from tests_focused_request_context import FocusedRequestContextTests
+    from tests_counter_readings import CounterReadingTests
+    from tests_nominal_source_ranges import NominalSourceRangeTests
+    from tests_short_causative import ShortCausativeTests
+    from tests_floating_quantity import FloatingQuantityTests, OrdinaryQuantityMeaningTests
+    from tests_prolonged_clause import ProlongedClauseTests
+    from tests_focused_sequence import FocusedSequenceTests
+    from tests_original_case_style import OriginalCaseStyleTests
+    from tests_biological_case import BiologicalCaseTests
+    from tests_adverbial_host import AdverbialHostTests
+    from tests_counted_nominals import CountedNominalTests
+    from tests_native_verb_prefix import NativeVerbPrefixTests
+    from tests_legacy_coverage import LegacyCoverageTests, NativeLegacyCoverageTests
+    from tests_search_boundaries import SearchBoundaryTests
+    from tests_file_format import FileFormatTests
+    from tests_spatial_nominal_context import SpatialNominalContextTests
     context_suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(c)
-        for c in (UnknownClauseTests, SemanticRoleTests, PoliteConnectionTests, ReadingLikelihoodTests, ContextualRepairTests, ContextualTailTests, BareModifierTests, WrittenErrorActionTests, SahenHomophoneTests, LayoutPositionTests, LiteralExampleTests, ReadingBoundaryTests, IntrudedStrokeTests, ShortReadingTests, PartialEngineTests, PartialReadingTests, ContinuationTests, MissingKeyPriorityTests, MarkSlipSearchTests, PropertyPrefixTests, HeadSemanticsTests, ExpressiveContextTests, ShortcutCaseTests, ParallelEvidenceTests))
+        for c in (FileFormatTests,NativeVerbPrefixTests,CountedNominalTests,AdverbialHostTests,BiologicalCaseTests,LegacyCoverageTests,NativeLegacyCoverageTests,FocusedSequenceTests,OriginalCaseStyleTests,CounterReadingTests,NominalSourceRangeTests,ShortCausativeTests,FloatingQuantityTests,OrdinaryQuantityMeaningTests,ProlongedClauseTests,SearchBoundaryTests,FocusedRequestContextTests,SpatialNominalContextTests,NegativeDegreeContextTests,ActionNominalContextTests,CompletedTabTests,BackgroundOwnershipTests,ApplicationCacheTests,InitialSetupTests,ReadingRowsTests,NativeReadingExtensionsTests,WorkContracts,CandidateContracts,MaiConnectionTests, NativeAdjunctTests, KanaActionRepairTests, CompoundMeaningTests, NativeActionRoleTests, ActionNoteTests, AttestedNounTests, SelectionContextTests, LexicalUsageTests, DuplicatePolicyTests, AdnominalReadingTests, PredicateConversionTests, SourceFragmentEntryTests, NativeNominalContextTests, EuphonicLiteralBoundaryTests, NativePhraseContextTests, QuotationAndPositionTests, NativeAdverbialTests, WordMentionTests, RepairBoundaryTests, SubjectRoleTests, ResolvedDiagnosticTests, UnattachedMarkTests, MarkUsageTests, SubjectValencyTests, WordformMentionTests, UnknownClauseTests, SemanticRoleTests, PoliteConnectionTests, ReadingLikelihoodTests, ContextualRepairTests, ContextualTailTests, BareModifierTests, WrittenErrorActionTests, SahenHomophoneTests, LayoutPositionTests, LiteralExampleTests, ReadingBoundaryTests, IntrudedStrokeTests, ShortReadingTests, PartialEngineTests, PartialReadingTests, ContinuationTests, MissingKeyPriorityTests, MarkSlipSearchTests, PropertyPrefixTests, HeadSemanticsTests, ExpressiveContextTests, ShortcutCaseTests, ParallelEvidenceTests))
     context_result = unittest.TextTestRunner().run(context_suite)
     all_ok = context_result.wasSuccessful() and preserved_result.wasSuccessful() and dictionary_result.wasSuccessful() and acceptor_result.wasSuccessful() and input_pending_result.wasSuccessful() and nearby_result.wasSuccessful() and reading_evidence_result.wasSuccessful() and state_result.wasSuccessful() and small_vowel_result.wasSuccessful() and fallback_result.wasSuccessful() and replacement_result.wasSuccessful() and all_ok and contract_result.wasSuccessful() and ime_result.wasSuccessful() and colloquial_result.wasSuccessful()
     print('ALL OK:', all_ok)

@@ -51,8 +51,8 @@ _MARK_KEY_ADJ = (os.environ.get('CN_MARK_KEY_ADJ', '0') != '0')
 # 実際のキーボードは段ごとに少しずつ右へずれているため、
 # 距離計算のときに ROW_OFFSET で補正する。
 #
-#  数字段: 1  2  3  4  5  6  7  8  9  0  -  ^
-#          ぬ ふ あ う え お や ゆ よ わ ほ へ
+#  数字段: 1  2  3  4  5  6  7  8  9  0  -  ^  ¥
+#          ぬ ふ あ う え お や ゆ よ わ ほ へ ー
 #  上段:   Q  W  E  R  T  Y  U  I  O  P  @  [
 #          た て い す か ん な に ら せ ゛ ゜
 #  中段:   A  S  D  F  G  H  J  K  L  ;  :  ]
@@ -75,18 +75,10 @@ KANA_POSITIONS = {
     'つ': (3, 0), 'さ': (3, 1), 'そ': (3, 2), 'ひ': (3, 3), 'こ': (3, 4),
     'み': (3, 5), 'も': (3, 6), 'ね': (3, 7), 'る': (3, 8), 'め': (3, 9),
     'ろ': (3, 10),
-    # 長音符「ー」。JISかな配列では「ろ」の刻印があるキー（下段
-    # 右端）を押すと実際には長音「ー」が入力される
-    # （「ろ」はキー印字であって、かな入力モードでの出力ではない）。
-    # 物理的に同じキーなので、押し間違えるとすれば「ろ」そのものと
-    # 混同するのではなく、Shift の有無や隣接キーとの取り違えになる。
-    # ここでは同じ座標に置き、「ろ」と「ー」を同一キー上の
-    # 表記違いとして距離0で近接させる（半角入力の復元で
-    # 「ふれろむ」のような、長音を隣接する別のかなと誤打した並びを
-    # 「ふれーむ」に訂正できるようにするため。実機で
-    # 「2;\\]（かな変換で ふれろむ）がフレームの候補に出ない」と
-    # 報告された）。
-    'ー': (3, 10),
+    # Standard JIS: long vowel is on the yen key, distinct from bottom-row ろ.
+    # FMV input quick sheet: https://www.fmworld.net/download/DD000923/DD000923.pdf
+    # Ambiguous ASCII backslash belongs to halfwidth.AMBIGUOUS_KEYS.
+    'ー': (0, 12), 'を': (0, 9),
     # 小書きかな: Shift + 清音キー なので物理位置は清音と同じ
     'ぁ': (0, 2), 'ぅ': (0, 3), 'ぇ': (0, 4), 'ぉ': (0, 5),
     'ゃ': (0, 6), 'ゅ': (0, 7), 'ょ': (0, 8),
@@ -150,7 +142,7 @@ def keystrokes(kana):
         か → ('か',)          1打鍵
         が → ('か', '゛')     2打鍵
         ぱ → ('は', '゜')     2打鍵
-        ゃ → ('や',)          Shift は同じキーなので1打鍵と数える
+        ゃ → ('ゃ',)          表記は保持し、キーの同一性は same_physical_key で判定
 
     かな入力の誤打を「何回の誤りか」で数えるための土台。
     """
@@ -161,6 +153,81 @@ def keystrokes(kana):
 
 # 48-XC・2026-09-10: 未入力キーの補充は、隣接・巻き込み・転置より後。
 MISSING_KEY_COST = 2.8
+
+
+def _single_key_drop_positions(typed, restored):
+    """Original physical keys and every position explaining one deletion."""
+    if len(typed)<=len(restored):return None
+    keys=tuple(k for char in typed for k in keystrokes(char))
+    target=tuple(k for char in restored for k in keystrokes(char))
+    if len(keys)!=len(target)+1:return None
+    positions=tuple(i for i in range(len(keys)) if keys[:i]+keys[i+1:]==target)
+    if not positions or any(not ('ぁ'<=keys[i]<='ゖ' or keys[i] in 'ー゛゜') for i in positions):
+        return None
+    return keys,positions
+
+
+def single_key_drop_adjacency(typed, restored, max_distance=1.0):
+    """Physical proof for a length-reducing single kana keystroke deletion.
+
+    None means a different operation. Repetition permission is separate.
+    Punctuation deletion and same-length voicing are different operations.
+    """
+    proof=_single_key_drop_positions(typed,restored)
+    if proof is None:return None
+    keys,positions=proof
+    return any(any(kana_key_distance(keys[i],keys[j])<=max_distance
+                   for j in (i-1,i+1) if 0<=j<len(keys)) for i in positions)
+
+
+@functools.lru_cache(maxsize=4096)
+def multiple_key_drop_adjacency(typed, restored, max_distance=1.0):
+    """48-AJM: pure multi-key deletion cannot bypass original adjacency.
+
+    A voiced kana occupies two physical keys. Check every removed key
+    against its immediate original neighbors, including retained context.
+    None leaves other edit kinds to their existing generator contracts.
+    Same-length voicing and punctuation deletion are not this operation.
+    """
+    if len(typed)<=len(restored):return None
+    keys=tuple(k for char in typed for k in keystrokes(char))
+    target=tuple(k for char in restored for k in keystrokes(char))
+    if len(keys)<=len(target)+1:return None
+    def reaches(require_adjacency):
+        reachable={0}
+        for i,key in enumerate(keys):
+            droppable=(key in KANA_POSITIONS and (not require_adjacency or
+                any(kana_key_distance(key,keys[j])<=max_distance
+                    for j in (i-1,i+1) if 0<=j<len(keys))))
+            following=set(reachable) if droppable else set()
+            following.update(j+1 for j in reachable if j<len(target) and key==target[j])
+            reachable=following
+            if not reachable:return False
+        return len(target) in reachable
+    if not reaches(False):return None
+    return reaches(True)
+
+
+def same_physical_key(left,right):
+    """Shift changes the printed kana, not which physical key was pressed."""
+    return left==right or (left in KANA_POSITIONS
+                           and KANA_POSITIONS.get(left)==KANA_POSITIONS.get(right))
+
+
+def single_key_drop_is_duplicate(typed, restored):
+    """Voiced kana still begin with the same physical base key.
+
+    そぞ -> ぞ deletes a repeated そ before the dakuten keystroke;
+    a different neighboring key cannot relabel that repetition an intrusion.
+    """
+    proof=_single_key_drop_positions(typed,restored)
+    if proof is None:return None
+    keys,positions=proof
+    # Shift changes the printed kana, not the physical repeated key.
+    # Keep literal forms in the deletion proof; only key identity ignores
+    # Shift, so this cannot silently change the surviving kana's spelling.
+    return any(any(same_physical_key(keys[i],keys[j])
+                   for j in (i-1,i+1) if 0<=j<len(keys)) for i in positions)
 
 
 def additional_kana_keys(typed, restored):
@@ -392,16 +459,8 @@ def kana_key_distance(c1, c2):
     if c1 == c2:
         return 0.0
 
-    # 「ろ」と「ー」（長音）は物理的に同じキー。
-    # キー印字は「ろ」だが、かな入力モードで実際にこのキーを押すと
-    # 長音「ー」が入力される。半角モード等で誤って「ろ」が混ざった
-    # 場合、実際に打ちたかったのはほぼ確実に長音なので、
-    # 最も間違えやすい関係として扱う（Shiftの押し忘れと同程度）。
-    if {c1, c2} == {'ろ', 'ー'}:
-        return 0.2
-
-    # Shift の押し忘れ／余分（小書き <-> 清音）
-    if SMALL_KANA_PAIR.get(c1) == c2:
+    # Shift changes kana output on one physical key (including わ / を).
+    if same_physical_key(c1,c2):
         return 0.3
 
     base1 = DAKUTEN_BASE.get(c1, c1)

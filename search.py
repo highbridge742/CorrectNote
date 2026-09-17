@@ -61,15 +61,49 @@ def build_pattern(query, regex=False, match_case=False, whole_word=False):
         raise SearchError(f'正規表現が正しくありません:\n{e}')
 
 
+def content_line_span(text):
+    """First through last nonblank line, including their indentation.
+
+    The outer blank lines are padding. Inner blank lines belong to the
+    document. This definition is shared with the editor's Select All.
+    """
+    first = len(text) - len(text.lstrip())
+    if first == len(text):
+        return None
+    last = len(text.rstrip())
+    start = text.rfind('\n', 0, first) + 1
+    end = text.find('\n', last)
+    return start, len(text) if end < 0 else end
+
+
+def _within_newline_scope(text, start, end, bounds):
+    if '\n' not in text[start:end]:
+        return True
+    return bounds is not None and bounds[0] <= start < end <= bounds[1]
+
+
+def match_allowed(text, start, end):
+    """A match containing a newline must stay within the content lines."""
+    return _within_newline_scope(text, start, end, content_line_span(text))
+
+
+def _matches(text, pattern):
+    bounds = content_line_span(text)
+    for match in pattern.finditer(text):
+        start, end = match.span()
+        if start != end and _within_newline_scope(text, start, end, bounds):
+            yield match
+
+
 def find_all(text, pattern):
-    """一致する範囲を全て返す。[(開始, 終了), ...]"""
-    out = []
-    for m in pattern.finditer(text):
-        # 長さ0の一致（^ や \b など）は無限に進まないよう飛ばす
-        if m.end() == m.start():
-            continue
-        out.append((m.start(), m.end()))
-    return out
+    """Return nonempty matching spans within the shared newline scope."""
+    return list(iter_spans(text, pattern))
+
+
+def iter_spans(text, pattern):
+    """一覧表示でも、通常検索と同じ改行の境界を通す。"""
+    for match in _matches(text, pattern):
+        yield match.span()
 
 
 def find_next(text, pattern, start, backwards=False, wrap=True):
@@ -109,40 +143,37 @@ def replace_one(text, pattern, span, replacement, regex=False):
     戻り値: (置換後のテキスト, 置換後の範囲の終わりの位置)
     """
     start, end = span
-    if regex:
-        m = pattern.match(text, start, end)
-        if m is None:
-            # 範囲が一致しなくなっている場合は、そのまま入れる
-            actual = replacement
-        else:
-            try:
-                actual = m.expand(replacement)
-            except re.error as e:
-                raise SearchError(f'置換文字列が正しくありません:\n{e}')
-    else:
-        actual = replacement
+    if not match_allowed(text, start, end):
+        return text, end
+    match = pattern.match(text, start)
+    if match is not None and match.end() != end:
+        match = None
+    actual = _replacement_value(match, replacement, regex)
+    return text[:start] + actual + text[end:], start + len(actual)
 
-    new_text = text[:start] + actual + text[end:]
-    return new_text, start + len(actual)
+
+def _replacement_value(match, replacement, regex):
+    if not regex or match is None:
+        return replacement
+    try:
+        return match.expand(replacement)
+    except re.error as error:
+        raise SearchError(f'置換文字列が正しくありません:\n{error}')
 
 
 def replace_all(text, pattern, replacement, regex=False):
-    """
-    全ての一致を置き換える。
-
-    戻り値: (置換後のテキスト, 置換した件数)
-    """
-    spans = find_all(text, pattern)
-    if not spans:
+    """Replace matches from the original text and fixed content bounds."""
+    pieces = []
+    previous = count = 0
+    for match in _matches(text, pattern):
+        pieces.append(text[previous:match.start()])
+        pieces.append(_replacement_value(match, replacement, regex))
+        previous = match.end()
+        count += 1
+    if not count:
         return text, 0
-
-    # 後ろから置き換える。前から進めると、置換で長さが変わったときに
-    # 以降の位置が全部ずれてしまうため。
-    out = text
-    for start, end in reversed(spans):
-        out, _ = replace_one(out, pattern, (start, end), replacement,
-                             regex=regex)
-    return out, len(spans)
+    pieces.append(text[previous:])
+    return ''.join(pieces), count
 
 
 def count_matches(text, pattern):

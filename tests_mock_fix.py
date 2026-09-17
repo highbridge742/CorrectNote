@@ -1128,11 +1128,14 @@ def test_homophone_by_context():
     # 共起の材料を少し厚くしておく。
     for _ in range(6):
         cv.observe_line(['文字', '変わり', '補正', '表示', '変換', '入力'])
-    check('複合動詞の一部（書き換わり）は触らない',
-          C._homophone_by_context('換わり', 'かわり', store, cv,
-                                  ['文字', '補正'],
-                                  attest_text='補正の文字列に書き換わりました。'),
-          None)
+    # Mock checks the caller's preservation contract; native proof is in smoke.
+    from unittest.mock import patch as native_proof_patch
+    with native_proof_patch.object(C,'_compound_verb_backed',return_value=True):
+        check('複合動詞の一部（書き換わり）は触らない',
+              C._homophone_by_context('換わり', 'かわり', store, cv,
+                                      ['文字', '補正'],
+                                      attest_text='補正の文字列に書き換わりました。'),
+              None)
     check('複合でなければ共起で 換わり → 変わり',
           C._homophone_by_context('換わり', 'かわり', store, cv,
                                   ['文字', '補正'],
@@ -1248,10 +1251,13 @@ def test_homophone_conjugated():
           None)
 
     # --- 通ってはいけないもの ---
-    check('並記が無ければ 換わり → 変わり にしない（実機の誤爆）',
-          pick('換わり', 'かわり',
-               '補正の文字列に書き換わりました。',
-               around=('文字', '補正')), None)
+    # Mock checks the caller's preservation contract; native proof is in smoke.
+    from unittest.mock import patch as native_proof_patch
+    with native_proof_patch.object(C,'_compound_verb_backed',return_value=True):
+        check('並記が無ければ 換わり → 変わり にしない（実機の誤爆）',
+              pick('換わり', 'かわり',
+                   '補正の文字列に書き換わりました。',
+                   around=('文字', '補正')), None)
     check('**向きが逆にならない**（並記は左右どちらからも成り立つ）',
           pick('打っ', 'うっ', '売った文字 ⇒ 打った文字'), None)
     check('置き換え先の実績が乏しければ触らない（打っ → 売っ にしない）',

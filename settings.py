@@ -55,6 +55,20 @@ INPUT_METHOD_LABELS = {
 }
 INPUT_METHOD_CHOICES = tuple(INPUT_METHOD_LABELS)
 
+DEFAULT_EDITOR_FONT = ('Yu Mincho', 11)
+FONT_SIZE_MIN = 6
+FONT_SIZE_MAX = 96
+
+
+def editor_font(family, size):
+    """保存値が壊れていても本文の字を使える範囲に保つ。"""
+    if not isinstance(family, str) or not family.strip() or len(family) > 200:
+        family = DEFAULT_EDITOR_FONT[0]
+    if type(size) is not int or not FONT_SIZE_MIN <= size <= FONT_SIZE_MAX:
+        size = DEFAULT_EDITOR_FONT[1]
+    return family, size
+
+
 DEFAULTS = {
     # Ctrl+Insert で簡易入力ウィンドウを開く
     'hotkey_insert_enabled': True,
@@ -65,6 +79,8 @@ DEFAULTS = {
     'show_quick_hint': True,
     # ダークモード。既定はオフ（既存の見た目を変えないため）
     'dark_mode': False,
+    'editor_font_family': DEFAULT_EDITOR_FONT[0],
+    'editor_font_size': DEFAULT_EDITOR_FONT[1],
     # 画面のレイアウト。
     #   'split'   入力エリアと補正エリアを左右に並べる（従来どおり・既定）
     #   'unified' 入力と補正をひとつのエリアにまとめる
@@ -215,6 +231,10 @@ class Settings:
             if isinstance(default, bool):
                 if isinstance(value, bool):
                     self.values[key] = value
+            elif key == 'editor_font_family':
+                self.values[key] = editor_font(value, DEFAULT_EDITOR_FONT[1])[0]
+            elif key == 'editor_font_size':
+                self.values[key] = editor_font(DEFAULT_EDITOR_FONT[0], value)[1]
             elif key in allowed:
                 if value in allowed[key]:
                     self.values[key] = value

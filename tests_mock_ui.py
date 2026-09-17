@@ -865,7 +865,8 @@ def run_theme_palette_cases():
                 break
         i += 1
     snippet = src[start:i]
-    ns = {}
+    from settings import DEFAULT_EDITOR_FONT
+    ns = {'DEFAULT_EDITOR_FONT': DEFAULT_EDITOR_FONT}
     exec(snippet, ns)
 
     keys, light, dark = ns['_PALETTE_KEYS'], ns['LIGHT_PALETTE'], ns['DARK_PALETTE']
@@ -1827,7 +1828,9 @@ def run_scroll_cache_cases():
     check('None でも落ちない', key(None), '')
 
     # --- 覚える → 使う（末尾の空行の数が変わっても当たる） ---
-    ns2 = dict(ns)
+    import analysis_async, tab_analysis, analysis_work_app as input_work
+    from session import SessionStore,new_tab
+    ns2 = dict(ns,analysis_async=analysis_async,tab_analysis=tab_analysis,input_work=input_work)
     for _n in ('_remember_tab_results', '_use_analysis_cache',
                '_blank_result'):
         take(_n, ns2)
@@ -1849,6 +1852,16 @@ def run_scroll_cache_cases():
             self.line_results = []
             self.settings = _FakeSettings()
             self.scheduled = 0
+            self.session = SessionStore()
+            self.session.tabs = [new_tab(text='あ\nい\nう')]
+            input_work.select_document(self, 'あ\nい\nう')
+            self._analyze_work = input_work.token(self)
+            self._analyze_dependencies = analysis_async.state_key(self)
+            self._analyze_readings = ()
+            self._analyze_todo = []
+            self._analyze_pos = 0
+            self._prune_analysis_cache = lambda **kwargs: None
+            self._trace_analysis = lambda *args: None
             # **前のタブの値**（項目48-QZ）。控えから戻す道が
             # これを置き直さないと、塗りの合図が一度も出ない
             self._analyze_shown_visible = True
@@ -1856,6 +1869,9 @@ def run_scroll_cache_cases():
             self._analyze_visible_n = 999
             self._analyze_last_paint_ms = 12345.0
             self._analyze_band = ('前のタブ',)
+
+        def _refresh_after_analysis(self,learn=True):
+            self.rendered=True
 
         def _schedule_analysis_chunk(self):
             self.scheduled += 1
@@ -1891,6 +1907,7 @@ def run_scroll_cache_cases():
     check('埋めたのは空行だけ',
           [r['original'] for r in f.line_results[3:]] == [''] * 24, True)
     check('解析の続き（単位の組み立て）は予約されている', f.scheduled, 1)
+    check('控えは単位の完成待ちをせず表示する',f.rendered,True)
 
     # ------------------------------------------------------------
     # 48-QZ **控えから戻した回も「見えているぶんから塗る」**
@@ -1907,12 +1924,12 @@ def run_scroll_cache_cases():
     check('**塗った位置を 0 に戻す**（前のタブの行数が残ると永久に偽）',
           f._analyze_painted_pos, 0)
     check('**見えているぶんの数を置き直す**（前のタブの数を使わない）',
-          f._analyze_visible_n, len(f.line_results))
+          f._analyze_visible_n, 3)
     check('前の塗りの時刻も持ち越さない', f._analyze_last_paint_ms, 0.0)
     check('画面の範囲の控えも持ち直す', f._analyze_band, None)
     check('単位の組み立てだけの印が立つ', f._analyze_units_only, True)
-    check('組む行は全部（並べ替えても件数は同じ）',
-          sorted(f._analyze_todo), list(range(len(padded.split('\n')))))
+    check('不足する表示単位だけを組む（末尾の空行は不要）',
+          sorted(f._analyze_todo), [0, 1, 2])
 
     # 中身が違えば当たらない
     f2 = _Fake()
@@ -2143,8 +2160,7 @@ def run_scroll_cache_cases():
 
     check('カーソルを後から書き換えるのは、隠す側と _set_pane_cursor だけ',
           sorted(nm for nm, fn in methods.items() if _reconfigs_cursor(fn)),
-          ['_scroll_cursor_hide', '_scroll_cursor_restore',
-           '_set_pane_cursor'])
+          ['_scroll_cursor_hide', '_set_pane_cursor'])
 
     # --- 2026-08-27（うにさんの報告6件）の見張り ---
     def refs(name, attr):
@@ -2180,10 +2196,11 @@ def run_scroll_cache_cases():
           calls_in('_analyze_chunk', '_visible_band'), True)
     # ④ 学習が控えを捨てても、裏のタブの歩みを立て直す
     check('控えを捨てたら裏の歩みも立て直す',
-          refs('_invalidate_analysis_cache', '_start_background_tabs'), True)
+          refs('_invalidate_analysis_cache', '_queue_background_tabs')
+          and refs('_queue_background_tabs', '_start_background_tabs'), True)
     check('裏の歩みは表の解析が済むまで始めない（取り合いの門）',
-          refs('_start_background_tabs', '_analyze_pos')
-          or has_const('_start_background_tabs', '_analyze_pos'), True)
+          refs('_start_background_tabs', '_foreground_analysis_pending')
+          and has_const('_foreground_analysis_pending', '_analyze_pos'), True)
     # ⑤ F2: 左右キーは捨てない・一覧が閉じていても渡り歩ける
     #    （2026-08-27 の2度目の報告で「印を使い切る」形から変えた）
     check('左右キーの離しでは F2 の記憶を捨てない',
@@ -2226,8 +2243,11 @@ def run_scroll_cache_cases():
     # ③' 裏の歩みは、触っていない間まとめて進める
     check('裏の歩みは一歩の形（_bg_step_once）を回す',
           calls_in('_bg_step', '_bg_step_once'), True)
-    check('触っていない間の判定（ANALYZE_BG_IDLE_MS）を見る',
-          refs('_bg_step', 'ANALYZE_BG_IDLE_MS'), True)
+    # 2026-09-15: computation moved to a process. Tk no longer spins through
+    # several heavy lines merely because input is idle.
+    check('裏の計算中も操作中は待機する',calls_in('_bg_step','_interacting'),True)
+    check('裏の歩みでTk上の計算ループを回さない',
+          any(isinstance(n,ast.While) for n in ast.walk(methods['_bg_step'])),False)
     # ⑦' 最大化は枠の太さを実測して、中身を作業領域にぴったり収める
     check('収め直しは枠の太さを実測する（GetClientRect）',
           refs('_clamp_zoom_to_workarea', 'GetClientRect'), True)
@@ -2718,7 +2738,8 @@ def run_explain_cases():
                 add = n.lineno if add is None else min(add, n.lineno)
             if isinstance(n, ast.Compare) and isinstance(n.left, ast.Call) \
                     and isinstance(n.left.func, ast.Name) \
-                    and n.left.func.id == 'len':
+                    and n.left.func.id == 'len' and len(n.left.args)==1 \
+                    and isinstance(n.left.args[0],ast.Name) and n.left.args[0].id=='items':
                 gate = n.lineno if gate is None else min(gate, n.lineno)
         if add is None or gate is None:
             return None
@@ -3235,8 +3256,13 @@ def test_refit_broken_units_48pv():
           and 'create_unicode_buffer(need + 1)' in _src_to, True)
 
     # テキストでないもの・フォルダは開かない
-    check('48-TO テキストでないファイルは開かない（NUL を見る）',
-          "b'\\x00' in raw[:8192]" in _src_to, True)
+    import file_format
+    try:
+        file_format.decode(b'abc\x00def')
+        _binary_rejected = False
+    except ValueError:
+        _binary_rejected = True
+    check('48-TO テキストでないファイルは開かない（NUL を見る）', _binary_rejected, True)
     check('48-TO フォルダは開かない', "os.path.isdir(path)" in _src_to, True)
 
     # 48-TQ タブの右クリックは、このアプリの一覧に揃える
@@ -3255,11 +3281,11 @@ def test_refit_broken_units_48pv():
           True)
 
     # ---- 検品で見つかって塞いだ穴（2026-09-07）
-    check("48-TO' 行末を均す（開いて保存で CR が増えない）",
-          "text.replace(_cr + _lf, _lf).replace(_cr, _lf)" in _src_to
-          and '.splitlines(' not in _src_to[
-              _src_to.index('def _read_text_file('):
-              _src_to.index('def _place_in_new_tab(')], True)
+    import file_format
+    _file_original = b'a\r\nb\rc\nd'
+    _file_text, _file_meta = file_format.decode(_file_original)
+    check("48-TO' 内部だけLFにそろえる", _file_text, 'a\nb\nc\nd')
+    check("48-AHX 保存時は元の改行を戻す", file_format.encode(_file_text, _file_meta), _file_original)
     check("48-TO'' 2度掛けない／失敗したら掛けた分を外す／管理者でも通す",
           "if getattr(self, '_drop_proc', None) is not None:" in _src_to
           and 'ChangeWindowMessageFilterEx' in _src_to
@@ -3340,8 +3366,12 @@ def test_refit_broken_units_48pv():
               _src_to.index('def _open_paths('):
               _src_to.index('def _setup_file_drop(')]
           and "self._analyze_cause = 'ファイルを開く'" in _src_to, True)
+    from app import CorrectNoteApp as _TraceApp
+    from types import SimpleNamespace as _TraceHarness
+    _trace_h=_TraceHarness(_analyze_cause='ファイルを開く',_analyze=lambda:None)
+    _TraceApp._warm_then_analyze(_trace_h)
     check('48-TS きっかけの名前は呼び手が決めていればそれを使う',
-          _src_to.count("or 'タブの切り替え')") == 2, True)
+          _trace_h._analyze_cause,'ファイルを開く')
     check("48-TP''' realpath は最後の手段（切れた道で固まらない）",
           'os.path.basename(na) != os.path.basename(nb)' in _src_to, True)
 
@@ -3578,8 +3608,13 @@ def test_refit_broken_units_48pv():
           and "'todo': _fg_todo[_fg_pos:]" in _asrc6, True)
     check('48-RY 戻ったら預かりから続ける',
           "self._trace_analysis('預かりから続き'" in _asrc6, True)
-    check('48-RY 裏は表が済ませた行を飛ばす',
-          "if st['results'][i] is None:" in _asrc6, True)
+    import analysis_async as _async6
+    from types import SimpleNamespace as _BgHarness
+    _bg_h=_BgHarness(settings={'input_method':'kana'})
+    _bg_st={'owner':'tab','work_epoch':0,'text':'本文','lines':['本文'],
+            'ctx':{},'pos':0,'results':[{'original':'本文'}]}
+    _async6.background_step(_bg_h,_bg_st)
+    check('48-RY 裏は表が済ませた行を飛ばす',_bg_st['pos'],1)
     check('48-RX 学習は直した範囲・紫の範囲を潰す',
           "_r.get('original_spans')" in _asrc6
           and "_r.get('odd_spans')" in _asrc6, True)
@@ -4265,14 +4300,15 @@ def test_quick_autofix_undo_48vd():
     _mi = body('_autofix_menu_items')
     _ed = body('_editor_dropdown_items')
     _qd = body('_open_quick_dropdown')
-    for _lab in ('― 自動補正 ―', 'この補正は不要（',
+    for _lab in ('― 自動補正 ―', 'の補正を使わない',
                  'は今後直さない', '元の入力に戻す（'):
         check(f'48-VD ラベル {_lab!r} は自動補正の口だけが持つ',
               (_lab in _mi, _lab in _ed, _lab in _qd),
               (True, False, False))
 
     # ---- (b) 台帳は全部の道へ（学び22） ----------------------
-    _calls = [x for x in _ast.walk(tree)
+    _worker_tree=_ast.parse(open('analysis_worker.py',encoding='utf-8').read())
+    _calls = [x for source in (tree,_worker_tree) for x in _ast.walk(source)
               if isinstance(x, _ast.Call)
               and ((isinstance(x.func, _ast.Name)
                     and x.func.id == 'correct_line')
@@ -4282,10 +4318,10 @@ def test_quick_autofix_undo_48vd():
                if not any(k.arg == 'decisions' for k in x.keywords)]
     check('48-VD correct_line を呼ぶ道は全部 decisions を渡す',
           _no_dec, [])
-    # 数え漏れの見張り: いま在るのは4本（起動時の下見・簡易入力・
-    # メモ欄の解析・貼り付けの下見）。**減ったら気づく**。
-    check('48-VD correct_line を呼ぶ道が減っていない',
-          len(_calls) >= 4, True)
+    # The worker is now the shared foreground/background entry. Include its
+    # actual call site when checking that the decision ledger is never omitted.
+    check('48-VD 主画面・簡易入力・共有ワーカーの入口を検査した',
+          len(_calls) >= 3, True)
 
     # ---- 控えの名簿は面ごとに分かれている ---------------------
     check('48-VD 面を決める口が在る（_autofix_pane）',
@@ -4371,14 +4407,17 @@ def run_review_regressions_48vi_vm():
                and n.name == 'CorrectNoteApp')
     method = next(n for n in cls.body if isinstance(n, ast.FunctionDef)
                   and n.name == '_write_to_file')
-    namespace = {'os': os}
+    import file_format
+    namespace = {'os': os, 'file_formats': file_format}
     exec(compile(ast.Module(body=[method], type_ignores=[]), 'app.py', 'exec'), namespace)
     save = namespace['_write_to_file']
     with tempfile.TemporaryDirectory() as directory:
         dest = Path(directory) / 'memo.txt'
         original = b'original document'
         def editor(text='new document'):
-            return SimpleNamespace(editor_source_text=lambda: text, _dirty=True,
+            session = SessionStore()
+            session.tabs = [new_tab()]
+            return SimpleNamespace(editor_source_text=lambda: text, _dirty=True, session=session,
                                    current_file='old-path', _refresh_title=lambda: None,
                                    status=SimpleNamespace(config=lambda **kw: None),
                                    _save_session=lambda: None)
@@ -4543,6 +4582,7 @@ def run_drag_edges_48vp():
         _overview = None
         _edge_warp = env['_edge_warp']
         _drag_motion = env['_drag_motion']
+        def _suppress_pick_hover(self,event,widget):return False
         def _warp_pointer(self, w, x, y):
             self.warps += 1
             w.py = w.top + y
@@ -4810,7 +4850,7 @@ def run_view_latency_48vv():
         def after_cancel(self,job):self.jobs.pop(job,None)
     class Harness(A):
         def __init__(self):
-            self.root=Scheduler();self.calls=[];self.marked=False
+            self.root=Scheduler();self.calls=[];self.marked=False;self.cached=False
             self.editor_gutter=self.result_gutter=SimpleNamespace(redraw=lambda:self.calls.append('paint'))
         def _clamp_zoom_to_workarea(self):pass
         def _schedule_whitespace_paint(self):self.calls.append('space')
@@ -4825,7 +4865,8 @@ def run_view_latency_48vv():
     h._analyze_units_only=True;h._analyze_chunk()
     ok=ok and h.calls==['chunk queued']
     h.calls.clear();h._analyze();ok=ok and not h.calls
-    h._resume_tab_analysis();ok=ok and not h.calls
+    h._resume_tab_analysis();ok=ok and h.calls==['cache']
+    h.calls.clear()
     h.root.jobs.clear();h._view_change_until=0;h.cached=True
     h._resume_tab_analysis();ok=ok and h.calls==['cache'] and h.marked
     h.calls.clear();h.cached=False;h._resume_tab_analysis()
@@ -4833,7 +4874,7 @@ def run_view_latency_48vv():
     h.calls.clear();h._finish_resize();ok=ok and h.calls==['paint','paint','space']
     calls=[]
     class Target:
-        def index(self,i):return {'end-1c':'100000.0','@0,0':'70000.0','@0,499':'70024.0'}[i]
+        def index(self,i):return {'end-1c':'100000.0','insert':'70010.2','@0,0':'70000.0','@0,499':'70024.0'}[i]
         def winfo_height(self):return 500
         def dlineinfo(self,i):calls.append(i);return (0,0,20,20,15)
     class Gutter:
@@ -4842,6 +4883,7 @@ def run_view_latency_48vv():
         def delete(self,*a):pass
         def create_text(self,*a,**kw):pass
         def create_oval(self,*a,**kw):pass
+        def create_rectangle(self,*a,**kw):pass
     G.redraw(Gutter())
     ok=ok and len(calls)==25 and calls[0]=='70000.0' and calls[-1]=='70024.0'
     print(('OK' if ok else 'NG'),'48-VV 10万行のガターは可視25行だけ・サイズ変更100回を統合・解析を待機・控えを優先')
@@ -4853,8 +4895,25 @@ def run_tab_render_48vw():
     from unittest.mock import patch
     import app
     class View:
-        def __init__(self):self.text='';self.inserts=0;self.tags={}
+        def __init__(self):
+            self.text='';self.inserts=0;self.tags={}
+            self.tk=SimpleNamespace(call=lambda *args:len(args[-1]))
         def config(self,**kw):pass
+        def get(self,*a):return self.text
+        def index(self,value):
+            import re
+            match=re.fullmatch(r'(\d+)\.(\d+)(?:\+(\d+)c)?',str(value))
+            if match:
+                row,column,extra=match.groups();return f'{row}.{int(column)+int(extra or 0)}'
+            return '1.0'
+        def replace(self,start,end,text):
+            def offset(value):
+                row,column=map(int,self.index(value).split('.'))
+                return sum(len(line)+1 for line in self.text.split('\n')[:row-1])+column
+            self.text=self.text[:offset(start)]+text+self.text[offset(end):];self.inserts+=1
+        def mark_set(self,*a):pass
+        def tag_ranges(self,tag):return tuple(self.index(value) for value in self.tags.get(tag,()))
+        def tag_remove(self,tag,*a):self.tags.pop(tag,None)
         def delete(self,*a):self.text='';self.tags={}
         def insert(self,index,text):self.inserts+=1;self.text+=text
         def tag_add(self,tag,*ranges):self.tags.setdefault(tag,[]).extend(ranges)

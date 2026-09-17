@@ -203,6 +203,7 @@ _PIECES = {
         ('ますまい', 'END'), ('まい', 'END'),
         ('た', 'TA'), ('て', 'TE'), ('た', 'IST'),      # たい はイ形容詞
         ('そう', 'SOU'), ('ながら', 'END'), ('つつ', 'END'),
+        ('すぎ', 'E'),  # 48-AGP: continuative + excess, retaining ichidan endings
         ('なさい', 'END'), ('なさいます', 'END'), ('なさら', 'MZ'),
         ('なさっ', 'TSU'), ('なさる', 'END'),
         ('やす', 'IST'), ('にく', 'IST'), ('づら', 'IST'), ('がた', 'IST'),
@@ -262,7 +263,7 @@ _PIECES = {
     'IST': (
         ('い', 'END'), ('く', 'Bf'), ('くて', 'TE'), ('かった', 'TA'),
         ('かったら', 'END'), ('ければ', 'END'), ('かろう', 'END'),
-        ('さ', 'Bw'), ('そう', 'SOU'), ('すぎ', 'E'),
+        ('さ', 'Bw'), ('そう', 'SOU'), ('すぎ', 'E'), ('さすぎ', 'E'),
     ),
     'SOU': (
         ('だ', 'END'), ('です', 'END'), ('でした', 'END'),
@@ -429,10 +430,28 @@ def _looks_verb(word, words):
     return False
 
 
-def is_functional_noun(token):
-    """解析上の形式名詞と、文法の機能語の境界が一致するか。"""
-    return (len(token) > 1 and (token[1] or '').startswith('名詞:非自立')
-            and token[0] in _load_tables()[1])
+def is_quotative_particle(surface, pos):
+    """Native quotation markers accept utterances, not only nominal case arguments.
+
+    GPT-6 / 2026-09-11 / 48-YR. Keep ordinary/parallel と distinct.
+    """
+    return bool((pos or '').startswith('助詞:格助詞') and (
+        (surface=='と' and '引用' in pos)
+        or (surface=='という' and '連語' in pos)))
+
+
+def is_functional_noun(token, dictionary_alternative=False):
+    """Match a functional noun; optional native alternatives only propose repair boundaries."""
+    if len(token)<=1 or token[0] not in _load_tables()[1]:
+        return False
+    if (token[1] or '').startswith('名詞:非自立'):
+        return True
+    if (not dictionary_alternative or len(token)<6 or not token[5]
+            or not (token[1] or '').startswith('名詞')):
+        return False
+    from morphology import dictionary_inflections
+    return any(pos.startswith('名詞,非自立,') and reading==token[2]
+               for pos,form,base,reading in dictionary_inflections(token[0]) or ())
 
 
 def explain_kana_run(run, after_kanji=False, before_kanji=None,
@@ -625,6 +644,22 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
                 for piece, st2 in _PIECES.get('TE', ()):
                     if run.startswith(piece, i):
                         stack.append((i + len(piece), st2))
+                # 48-ABA: the same functional roster contains native
+                # auxiliary verbs (ください), although AUXILIARY_TAILS
+                # also includes them. After a proven て form, use their
+                # actual inflection; a generic clause start cannot do so.
+                from morphology import dictionary_inflections,native_potential_auxiliary
+                for ln in range(2,min(12,n-i)+1):
+                    piece=run[i:i+ln]
+                    for pos,form,lemma,rd in dictionary_inflections(piece) or ():
+                        if rd!=piece:continue
+                        if not (piece in funcs and pos.startswith('動詞,非自立,')
+                                or native_potential_auxiliary(piece,form,rd)):continue
+                        target=continuation_state(form)
+                        if target is None:continue
+                        if form.startswith('命令') and any(c not in _FINAL_PARTICLES for c in run[i+ln:]):
+                            continue
+                        stack.append((i+ln,target))
             continue
         if st in _PIECES:
             for piece, st2 in _PIECES[st]:
@@ -787,6 +822,21 @@ def _exclamation_shape(run):
     if run.endswith('ーん'):
         return True                      # どりーん・つんぼよーん
     if len(run) <= 5 and any(c in 'ぁぃぅぇぉ' for c in run):
+        # 48-AGM: a lone terminal small vowel is a voice spelling only when
+        # its native word/inflection or vowel prolongation supports it.
+        # A small glyph alone must not hide an otherwise unexplained stem.
+        if len(run)>=4 and run[-1] in 'ぁぃぅぇぉ' and not any(c in 'ぁぃぅぇぉゃゅょ' for c in run[:-1]):
+            from morphology import HAS_JANOME, tokenize, dictionary_inflections
+            if not HAS_JANOME:return True
+            large=run[:-1]+dict(zip('ぁぃぅぇぉ','あいうえお'))[run[-1]]
+            vowels=('あかさたなはまやらわがざだばぱ','いきしちにひみりぎじぢびぴ',
+                    'うくすつぬふむゆるぐずづぶぷ','えけせてねへめれげぜでべぺ',
+                    'おこそとのほもよろをごぞどぼぽ')
+            prolonged=run[-2] in vowels['ぁぃぅぇぉ'.index(run[-1])]
+            if not (prolonged or dictionary_inflections(run) or dictionary_inflections(large)
+                    or any(t.has_reading and t.pos in ('感動詞','フィラー') for text in (run,large) for t in tokenize(text))
+                    or explain_kana_run(large,before_kanji=False)):
+                return False
         return True
     if len(run) <= 4 and 'ー' in run:
         return True
@@ -810,7 +860,8 @@ def odd_kana_spans(line, dict_index=None, store=None):
     """
     if not line:
         return []
-    out0 = []
+    from morphology import original_spelling_facts
+    out0 = [(f.change_start,f.change_start+1) for f in original_spelling_facts(line)]
     if dict_index is not None and store is not None and 'ー' in line:
         from reading_segments import odd_partial_loanwords
         from corrector import make_tokenizer
@@ -907,6 +958,20 @@ def odd_kana_spans(line, dict_index=None, store=None):
             from reading_segments import short_nominal_reading
             if short_nominal_reading(run):
                 ok = True
+        if not ok:
+            # 48-YY: The native original noun and its functional tail are
+            # the same completion evidence used by the correction entry.
+            try:
+                from corrector import make_tokenizer
+                from reading_segments import native_nominal_context, native_word_fragment_context
+                tokenize=make_tokenizer(store)
+                ok=(native_word_fragment_context(line,i0,j,tokenize)
+                    or native_nominal_context(line,i0,j,tokenize))
+            except Exception:
+                pass
+        if not ok:
+            from reading_segments import intact_native_reading
+            ok=intact_native_reading(run)
         if not ok:
             out.append((i0, j))
     return out

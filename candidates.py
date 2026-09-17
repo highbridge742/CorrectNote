@@ -270,6 +270,12 @@ def _reading_worth_offering(reading, store, dict_index=None):
     return False
 
 
+def particle_intrusion_candidates(source, start, end, dict_index=None):
+    """Offer native particle-frame hypotheses for explicit user selection."""
+    from particle_frames import particle_frames, drop_candidate
+    return [candidate for frame in particle_frames(source,start,end,dict_index)
+            for candidate in (drop_candidate(source,frame),) if candidate is not None]
+
 def build_candidates(surface, reading, store, find_readings,
                      max_dist=1.6, max_edits=2,
                      max_homophones=8, max_typos=8, dict_index=None,
@@ -606,8 +612,30 @@ def build_candidates(surface, reading, store, find_readings,
 
     if context_vec is not None and surrounding_words:
         _reorder_by_context(out, context_vec, surrounding_words)
+    _prefer_ordinary_usage(out)
 
     return out
+
+
+
+def _usage_rank(candidate):
+    from kango_tier import usage_tier_for_reading
+    return int(usage_tier_for_reading(candidate['surface'],candidate.get('reading',''))==3)
+
+
+def _explicit_choice_rank(candidate, fallback_reading=''):
+    """48-ABM: the same last explicit choice overrides usage in both menus."""
+    from last_choice import surface_for_reading
+    reading=candidate.get('reading') or fallback_reading
+    return 0 if reading and surface_for_reading(reading)==candidate['surface'] else 1
+
+
+def _prefer_ordinary_usage(candidates):
+    """Keep kind order and each candidate; explicit restricted usage comes later."""
+    kinds=list(dict.fromkeys(c['kind'] for c in candidates))
+    candidates[:]=[c for kind in kinds
+        for c in sorted((c for c in candidates if c['kind']==kind),
+            key=lambda c:(_explicit_choice_rank(c),_usage_rank(c)))]
 
 
 def _prefer_known_units(candidates):
@@ -932,11 +960,8 @@ def build_range_candidates(segments, store, find_readings,
     # **先頭に**置く——同じ選び直しを二度させないため。
     _framed = set()
     try:
-        import last_choice as _lc_cand
         for _c in out:
-            _r = _c.get('reading') or reading
-            _p = _lc_cand.surface_for_reading(_r) if _r else None
-            if _p and _p == _c['surface']:
+            if _explicit_choice_rank(_c,reading)==0:
                 _framed.add(_c['surface'])
     except Exception:
         _framed = set()
@@ -950,8 +975,11 @@ def build_range_candidates(segments, store, find_readings,
         keeps_tail = 0 if (o_tail and c['surface'].endswith(o_tail)) else 1
         # スコアは高いほど上に出したいので符号を反転する
         ctx = -ctx_scores.get(c['surface'], 0.0)
+        # 48-AAF: explicit AI judgment of restricted use is shared with
+        # automatic ranking. Missing coverage is neutral; the user's last
+        # explicit choice still comes first. Do not remove manual choices.
         return (0 if c['surface'] in _framed else 1,
-                kind_rank, keeps_tail, ctx)
+                kind_rank, keeps_tail, _usage_rank(c), ctx, c.get('reading',''),c['surface'])
 
     out.sort(key=_rank)
     return out

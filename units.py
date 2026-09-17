@@ -1769,6 +1769,12 @@ def make_range_unit(line_text, units, start, end):
     else:
         reading = ''
 
+    # 48-ABV: selection keeps the original grammatical frame. Only whole
+    # native particles/auxiliaries may inherit the functional-menu policy.
+    # A substring inside a word and an unknown parse provide no such proof.
+    from morphology import native_tokens_in_span
+    parts=native_tokens_in_span(line_text,start,end)
+    functional=bool(parts and all(t.has_reading and t.pos in ('助詞','助動詞') for t in parts))
     return {
         'start': start, 'end': end,
         'text': sel, 'base': sel,
@@ -1776,6 +1782,8 @@ def make_range_unit(line_text, units, start, end):
         'prev': prev, 'next': next_,
         'kind': 'range', 'detail': None,
         'segments': segments,
+        'functional': functional,
+        'analysis_context': (line_text,start,end),
     }
 
 

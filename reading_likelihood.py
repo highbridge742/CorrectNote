@@ -112,7 +112,7 @@ def edit_cost(original, revised, before='', after=''):
 
 
 def adjacent_readings(text, tokens, start, end):
-    """編集範囲の外の連続した読み。空白・不明・語途中を越えない。"""
+    """編集範囲外の読み。明示されたかなは原文座標、漢字は語の根拠を使う。"""
     before = ''; after = ''; cursor = start
     for t in reversed([t for t in tokens if t[4] <= start]):
         if t[4] != cursor: break
@@ -128,6 +128,19 @@ def adjacent_readings(text, tokens, start, end):
         if len(options) != 1: break
         after += options[0]; cursor = t[4]
         if len(after) >= 2: break
+    # An unknown token can swallow an independently validated edit edge.
+    # Literal kana still specify the original neighboring keys exactly;
+    # no guessed kanji reading or gap crossing is needed for that evidence.
+    if not before:
+        for char in reversed(text[max(0,start-2):start]):
+            literal=_kana(char)
+            if not _reading(literal):break
+            before=literal+before
+    if not after:
+        for char in text[end:end+2]:
+            literal=_kana(char)
+            if not _reading(literal):break
+            after+=literal
     return before[-2:], after[:2]
 
 

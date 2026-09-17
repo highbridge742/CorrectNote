@@ -198,7 +198,7 @@ class Token:
         # 活用形（連用形・連用タ接続等）。品詞説明と文脈の接続判定で使う。
         # 辞書がないときは空文字。未確認の活用形を推測で埋めない。
         self.infl_form = infl_form
-        # janome が辞書から読みを引けたか。
+        # 同梱の解析辞書、または版付きの語彙表から読みを引けたか。
         # 引けなかった語は辞書に無い＝誤字の可能性がある。
         self.has_reading = has_reading
 
@@ -466,6 +466,95 @@ def colloquial_auxiliary_normal_form(line):
     return ''.join(chars)
 
 
+
+# SP-2026-09-13-1 / GPT-6: spelling evidence is distinct from readable tokens.
+# Keep the original positions; the existing native inflection routines are the
+# sole grammatical source. These are not word-to-answer lookup entries.
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class SpellingFact:
+    start: int
+    end: int
+    change_start: int
+    original: str
+    normal: str
+    reading: str
+    rule: str
+    pos: str
+    inflection: str
+
+    @property
+    def reason(self):
+        return '読み・活用は説明できますが、通常の語尾が小書きになっています'
+
+
+def _spelling_adjective_boundary(line,start,end):
+    """A hypothetical adjective must not take a loanword's prefix or suffix.
+
+    SP / GPT-6, 2026-09-13. Written boundaries, an original preceding functional
+    unit, or a complete grammatical suffix establish the source word boundary.
+    Parsing a guessed normalized prefix alone cannot establish it.
+    """
+    import re
+    if start and ('ぁ'<=line[start-1]<='ゖ' or line[start-1]=='ー'):
+        before=_tokenize_janome(line[:start])
+        if (not before or not all(t.has_reading for t in before)
+                or before[-1].pos not in ('助詞','助動詞','連体詞','記号')):
+            return False
+    if end<len(line) and 'ぁ'<=line[end]<='ゖ':
+        suffix=re.match(r'[ぁ-ゖー]+',line[end:]).group()
+        parts=_tokenize_janome(suffix)
+        if not parts or not all(t.has_reading and t.pos in ('助詞','助動詞') for t in parts):
+            return False
+        from pos_grammar import explain_kana_run
+        if not explain_kana_run(suffix,no_words=True,initial_state='END',before_kanji=False):
+            return False
+    return True
+
+
+@lru_cache(maxsize=4096)
+def original_spelling_facts(line):
+    """Confirmed source spelling anomalies, without generating lexical guesses."""
+    if not HAS_JANOME or not any(c in line for c in 'ぃぅ'):
+        return ()
+    from literal_examples import protected_ranges, overlaps
+    protected=protected_ranges(line)
+    out=[]
+    for a,b in colloquial_auxiliary_forms(line):
+        if a[3] not in ('です','ます','だ'):continue
+        start,end=a[0],b[1]
+        if overlaps(start,end,protected) or (end<len(line) and line[end] in 'ー〜～'):
+            continue
+        original=line[start:end]
+        out.append(SpellingFact(start,end,b[0],original,original[:-1]+'う',
+            a[4]+b[4],'SP-AUX-U','助動詞',a[6]+'+基本形'))
+    for start,end,base,reading,sub,infl in colloquial_adjective_forms(line):
+        if not _spelling_adjective_boundary(line,start,end):continue
+        if overlaps(start,end,protected) or (end<len(line) and line[end] in 'ー〜～'):
+            continue
+        original=line[start:end]
+        out.append(SpellingFact(start,end,end-1,original,original[:-1]+'い',
+            reading,'SP-ADJ-I','形容詞',infl))
+    return tuple(sorted(out,key=lambda f:(f.start,f.end,f.rule)))
+
+
+def spelling_edit_allowed(line,start,end,replacement):
+    """None: unrelated; False: loses a proven stem; True: exact scoped size edit."""
+    facts=[f for f in original_spelling_facts(line) if f.start<end and start<f.end]
+    if not facts:
+        return None
+    if len(replacement)!=end-start:
+        return False
+    for f in facts:
+        a,b=max(start,f.start),min(end,f.end)
+        expected=f.normal[a-f.start:b-f.start]
+        if replacement[a-start:b-start]!=expected:
+            return False
+    return True
+
+
 def _restore_colloquial_auxiliaries(line, tokens):
     normal = colloquial_auxiliary_normal_form(line)
     if normal == line:
@@ -550,6 +639,128 @@ def _restore_unknown_predicates(line, tokens):
     return out
 
 
+def _restore_attested_nouns(line, tokens):
+    """48-ABW: restore attested written nouns at existing exact boundaries.
+
+    The versioned general_words roster and exact native Katakana noun entries
+    supply lexical facts, not generated repair answers. Never split an unknown token to extract a known substring,
+    join across a gap, or absorb a particle/predicate into a noun. The remaining
+    tokens retain their original evidence and still undergo anomaly judgment.
+    Native dictionary_inflections remains native-only; no fact is forged there.
+    """
+    from general_words import EXACT_NOUNS
+    if not tokens:
+        return tokens
+    katakana=lambda text:bool(text) and all('ァ'<=c<='ヶ' or c=='ー' for c in text)
+    if not any(w in line for w in EXACT_NOUNS) and not any(
+            katakana(a.surface) and katakana(b.surface) and a.end==b.start
+            for a,b in zip(tokens,tokens[1:])):
+        return tokens
+    out=[];i=0
+    while i<len(tokens):
+        first=tokens[i];best=None;word='';end=first.start
+        for j in range(i,min(len(tokens),i+8)):
+            part=tokens[j]
+            if part.start!=end or part.pos not in ('名詞','接頭詞'):
+                break
+            word+=part.surface;end=part.end
+            if line[first.start:end]!=word:
+                break
+            entry=EXACT_NOUNS.get(word)
+            # Whole, unchanged dictionary nouns may be split into names by
+            # the surrounding text. A cost-table spelling is not this proof.
+            native=katakana(word) and len(word)<=32
+            if entry is None and native and j>i:
+                rows=[(rd,pos.split(',')[1]) for pos,form,base,rd in dictionary_inflections(word) or ()
+                      if pos.startswith(('名詞,一般,','名詞,サ変接続,','名詞,形容動詞語幹,'))
+                      and base==word and rd==katakana_to_hiragana(word)]
+                if rows:entry=rows[0]
+            if entry:
+                best=(j+1,Token(word,'名詞',word,entry[0],first.start,end,
+                               True,entry[1],''))
+            if not native and not any(w.startswith(word) for w in EXACT_NOUNS):
+                break
+        if best:
+            i,merged=best;out.append(merged)
+        else:
+            out.append(first);i+=1
+    return out
+
+
+
+def _restore_orthographic_nouns(line, tokens):
+    """48-AGP: interpret an attested variant word without changing its text.
+
+    A verified character variant AND a complete native noun entry are both
+    required. Do not infer a word from a per-character reading or extract a
+    substring from an unknown token. Native dictionary APIs remain exact.
+    """
+    from kanji_onkun import orthographic_variants, _ORTHOGRAPHIC_VARIANTS
+    if not any(ch in _ORTHOGRAPHIC_VARIANTS for ch in line):
+        return tokens
+    out=[];i=0
+    while i<len(tokens):
+        first=tokens[i];best=None;word='';edge=first.start
+        for j in range(i,min(len(tokens),i+8)):
+            part=tokens[j]
+            if part.start!=edge or part.pos not in ('名詞','接頭詞'):
+                break
+            word+=part.surface;edge=part.end
+            if len(word)>32 or line[first.start:edge]!=word:break
+            if dictionary_inflections(word):continue
+            rows=[]
+            for alternate in orthographic_variants(word):
+                for pos,form,base,reading in dictionary_inflections(alternate) or ():
+                    if (pos.startswith(('名詞,一般,','名詞,サ変接続,','名詞,形容動詞語幹,'))
+                            and base==alternate and reading):
+                        rows.append((pos.split(',')[1],reading))
+            # Conflicting native interpretations need context we do not have.
+            rows=set(rows)
+            if len(rows)==1:
+                sub,reading=next(iter(rows))
+                best=(j+1,Token(word,'名詞',word,reading,first.start,edge,True,sub,''))
+        if best:
+            i,merged=best;out.append(merged)
+        else:
+            out.append(first);i+=1
+    return out
+
+
+def _restore_counter_readings(line,tokens):
+    """Preserve native counting nouns at exact original token boundaries.
+
+    Known verbs spanning the counter's end (やっつける) stay intact.
+    The native dictionary supplies the full counting reading; no substring
+    inside an unknown token or corrected candidate supplies this evidence.
+    """
+    from reading_segments import native_counter_readings
+    counters=native_counter_readings()
+    if not any(word in line for word in counters):return tokens
+    out=[];i=0
+    while i<len(tokens):
+        first=tokens[i];best=None;word='';edge=first.start
+        # 48-AHJ: an existing noun owns its following native case.
+        # Do not turn 子供 + に + 本 into a new 二本 counter token.
+        # Quantity proof after a case (本を二冊) remains independent.
+        previous=tokens[i-1] if i else None
+        if (previous and previous.has_reading and previous.end==first.start
+                and previous.pos=='名詞' and first.has_reading
+                and first.pos=='助詞' and first.pos_sub.startswith('格助詞')):
+            out.append(first);i+=1;continue
+        for j in range(i,min(len(tokens),i+5)):
+            part=tokens[j]
+            if part.start!=edge or not part.has_reading:break
+            word+=part.surface;edge=part.end
+            if not any(counter.startswith(word) for counter in counters):break
+            if word in counters and line[first.start:edge]==word:
+                best=(j+1,Token(word,'名詞',word,word,first.start,edge,True,'一般'))
+        if best:
+            i,merged=best;out.append(merged)
+        else:
+            out.append(first);i+=1
+    return out
+
+
 def tokenize(line):
     """
     1行を形態素に分割する。
@@ -561,7 +772,10 @@ def tokenize(line):
         return []
 
     if HAS_JANOME:
-        tokens = _restore_colloquial_auxiliaries(line, _tokenize_janome(line))
+        tokens = _restore_orthographic_nouns(line, _tokenize_janome(line))
+        tokens = _restore_attested_nouns(line, tokens)
+        tokens = _restore_counter_readings(line, tokens)
+        tokens = _restore_colloquial_auxiliaries(line, tokens)
         tokens = _restore_colloquial_adjectives(line, tokens)
         tokens = _restore_nominal_readings(line, tokens)
         tokens = _restore_unknown_predicates(line, tokens)
@@ -616,6 +830,60 @@ def dictionary_inflections(surface):
         return None
     return tuple(dict.fromkeys((pos,form,base,reading)
                  for pos,kind,form,base,reading in forms))
+
+
+@lru_cache(maxsize=8192)
+def native_suru_form(surface,form,reading,allow_potential=True):
+    """48-AIT: the grammatical suru is native サ変, not a godan homograph.
+
+    IPAdic also gives すり (rubbing/printing) the base spelling する.
+    The complete native paradigm, surface, form and reading bind this
+    grammatical role. The existing potential できる remains ichidan.
+    """
+    return any(pos.startswith('動詞,自立,') and inflection==form and rd==reading
+               and ((base=='する' and kind.startswith('サ変'))
+                    or allow_potential and base in ('できる','出来る') and kind=='一段')
+               for pos,kind,inflection,base,rd in dictionary_paradigms(surface) or ())
+
+
+@lru_cache(maxsize=8192)
+def native_potential_auxiliary(surface,form,reading):
+    """An attested ichidan potential of an attested native godan auxiliary.
+
+    2026-09-14 / GPT-6 Astra. Both lemmas and exact readings are native
+    dictionary entries; the shared godan paradigm relates them. This
+    supplies a grammatical role, never a replacement or a new vocabulary.
+    """
+    from pos_grammar import _GODAN_ROW
+    for pos,kind,inflection,base,rd in dictionary_paradigms(surface) or ():
+        if (not pos.startswith('動詞,') or kind!='一段' or inflection!=form
+                or rd!=reading or len(base)<2 or not base.endswith('る')):continue
+        for terminal,row in _GODAN_ROW.items():
+            if base[-2]!=row[2]:continue
+            origin=base[:-2]+terminal
+            for p,k,f,b,r in dictionary_paradigms(origin) or ():
+                if not (p.startswith('動詞,非自立,') and k.startswith('五段')
+                        and f=='基本形' and b==origin):continue
+                expected=r[:-1]+row[2]+'る'
+                if any(p2.startswith('動詞,') and k2=='一段' and f2=='基本形'
+                       and b2==base and r2==expected
+                       for p2,k2,f2,b2,r2 in dictionary_paradigms(base) or ()):
+                    return origin
+    return None
+
+
+# 48-ZU / GPT-6 / 2026-09-11. Inspection of all 1,821 native basic
+# adjective entries, including all 24 entries with at most two kana.
+# IPAdic's くい adjective has no established independent meaning here.
+# Its entry cannot supply positive evidence for a new adjective/noun split.
+# This does not reclassify original text, noun/verb senses, or dialects.
+_UNVERIFIED_INDEPENDENT_ADJECTIVES = frozenset(('くい',))
+
+
+def native_independent_adjective(pos, form, lemma):
+    """Native classification supplies positive lexical evidence only."""
+    return (pos.startswith('形容詞,自立,') and form=='基本形'
+            and lemma not in _UNVERIFIED_INDEPENDENT_ADJECTIVES)
 
 
 # 48-WM: 文字を対象に取る用言。文字の説明という局所文脈に限って使う。
@@ -748,25 +1016,29 @@ def _restore_polite_aux_boundaries(tokens):
     return out
 
 
-def _contextualize_written_error_actions(tokens):
-    """48-XS: 誤りを表す文字単位の結果名詞を、するの口語用法で読む。
+def _contextualize_nominal_actions(tokens):
+    """48-XS・AGH: 実辞書の一般名詞にある動作用法を、するの文脈で読む。
 
     GPT-6の設計・反証（2026-09-10）。誤/脱/衍＋字/語/句/文は
     書かれた結果と、その結果を生む行為の両方を指せる。辞書で一般名詞に
     分類されても、直後がするの活用なら動作名詞として解釈する。
     接頭要素だけで造語を認めず、全体が実辞書の普通名詞であることを要求。
+    既存の意味役割表が持つ動作用法も同じ口で共有する。
     """
     out=list(tokens)
     for i,(a,b) in enumerate(zip(out,out[1:])):
         if (a.pos == '名詞' and a.pos_sub == '一般' and a.has_reading
-                and len(a.surface) == 2 and a.surface[0] in '誤脱衍'
-                and a.surface[1] in '字語句文'
                 and b.pos == '動詞' and b.base_form == 'する' and b.has_reading
+                and native_suru_form(b.surface,b.infl_form,b.reading,False)
                 and a.end == b.start
                 and any(p.startswith('名詞,一般,')
                         for p in (dictionary_base_pos(a.surface) or ()))):
-            out[i]=Token(a.surface,a.pos,a.base_form,a.reading,a.start,a.end,
-                         a.has_reading,'サ変接続',a.infl_form)
+            from semantic_roles import classified_nominal_action
+            written_error=(len(a.surface)==2 and a.surface[0] in '誤脱衍'
+                           and a.surface[1] in '字語句文')
+            if written_error or classified_nominal_action(a.surface,a.reading):
+                out[i]=Token(a.surface,a.pos,a.base_form,a.reading,a.start,a.end,
+                             a.has_reading,'サ変接続',a.infl_form)
     return out
 
 
@@ -787,6 +1059,52 @@ def _nominal_suffix_parts(surface):
         return None
     a=parts[0]
     return (head,a.reading,a.pos_sub,a.infl_form,suffix,next(iter(readings)))
+
+
+def _restore_nominal_affixes(tokens):
+    """48-AGH: retain nominal prefix/suffix attachment across a noun boundary.
+
+    This interprets unchanged native parts; it neither creates dictionary
+    entries nor searches for a correction. A person-name suffix keeps the
+    personal-name parse. The preceding noun must itself remain unchanged.
+    """
+    out=[];i=0
+    plain=('一般','サ変接続','形容動詞語幹','副詞可能')
+    while i<len(tokens):
+        t=tokens[i];prev=out[-1] if out else None
+        nxt=tokens[i+1] if i+1<len(tokens) else None
+        nominal_left=(prev is not None and prev.end==t.start and prev.has_reading
+                      and prev.pos=='名詞' and prev.pos_sub in plain)
+        if (nominal_left and t.has_reading and t.pos=='接頭詞'
+                and t.pos_sub=='名詞接続' and nxt is not None
+                and t.end==nxt.start and nxt.has_reading
+                and nxt.pos=='名詞' and nxt.pos_sub in plain
+                and any(p.startswith('接頭詞,名詞接続,') and rd==t.reading
+                        for p,f,b,rd in dictionary_inflections(t.surface) or ())):
+            word=t.surface+nxt.surface
+            out.append(Token(word,'名詞',word,t.reading+nxt.reading,t.start,nxt.end,
+                             True,nxt.pos_sub,nxt.infl_form))
+            i+=2;continue
+        if (nominal_left and t.has_reading and t.pos=='名詞'
+                and t.pos_sub=='固有名詞:人名:名' and 2<=len(t.surface)<=4
+                and not (nxt is not None and nxt.start==t.end
+                         and nxt.pos=='名詞' and nxt.pos_sub=='接尾:人名')):
+            suffix,head=t.surface[0],t.surface[1:]
+            left=_tokenize_janome(prev.surface+suffix)
+            right=_tokenize_janome(head)
+            if (len(left)==2 and left[0].surface==prev.surface
+                    and left[0].reading==prev.reading and left[0].has_reading
+                    and left[1].surface==suffix and left[1].has_reading
+                    and left[1].pos=='名詞' and left[1].pos_sub=='接尾:一般'
+                    and len(right)==1 and right[0].surface==head
+                    and right[0].has_reading and right[0].pos=='名詞'
+                    and right[0].pos_sub in plain):
+                a,b=left[1],right[0];edge=t.start+len(suffix)
+                out.append(Token(suffix,'名詞',suffix,a.reading,t.start,edge,True,a.pos_sub,a.infl_form))
+                out.append(Token(head,'名詞',b.base_form,b.reading,edge,t.end,True,b.pos_sub,b.infl_form))
+                i+=1;continue
+        out.append(t);i+=1
+    return out
 
 
 def _restore_nominal_suffix_boundaries(tokens):
@@ -832,6 +1150,112 @@ def _restore_imperative_emphasis(tokens):
     return out
 
 
+@lru_cache(maxsize=4096)
+def _native_adverbial_noun(surface,reading,voiced_suffix=False):
+    """Same spelling/reading has a native adverbial nominal use."""
+    readings={reading}
+    if voiced_suffix and reading:
+        import unicodedata
+        unvoiced=unicodedata.normalize('NFD',reading[0]).replace('\u3099','')
+        if len(unvoiced)==1:readings.add(unvoiced+reading[1:])
+    return any(pos.startswith('名詞,') and '副詞可能' in pos and rd in readings
+               for pos,form,base,rd in dictionary_inflections(surface) or ())
+
+
+@lru_cache(maxsize=4096)
+def _native_nominal_case_entry(surface, reading):
+    """Same spelling and reading may have a noun sense as well as an adverb sense."""
+    entries=[(pos,base) for pos,form,base,rd in dictionary_inflections(surface) or ()
+             if rd==reading and pos.startswith('名詞,')
+             and not any(x in pos for x in ('固有名詞','接尾','非自立'))]
+    return min(entries) if entries else None
+
+
+def _contextualize_nominal_cases(tokens):
+    """Use a native nominal homograph when an explicit nominal case follows.
+
+    GPT-6 / 2026-09-11 / 48-YZ/ZF. Adverbs and adnominals may have a native noun sense.
+    This changes the grammatical interpretation,
+    keeping the original characters, reading and positions. An adverb before
+    a predicate, an unknown word, or another reading supplies no noun evidence.
+    """
+    out=list(tokens)
+    for i,(a,b) in enumerate(zip(out,out[1:])):
+        if (a.pos not in ('副詞','連体詞') or not a.has_reading or not b.has_reading or a.end!=b.start
+                or b.pos!='助詞' or not b.pos_sub.startswith(('格助詞','係助詞','連体化'))):
+            continue
+        entry=_native_nominal_case_entry(a.surface,a.reading)
+        if entry is not None:
+            pos,lemma=entry
+            out[i]=Token(a.surface,'名詞',lemma,a.reading,a.start,a.end,True,
+                         ':'.join(p for p in pos.split(',')[1:] if p!='*'))
+    return out
+
+
+def _contextualize_adverbial_nominals(tokens):
+    """Retain native adverbial evidence before a predicate, including nominal suffixes.
+
+    GPT-6, 2026-09-11. Surface, reading, offsets and the original subtype remain.
+    Only the same dictionary spelling/reading supplies the additional role.
+    """
+    out=list(tokens)
+    for i,(a,b) in enumerate(zip(out,out[1:])):
+        if (a.pos!='名詞' or '副詞可能' in a.pos_sub or '固有名詞' in a.pos_sub
+                or not a.has_reading or not b.has_reading or a.end!=b.start
+                or b.pos not in ('動詞','形容詞')):
+            continue
+        suffix=(a.pos_sub.startswith('接尾') and i>0 and out[i-1].pos=='名詞'
+                and out[i-1].has_reading and out[i-1].end==a.start)
+        if _native_adverbial_noun(a.surface,a.reading,suffix):
+            out[i]=Token(a.surface,a.pos,a.base_form,a.reading,a.start,a.end,
+                         a.has_reading,a.pos_sub+':副詞可能',a.infl_form)
+    return out
+
+
+
+def _contextualize_terminal_questions(tokens):
+    """48-ABV / GPT-6 / 2026-09-13: a finite predicate followed by final か.
+
+    Retain the native ambiguous label in indefinite or alternative uses.
+    Only original, contiguous, known tokens and a completed predicate give
+    positive evidence for the sentence-final question particle.
+    """
+    out=list(tokens)
+    for i,t in enumerate(out):
+        if (i==0 or t.surface!='か' or t.pos!='助詞' or not t.has_reading
+                or '終助詞' not in t.pos_sub):
+            continue
+        tail=out[i+1:]
+        if any(x.pos!='記号' or x.surface not in ('。','！','？','!','?','」','』') for x in tail):
+            continue
+        head=out[i-1]
+        if head.end!=t.start:
+            continue
+        if head.surface=='の' and head.pos in ('助詞','名詞') and i>=2:
+            previous=out[i-2]
+            if previous.end!=head.start or not head.has_reading:
+                continue
+            head=previous
+        if (not head.has_reading or head.pos not in ('動詞','形容詞','助動詞')
+                or head.infl_form!='基本形'):
+            continue
+        out[i]=Token(t.surface,t.pos,t.base_form,t.reading,t.start,t.end,
+                     t.has_reading,'終助詞',t.infl_form)
+    return out
+
+
+def native_tokens_in_span(text,start,end):
+    """Use exact original token boundaries, never a standalone fragment parse."""
+    if not isinstance(start,int) or not isinstance(end,int) or not 0<=start<end<=len(text):
+        return ()
+    parts=tuple(t for t in tokenize(text) if start<=t.start and t.end<=end)
+    if (not parts or parts[0].start!=start or parts[-1].end!=end
+            or ''.join(t.surface for t in parts)!=text[start:end]
+            or any(a.end!=b.start for a,b in zip(parts,parts[1:]))):
+        return ()
+    return parts
+
+
 def contextualize_tokens(tokens):
     """48-VO: 前後の接続と既知の複合語から、品詞と単位を確かめる。
 
@@ -841,9 +1265,11 @@ def contextualize_tokens(tokens):
     解析不能時に語尾だけから品詞を決めることはしない。
     """
     tokens = _restore_imperative_emphasis(tokens)
-    out = _restore_nominal_suffix_boundaries(_contextualize_written_error_actions(
+    out = _restore_nominal_suffix_boundaries(_contextualize_nominal_actions(
         _contextualize_expressive_adverbs(_restore_polite_aux_boundaries(
             _split_literal_character_objects(list(tokens))))))
+    out = _contextualize_nominal_cases(_restore_nominal_affixes(out))
+    out = _contextualize_terminal_questions(_contextualize_adverbial_nominals(out))
     # 48-VS: 「同じ」は連体用法とナ形容詞の述語用法を兼ねる不規則語。
     # 辞書の連体詞分類だけで「同じだけ／同じに／同じです」を拒まない。
     # 名詞に直結する連体用法（同じ本・同じように）は元の分類を保つ。
@@ -1352,3 +1778,25 @@ def allows_bare_clause_object(following):
         if part.pos not in ('名詞', '助詞', '副詞', '連体詞', '接頭詞'):
             return False
     return False
+
+
+@lru_cache(maxsize=4096)
+def native_excess_head(surface, reading):
+    """48-AGP: native V-continuative / adjective stem before bound sugiru.
+
+    Unknown/nominal interpretations remain undecided. A native adjective
+    stem + nominalizing sa supplies another unchanged degree expression;
+    its occurrence as a verb's irrealis homograph must not create an error.
+    Source: https://www2.ninjal.ac.jp/vvlexicon/about.html
+    Grammar review and counterexamples: GPT-6 Astra / 2026-09-15.
+    """
+    rows=[row for row in dictionary_inflections(surface) or () if row[3]==reading]
+    if any((p.startswith('動詞,') and f=='連用形')
+           or (p.startswith(('形容詞,','助動詞,')) and f=='ガル接続')
+           or p.startswith('名詞,形容動詞語幹,') for p,f,b,rd in rows):return True
+    if surface.endswith('さ') and reading.endswith('さ'):
+        if any(p.startswith(('形容詞,','助動詞,')) and f=='ガル接続' and rd==reading[:-1]
+               for p,f,b,rd in dictionary_inflections(surface[:-1]) or ()):return True
+    if any(p.startswith(('名詞,','副詞,','感動詞,')) for p,f,b,rd in rows):return None
+    if any(p.startswith(('動詞,','形容詞,','助動詞,')) for p,f,b,rd in rows):return False
+    return None

@@ -139,7 +139,7 @@ _PARTICLE_SUB = {
     '格助詞': '格助詞', '係助詞': '係助詞', '副助詞': '副助詞',
     '接続助詞': '接続助詞', '終助詞': '終助詞', '並立助詞': '並立助詞',
     '連体化': '連体化（の）', '副詞化': '副詞化',
-    '副助詞／並立助詞／終助詞': '副助詞',
+    '副助詞／並立助詞／終助詞': '副助詞・並立助詞・終助詞（文脈による）',
     '特殊': '特殊',
 }
 
@@ -613,7 +613,7 @@ def candidate_pos_line(surface, tokenize_fn):
 
 def pos_lines(text, tokenize_fn=None, store=None, pos_hint=None,
               infl_hint='', atomic_hint=False, known_hint=True,
-              prev_text='', next_text='', dict_index=None):
+              prev_text='', next_text='', dict_index=None, source_context=None):
     """
     **選んだ範囲の品詞**（「－ 品詞判定 －」の中身）を行の一覧で返す。
 
@@ -642,12 +642,24 @@ def pos_lines(text, tokenize_fn=None, store=None, pos_hint=None,
     text = text or ''
     if not text.strip():
         return [UNKNOWN_POS]
+    context_tokens=[]
+    if source_context is not None and len(source_context)==3:
+        source,start,end=source_context
+        if isinstance(source,str) and source[start:end]==text:
+            from morphology import native_tokens_in_span
+            context_tokens=[(t.surface,t.pos+(':'+t.pos_sub if t.pos_sub else ''),
+                             t.infl_form,t.base_form,t.has_reading,t.reading)
+                            for t in native_tokens_in_span(source,start,end)]
+            if not context_tokens:
+                from morphology import HAS_JANOME
+                if HAS_JANOME:
+                    return [UNKNOWN_POS+'（原文の語の区切りに揃っていません）']
     # **1字の助詞は、行の文脈の品詞で言う**（項目48-PW・2026-09-04）。
     # この関数は範囲の文字列だけを解析し直すので、`が`・`で` を単独で
     # 掛けると janome は文頭の「接続詞」（だが・それで の類）と
     # 当て推量する。単位は行を解析したときの品詞（`pos`）を持って
     # いるので、**1字のときはそちらが正しい**（呼び手が渡したとき）。
-    if pos_hint and len(text) == 1:
+    if not context_tokens and pos_hint and len(text) == 1:
         return [pos_name(pos_hint, text, infl_hint or '',
                          has_reading=known_hint)]
     # **行の解析が「1語」と見た範囲は、その品詞を名乗る**（項目48-QC・
@@ -676,7 +688,7 @@ def pos_lines(text, tokenize_fn=None, store=None, pos_hint=None,
     # 実測（実機メモの単位 5,471 種）: **1,117 種・4,555 か所**の
     # 判定が変わり、**悪くなったものは1つも無い**
     # （`tools_local/probe_pos_survey.py` の全種突き合わせ）。
-    if pos_hint and atomic_hint and known_hint:
+    if not context_tokens and pos_hint and atomic_hint and known_hint:
         # **原形は落とさない**（`押し` を見て `押す` だと分かるように）。
         # 単位は原形を持っていないので、割り直した側から借りる——
         # ただし**割り直しても1語で、大分類が一致するとき**だけ
@@ -690,7 +702,7 @@ def pos_lines(text, tokenize_fn=None, store=None, pos_hint=None,
             _base = _one[0][3] or ''
         return [pos_name(pos_hint, text, infl_hint or '', _base,
                          has_reading=known_hint)]
-    toks = _tokens_for(text, tokenize_fn)
+    toks = context_tokens or _tokens_for(text, tokenize_fn)
     if not toks:
         return [UNKNOWN_POS]
     if (store is not None and len(toks) >= 2 and len(text) >= 4

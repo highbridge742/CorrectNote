@@ -114,7 +114,7 @@ def _should_prune(surface, pos, sub_pos, sub_sub_pos, cost):
 
 
 # キャッシュの形式が変わったら数字を上げる（古い索引を作り直させる）
-CACHE_VERSION = 9
+CACHE_VERSION = 10  # AI usage classification 2026-09-12
 # 索引として最低限あるべき読みの数。これを下回るものは
 # 作りかけ・壊れた索引とみなして作り直す。
 # （空の索引が保存されると、候補が一切出ないのに

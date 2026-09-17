@@ -4,10 +4,11 @@ from unittest.mock import Mock,patch
 import corrector as C
 
 class PreservedHeadTests(unittest.TestCase):
-    def resolve(self,head=('かな','かな'),reading='にゅうりょく',edits=1,odd=False):
+    def resolve(self,head=('かな','かな'),reading='にゅうりょく',edits=1,odd=False,compound=True):
         store=Mock();store.has_reading.side_effect=lambda r:r=='かな'
         dictionary=Mock();dictionary.is_world_reading.return_value=False
-        with patch('kango_tier.tier',return_value=1), \
+        with patch('semantic_roles.nominal_compound_support',return_value=compound), \
+             patch('kango_tier.tier',return_value=1), \
              patch('oddness.is_odd_run',return_value=[('x','y')] if odd else []), \
              patch.object(C,'_convert_odd_kana_run',return_value=('入力','隣接キー')):
             return C._fix_known_head_compound('かなりゅうりょく',store,lambda x:[],dictionary,
@@ -16,7 +17,8 @@ class PreservedHeadTests(unittest.TestCase):
     def test_inflected_source_head_does_not_need_noun_index_entry(self):
         store=Mock();store.has_reading.return_value=False
         dictionary=Mock();dictionary.is_world_reading.return_value=False
-        with patch('kango_tier.tier',return_value=1), \
+        with patch('semantic_roles.nominal_compound_support',return_value=True), \
+             patch('kango_tier.tier',return_value=1), \
              patch('oddness.is_odd_run',return_value=[]), \
              patch.object(C,'_convert_odd_kana_run',return_value=('入力','隣接キー')):
             result=C._fix_known_head_compound('よみこみりゅうりょく',store,lambda x:[],dictionary,
@@ -35,6 +37,9 @@ class PreservedHeadTests(unittest.TestCase):
     def test_no_deletion_or_multiple_edits(self):
         self.assertIsNone(self.resolve(reading='にゅうりょ'))
         self.assertIsNone(self.resolve(edits=2))
+
+    def test_unproved_compound_is_not_accepted_by_preservation_alone(self):
+        self.assertIsNone(self.resolve(compound=False))
 
     def test_generated_odd_compound_is_rejected(self):
         self.assertIsNone(self.resolve(odd=True))

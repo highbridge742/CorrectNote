@@ -36,7 +36,12 @@
     版1  2026-08-25  うにさんの的リスト（見本なし）から11対
 """
 
-VERSION = 3
+VERSION = 7
+# 版7（2026-09-14・GPT-6 Astra）: 既存の漢字1字の動詞手がかりを、実辞書の送り仮名付き活用でも照合。
+# 版6（2026-09-14・GPT-6 Astra）: 既存の語尾制約が認める原文は他の同音経路でも保持。
+# 版5（2026-09-14・GPT-6 Astra）: 共通の元の主語・目的語の意味が成立すれば保持。対は増やさない。
+# 版4（2026-09-14・GPT-6 Astra）: 既存対を実際の活用・格・節の範囲で判断。
+# 視覚→四角は直後の「で＋囲む/囲う」に限定。別節/連体修飾の手がかりは混ぜない。
 # 版3（2026-08-30・Fable）: うにさんの一覧「視覚で囲って ⇒ 四角で囲って」
 # から 視覚→四角 を足した（手がかり: 囲・枠・矩形…。視覚的 は後ろの門）。
 # 版2（2026-08-25・同日）: うにさんの×つきの的から**逆向きの対**を足した
@@ -144,7 +149,7 @@ PAIRS = (
      ('囲っ', '囲む', '囲い', '囲ん', '囲う', '囲え', '枠',
       '矩形', '図形', '正方形', '長方形'),
      ('聴覚', '触覚', '感覚', '認知', '効果', '情報'),
-     ('的',), None),
+     ('的',), ('で',), None, ('囲む','囲う')),
 )
 
 
@@ -170,10 +175,77 @@ def _hits(cues, material):
         for c in cues:
             if w == c or (len(c) >= 2 and w.startswith(c)):
                 return True
+        # 48-ACU / GPT-6 Astra / 2026-09-14: exact native inflections
+        # share the existing lemma cue. Never derive a cue from a substring
+        # or a kana homophone; the written verb must exist in the dictionary.
+        if any('一'<=char<='鿿' for char in w):
+            from morphology import dictionary_inflections
+            for pos,form,base,reading in dictionary_inflections(w) or ():
+                if not pos.startswith('動詞,'):
+                    continue
+                if base in cues:
+                    return True
+                # An existing one-kanji cue denotes the written verb stem.
+                # Require a complete native form, not a prefix of a noun
+                # (切手) or a compound with a different predicate.
+                stem,tail=_split(base)
+                if (len(stem)==1 and stem in cues and tail
+                        and all('ぁ'<=c<='ゖ' for c in tail)):
+                    return True
     return False
 
 
-def find_fix(surface, material, after='', prev=''):
+def local_material(surface, material, before='', after='', source=''):
+    """Use the actual clause when the caller supplies an exact source boundary.
+
+    2026-09-14 / GPT-6 Astra: a distant text-writing cue cannot change a
+    drawing predicate in another clause. A comma after an object alone
+    does not end its dependency; require a native predicate/connective.
+    """
+    if source != before+surface+after:
+        return tuple(material)
+    from morphology import tokenize
+    parts=tokenize(source);start=len(before);end=start+len(surface)
+    boundaries=[0,len(source)]
+    for i,t in enumerate(parts):
+        if t.surface in ('。','！','？','!','?',';','；','\n','\r\n'):
+            boundaries.append(t.end)
+        elif (i and t.pos=='助詞' and t.pos_sub.startswith('接続助詞')
+              and t.has_reading and parts[i-1].has_reading
+              and parts[i-1].pos in ('動詞','形容詞','助動詞')):
+            # A written comma is optional between connected predicates.
+            boundaries.append(t.end)
+        elif t.surface in ('、',',','，') and i:
+            prev=parts[i-1]
+            connective=prev.pos=='助詞' and prev.pos_sub.startswith('接続助詞')
+            finite=prev.pos in ('動詞','形容詞','助動詞') and prev.infl_form in ('基本形','連用形')
+            after_te=prev.surface=='から' and i>1 and parts[i-2].surface in ('て','で')
+            if prev.has_reading and (connective or finite or after_te):boundaries.append(t.end)
+    lo=max(b for b in boundaries if b<=start)
+    hi=min(b for b in boundaries if b>=end)
+    local=[t for t in parts if lo<=t.start and t.end<=hi]
+    if any(t.pos=='動詞' and t.start<end and start<t.end for t in local):
+        # The head of an explicit object belongs to this verb. A verb
+        # inside its relative modifier has a different object (文字を読む猫).
+        from semantic_roles import object_before
+        legacy=[(t.surface,t.pos+(':'+t.pos_sub if t.pos_sub else ''),
+                 t.reading,t.start,t.end,t.has_reading,t.infl_form) for t in local]
+        obj=object_before(source,start,lambda _:legacy)
+        if obj:
+            index=next(i for i in range(len(local)-1,-1,-1)
+                       if source[local[i].start:local[i].start+len(obj)]==obj
+                       and local[i].start+len(obj)<=start)
+            while index and local[index-1].end==local[index].start:
+                prev=local[index-1]
+                if not (prev.has_reading and (prev.pos in ('名詞','連体詞')
+                        or prev.pos=='助詞' and prev.pos_sub=='連体化')):break
+                index-=1
+            local=local[index:]
+    return tuple(t.surface for t in local if (t.end<=start or t.start>=end)
+                 and t.has_reading and t.pos in ('名詞','動詞','形容詞'))
+
+
+def find_fix(surface, material, after='', prev='', source=''):
     """
     見本（並記）が無くても、**対の単語**だけで直せるか。
 
@@ -188,8 +260,9 @@ def find_fix(surface, material, after='', prev=''):
     どちらも**構造の門**（手がかり語には助詞が見えない——
     `ハンドルについて話しました` を 離し に変えた実測から）。
     """
-    if not surface or not material:
+    if not surface:
         return None
+    material=tuple(material or ())
     stem, tail = _split(surface)
     if not stem or len(tail) > 3:
         return None
@@ -197,21 +270,43 @@ def find_fix(surface, material, after='', prev=''):
         x, y, tails, to_cues, keep_cues, deny_after = p[:6]
         only_after = p[6] if len(p) > 6 else None
         prev_ok = p[7] if len(p) > 7 else None
+        following_action = p[8] if len(p) > 8 else None
         if stem != x:
             continue
         if tails is not None and tail not in tails:
             continue
+        from semantic_roles import original_argument_evidence
+        if original_argument_evidence(surface,prev,after,source):
+            return KEEP
+        # 48-ACU: a shape/enclosure cue must belong to this instrumental
+        # phrase. A distant frame cannot change a visual-perception phrase;
+        # a noun compound such as visual experiment has no such case/verb.
+        if following_action is not None:
+            from morphology import tokenize
+            parts=[t for t in tokenize(surface+after) if t.start>=len(surface)]
+            if (len(parts)<2 or parts[0].surface!='で' or parts[0].pos!='助詞'
+                    or parts[0].pos_sub!='格助詞:一般' or parts[0].start!=len(surface)
+                    or parts[1].start!=parts[0].end or parts[1].pos!='動詞'
+                    or not parts[1].has_reading or parts[1].base_form not in following_action):
+                continue
+            # The exact following action is native evidence even before the
+            # initial dictionary import populates the surrounding-word index.
+            material=material+(parts[1].surface,parts[1].base_form)
         if _hits(keep_cues, material):
             return KEEP
         if after and any(after.startswith(d) for d in deny_after):
-            continue
+            # This existing native construction excludes the proposed sense.
+            # Preserve that result across other homophone paths as well.
+            return KEEP
         if only_after is not None:
             ok = (not after and '' in only_after) \
                 or any(o and after.startswith(o) for o in only_after)
             if not ok:
                 continue
         if prev_ok is not None:
-            if not prev or prev[-1] not in prev_ok:
+            # A comma after an explicit case leaves that dependency intact.
+            boundary=prev.rstrip('、,， \t')
+            if not boundary or boundary[-1] not in prev_ok:
                 continue
         if _hits(to_cues, material):
             return y + tail

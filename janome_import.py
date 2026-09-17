@@ -638,36 +638,10 @@ def iter_janome_entries(min_len=2, max_len=12):
                    cost if cost is not None else 99999)
 
 
-def import_from_janome(store, limit=DEFAULT_MAX_WORDS, min_len=2, max_len=12,
-                       progress=None, only_new=False):
-    """
-    janome の辞書から、日常的に使う語を選んで取り込む。
-
-    固有名詞（地名・人名・川名・岬名など）は原則除外する。
-    コストが高い語（＝使用頻度が低い語）も除外する。
-    上記フィルタ後、コストの低い順に上位 limit 語を採用する。
-
-    only_new=True: **既にある語には触らない**（うにさんの指定・
-        2026-08-11・D-1）。アプリを更新したあとの「取り込み直し」に
-        使う。`store.add` は既にある語の使用回数を増やすので、
-        そのまま呼び直すと**うにさんが実際に使っている語の回数が
-        水増しされる**。回数は「使用実績」の判断材料そのもので、
-        水増しすると補正の判断が狂う（プラネタリウムの回帰と
-        同じ形。学び20「数えるものには、必ず二度数えない仕組みを
-        付ける」）。
-
-    戻り値: 足した語数。only_new=True では**新しく足したぶんだけ**。
-    """
+def collect_import_entries(limit=DEFAULT_MAX_WORDS, min_len=2, max_len=12, progress=None):
+    """Collect public dictionary entries without touching an application store."""
     if not HAS_JANOME:
-        return 0
-
-    known = set()
-    if only_new:
-        try:
-            known = {(e.get('reading'), e.get('surface'))
-                     for e in store.to_list()}
-        except Exception:
-            known = set()
+        return []
 
     candidates = []
     seen = set()
@@ -733,14 +707,26 @@ def import_from_janome(store, limit=DEFAULT_MAX_WORDS, min_len=2, max_len=12,
         world_of[(reading, surface)] = (
             20 if p < 0.16 else 5 if p < 0.34 else 2 if p < 0.78 else 1)
 
+    return [(reading, surface, _guess_category(pos, sub_pos, surface),
+             world_of.get((reading, surface), 1))
+            for cost, surface, reading, pos, sub_pos in candidates]
+
+
+def import_from_janome(store, limit=DEFAULT_MAX_WORDS, min_len=2, max_len=12,
+                       progress=None, only_new=False):
+    """Import the selected public words; only_new preserves existing entries."""
+    known = set()
+    if only_new:
+        try:
+            known = {(e.get('reading'), e.get('surface')) for e in store.to_list()}
+        except Exception:
+            pass
     added = 0
-    for cost, surface, reading, pos, sub_pos in candidates:
+    for reading, surface, category, world in collect_import_entries(limit, min_len, max_len, progress):
         if only_new and (reading, surface) in known:
             continue
-        store.add(reading, surface, _guess_category(pos, sub_pos, surface),
-                  world=world_of.get((reading, surface), 1))
+        store.add(reading, surface, category, world=world)
         added += 1
-
     return added
 
 

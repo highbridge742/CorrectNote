@@ -62,17 +62,21 @@ janome は 誤 を **あやま**（訓）と読んで
 
 表が無くても動く（今までどおりの読みだけになる）。
 表の作り方は `kanji_onkun_build.py`（開発時のみ）。
+48-AGPでは公式Unihanの一致する音読みを不足分だけ補う。出典・版・
+抽出条件・ライセンスはJSONのsupplemental_sourceへ記録する。
+既存の読み順を保ち、補助読みは後ろへ加える。
 """
 
 import json
 import os
 
 _TABLE = None
+_SUPPLEMENTAL = {}
 _MISSING = False
 
 
 def _load():
-    global _TABLE, _MISSING
+    global _TABLE, _SUPPLEMENTAL, _MISSING
     if _TABLE is not None or _MISSING:
         return _TABLE
     here = os.path.dirname(os.path.abspath(__file__))
@@ -84,6 +88,8 @@ def _load():
             got = data.get('readings')
             if isinstance(got, dict):
                 _TABLE = got
+                supplement = data.get('supplemental_readings', {})
+                _SUPPLEMENTAL = supplement if isinstance(supplement, dict) else {}
                 return _TABLE
         except Exception:
             continue
@@ -107,22 +113,25 @@ def readings_of(ch):
     AI が並べてある。**JSON のキーを並べ替えないこと。**
     """
     table = _load()
-    if not table:
+    if table is None:
         return []
-    got = table.get(ch)
-    if not got:
-        return []
+    got = table.get(ch, {})
     order = {'on': 0, 'kun': 1, 'gai': 2, 'mix': 3, 'na': 4, '?': 5}
-    return [r for r, _k in sorted(got.items(),
-                                  key=lambda x: order.get(x[1], 9))]
+    readings = [r for r, _k in sorted(got.items(),
+                                     key=lambda x: order.get(x[1], 9))]
+    # 48-AGP: source-backed missing readings follow every existing reading.
+    # They prove possible pronunciation, not independent wordhood or error.
+    readings.extend(r for r in _SUPPLEMENTAL.get(ch, {}) if r not in got)
+    return readings
 
 
 def kind_of(ch, reading):
     """その読みが音読みか訓読みか。分からなければ '?'。"""
     table = _load()
-    if not table:
+    if table is None:
         return '?'
-    return (table.get(ch) or {}).get(reading, '?')
+    return (table.get(ch) or {}).get(reading,
+        _SUPPLEMENTAL.get(ch, {}).get(reading, '?'))
 
 
 #: 音読みの尻に立てる字（漢音・呉音の入声・撥音の名残と、熟語の
@@ -311,3 +320,28 @@ _PATTERN_NAMES = {
 def pattern_name(kinds):
     """音訓の並び（2つ）を型の名前にする。2字以外は `None`。"""
     return _PATTERN_NAMES.get(tuple(kinds))
+
+
+# 48-AGP / 2026-09-15: Japanese orthographic variants, not homophones.
+# Reviewed against primary sources. These pairs supply dictionary lookup
+# evidence only; callers retain the original spelling and character offsets.
+ORTHOGRAPHIC_VARIANT_SOURCES = (
+    ('灌潅', 'https://www.kanjipedia.jp/kanji/0001142200'),
+    ('諫諌', 'https://eprints.lib.hokudai.ac.jp/repo/huscap/all/65755/Li_Yuan_summary.pdf'),
+    ('繫繋', 'https://www.kanjipedia.jp/kanji/0001821100'),
+    ('鷗鴎', 'https://www.kanjipedia.jp/kanji/0000542500'),
+)
+_ORTHOGRAPHIC_VARIANTS = {ch: group for group, source in ORTHOGRAPHIC_VARIANT_SOURCES for ch in group}
+
+
+def orthographic_variants(surface):
+    """Bounded alternate spellings; none is itself lexical evidence."""
+    if not surface or not any(ch in _ORTHOGRAPHIC_VARIANTS for ch in surface):
+        return ()
+    options = ['']
+    for ch in surface:
+        group = _ORTHOGRAPHIC_VARIANTS.get(ch, ch)
+        if len(options) * len(group) > 16:
+            return ()
+        options = [head + tail for head in options for tail in group]
+    return tuple(word for word in options if word != surface)

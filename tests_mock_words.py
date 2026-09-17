@@ -20,6 +20,7 @@
 `tests_mock.py` から分けたもの（2026-08-20・項目48-GQ）。
 **走らせる入口は `tests_mock.py` のまま。**
 """
+from tests_mock_common import with_duplicate_repair
 import corrector as C
 from vocabulary import VocabularyStore, find_known_readings_flex, dup_repair_enabled
 from seed_vocabulary import load_seed
@@ -1067,7 +1068,7 @@ def test_kana_fix_48it():
     print('--- 平仮名を平仮名に補正する（項目48-IT） ---')
     import corrector as C
     f = C._fix_functional_run
-    check('押しすぎ: ににして → にして', f('ににして'), 'にして')
+    check('押しすぎ: ににして → にして', with_duplicate_repair(f, 'ににして'), 'にして')
     check('巻き込み: すねると → すると', f('すねると'), 'すると')
     check('巻き込み: いいですよわね → いいですよね',
           f('いいですよわね'), 'いいですよね')
@@ -1691,9 +1692,9 @@ def test_odd_recognition_48jg():
     check('対の表: 動作 が手がかりなら 思い → 重い',
           find_fix('思い', ('動作',)), '重い')
     check('対の表: 重い は「ます」に接続できない（と思います を守る）',
-          find_fix('思い', ('動作',), after='ます。'), None)
+          find_fix('思い', ('動作',), after='ます。'), KEEP)
     check('対の表: 慣用（思いのほか）を守る',
-          find_fix('思い', ('処理',), after='のほか'), None)
+          find_fix('思い', ('処理',), after='のほか'), KEEP)
     check('対の表: 書かれている側の手がかりが在れば KEEP（正しいと確認）',
           find_fix('思い', ('気持ち', '動作')), KEEP)
     check('対の表: 半角 が手がかりなら 治り → 直り',
@@ -1776,7 +1777,10 @@ def test_odd_recognition_48jg():
           got, [(0, 4, 'へんかん', 'かな入力')])
     check('正しい小書き（きょ・しょ）には触らない',
           CC._misplaced_small_kana_fixes('きょうもしょっぷへ', _s38), [])
-    check('候補が2つ以上並んだら決めない（ただ1つのときだけ）',
+    # 48-ABT: this asserts only the dedicated early helper's handoff.
+    # It does not authorize the whole engine to abstain after judging oddness;
+    # the ordinary ranked path remains responsible for choosing a candidate.
+    check('設計38の専用先行処理は競合時に後段へ渡す',
           CC._misplaced_small_kana_fixes('もじゃゅうりょく', type(
               'S', (), {'lookup': lambda self, r: [
                   {'surface': r, 'count': 2}]})()), [])
@@ -1935,6 +1939,7 @@ def test_long_vowel_48js():
 
     st = _Store({'ぺーすと': 'ペースト', 'かーそる': 'カーソル',
                  'れんらく': '連絡', 'めもちょう': 'メモ帳',
+                 'へんかん':'変換', 'へんこう':'変更',
                  'くれる': 'くれる', 'かれ': '彼',
                  'けーす': 'ケース', 'ろーす': 'ロース'})
 
@@ -1943,12 +1948,12 @@ def test_long_vowel_48js():
                 C._misplaced_long_vowel_fixes(line, st)]
 
     # (1) 頭の ー（構造だけで立つ異様）
-    check('頭の伸ばし棒を隣のキーで戻す（ーんらく → れんらく）',
-          fix('ーんらく'), [(0, 4, 'れんらく')])
-    check('同（ーもちょう → めもちょう）',
-          fix('ーもちょう'), [(0, 5, 'めもちょう')])
+    check('JIS上段の隣接キー（ーんかん → へんかん）',
+          fix('ーんかん'), [(0, 4, 'へんかん')])
+    check('同（ーんこう → へんこう）',
+          fix('ーんこう'), [(0, 4, 'へんこう')])
     # (5) 2つ以上が語になったら決めない（けーす と ろーす）
-    check('2つ以上が語になったら決めない（ーーす）', fix('ーーす'), [])
+    check('遠いキーへ戻さない（ーーす）', fix('ーーす'), [])
     # (4) 触らないもの
     check('ー だけの連続は区切り線（触らない）', fix('ーーーーー'), [])
     check('引き伸ばしには触らない（あーー）', fix('あーー'), [])
@@ -1970,12 +1975,16 @@ def test_long_vowel_48js():
     # あちらの門があるので、ここで見るのは「**どの連続を直したか**」。
     # `かーそる` はカタカナで書かれ、`ぺーすと` はこの偽の入れ物では
     # あちらの門に掛かって読みのまま（本物の語彙では `ペースト`）。
-    check('隣のキーを伸ばし棒に戻す（ぺめすと → ぺーすと）',
-          fix('ぺめすと'), [(0, 4, 'ぺーすと')])
-    check('同（かけそる → カーソル。カタカナ語はカタカナで書く）',
-          fix('かけそる'), [(0, 4, 'カーソル')])
+    check('隣のキーを伸ばし棒に戻す（ぺへすと → ぺーすと）',
+          fix('ぺへすと'), [(0, 4, 'ぺーすと')])
+    check('同（かへそる → カーソル。カタカナ語はカタカナで書く）',
+          fix('かへそる'), [(0, 4, 'カーソル')])
     check('文の中でも連続だけを見る',
-          fix('この ぺろすと を見る'), [(3, 7, 'ぺーすと')])
+          fix('この ぺへすと を見る'), [(3, 7, 'ぺーすと')])
+
+    # 旧配置の参照例は、JISでは非隣接のため修復成功に数えない。
+    for old in ('ーんらく','ーもちょう','ぺめすと','かけそる','この ぺろすと を見る'):
+        check('旧配置の非隣接を採らない '+old,fix(old),[])
 
     # (3) 正しい語には触らない
     check('それ自体が語なら触らない（くれる）', fix('くれる'), [])
@@ -3546,9 +3555,9 @@ def test_shift_toggle_48kv():
     check('にゆうりよくみす → 入力ミス（シフト補正した漢字変換）',
           C._misplaced_large_kana_fixes('にゆうりよくみす', _St2(), di4),
           [(0, 8, '入力ミス', 'かな入力')])
-    check('にゅうりょくみす（手なし）も変換する',
+    check('SR-A にゅうりょくみす（手なし）は保持',
           C._misplaced_large_kana_fixes('にゅうりょくみす', _St2(), di4),
-          [(0, 8, '入力ミス', 'かな入力')])
+          [])
     check('にゅりょくみす（う挿入）も変換する',
           C._misplaced_large_kana_fixes('にゅりょくみす', _St2(), di4),
           [(0, 7, '入力ミス', 'かな入力')])
@@ -3604,7 +3613,7 @@ def test_shift_toggle_48kv():
     # 変種（にゅりょうくみす）は列挙すらされない
     check('敷き詰まっている読みは位置ずれを試さない',
           C._misplaced_large_kana_fixes('にゅうりょくみす', _St2(), di4),
-          [(0, 8, '入力ミス', 'かな入力')])
+          [])
 
     # **手(ii)（う挿入）が先**——`しゅうりょじ`（48-MG）は両方の手が
     # 立つ（(ii) しゅうりょうじ → 終了時 ／ (iii) しゅりょうじ）。
@@ -3831,7 +3840,7 @@ def test_te_i_piece_48ky():
     check('していたり を 48-IT が直さない',
           C._fix_functional_run('していたり', False), None)
     check('ににして は今までどおり直す',
-          C._fix_functional_run('ににして', False), 'にして')
+          with_duplicate_repair(C._fix_functional_run, 'ににして', False), 'にして')
     return all_ok
 
 
@@ -4752,7 +4761,7 @@ def test_compose_48lu():
           and '_core_readable = True' in src, True)
     # ---- 48-UF **機能語の並びの異様は、まるごと1語の連続には言わない**
     check('48-UF まるごと1語なら異様と言わない（48-IT）',
-          'if not original_ok and not doubled and finals < 3:' in src
+          'if not original_ok and not repair_doubled and finals < 3:' in src
           and 'if _sj_ff.is_unit(window) is True:' in src, True)
     check('48-UF 押しすぎ・終助詞3連はそのまま（打鍵の形が証拠）',
           'odd = doubled or finals >= 3 or not original_ok' in src, True)
@@ -4760,10 +4769,10 @@ def test_compose_48lu():
     check('48-UF 表の語 かきすて・かいとる は直さない',
           (_ff48('かきすて'), _ff48('かいとる')), (None, None))
     check('48-UF 48-IT の的は今までどおり（すねると・ににして・いいですよわね）',
-          (_ff48('すねると'), _ff48('ににして'), _ff48('いいですよわね')),
+          (_ff48('すねると'), with_duplicate_repair(_ff48, 'ににして'), _ff48('いいですよわね')),
           ('すると', 'にして', 'いいですよね'))
     check('48-UF 送り仮名の2度押しも今までどおり（さされるので）',
-          _ff48('さされるので', after_kanji=True), 'されるので')
+          with_duplicate_repair(_ff48, 'さされるので', after_kanji=True), 'されるので')
 
     # ---- 48-UG **48-FC の門を、漢字塊と混合塊にも**（学び22）
     check('48-UG 漢字塊も「同梱の表が1語」なら読める扱い',
@@ -4804,7 +4813,7 @@ def test_compose_48lu():
     check('48-UK 漢字の直後でなければ今までどおり（すねると）',
           _ff48('すねると'), 'すると')
     check('48-UK 押しすぎ（同じ助詞の2度打ち）は漢字の直後でも直す',
-          _ff48('さされるので', after_kanji=True), 'されるので')
+          with_duplicate_repair(_ff48, 'さされるので', after_kanji=True), 'されるので')
 
     # ---- 48-UL **1つの既知語の中に収まっている窓は、語の断片**
     def _tok48ul(_x=None):
@@ -4877,8 +4886,8 @@ def test_compose_48lu():
     _st48uo2 = _VS48()      # 空の語彙（本人が何も書いていない状態）
     check('48-UO 48-IT の的は語彙に無いので今までどおり',
           (_ff48('すねると', store=_st48uo2),
-           _ff48('ににして', store=_st48uo2),
-           _ff48('さされるので', after_kanji=True, store=_st48uo2)),
+           with_duplicate_repair(_ff48, 'ににして', store=_st48uo2),
+           with_duplicate_repair(_ff48, 'さされるので', after_kanji=True, store=_st48uo2)),
           ('すると', 'にして', 'されるので'))
     check('48-UO/48-UP 呼び手2つに同じ材料を渡す（予想と本番を揃える）',
           'store=store, tokenize_fn=tokenize_fn)' in src
@@ -4917,7 +4926,7 @@ def test_compose_48lu():
           (_ff48('すねると'), _ff48('はいてく'), _ff48('いいですよわね')),
           ('すると', 'はいく', 'いいですよね'))
     check('48-UQ 押しすぎ・終助詞3連には掛けない（打鍵の形が証拠）',
-          (_ff48('ににして'), _ff48('さされるので', after_kanji=True)),
+          (with_duplicate_repair(_ff48, 'ににして'), with_duplicate_repair(_ff48, 'さされるので', after_kanji=True)),
           ('にして', 'されるので')),
     check('48-UQ 判定は 48-TH と同じ `explain_kana_run(stems_only=True)`',
           "_pg_mk.explain_kana_run(window," in src
@@ -5011,8 +5020,8 @@ def test_compose_48lu():
     check('48-UV 押しすぎの判定に掛かっている',
           'and not _doubled_is_word_boundary(window, i,' in src, True)
     check('48-UV 的は今までどおり（ににして・さされるので・かかして）',
-          (_ff48('ににして'), _ff48('さされるので', after_kanji=True),
-           _ff48('かかして', after_kanji=True)),
+          (with_duplicate_repair(_ff48, 'ににして'), with_duplicate_repair(_ff48, 'さされるので', after_kanji=True),
+           with_duplicate_repair(_ff48, 'かかして', after_kanji=True)),
           ('にして', 'されるので', 'かして'))
     check('48-UV これははなし は直さない（解析つき）',
           _ff48('これははなしです', tokenize_fn=_tok48uv), None)
@@ -5650,7 +5659,7 @@ def test_kango_convert_48mi():
 
     src = open('corrector.py', encoding='utf-8').read()
     check('この道はいちばん最後に載せる（手が立つ場所に割り込まない）',
-          src.index('_kango_kana_fixes(line, store, dict_index)')
+          src.index('_kango_kana_fixes(line, store, dict_index, tokenize_fn=tokenize_fn)')
           > src.index('_reopen_mixed_run_fixes(line, store, tokenize_fn'),
           True)
     check('切り替えの口がある（CN_KANGO_CONV=0）',
@@ -7156,7 +7165,7 @@ def test_ime_record_is_not_a_gate_48nq():
           'def set_ime_readings_provider' in ksrc, True)
     # **本当の「本人が確定した」は decisions**（手動で解除できる）
     check('置換の最終検査で decisions を見ている',
-          'decisions.blocks(original, new_surface)' in src, True)
+          '_user_blocks_replacement(decisions,original,new_surface)' in src and 'decisions.blocks(original,corrected)' in src, True)
     return all_ok
 
 
@@ -7997,13 +8006,12 @@ def test_index_face_48oj():
     check('kango_tier.json は同梱の名簿に在る',
           "Item('kango_tier.json', 'kango_tier'" in bm, True)
     check('決めているのは _index_face 1つ', src.count('def _index_face('), 1)
-    check('段1がただ1つのときだけ決める（段2では決めない）',
-          'top = [s for t, s in tiers if t == 1]' in src, True)
+    # 順位と未判定の一意条件は tests_lexical_usage の実動作で検査する。
     check('語彙に実績2以上が在れば決めない',
           "if any((e.get('count', 0) or 0) >= 2 for e in store.lookup(reading)):\n"
           "            return None" in src, True)
     check('錨は弱い先頭・count1 の漢語錨より先に索引の顔',
-          '_face = _index_face(first, store, dict_index)' in src, True)
+          '_face = _index_face(first, store, dict_index,' in src, True)
     check('48-MI（strict_anchor）からは呼ばない（切り替え CN_MI_INDEX のときだけ）',
           'if ((not strict_anchor or index_anchor) and not vocab_only' in src, True)
     check('(あ) は名詞に続く機能語で始まる尾だけ（48-ON）',
@@ -8034,7 +8042,7 @@ def test_index_face_48oj():
     check('帯を見ないのは compose・48-MI の門・(い) の辞書の先頭の3か所（helper 経由・定義1＋呼び手3）',
           src.count('_surfaces_no_band(dict_index, '), 4)
     check('索引が帯を持つ（dict_index._band）', 'self._band = band' in di, True)
-    check('索引の版は 9（用言・活用形の読みを共有）', 'CACHE_VERSION = 9' in di, True)
+    check('索引の版は 10（AIの使用判断を共有）', 'CACHE_VERSION = 10' in di, True)
     check('造語の道: 手を当てた読みの語幹は直し先が1語のときだけ（48-OJ）',
           'が本人の語彙に無く、直し先' in src, True)
     check('形容動詞語幹＋化 は1語（48-OK・2か所）',

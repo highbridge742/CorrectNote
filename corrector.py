@@ -1140,8 +1140,8 @@ def _lu_dominant(r, store, dict_index=None):
     順に:
       (1) 本人の語彙に **solid（実績2以上）** の表記——ただ1つならそれ。
           2つ以上なら **段（`kango_tier`）→ 同梱の費用** で1つに
-          （いどう: 移動〔段1〕／異動〔段2〕→ 移動）。並べば None
-      (2) 索引の顔（`_index_face`——段1の2字漢語がただ1つ）
+          （いどう: 移動〔段1〕／異動〔段2〕→ 移動）。同点は表記順
+      (2) 索引の顔（`_index_face`——段1の2字漢語を順位付け）
       (3) 世の中のカタカナ語（`_lu_katakana_face`・4字以上）
 
     **count 1 の表記は数えない**（48-LU の注記「立った表記がただ1つ」
@@ -1167,9 +1167,7 @@ def _lu_dominant(r, store, dict_index=None):
             tc = _table_cost(sf)
             return (_kango_tier_of(sf), tc if tc is not None else 10 ** 9)
         faces.sort(key=lambda sf: (_key(sf), sf))
-        if _key(faces[0]) < _key(faces[1]):
-            return faces[0], 3
-        return None
+        return faces[0], 3
     if dict_index is not None:
         try:
             f = _index_face(r, store, dict_index)
@@ -1463,7 +1461,7 @@ def _lu_compose_odd_run(run, store, input_method=None, tokenize_fn=None,
       ・**手を費用の段に分ける**（48-OQ(e')「打った字を使う手が先」）:
           0手 → 安い1手（隣のキー≤1.0・゛の付け外し・**゛の位置ずれ**
           〔48-SB〕・**余分な字に濁点**〔48-OR(b)・たで→だ〕・
-          **余分な隣のキー／同じキー**を落とす）→ 遠い隣（≤1.4・
+          **余分な隣のキー／同じキー**を落とす〔重複設定に従う〕）→ 遠い隣（≤1.4・
           `たぶいごうして` の ご→ど）→ 脱字（1字足す・1.5）。
           **どの字でも消す手は止めた**（余分な打鍵は隣のキーのとき
           だけ——SPEC の型5）
@@ -1558,6 +1556,8 @@ def _lu_compose_odd_run(run, store, input_method=None, tokenize_fn=None,
                 if not got:
                     continue
                 face, strength = got
+                from kango_tier import prefer_predicate_spelling
+                face=prefer_predicate_spelling(v[i:i+L],face,v[i+L:])
                 # **2字の部品は solid かカタカナだけ**（48-ON の族）
                 if L == 2 and strength < 3 \
                         and not all(is_katakana(_c) or _c == 'ー'
@@ -1628,6 +1628,11 @@ def _lu_compose_odd_run(run, store, input_method=None, tokenize_fn=None,
     # 余分な打鍵は**隣のキーか同じキー**のときだけ落とす（SPEC の型5。
     # どの字でも消す手は junk を作る——`チサ積んこうになる` の族）
     for i in range(1, n):
+        # 48-AAC: an equal neighbor makes this a repeated keystroke even
+        # when the other neighbor is also physically adjacent. The same
+        # setting must apply to LU as to the other candidate generators.
+        if not _deletion_allowed(run, i):
+            continue
         nb = False
         for j in (i - 1, i + 1):
             if 0 <= j < n:
@@ -1765,15 +1770,9 @@ def _lu_compose_odd_run(run, store, input_method=None, tokenize_fn=None,
                     and (not tail or _lu_tail_shape(tail)))
         if c2 == '後':
             return True                         # カタカナ＋後（上で確かめ済み）
-        if len(c2) >= 4 and all(is_katakana(_c) or _c == 'ー'
-                                for _c in c2):
+        from semantic_roles import nominal_compound_support
+        if nominal_compound_support(c1,c2):
             return not tail or _lu_tail_shape(tail)
-        try:
-            import seed_japanese as _sj_cl
-            if _sj_cl.is_unit(c1 + c2) is True:
-                return not tail or _lu_tail_shape(tail)
-        except Exception:
-            pass
         # 2つ目＋尾がサ変（移動＋して）
         if tail and tail[0] in 'しさせ' and _lu_face_pos(c2).startswith(
                 '名詞:サ変接続'):
@@ -1865,8 +1864,8 @@ def _lu_compose_odd_run(run, store, input_method=None, tokenize_fn=None,
                 #       解析|でした）。1字の助詞だけ（`上|へ|は`）は不可
                 #   (b) 内容語が2つ → 間に格助詞（続き|を|話す）か、
                 #       2つ目＋尾がサ変（タブ|移動|して）か、
-                #       2つ目が世の中のカタカナ語4字以上（右|ダブルクリック）か、
-                #       組んだ形が世の中の1語（`is_unit`）か、
+                #       組んだ形が実在語か、共通の意味分類で
+                #       名詞・動作・操作方式の関係を証明できる組か、
                 #       カタカナ＋後（スクロール|後）
                 if not _lu_clause_shape(pieces):
                     continue
@@ -2421,22 +2420,34 @@ _WHOLE_KANJI_FLOOR = int(os.environ.get('CN_WHOLE_FLOOR', '2'))
 
 
 def _adj_ok_one_char(typed, chosen, input_method):
-    """
-    **決まった直しが「1文字違うだけ」なら、隣のキーかを見る**
-    （項目48-FX）。
+    """同じ長さの読みは、各置換または隣り合う転置を物理キーで確かめる。
 
-    1文字違いでないもの（脱字・重複・入れ替え・2箇所以上）は
-    ここでは何も言わない（True）。入れ替え（順序違い）は
-    同じ長さだが**2箇所**違うので、これも当たらない。
+    48-AAE / GPT-6 / 2026-09-12. 旧名は呼び口の互換用。2字以上違う
+    だけで隣接検査を素通りさせない。48-ABS（2026-09-13・本人指定）: 長さの違う純粋な1打鍵削除も
+    元の左右の打鍵に隣接することを確認する。48-AJM: 複数打鍵の純粋な削除も同じ原文条件。その他の長さ違いは生成経路が
+    検査する。転置は順序を戻す操作なので非隣接置換と混同しない。
     """
     if not _ADJ_GATE:
         return True
+    if input_method == 'kana':
+        from kana_layout import single_key_drop_adjacency,multiple_key_drop_adjacency
+        drop=single_key_drop_adjacency(typed,chosen,_INTRUDE_MAX_DIST)
+        if drop is None:drop=multiple_key_drop_adjacency(typed,chosen,_INTRUDE_MAX_DIST)
+        if drop is not None:return drop
     if len(typed) != len(chosen):
         return True
-    diff = [(a, b) for a, b in zip(typed, chosen) if a != b]
-    if len(diff) != 1:
-        return True
-    return adjacent_slip(diff[0][0], diff[0][1], input_method)
+    # A path can contain independent adjacent substitutions and true
+    # neighboring transpositions. Neither needs arbitrary remote keys.
+    reachable={0}
+    for i in range(len(typed)):
+        if i not in reachable:
+            continue
+        if typed[i]==chosen[i] or adjacent_slip(typed[i],chosen[i],input_method):
+            reachable.add(i+1)
+        if (i+1<len(typed) and typed[i]==chosen[i+1]
+                and typed[i+1]==chosen[i]):
+            reachable.add(i+2)
+    return len(typed) in reachable
 
 
 def kana_to_romaji(kana):
@@ -3029,6 +3040,9 @@ def _is_expressive_kana_run(run):
     - 同じ並びの繰り返し（はわはわ・わうわう・うほうほ）は擬音。
     """
     if not run:
+        return False
+    from morphology import original_spelling_facts
+    if original_spelling_facts(run):
         return False
     # 長音「ー」が1つだけの並びは、伸ばして書いた話し言葉
     # （うれしー・みかーん・もしもーし・すりーぷ）。
@@ -3961,7 +3975,8 @@ def _best_surface_for(reading, store):
         return None
     if not entries:
         return None
-    return max(entries, key=lambda e: e.get('count', 0)).get('surface')
+    from kango_tier import prefer_ordinary_spelling
+    return prefer_ordinary_spelling(reading,max(entries, key=lambda e: e.get('count', 0)).get('surface'))
 
 
 # 使用実績の頭打ちと、使わなくなった語の弱まり方。
@@ -4577,12 +4592,83 @@ def _chunk_is_intact(chunk, tokenize_fn, after_kanji=False,
     """
     if not chunk or len(chunk) < 2:
         return False
+    from morphology import original_spelling_facts
+    if original_spelling_facts(chunk):
+        return False
+    from semantic_roles import unadorned_nominal_prefix_parts
+    if unadorned_nominal_prefix_parts(chunk):return True
+    # 48-AAK: the same written category-list proof also suppresses the
+    # lexical anomaly below. It never supplies a new kana reading.
+    from semantic_roles import is_nominal_coordination
+    if is_nominal_coordination(chunk):
+        return True
+    # 48-AGS: retain only proved source-clause ranges before a competing
+    # token split is mistaken for a structural anomaly.
+    if tokenize_fn is not None:
+        source_var=globals().get('_CORRECTION_SOURCE')
+        source=source_var.get() if source_var is not None else None
+        if source:
+            from reading_segments import native_context_ranges
+            ranges=native_context_ranges(source)
+            locations=[m.span() for m in re.finditer(re.escape(chunk),source)] if ranges else []
+            if locations and all(any(lo<=a and z<=hi for lo,hi in ranges) for a,z in locations):
+                return True
     # 切り出した語だけが自然でも、原文の接続の異様さは失われない。
     # 文脈付き経路では、先に確定した同じ範囲の判定をこの共通入口で受ける。
     if (repair_context is not None and repair_context.text == chunk
             and repair_context.structural and repair_context.anomalies):
         _trace('文脈入口', f'{chunk!r} は原文で接続の異様判定がある')
         return False
+    # 48-ZJ: a native action reading with its literal finite inflection is
+    # already grammatical. The same entry serves repairs and word splits.
+    if tokenize_fn is not None:
+        from reading_segments import intact_native_reading
+        if intact_native_reading(chunk):
+            return True
+        # 48-ACK: a proven original kana clause remains complete when a
+        # legacy path selects only its predicate. Purple already uses the
+        # entire kana run; losing its object must not start a new repair.
+        source_var=globals().get('_CORRECTION_SOURCE')
+        source=source_var.get() if source_var is not None else None
+        if source and source!=chunk and all('ぁ'<=c<='ゖ' or c=='ー' for c in chunk):
+            locations=[m.span() for m in re.finditer(re.escape(chunk),source)]
+            runs=list(re.finditer('[ぁ-ゖー]+',source))
+            if locations and all(any(m.start()<=a and b<=m.end()
+                    and intact_native_reading(m.group()) for m in runs)
+                    for a,b in locations):
+                return True
+    # 48-ZA: 既存48-ULの「原文の1語の断片」を全ての道の入口へ共有。
+    # 窓に助詞や前の名詞が含まれても、探索する芯自体は同じ入口を通す。
+    if tokenize_fn is not None:
+        source_var=globals().get('_CORRECTION_SOURCE')
+        source=source_var.get() if source_var is not None else None
+        if source and source!=chunk:
+            locations=[m.start() for m in re.finditer(re.escape(chunk),source)]
+            if locations:
+                from reading_segments import native_word_fragment_context
+                if all(native_word_fragment_context(source,a,a+len(chunk),tokenize_fn)
+                       for a in locations):
+                    return True
+    # 48-YY: 紫の判定と同じ原文の名詞＋機能語を確認する。
+    if tokenize_fn is not None and any('ぁ'<=c<='ゖ' for c in chunk):
+        source_var=globals().get('_CORRECTION_SOURCE')
+        source=source_var.get() if source_var is not None else None
+        source=source or chunk
+        from reading_segments import native_nominal_context
+        locations=[m.start() for m in re.finditer(re.escape(chunk),source)]
+        if locations and all(native_nominal_context(source,a,a+len(chunk),tokenize_fn)
+                             for a in locations):
+            return True
+    # 48-YV: 送り仮名と名詞化さを、窓だけの重複助詞に取り違えない。
+    if tokenize_fn is not None and 'さ' in chunk:
+        source_var=globals().get('_CORRECTION_SOURCE')
+        source=source_var.get() if source_var is not None else None
+        source=source or chunk
+        from reading_segments import nominalized_adjective_context
+        locations=[m.start() for m in re.finditer(re.escape(chunk),source)]
+        if locations and all(nominalized_adjective_context(source,a,a+len(chunk),tokenize_fn)
+                             for a in locations):
+            return True
     # 文中で命令の強調と判定できた形は、古い語の組の道でも保持する。
     # 部分だけ見て「行けいません」の前半を命令に取り違えない。
     if tokenize_fn is not None and chunk.endswith(('い','ぃ')):
@@ -4658,6 +4744,22 @@ def _chunk_is_intact(chunk, tokenize_fn, after_kanji=False,
         from reading_segments import short_nominal_reading
         if short_nominal_reading(chunk):
             return True
+    # 48-YT: 原文の表記そのものが辞書にある名詞＋助詞・引用された感動詞。
+    # 読みだけの頻度表が知らないことを、壊れている根拠へ変えない。
+    if not after_kanji and not starts_inside_word and tokenize_fn is not None:
+        from reading_segments import native_lexical_phrase
+        if native_lexical_phrase(chunk,tokenize_fn):
+            return True
+    # 48-YT: 窓の頭の「の」は、原文の名詞を受ける連体化と確認できる。
+    if chunk.startswith('の') and tokenize_fn is not None:
+        source_var=globals().get('_CORRECTION_SOURCE')
+        source=source_var.get() if source_var is not None else None
+        if source and source!=chunk:
+            from reading_segments import native_genitive_context
+            locations=[m.start() for m in re.finditer(re.escape(chunk),source)]
+            if locations and all(native_genitive_context(source,a,a+len(chunk),tokenize_fn)
+                                 for a in locations):
+                return True
     # 原文の周囲だけを確かめる呼び口。単独の塊の判定を全文へ広げない。
     if context_only:
         return False
@@ -4849,7 +4951,19 @@ def _chunk_is_intact(chunk, tokenize_fn, after_kanji=False,
             and all(_te_tail_ok(t) for t in _tk2[2:])
             and all(t[5] for t in _tk2)
             and ''.join(t[0] for t in _tk2) == chunk):
-        return True
+        # 48-ZL: the same native euphonic link used to validate candidates
+        # must also justify this positive completion. Merely tokenizing
+        # さい＋で as a verb and connective does not make that link valid.
+        from contextual_repair import _modern_te_allowed, _modern_euphonic_link
+        invalid_link=False
+        for a,b in zip(_tk2,_tk2[1:]):
+            link=_modern_euphonic_link(b[0],b[1],b[6] if len(b)>6 else '')
+            if (a[1].startswith('動詞') and link is not None
+                    and _modern_te_allowed(a[0],a[2],link) is False):
+                invalid_link=True
+                break
+        if not invalid_link:
+            return True
     # 48-VQ: 未然形＋接尾動詞は受身・可能・尊敬・使役の活用。
     # 「示さ＋れる」を別の語へ読み替えない。使役受身の接尾も、
     # 直前が未然形であることを確かめる。助動詞などを無条件に
@@ -5540,6 +5654,8 @@ def _resolve_reading_seq(chunk, readings, store, tokenize_fn,
             # 真ん中助詞の3分割に限る（下の kind 判定を参照）。
             if not tail:
                 for k in range(len(base)):
+                    if not _deletion_allowed(base, k):
+                        continue
                     v = base[:k] + base[k + 1:]
                     if all(v != w for w, _c, _k2 in variants):
                         variants.append((v, 1, 'delete'))
@@ -6030,35 +6146,14 @@ def _katakana_melt_ok(chunk, new_surface, store, tokenize_fn=None):
 
 
 def _is_repeat_collapse(core, cand):
-    """
-    core から「隣と同じ文字」だけを削っていくと cand になるか。
+    # Shared with the vocabulary search, so one setting covers all routes.
+    from vocabulary import is_repeat_collapse
+    return is_repeat_collapse(core, cand)
 
-    「たたんご」→「たんご」（先頭の た の連打を1つ削る）が該当する。
-    連打の訂正で短くなった候補は、部分文字列の形をしていても
-    「切り詰め」（語の切り落とし）ではないので、除外してはいけない。
-    """
-    # 「隣と同じ文字を削る」を1文字ずつ判定すると、「みみ」の
-    # 両方を削って「みみこぴー」→「こぴー」まで許してしまう
-    # （どちらの み も「隣と同じ」だから）。これは連打の訂正ではなく
-    # 語の頭の切り落とし（実機で 耳コピー→コピー と壊れた）。
-    # 同じ文字の連続（run）ごとに比べ、**各連続から最低1文字は残る**
-    # 形だけを連打の畳み込みとみなす。
-    def _runs(s):
-        out = []
-        for ch in s:
-            if out and out[-1][0] == ch:
-                out[-1][1] += 1
-            else:
-                out.append([ch, 1])
-        return out
 
-    rc, rd = _runs(core), _runs(cand)
-    if len(rc) != len(rd):
-        return False
-    for (c1, n1), (c2, n2) in zip(rc, rd):
-        if c1 != c2 or not (1 <= n2 <= n1):
-            return False
-    return core != cand
+def _deletion_allowed(text, index):
+    from vocabulary import deletion_respects_dup_setting
+    return deletion_respects_dup_setting(text, index)
 
 
 def _is_whole_proper_noun(surface, tokenize_fn):
@@ -6098,6 +6193,10 @@ def short_pile_overturn_ok(core, best, store, dict_index, tokenize_fn):
     """
     **元の解釈が「短い語の寄せ集め」でしかないなら覆してよい**
     （項目48-ES・設計11・2026-08-18）。
+
+    48-ABT: 以下は当時の作例の説明。現行のかな入力では非隣接の
+    「あ」を削るこの復元を要求しない。原文解釈を調べる門が開いても、
+    操作そのものは現在の入力方式・隣接・重複設定を別に満たす必要がある。
 
     `たんあごの繋がり → たんごの繋がり` が止まっている理由は、
     芯 `たんあご` が `たん`＋`あご`（どちらも実在語）と読めてしまい、
@@ -6515,6 +6614,8 @@ def _typo_repairs(core, extra_key=False, input_method='kana'):
     # **短い語へ削る候補が費用で勝つ**。並べる順を後ろにしても同じ）。
     if extra_key and n >= 3:
         for i in range(n):
+            if not _deletion_allowed(core, i):
+                continue
             _nb = ((i > 0 and core[i - 1] != core[i]
                     and adjacent_slip(core[i - 1], core[i], input_method))
                    or (i + 1 < n and core[i] != core[i + 1]
@@ -6672,15 +6773,20 @@ def _moved_dakuten_fix(core, store, dict_index=None):
     その門より先に見る。
 
     採るのは、**元の芯が語でなく**、戻した形が**ただ1つ**、語として
-    立つ（本人の語彙に実績2以上・同梱の費用の表に在る・世の中の読み
-    〔4字以上〕）ときだけ。決まらなければ None（今までの道へ）。
+    立つときだけ。元の語の保護には従来の広い存在根拠を残す。
+    候補は本人の solid、または従来の既知読みに加えて実辞書の独立した
+    語・完全に同じ読みを要する（48-AJA）。費用表の存在だけでは採らない。
+    決まらなければ None（今までの道へ）。
     """
     if not core or len(core) < 3 or store is None:
         return None
 
+    from vocabulary import entry_is_solid
+    from reading_segments import native_lexical_reading_faces
+
     def _known(x):
         try:
-            if any(e.get('count', 0) >= 2 for e in store.lookup(x)):
+            if any(entry_is_solid(e) for e in store.lookup(x)):
                 return True
         except Exception:
             pass
@@ -6697,8 +6803,15 @@ def _moved_dakuten_fix(core, store, dict_index=None):
         return None
     good = []
     for v in _moved_dakuten_variants(core):
-        if _known(v) and v not in good \
-                and not _dakuten_rival_stronger(core, v, store):
+        if not _known(v) or v in good or _dakuten_rival_stronger(core, v, store):
+            continue
+        try:
+            personal=any(entry_is_solid(e) for e in store.lookup(v))
+        except Exception:
+            personal=False
+        # A cost-table reading alone may be a historical inflection or a
+        # phrase. It cannot certify the independent word needed here.
+        if personal or native_lexical_reading_faces(v):
             good.append(v)
     return good[0] if len(good) == 1 else None
 
@@ -7259,6 +7372,8 @@ def _drop_one_repeat(core):
 
     長さが同じまま並べ替わっているものまである。
     """
+    if not _dup_repair_enabled():
+        return []
     out = []
     for i in range(1, len(core)):
         if core[i] == core[i - 1]:
@@ -7369,7 +7484,9 @@ def rebuild_window_core(window, store, tokenize_fn, max_cost=3.0,
         if dict_index is not None and window \
                 and all(is_hiragana(c) or c == 'ー' for c in window):
             try:
-                if dict_index.is_world_reading(window):
+                from kango_tier import reading_is_explicitly_restricted
+                if (dict_index.is_world_reading(window)
+                        and not reading_is_explicitly_restricted(window)):
                     _trace('芯', f'{window!r} → 世の中に在る語なので'
                                  f'触らない（知らないだけで'
                                  f'壊れていない・項目48-EN）')
@@ -7397,6 +7514,9 @@ def rebuild_window_core(window, store, tokenize_fn, max_cost=3.0,
             _trace('芯', f'{window!r} → 辞書としては読める。'
                          f'明らかに自然になる直しだけ通す')
         cores = window_cores(window, store, after_kanji=after_kanji)
+        if not readable:
+            from reading_segments import native_functional_case_cuts
+            cores=list(dict.fromkeys(cores+[(0,b) for b in native_functional_case_cuts(window)]))
     _trace('芯', f'{window!r}（直前が漢字={after_kanji}）→ '
                  f'{[window[x:y] for x, y in cores] or "芯なし"}')
     # **長い芯から見る**（項目48-CR）。短いほうから見ると、短い芯で
@@ -7415,6 +7535,12 @@ def rebuild_window_core(window, store, tokenize_fn, max_cost=3.0,
     for c_s, c_e in cores:
         readable = _readable_window
         core = window[c_s:c_e]
+
+        # 48-ZA: 窓から切り出す前に見た原文を、芯の共通完成判定にも渡す。
+        # 漢字を開いた読み全体の探索には原文の部分文字列の判定を流用しない。
+        if not whole_only and _chunk_is_intact(core,tokenize_fn,context_only=True):
+            _trace('芯',f'{core!r} は原文の共通判定で完成している')
+            continue
         if len(core) < 3:
             _trace('芯', f'{core!r} → 3文字未満なので対象外')
             continue
@@ -7436,7 +7562,9 @@ def rebuild_window_core(window, store, tokenize_fn, max_cost=3.0,
         #     昨日ひどまえ → 芯 `ひどまえ` はどこにも無い → 直す
         if after_kanji and c_s == 0 and dict_index is not None:
             try:
-                if dict_index.is_world_reading(core):
+                from kango_tier import reading_is_explicitly_restricted
+                if (dict_index.is_world_reading(core)
+                        and not reading_is_explicitly_restricted(core)):
                     _trace('芯', f'{core!r} → 送り仮名を剥がさない形だが、'
                                  f'世の中に在る語なので触らない')
                     continue
@@ -7764,9 +7892,15 @@ def rebuild_window_core(window, store, tokenize_fn, max_cost=3.0,
                          f'触らない')
             continue
         _repairs = []
+        def ordinary_dictionary_candidate(reading):
+            # The source was already judged unexplained and passed the
+            # shared intact entry. No vocabulary counts/solid bits change.
+            if readable or whole_only or dict_index is None:
+                return False
+            return _index_face(reading,store,dict_index) is not None
         for _c in (() if whole_only else _typo_repairs(core)):
             try:
-                if store.has_reading(_c):
+                if store.has_reading(_c) or ordinary_dictionary_candidate(_c):
                     # 基本費用0.5・訂正1回。追加打鍵が必要なら共通の補充費用へ上げる。
                     # 「誤打の形そのもの」なので、ふつうの置換より
                     # ありそうだが、桁違いに安くはしない。
@@ -7785,7 +7919,7 @@ def rebuild_window_core(window, store, tokenize_fn, max_cost=3.0,
             if _c in _seen_rep:
                 continue
             try:
-                if store.has_reading(_c):
+                if store.has_reading(_c) or ordinary_dictionary_candidate(_c):
                     _repairs.append((_c, 0.7, 1))
                     _seen_rep.add(_c)
             except Exception:
@@ -7983,6 +8117,18 @@ def rebuild_window_core(window, store, tokenize_fn, max_cost=3.0,
         # 費用は打鍵の近さを足したものなので、こちらが「最有力」。
         _trace('芯', f'{core!r} → 読める={readable}')
         if decisive:
+            # 48-AAX: after an unexplained source has passed the shared
+            # entry, an impossible keystroke is not a candidate to rank.
+            # Otherwise a cheap non-adjacent spelling can veto a valid
+            # omitted-key repair below it. Readable-source comparisons
+            # retain their existing late check and tie evidence.
+            if input_method:
+                feasible=[f for f in found if _adj_ok_one_char(core,f[0],input_method)]
+                if len(feasible)!=len(found):
+                    _trace('芯',f'{core!r} は入力方式の打鍵で説明できる候補を先に比較する')
+                found=feasible
+            if not found:
+                continue
             found = sorted(found, key=lambda f: (f[1], f[2]))
         best, cost, edits = found[0]
         if cost >= max_cost or best == core:
@@ -8225,8 +8371,13 @@ def rebuild_window_core(window, store, tokenize_fn, max_cost=3.0,
         _free_from = (c_s + len(best)
                       if _tail_free and _leading_particle_len(_tail_free)
                       else None)
+        # The exact same ordinary dictionary evidence used to generate
+        # this reading also reaches the existing coverage validator.
+        # It certifies only the chosen whole word, not arbitrary fragments.
+        _dictionary_best=ordinary_dictionary_candidate(best)
         if not _covered_by_known(_after3, store, after_kanji,
-                                 free_from=_free_from):
+                                 free_from=_free_from,
+                                 world=(lambda rd: rd==best) if _dictionary_best else None):
             _trace('芯', f'{core!r} → {best!r} にすると {_after3!r} になり、'
                          f'語彙と助詞で説明できないので採らない')
             continue
@@ -8561,6 +8712,16 @@ def _compound_verb_backed(surface, reading, attest_text, max_prefix=3):
         return False
     if not words:
         return False
+    from morphology import tokenize as native_tokenize
+    def native_compound(word):
+        if word not in words:return False
+        parts=native_tokenize(word)
+        # A full native verb or an attested continuative verb compound.
+        # A noun/case substring such as 思いで is not a compound verb.
+        return bool(parts and parts[0].start==0 and parts[-1].end==len(word)
+            and ''.join(t.surface for t in parts)==word
+            and all(t.has_reading and t.pos=='動詞' for t in parts)
+            and all(t.infl_form.startswith('連用') for t in parts[:-1]))
     stem, tail = _split_stem_tail_local(surface)
     if not stem or not tail:
         return False
@@ -8576,7 +8737,7 @@ def _compound_verb_backed(surface, reading, attest_text, max_prefix=3):
             if not all(is_hiragana(c) or is_kanji(c) for c in head):
                 break
             for b in bases:
-                if (head + b) in words:
+                if native_compound(head+b):
                     return True
         # 後ろに付く形（映り＋込む）。書かれている形のまま続きを足す
         end = idx + len(surface)
@@ -8585,7 +8746,7 @@ def _compound_verb_backed(surface, reading, attest_text, max_prefix=3):
             tail_part = rest[:k]
             if not all(is_hiragana(c) or is_kanji(c) for c in tail_part):
                 break
-            if (surface + tail_part) in words:
+            if native_compound(surface+tail_part):
                 return True
         idx = attest_text.find(surface, idx + 1)
     return False
@@ -9847,6 +10008,13 @@ def _inflection_tail_fixes(line, tokenize_fn, input_method='kana', dict_index=No
             if sahen and not (ct[0][0] in _odd_suru._SURU_FORMS or
                     (ct[0][0] == 'さ' and len(ct[0]) > 6 and ct[0][6] == '未然レル接続')):
                 continue
+            if sahen or renyou or nominal:
+                # 48-ACP: use the same complete native predicate contract as
+                # composed candidates. A loose functional explanation can
+                # split a final adverb (まず) as an auxiliary and hide a bad tail.
+                from contextual_repair import _productive_predicate
+                if not _productive_predicate(prev[0]+candidate,prev[0]):
+                    continue
             if sahen:
                 state = _pg_suru.continuation_state(ct[0][6] if len(ct[0]) > 6 else '')
                 rest = whole[ct[0][4]:candidate_end]
@@ -10893,8 +11061,6 @@ def _design35_fix(surface, reading, surrounding_words, attest_text,
     置く場所は2つの入口（evaluate_candidate の頭＝count の盾より前、
     _homophone_by_context の頭＝活用形の道・48-IQ）。中身はここ1か所。
     """
-    if not surrounding_words:
-        return None
     # **「X」で括られた語は、言及であって使用ではない**（引用の守り。
     # `※「治り」を右クリック…` の 治り を直すと説明が壊れる——実測）。
     # attest_text はこの語を1つの空白に伏せた行（または行そのもの）
@@ -10904,9 +11070,10 @@ def _design35_fix(surface, reading, surrounding_words, attest_text,
         return None
     try:
         import homophone_pairs as _hp
-        material = tuple(w for w in surrounding_words if w and w != surface)
+        material = tuple(w for w in (surrounding_words or ()) if w and w != surface)
+        material = _hp.local_material(surface, material, prev_text, after_text, attest_text)
         fix = _hp.find_fix(surface, material, after=after_text,
-                           prev=prev_text)
+                           prev=prev_text, source=attest_text)
     except Exception:
         return None
     if fix == getattr(_hp, 'KEEP', None):
@@ -10963,8 +11130,6 @@ def _homophone_by_context(surface, reading, store, context_vec,
 
     戻り値: (置き換え先の表記, カテゴリ, 証拠の強さ) または None
     """
-    if context_vec is None or not surrounding_words:
-        return None
     # 設計35（項目48-JJ）はここにも置く——この関数は evaluate_candidate
     # の is_known_word の道のほかに、**活用形の道（48-IQ・語尾で切られた
     # 映る/思い/描く の入口）からも直接呼ばれる**（学び22: 門・表は
@@ -10975,6 +11140,9 @@ def _homophone_by_context(surface, reading, store, context_vec,
         return None
     if _fix35:
         return _fix35
+    # The native pair table is independent of learned co-occurrence.
+    if context_vec is None or not surrounding_words:
+        return None
     # 案A（項目48-DZ）: 漢字だけでない語でも、**漢字＋送り仮名**なら
     # 活用形を作って比べる経路に入る。`_CONJ_HOMOPHONE` を False に
     # すれば、この経路は丸ごと消えて第37回までと同じ動きに戻る。
@@ -12647,6 +12815,24 @@ def _doubled_is_word_boundary(window, i, tokenize_fn=None):
 
     `tokenize_fn` が無ければ False（＝今までどおり打ちすぎと見る）。
     """
+    # 48-ZC: 語の中の同じ字は、助詞を2度押した証拠にならない。
+    # 名詞の証拠は48-YYと共有し、原文の読み・品詞・語全体で確認する。
+    # 活用形の末尾を同形の名詞へ読み替えない（表示さされる等は対象外）。
+    if tokenize_fn is not None and 0<=i<len(window)-1:
+        source_var=globals().get('_CORRECTION_SOURCE')
+        source=(source_var.get() if source_var is not None else None) or window
+        locations=[m.start() for m in re.finditer(re.escape(window),source)]
+        try:
+            parts=list(tokenize_fn(source) or ())
+        except Exception:
+            return False
+        from reading_segments import native_nominal_context
+        def inside_nominal(offset):
+            return any(t[3]<=offset+i and offset+i+2<=t[4]
+                       and native_nominal_context(source,t[3],t[4],tokenize_fn)
+                       for t in parts)
+        if locations and all(inside_nominal(offset) for offset in locations):
+            return True
     if i < 2 or tokenize_fn is None:
         return False
     try:
@@ -12739,6 +12925,7 @@ def _fix_functional_run(window, after_kanji=False, store=None,
                   and not _doubled_is_word_boundary(window, i,
                                                     tokenize_fn)
                   for i in range(n - 1))
+    repair_doubled = doubled and _dup_repair_enabled()
     finals = 0
     run = 0
     for c in window:
@@ -12777,7 +12964,7 @@ def _fix_functional_run(window, after_kanji=False, store=None,
     # 証拠なので、語であることでは覆らない（`表示さされる` を守る）。
     # ここで外すのは「機能語の並びではない」という**内容語なら必ず立つ**
     # 印だけ。
-    if not original_ok and not doubled and finals < 3:
+    if not original_ok and not repair_doubled and finals < 3:
         try:
             import seed_japanese as _sj_ff
             if _sj_ff.is_unit(window) is True:
@@ -12869,7 +13056,7 @@ def _fix_functional_run(window, after_kanji=False, store=None,
     #   あちらは**打鍵の形そのもの**が証拠なので、文法の形は要らない
     #   （`ににして` は文法の形をしていないが、`に` の2度打ちが見えている）。
     _maki_ok = True
-    if not (doubled or finals >= 3):
+    if not (repair_doubled or finals >= 3):
         try:
             import pos_grammar as _pg_mk
             _maki_ok = bool(_pg_mk.explain_kana_run(window,
@@ -12880,7 +13067,8 @@ def _fix_functional_run(window, after_kanji=False, store=None,
     for i in range(n - 1):
         a, b = window[i], window[i + 1]
         if a == b and a in PARTICLES_1CHAR:
-            cands.setdefault(window[:i] + window[i + 1:], ('押しすぎ', a))
+            if _deletion_allowed(window,i) and not _doubled_is_word_boundary(window,i,tokenize_fn):
+                cands.setdefault(window[:i] + window[i + 1:], ('押しすぎ', a))
         elif a != b and _keys_adjacent(a, b):
             # ★★ **漢字の直後のかな連続からは、巻き込みで字を落とさない**
             # （項目48-UK・2026-09-07）。
@@ -12912,12 +13100,14 @@ def _fix_functional_run(window, after_kanji=False, store=None,
                 cands.setdefault(window[:i] + window[i + 1:], ('巻き込み', a))
                 cands.setdefault(window[:i + 1] + window[i + 2:],
                                  ('巻き込み', b))
+    from vocabulary import repeat_collapse_is_disabled
     ok = [(c, how, ch) for c, (how, ch) in cands.items()
-          if c != window and len(c) >= 2 and _is_functional_strict(c)]
+          if c != window and len(c) >= 2 and _is_functional_strict(c)
+          and not repeat_collapse_is_disabled(window,c)]
     if not ok:
         return None
     # 元が機能語だけで説明できるなら、(1)(2) の印が要る
-    if original_ok and not (doubled or finals >= 3):
+    if original_ok and not (repair_doubled or finals >= 3):
         return None
     pushed = [x for x in ok if x[1] == '押しすぎ']
     if pushed:
@@ -13389,7 +13579,7 @@ def _has_new_repetition(original, replacement):
             best = max(best, cur)
         return best if s else 0
 
-    return _max_run(replacement) > _max_run(original)
+    return _max_run(replacement) > max(1,_max_run(original))
 
 
 def _match_score(a, b):
@@ -15700,7 +15890,7 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
                                  if distance <= 1.0}
                 except Exception:
                     neighbors = set()
-                if rd[i] in neighbors:
+                if rd[i] in neighbors and _deletion_allowed(rd,i):
                     _add(rd[:i] + rd[i + 1:], '余分な隣のキー', 1.0)
         for repaired in _intrusion_candidates:
             _add(repaired, '余分な隣のキー', 1.0)
@@ -15756,7 +15946,7 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
         # 「打ち間違い」の範囲。
         try:
             from vocabulary import find_known_readings_flex as _fkr
-            for r, c, e in _fkr(rd, store, max_edits=2):
+            for r, c, e in _fkr(rd, store, max_edits=2, input_method=input_method):
                 if c <= 2.0 and r != rd:
                     _add(r, f'似た読み({c:.1f})', c)
         except Exception:
@@ -16083,6 +16273,11 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
                     faces=list(tokenize_fn(surf))
                     noun=bool(faces and all((t[1] or '').startswith('名詞') for t in faces))
                     key=(0 if noun else 1,_fixes.costs.get(fixed,9.9))+key
+                else:
+                    # Reuse the assembly fallback's source-reading evidence.
+                    # Keep the existing role order for nominal modifiers, and
+                    # the established word order within one source reading.
+                    key = (_reading_gap(rd, _ar) if _ar else 0,) + key
                 cands[surf] = min(cands.get(surf, key), key)
                 if best is None or key < best[0]:
                     best = (key, surf, how, rd, fixed, cnt)
@@ -16418,7 +16613,16 @@ def _kango_tier_of(surface):
 
     引き当ての内側から呼ばれるので**例外を外へ出さない**。
     """
-    if not surface or len(surface) != 2:
+    if not surface:
+        return 1
+    try:
+        import kango_tier as _usage
+        judged = _usage.known_usage_tier(surface)
+        if judged is not None:
+            return judged
+    except Exception:
+        pass
+    if len(surface) != 2:
         return 1
     try:
         if not all(is_kanji(c) for c in surface):
@@ -17275,6 +17479,8 @@ def _fix_known_head_compound(run, store, tokenize_fn, dict_index,
     """
     if not run or len(run) < 7:
         return None
+    if _chunk_is_intact(run,tokenize_fn):
+        return None
     # ★★ **かぎ括弧にちょうど囲まれた読みは「引用」**——触らない
     # （項目48-RK・実機メモで測って足した門）。うにさんのメモは
     # **誤字の話を書いたメモ**なので、読みを括弧に入れて引く形が出る:
@@ -17392,6 +17598,9 @@ def _fix_known_head_compound(run, store, tokenize_fn, dict_index,
         if not preserved:
             hk = _known_head_kanji(head, store, right_surface=best_t, dict_index=dict_index) or hk
         whole = hk + best_t
+        from semantic_roles import nominal_compound_support
+        if not nominal_compound_support(hk,best_t):
+            continue
         try:
             if _odd.is_odd_run(whole, tokenize_fn, store=store,
                                dict_index=dict_index):
@@ -17757,6 +17966,7 @@ def _convert_odd_kana_run(text, store, dict_index, strict_anchor=False,
         _w, _funcs, _p1 = _pg._load_tables()
     except Exception:
         return None
+    from kango_tier import prefer_ordinary_spelling
     n = len(text)
 
     def _tail_kana_ok(i):
@@ -17798,7 +18008,7 @@ def _convert_odd_kana_run(text, store, dict_index, strict_anchor=False,
         entries = [e for e in store.lookup(frag)
                    if e.get('count', 0) >= 1]
         if entries:
-            return max(entries, key=lambda e: e.get('count', 0))['surface']
+            return prefer_ordinary_spelling(frag,max(entries, key=lambda e: e.get('count', 0))['surface'])
         if vocab_only:
             return None
         try:
@@ -17847,7 +18057,7 @@ def _convert_odd_kana_run(text, store, dict_index, strict_anchor=False,
         except Exception:
             _e2 = []
         if _e2:
-            return max(_e2, key=lambda e: e.get('count', 0))['surface']
+            return prefer_ordinary_spelling(frag,max(_e2, key=lambda e: e.get('count', 0))['surface'])
         if strict_anchor or vocab_only:
             return None
         return (_index_face(frag, store, dict_index)
@@ -17923,7 +18133,7 @@ def _convert_odd_kana_run(text, store, dict_index, strict_anchor=False,
             # さんこう は語彙に 参考・鑽孔・参向（全部 count1・漢語）が
             # 並び、48-MK の「表記がただ1つ」の門で止まっていた。
             # 段が付いた今は、門ではなく順位で決める（★★）
-            _face = _index_face(first, store, dict_index)
+            _face = _index_face(first, store, dict_index, require_unique=strict_anchor)
             if _face:
                 entries = [{'surface': _face, 'count': 0, 'reading': first}]
                 _idx = True
@@ -17941,7 +18151,10 @@ def _convert_odd_kana_run(text, store, dict_index, strict_anchor=False,
         # 下の「強い2つ目」の両方を要る
         if _short and not any(e.get('count', 0) >= 2 for e in entries):
             continue
-        head = max(entries, key=lambda e: e.get('count', 0))['surface']
+        head = prefer_ordinary_spelling(first,max(entries, key=lambda e: e.get('count', 0))['surface'])
+        if not strict_anchor:
+            from kango_tier import prefer_predicate_spelling
+            head=prefer_predicate_spelling(first,head,text[ln1:])
         # **短い先頭は「カタカナ語」だけ**（項目48-OQ(b)・2026-09-03）。
         # 漢字の2〜3字を開けると `ぶんうつ → 文打つ`・
         # `外しょつする → 外施設する` を作る（48-ON で実測）。
@@ -18097,7 +18310,7 @@ def _convert_odd_kana_run(text, store, dict_index, strict_anchor=False,
     return None
 
 
-def _misplaced_large_kana_fixes(line, store, dict_index=None):
+def _misplaced_large_kana_fixes(line, store, dict_index=None, tokenize_fn=None):
     """
     **項目48-KV: 場違いな大書き（Shift の押し忘れ）を小書きに戻す**
     （2026-08-29・うにさんの一覧「にゆうりよくみす　にゅうりょくみす
@@ -18141,6 +18354,11 @@ def _misplaced_large_kana_fixes(line, store, dict_index=None):
     out = []
     for a, b in spans:
         run = line[a:b]
+        # Legacy Shift repair shares source intactness with other routes.
+        # An odd dictionary split cannot shrink a proved native volition.
+        if tokenize_fn is not None and _chunk_is_intact(run,tokenize_fn,
+                left_context=line[:a]):
+            continue
         # ③ 手(i): い段の直後の大書き やゆよ → 小書き（全部まとめて）
         spots = [i for i in range(1, len(run))
                  if run[i] in _LARGE_TO_SMALL and run[i - 1] in _KV_I_DAN]
@@ -18166,7 +18384,9 @@ def _misplaced_large_kana_fixes(line, store, dict_index=None):
             import pos_grammar as _pg
             cands = []                  # 試す順の [(読み, う の位置)]
             if _pg.world_covered(base, dict_index):
-                cands.append((base, None))
+                # SR-A: restoring a reading requires an actual spelling edit.
+                if base!=run:
+                    cands.append((base, None))
             else:
                 # 手(ii): う挿入
                 good = {}
@@ -18357,29 +18577,13 @@ def _surfaces_no_band(dict_index, reading):
         return dict_index.surfaces_for_reading(reading)
 
 
-def _index_face(reading, store, dict_index):
-    """
-    **異様と判定したあと、その読みの漢字表記を索引の順位で1つに決める**
-    （項目48-OJ・2026-09-02）。
+def _index_face(reading, store, dict_index, require_unique=False):
+    """異様判定後の読みに、AIが日常語と判断した索引の表記を順位付けする。
 
-    うにさん（2026-09-02）:「そのような基本的な単語が見つからない場所が
-    あってもよいのか」——課題・効率・巨大・参考 は初期語彙にも索引にも
-    無かった（取り込みのコスト上限 4500・索引 4000。項目48-OF）。
-    **語彙（count＝本人の回数）へ入れる形は測って捨てた**（12,482語を
-    入れると全部の道が「知っている語」として読み、化け +22。
-    `janome_import.is_two_kanji_noun` の説明）。**索引（世の中の語）**に
-    2字漢語の帯を持たせ、順位は `kango_tier`（AI の判断）で付ける。
-
-    決め方（CLAUDE.md ★★「候補が複数あっても、優先度の高い1つに
-    決めて補正する」）:
-      ・本人の語彙に**実績2以上**の表記が在れば、そちらの持ち場（None）
-      ・索引の**漢字2字の表記**を段で見て、**いちばん高い段がただ1つ**
-        ならそれ（課題(1) 過大(2) → 課題／効率(1) 高率(3) → 効率）
-      ・同じ段に2つ（公園・講演）→ **決めない**（None）。段3 しか無い
-        （参向・鑽孔）→ 決めない
-
-    **呼ぶのは①（異様判定）が立ったあとの道だけ。** 異様と判定して
-    いない連続を変換する道（48-MI・strict_anchor）からは呼ばない。
+    48-OJ / 48-AAH。語彙の確定表記がある場合は従来の語彙側へ渡す。
+    日常語（段1）が複数あっても、同梱の費用・安定した表記順で先頭を
+    選ぶ。候補数は撤退理由にしない。一般語しかない場合の旧閾値は維持。
+    未判定の読みをこの関数だけで異様とは認定しない。
     """
     if not reading or dict_index is None or len(reading) < 2:
         return None
@@ -18401,16 +18605,19 @@ def _index_face(reading, store, dict_index):
         return None
     if not faces:
         return None
-    tiers = [(_kt.tier(s), s) for s in faces]
-    # **段1（日常語）がただ1つのときだけ決める。** 段2 では決めない——
+    tiers = [(_kt.usage_tier_for_reading(s,reading), s) for s in faces]
+    # **段1（日常語）を順位付けして決める。** 段2 では決めない——
     # 2026-09-02 に測った: 段2 で決めると 手動補正 → 主導性（手動 は
     # IPAdic の既定コスト 5622 で索引の外・主導(段2) だけが見えた）・
     # 雛仮名 → 表明(段2)・いちょう → 医長(段2)。索引に無い日常語の
     # 同音語が居るかは分からないので、**段1 だけを「決め手」にする**
-    top = [s for t, s in tiers if t == 1]
-    if len(top) != 1:
+    top = list(dict.fromkeys(s for t, s in tiers if t == 1))
+    # 48-AAS: choosing among several faces is required after an anomaly.
+    # Optional spelling conversion has no such judgment and retains its
+    # existing unique-ordinary-face condition. Keep both on this one roster.
+    if not top or (require_unique and len(top)!=1):
         return None
-    return top[0]
+    return min(top,key=lambda sf:(_table_cost(sf) if _table_cost(sf) is not None else 10**9,sf))
 
 
 def _is_conversion_anchor(entry, reading):
@@ -18484,55 +18691,26 @@ def _kanji_faces_for_reading(reading, store, dict_index):
     return faces
 
 
-def _kango_kana_fixes(line, store, dict_index=None):
-    """
-    **かなのまま残った漢語を、漢字に変換する**（項目48-MI・2026-08-31）。
+def _kango_kana_fixes(line, store, dict_index=None, tokenize_fn=None):
+    """Legacy conversion of an unambiguous remaining Sino-Japanese reading.
 
-    うにさんの画面（v1.3.0 の初期状態）:「・**平仮名が漢字変換されない**」
-    ——`かすくにん ⇒ かくにん` までは直るのに、`かくにん` が `確認` に
-    ならない。設計指針 U0（2026-08-29）:
+    The original-line call supplies tokenize_fn and shares _chunk_is_intact:
+    proven natural source text is retained before proposing a spelling change.
+    A reading already repaired after an anomaly reaches this helper without
+    that tokenizer from _convert_repaired_kana; its source judgment and final
+    replacement checks remain owned by the repair caller.
 
-        「**かなのまま打ちたいことの確信がなければ漢字変換する**」
-
-    変換の道（`_convert_odd_kana_run`）は在るのに、走るのは
-    **異様と判定された連続だけ**だった。`かくにん` は語として説明が
-    付く（＝異様ではない）ので、その道に一度も乗らない。
-
-    **「異様だから直す」ではなく「かなのままの確信が無いから変換する」**
-    ——別の理由なので、別の口を作る。その代わり門は厳しくする:
-
-      (1) 4字以上の かな連続（短いのは助詞と見分けが付かない）
-      (2) **読みの注記ではない**（`is_reading_gloss`・48-LN）
-      (3) **かぎ括弧・括弧にそっくり入っていない**——引用は
-          「その語を言及している」形（`本来の読みは「しゅるい」`）
-      (4) `_convert_odd_kana_run` が立つ（＝**先頭は語彙の実績2以上の
-          4字以上の語**・中身の区切りは2つまで・残りは機能語）
-      (5) **その読みの漢字表記が、ただ1つ**であること（語彙の実績2
-          以上と、辞書の索引を合わせて）。`せんたく` は **洗濯／選択**
-          の2つがあるので触らない——**異様判定が立っていない場所の
-          門は「ただ1つのときだけ採る」**（設計38〜40・CLAUDE.md）。
-          この道はまさに「異様ではないが変換したい」場所なので、
-          いちばん厳しい門がそのまま当てはまる。
-      (6) **直し先の頭が漢語**（音読みだけで組める2字以上の漢字語）。
-          ここが要——`ひらがな → 平仮名`（平は訓読み）・
-          `かんがえる → 考える`・`まちがい → 間違い` は和語なので
-          かなで書くのが普通で、変換すると**書きたい形を壊す**。
-          漢語をかなで書いたままなのは、まず変換し忘れ。
-
-    実測（実機メモ 1,948行・初期状態）: 門(6) が無いと 16種が立ち、
-    そのうち和語・注記が 5種混ざる。門(6) を掛けると **3種**（うち
-    1つは 門(3) が落とす引用）＝**的の `かくにん → 確認` だけが残る**。
-    門(5) は `せんたくする → 選択する`（同梱の見本の守り。**洗濯**か
-    **選択**か決められない）を落とす。
-    readcheck・fpcheck は kana/romaji とも差0。
-
-    戻り値: [(始まり, 終わり, 直し先, 分類), ...]
+    The existing reading-gloss/quotation, whole-word, same-tail, unique-face,
+    native reading and ordinary-spelling checks still constrain conversion.
+    Historical rationale: 48-MI/OO/PH. Current priority: specification 1.1.
+    Returns (start, end, surface, category) candidates.
     """
     if not line or store is None or dict_index is None:
         return []
     if os.environ.get('CN_KANGO_CONV') == '0':
         return []
     out = []
+    native_tokens = None
     i, n = 0, len(line)
     while i < n:
         if not ('ぁ' <= line[i] <= 'ゖ' or line[i] == 'ー'):
@@ -18548,6 +18726,9 @@ def _kango_kana_fixes(line, store, dict_index=None):
         if kana_is_mentioned(line, a0, j):
             continue
         if _is_quoted_whole(line, a0, j):
+            continue
+        if tokenize_fn is not None and _chunk_is_intact(run,tokenize_fn):
+            _trace('かな連続',f'{run!r} は共通入口で原文が成立するため漢字化を見送る')
             continue
         # **錨は実績2以上だけ**（項目48-MK）。ここは異様と判定して
         # いない連続を変換する場所なので、いちばん厳しい錨で問う
@@ -18569,6 +18750,17 @@ def _kango_kana_fixes(line, store, dict_index=None):
         if not got or got[0] == run:
             continue
         surface, head_end = got
+        # 48-YU: 漢語の候補が、原文で確定したかなの一語を途中で切らない。
+        # 同じ_starts_inside_wordを借りる。挨拶などの語を別名簿にしない。
+        if native_tokens is None:
+            try:
+                native_tokens=list((tokenize_fn or make_tokenizer(store))(line))
+            except Exception:
+                native_tokens=[]
+        # 48-ZE: かな＋漢字の一語も同じ境界。きちょう面を貴重＋面へ切らない。
+        if _starts_inside_word(native_tokens,a0+head_end):
+            _trace('かな連続',f'{run!r} の漢語候補は原文の一語を途中で切るので保持する')
+            continue
         # **濁点1つ違いで別の日常語になるなら決めない**（48-OO の
         # 受け皿・項目48-OQ の測定で出た化け4件を受け止める門）。
         # ここは①（異様）が立っていない場所なので、設計38〜40
@@ -18628,7 +18820,7 @@ def _kango_kana_fixes(line, store, dict_index=None):
         # (5) **その読みの漢字表記がただ1つ**であること
         if (len(_kanji_faces_for_reading(run[:head_end], store,
                                          dict_index)) != 1
-                and _index_face(run[:head_end], store, dict_index)
+                and _index_face(run[:head_end], store, dict_index, require_unique=True)
                 != head_surface):
             _trace('かな連続', f'{run!r} → 読み {run[:head_end]!r} の'
                                f'漢字表記が1つに決まらないので触らない'
@@ -18636,6 +18828,24 @@ def _kango_kana_fixes(line, store, dict_index=None):
             continue
         # (6) **直し先の頭が漢語**
         if not _is_kango(head_surface, run[:head_end]):
+            continue
+        # 48-ZI: a spelling conversion must obey the same structural
+        # validation as repair candidates. Selecting a noun such as 選択肢
+        # must not turn the remaining original ます into an invalid suffix.
+        from oddness import (structural_anomaly_in_range, preserves_bound_verb,
+                             preserves_completed_modifier)
+        converted=line[:a0]+surface+line[j:]
+        if not preserves_completed_modifier(line,a0,converted,a0,a0+len(surface),
+                                            tokenize_fn or make_tokenizer(store)):
+            _trace('かな連続',f'{surface!r} は原文の完成した修飾語に接続しない')
+            continue
+        if not preserves_bound_verb(line,j,converted,a0+len(surface),
+                                   tokenize_fn or make_tokenizer(store)):
+            _trace('かな連続',f'{surface!r} は原文の複合動詞の接続を保たない')
+            continue
+        if structural_anomaly_in_range(converted,a0,a0+len(surface),
+                tokenize_fn or make_tokenizer(store),store,dict_index):
+            _trace('かな連続',f'{surface!r} は原文の文脈で活用・接続が成立しない')
             continue
         _trace('かな連続', f'{run!r} → {surface!r}（かなのまま残った'
                            f'漢語を変換・項目48-MI）')
@@ -19923,6 +20133,10 @@ def _kana_run_hand_fixes(line, store, dict_index=None, input_method='kana'):
             continue
         if kana_is_mentioned(line, a0, j) or _is_quoted_whole(line, a0, j):
             continue            # 読み・引用として提示した綴りは、この推定で読み替えない。
+        # 48-ZJ: completed inflections must also reach the shared entry
+        # before the older direct word-pair conversion can split them.
+        if _chunk_is_intact(run,make_tokenizer(store)):
+            continue
         # 48-VZ: 候補を探す前に、既知語・活用として正常な入力を除く。
         from pos_grammar import explain_kana_run
         if explain_kana_run(run, before_kanji=False, bare_head=True, stems_only=True):
@@ -20177,50 +20391,12 @@ def _misplaced_dakuten_fixes(line, store):
 
 
 def _misplaced_long_vowel_fixes(line, store, decisions=None):
+    """Restore long-vowel slips using the shared physical-key map.
+
+    A run-initial long vowel and an unknown internal run use the existing
+    source safeguards, unique lexical evidence and final line recheck.
+    ASCII backslash ambiguity is resolved by halfwidth, not kana distance.
     """
-    **設計40: 伸ばし棒（ー）の打ち間違いを、隣のキーで戻す**
-    （項目48-JS・2026-08-26。【Opus への実装方針】2番「ー と隣キーの相互」）。
-
-    かな配列では `ー` の隣が **ろ(0.2)・れ・け・む・め** なので、
-    この6つは互いに打ち間違えやすい。48-JN の台帳（初期語彙の読みを
-    隣のキーで崩す）で、ー が絡む崩しだけを数えると:
-
-        ー→他  75件（直った 48 ／ そのまま 13 ／ **別のもの 14**）
-        他→ー  36件（直った  2 ／ そのまま 34 ／ 別のもの  0）
-
-    **向きで形が違う**ので、門も別に置く。
-
-    **(A) 連続の先頭の `ー`**（他→ー の側）。
-        `ー` は**直前のかなの母音を伸ばす印**なので、**連続の頭には
-        立てない**（48-EL の「長音の書き分け」がその裏返し）。
-        設計38 の小書きと同じ**構造だけで立つ異様**——
-        `ーいかく` `ーんらく` `ーもちょう` `ーーす` は日本語ではない。
-        隣のキーの通常字に戻して、語になるものが**ただ1つ**なら採る。
-
-    **(B) `ー` のはずが隣のキーになった**（ー→他 の側）。
-        `ぺめすと` は**構造としては可能**なので、(A) のような
-        「不可能」の印は立たない。代わりに3つで締める:
-
-            ・**その連続が、それ自体では語として立たない**
-              （`くれる` `かれ` のような正しい語には触らない）
-            ・戻し先が**カタカナを含む表記**（`ー` を持つ語は外来語か
-              `ローマ字` の類。48-IT の「外来語の印」と同じ考え）
-            ・**ただ1つ**のときだけ（2か所以上で語になったら決めない）
-
-        頭の1字は (A) が受け持つので、ここでは **i>0 だけ**見る。
-
-    直した行は**丸ごと補正し直す**（設計39 と同じ形）。そうしないと
-    `かろそる` が `かーそる` のまま止まって、**いままで `カーソル` に
-    なっていたものが平仮名に戻る**（＝直っているのに悪くなる）。
-
-    **止まること**: (A) は頭の `ー` を1つ減らす。(B) は「語として
-    立たない連続」を「立つ連続」に変えるので、どちらも同じ連続では
-    二度は成立しない。
-
-    戻り値: [(開始, 終了, 直したかな), ...]（かな連続ごと）
-    """
-    if 'ー' not in line and not any(c in 'ろれけむめ' for c in line):
-        return []
     try:
         from kana_layout import nearby_candidates
     except Exception:
@@ -20228,7 +20404,7 @@ def _misplaced_long_vowel_fixes(line, store, decisions=None):
     near = [nb for nb, _d in nearby_candidates('ー', max_dist=1.05,
                                                include_phonetic=False)
             if nb != 'ー' and is_hiragana(nb)]
-    if not near:
+    if not near or ('ー' not in line and not any(c in near for c in line)):
         return []
 
     def _runs():
@@ -20429,7 +20605,7 @@ def _one_edit_words(run, store, limit=None):
         for k in _ONE_EDIT_KANA:
             add(run[:i] + k + run[i:], '脱字')
     for i in range(len(run)):
-        if len(run) - 1 >= 2:
+        if len(run) - 1 >= 2 and _deletion_allowed(run,i):
             add(run[:i] + run[i + 1:], '余分')
     for i in range(len(run) - 1):
         sw = list(run)
@@ -20491,6 +20667,16 @@ def _d42_known_unit(surface, store, dict_index=None):
     """その表記は**世の中で1語**か（語彙・辞書・778,340語の集合）。"""
     if not surface or len(surface) < 2:
         return False
+    # 48-ACB: the shared written-word roster is lexical evidence here too.
+    # The old split path must not call a restored, attested noun unknown.
+    from general_words import is_general,attested_noun
+    if is_general(surface) or attested_noun(surface):
+        return True
+    # 48-AAK: this legacy split path has its own known-unit entry.
+    # Reuse the category-list judgment before setting _ODD_PENDING.
+    from semantic_roles import is_nominal_coordination
+    if is_nominal_coordination(surface):
+        return True
     try:
         if store.reading_of(surface):
             return True
@@ -20738,6 +20924,11 @@ def _resegment_fixes(line, tokenize_fn, store, dict_index=None,
             if not any(is_kanji(c) for c in surface):
                 continue
             if _d42_known_unit(surface, store, dict_index):
+                continue
+            # 48-AKF: use the common source gate before either searching
+            # or retaining a pending anomaly. A completed source clause
+            # must not become odd solely through this legacy token split.
+            if _chunk_is_intact(surface, tokenize_fn):
                 continue
             reading = ''.join(katakana_to_hiragana(t[2] or t[0]) for t in run)
             if not reading or not all(is_hiragana(c) or c == 'ー'
@@ -21043,7 +21234,7 @@ def _lc_hand_unit_fix(run, tokens, i, L, store, dict_index, tokenize_fn,
             # 削除は語の切り詰めで、別の語がただ現れる（実測:
             # 誤判定 → 判定・補助動詞 → 助動詞・確定文字 → 確定時・
             # スクロール語 → スクロール）
-            if len(r) - 1 >= 4 and k not in _edges:
+            if len(r) - 1 >= 4 and k not in _edges and _deletion_allowed(r,k):
                 edits.append(r[:k] + r[k + 1:])
             for v in edits:
                 if v == r or v in seen:
@@ -21266,7 +21457,7 @@ def _lm_zero_edge_fix(run, tokens, i, store, dict_index, tokenize_fn,
     for k in range(len(reading)):
         # **読み1字のトークンの丸ごと削除は、語の消去**（48-LC と同じ
         # 門・学び22。`移行し` の し を消して 以降 に乗り換えた・実測）
-        if k in ones:
+        if k in ones or not _deletion_allowed(reading,k):
             continue
         v = reading[:k] + reading[k + 1:]
         for e in store.lookup(v):
@@ -21396,6 +21587,8 @@ def _run_reading_merge_fixes(line, tokenize_fn, store, dict_index=None,
                              for e in store.lookup(reading)] or [0])
                         need = max(2, 20 * base_count)
                         for k in range(len(reading)):
+                            if not _deletion_allowed(reading,k):
+                                continue
                             v = reading[:k] + reading[k + 1:]
                             faces.update(
                                 e['surface'] for e in store.lookup(v)
@@ -21946,7 +22139,7 @@ def _odd_spans_for_line(line, tokenize_fn, taken,
         return []
     def _why(a, b, text):
         """印の出どころを1件控える（`reasons_out` が在るときだけ）。"""
-        if reasons_out is not None:
+        if reasons_out is not None and (a,b,text) not in reasons_out:
             reasons_out.append((a, b, text))
 
     try:
@@ -21972,7 +22165,10 @@ def _odd_spans_for_line(line, tokenize_fn, taken,
             import pos_grammar as _pg
             for _a, _b in _pg.odd_kana_spans(line, dict_index, store):
                 spans.append((_a, _b))
-                _why(_a, _b,
+                from morphology import original_spelling_facts
+                spelling=next((f for f in original_spelling_facts(line)
+                               if (_a,_b)==(f.change_start,f.change_start+1)),None)
+                _why(_a, _b, spelling.reason if spelling else
                      '品詞として識別できない（かなの並びに説明が付かない）')
         except Exception:
             pass
@@ -22069,6 +22265,7 @@ _CORRECTION_SOURCE = ContextVar('correctnote_correction_source', default=None)
 
 
 _CORRECTION_PATH = ContextVar('correctnote_correction_path', default=())
+_CORRECTION_INPUT_METHOD = ContextVar('correctnote_correction_input_method', default='kana')
 
 # 48-WI: 同じ本文に戻らず変化し続ける再解析にも有限の上限を置く。
 # 最初の呼出しを含む深さ。通常の補正は数段で終わる。
@@ -22093,6 +22290,7 @@ def _with_correction_source(fn):
         if len(path) >= MAX_CORRECTION_DEPTH:
             raise _CorrectionLimit()
         source_token = _CORRECTION_SOURCE.set(line) if root else None
+        method_token = _CORRECTION_INPUT_METHOD.set(kwargs.get('input_method',args[6] if len(args)>6 else 'kana')) if root else None
         path_token = _CORRECTION_PATH.set(path + (line,))
         try:
             return fn(line, *args, **kwargs)
@@ -22103,8 +22301,16 @@ def _with_correction_source(fn):
             reason = 'cycle' if cycle else 'depth_limit'
             _trace('再解析', ('同じ本文へ戻る循環' if cycle else '再解析の深さ上限')
                    + 'を検出。原文を保持して未解決を残す')
+            # SR-E: recompute evidence only on the original, never a trial output.
+            original_reasons=[];original_odd=[]
+            tok=kwargs.get('tokenize_fn',args[1] if len(args)>1 else None)
+            store=kwargs.get('store',args[0] if args else None)
+            dictionary=kwargs.get('dict_index',args[8] if len(args)>8 else None)
+            if tok is not None:
+                original_odd=_odd_spans_for_line(line,tok,[],store,dictionary,
+                                                reasons_out=original_reasons)
             result = dict(original=line, corrected=line, changed=False, details=[],
-                          spans=[], original_spans=[], odd_spans=[], odd_reasons=[],
+                          spans=[], original_spans=[], odd_spans=original_odd, odd_reasons=original_reasons,
                           unsure_spans=[(0,len(line))] if line else [],
                           analysis_status='incomplete', stop_reason=reason)
             if cycle:
@@ -22116,6 +22322,7 @@ def _with_correction_source(fn):
             _CORRECTION_PATH.reset(path_token)
             if source_token is not None:
                 _CORRECTION_SOURCE.reset(source_token)
+                _CORRECTION_INPUT_METHOD.reset(method_token)
     return wrapped
 
 
@@ -22170,6 +22377,7 @@ def _line_result_contract(line, result, tokenize_fn, dict_index=None):
     range_errors = []
     source_spans = _merged_source_intervals(result.get('odd_spans'), len(line),
                                             range_errors, 'odd_spans')
+    final_odd = list(source_spans)
     source_spans += _merged_source_intervals(result.get('odd_reasons'), len(line),
                                              range_errors, 'odd_reasons', width=3)
     detected = _merged_source_intervals(source_spans, len(line))
@@ -22178,11 +22386,34 @@ def _line_result_contract(line, result, tokenize_fn, dict_index=None):
     if range_errors:
         status = 'incomplete'
         result.setdefault('stop_reason', 'invalid_source_ranges')
+    # 48-YM: 一文字の変更で接続全体が直ることがある。変わらなかった文字を
+    # 未解決と数えず、補正本体が最終的に残した異様範囲と照合する。
+    # 本文の編集も最終範囲もない結果から、勝手に解決済みとは推定しない。
+    resolved_coverage = list(applied)
+    if (status == 'complete' and not range_errors and result.get('changed')
+            and result.get('corrected', line) != line
+            and isinstance(result.get('odd_spans'), (list, tuple))):
+        resolved_coverage = []
+        for a, b in detected:
+            pieces = [(a, b)]
+            for x, y in final_odd:
+                remaining = []
+                for lo, hi in pieces:
+                    if y <= lo or hi <= x:
+                        remaining.append((lo, hi))
+                    else:
+                        if lo < x: remaining.append((lo, x))
+                        if y < hi: remaining.append((y, hi))
+                pieces = remaining
+            for lo, hi in pieces:
+                if any((lo <= x <= hi if x == y else lo < y and x < hi) for x, y in applied):
+                    resolved_coverage.append((lo, hi))
+        resolved_coverage = _merged_source_intervals(resolved_coverage, len(line), allow_empty=True)
     unresolved = []
     resolved = []
     for a, b in detected:
         cursor = a
-        for x, y in applied:
+        for x, y in resolved_coverage:
             lo, hi = max(a, x), min(b, y)
             if lo >= hi:
                 continue
@@ -22197,12 +22428,19 @@ def _line_result_contract(line, result, tokenize_fn, dict_index=None):
                  'not_reported' if result.get('changed') else 'no_anomaly_reported')
     result['analysis_status'] = status
     result['diagnosis'] = {
-        'version': 1,
+        'version': 2,
+        'resolution_basis': 'final_anomaly_ranges_and_applied_changes',
         'coordinate_system': 'python_codepoint_half_open',
         'judgement': judgement,
+        'language_state': ('anomaly_unrepaired' if unresolved else 'anomaly_repaired' if detected
+            else 'normal_confirmed' if not missing and not result.get('changed')
+                 and tokenize_fn is not None and _chunk_is_intact(line,tokenize_fn)
+            else 'undetermined'),
         'analyzer': backend,
         'missing_resources': missing,
         'resource_status': resources,
+        'computation': ('truncated' if result.get('stop_reason')=='search_limit' else 'resource_missing' if missing else 'interrupted' if status=='incomplete' else 'complete'),
+        'search_reports': result.get('search_reports',[]),
         'range_errors': range_errors,
         'detected_odd_spans': [list(x) for x in detected],
         'replaced_odd_spans': [list(x) for x in resolved],
@@ -22237,6 +22475,14 @@ def _with_literal_examples(fn):
         ranges=merged
         chars=list(line)
         for a,b in ranges:chars[a:b]=' '*(b-a)
+        # 48-AAN: a named identifier is still a noun in its sentence.
+        # Shield the code, but retain the original grammatical head so a
+        # following case particle is not judged as a sentence-initial fragment.
+        # The full original range remains protected from every proposed edit.
+        from literal_examples import named_identifier_parts
+        for a,code,b in named_identifier_parts(line):
+            if (a,b) in ranges:
+                chars[a:code]=line[a:code]
         masked=''.join(chars)
         _trace('原文の保持',f'明示された引用例またはユーザー保護の範囲 {ranges!r} は文字を保持する')
         inner=fn(masked,*args,**kwargs)
@@ -22308,6 +22554,129 @@ def _drops_nominal_head(original, replacement, tokenize_fn):
     return not odd.is_odd_run(original, tokenize_fn, skip_join=True)
 
 
+def _candidate_source_ranges(line, start, end):
+    """Exact original boundaries shared by repetition and intrusion checks."""
+    yield line,start,end
+    import difflib
+    for ancestor in _CORRECTION_PATH.get():
+        if ancestor == line:
+            continue
+        opcodes = difflib.SequenceMatcher(None, ancestor, line,
+                                         autojunk=False).get_opcodes()
+        def source_boundary(position):
+            points = set()
+            for tag, a, b, c, d in opcodes:
+                if tag == 'equal' and c <= position <= d:
+                    points.add(a + position - c)
+                elif tag != 'equal':
+                    if position == c: points.add(a)
+                    if position == d: points.add(b)
+            return next(iter(points)) if len(points) == 1 else None
+        a, b = source_boundary(start), source_boundary(end)
+        if a is not None and b is not None and a<b:
+            yield ancestor,a,b
+
+
+def _repeat_repair_disabled_in_source(line, start, end, replacement, tokenize_fn=None):
+    """Use original coordinates without changing the repetition policy."""
+    from vocabulary import repeat_collapse_is_disabled, dup_repair_enabled
+    if dup_repair_enabled():return False
+    if any(repeat_collapse_is_disabled(source[a:b],replacement)
+           for source,a,b in _candidate_source_ranges(line,start,end)):
+        return True
+    from kana_layout import single_key_drop_is_duplicate
+    return any(single_key_drop_is_duplicate(typed,restored) is True
+               for typed,restored in _source_kana_deletion_pairs(
+                   line,start,end,replacement,tokenize_fn))
+
+
+def _source_kana_deletion_pairs(line, start, end, replacement, tokenize_fn):
+    """Share exact original kana and candidate readings across key policies.
+
+    The input method is the root call's method. Kana literals retain their
+    reading; a kanji candidate needs actual known token readings. Unknown
+    original spellings do not acquire guessed physical keys here.
+    """
+    if _CORRECTION_INPUT_METHOD.get()!='kana':return
+    from morphology import katakana_to_hiragana
+    punctuation='。、！？!?「」（）・ \t\r\n'
+    def literal(text):
+        text=katakana_to_hiragana(text)
+        return text if all('ぁ'<=c<='ゖ' or c in 'ー゛゜'+punctuation for c in text) else None
+    reading=literal(replacement)
+    if reading is None:
+        if tokenize_fn is None:return
+        parts=list(tokenize_fn(replacement))
+        if not parts or not all(t[5] or t[0] in punctuation for t in parts):return
+        reading=''.join(t[0] if t[0] in punctuation else t[2] for t in parts)
+        if literal(reading) is None:return
+    for source,a,b in _candidate_source_ranges(line,start,end):
+        typed=literal(source[a:b])
+        if typed is None or len(typed)<=len(reading):continue
+        left=literal(source[a-1:a]) if a else ''
+        right=literal(source[b:b+1])
+        if (left is None or right is None) and tokenize_fn is not None:
+            from reading_likelihood import adjacent_readings
+            before,after=adjacent_readings(source,list(tokenize_fn(source)),a,b)
+            if left is None:left=before[-1:]
+            if right is None:right=after[:1]
+        left=left or '';right=right or ''
+        yield left+typed+right,left+reading+right
+
+
+
+def _nonadjacent_drop_in_source(line, start, end, replacement, tokenize_fn):
+    """A legacy candidate cannot delete a remote original kana keystroke."""
+    return any(not _adj_ok_one_char(typed,restored,'kana')
+               for typed,restored in _source_kana_deletion_pairs(
+                   line,start,end,replacement,tokenize_fn))
+
+def _user_blocks_replacement(decisions,original,corrected):
+    """Same contract for word-sized grammar candidates and UI-sized diffs."""
+    return bool(decisions is not None and (decisions.blocks(original,corrected)
+        or any(decisions.blocks(original[a:b],corrected[c:d])
+               for a,b,c,d in _diff_spans(original,corrected))))
+
+
+def _repeated_nominal_seam(line,edge,tokenize_fn):
+    """Equal glyphs across an attested attributive boundary are not key repeats.
+
+    A native finite ending or adnominal の can precede a multi-glyph noun
+    (したため / ののり). A guessed token or repeated final particle cannot.
+    This establishes only the seam; ordinary candidate validation still runs.
+    """
+    if tokenize_fn is None:return False
+    parts=list(tokenize_fn(line) or ())
+    left=next((t for t in parts if t[4]==edge),None)
+    right=next((t for t in parts if t[3]==edge),None)
+    if (not left or not right or not left[5] or not right[5]
+            or len(right[0])<2 or not right[1].startswith('名詞')
+            or any(x in right[1] for x in ('固有名詞','接尾'))):return False
+    from contextual_repair import _completed_predicate_token
+    return bool(_completed_predicate_token(left) or left[1].startswith('助詞:連体化'))
+
+
+def _native_degree_repeat(line,edge):
+    """A repeated glyph inside a native degree predicate is not extra typing.
+
+    Both an adjective stem's own spelling and its seam with bound sugiru
+    require the existing complete native expression. This does not allow
+    deleting duplicated source keys or a nonadjacent intrusion.
+    """
+    from morphology import tokenize
+    from reading_segments import native_degree_expression
+    parts=tokenize(line)
+    for head in parts:
+        if head.start>=edge or not head.has_reading:continue
+        within=(head.start<edge<head.end and head.pos=='形容詞' and head.infl_form=='ガル接続')
+        seam=(head.end==edge and (head.pos=='形容詞' and head.infl_form=='ガル接続'
+              or head.pos=='動詞' and head.infl_form=='連用形'))
+        if not within and not seam:continue
+        predicate=re.split(r'[。！？.!?、,;；\t\r\n]',line[head.start:],maxsplit=1)[0]
+        if native_degree_expression(predicate):return True
+    return False
+
+
 def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
                        decisions=None, halfwidth_taken=(), shift_taken=(),
                        lu_taken=(), conv_taken=(), loanword_module=None):
@@ -22327,14 +22696,62 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
                        f'（外した1文字を作り直していた）')
         start, end = _s2, _e2
     original = line[start:end]
+    from morphology import spelling_edit_allowed
+    if spelling_edit_allowed(line,start,end,new_surface) is False:
+        return None, 'original_spelling_scope'
     if new_surface == original:
-        return None, 'unchanged'        # 範囲を広げたら元と同じ＝直していない
+        return None, 'unchanged'         # 範囲を広げたら元と同じ＝直していない
+    # 48-AAO: deleting a mark must produce a positively explained seam.
+    # This is shared by legacy, direct contextual and normalization paths.
+    from mark_usage import incomplete_mark_deletion
+    if incomplete_mark_deletion(line,line[:start]+new_surface+line[end:],tokenize_fn):
+        return None, 'unexplained_mark_deletion'
+    if _repeat_repair_disabled_in_source(line, start, end, new_surface, tokenize_fn):
+        return None, 'duplicate_repair_disabled'
+    if _nonadjacent_drop_in_source(line,start,end,new_surface,tokenize_fn):
+        return None,'nonadjacent_original_key_deletion'
     # ユーザーが「この補正は不要」と判断した置換は行わない。
     # 統計や辞書より、本人が明示した判断を優先する。
     # 通常の置換候補をこの最終検査へ集める。直接再構築して返す道への
     # 全条件の共有は未完（48-XV）。ユーザー保護は行入口でも保持する。
-    if decisions is not None and decisions.blocks(original, new_surface):
+    if _user_blocks_replacement(decisions,original,new_surface):
         return None, 'user_block'
+    from oddness import changed_conjunctive_case_allowed
+    if not changed_conjunctive_case_allowed(line[:start]+new_surface+line[end:],
+                                                start,start+len(new_surface)):
+        return None,'native_conjunctive_case'
+    from oddness import changed_auxiliary_chain_allowed
+    if not changed_auxiliary_chain_allowed(line[:start]+new_surface+line[end:],
+                                                start,start+len(new_surface)):
+        return None,'native_auxiliary_chain'
+    from semantic_roles import preserves_unadorned_nominal_prefix
+    if not preserves_unadorned_nominal_prefix(line,line[:start]+new_surface+line[end:]):
+        return None,'completed_nominal_prefix'
+    from reading_segments import preserves_native_predicate_modifier
+    if not preserves_native_predicate_modifier(line,line[:start]+new_surface+line[end:]):
+        return None,'completed_predicate_modifier'
+    from reading_segments import preserves_native_word_onset
+    if not preserves_native_word_onset(line,start,end,new_surface):
+        return None,'native_word_boundary'
+    from contextual_repair import preserves_completed_reading_link
+    if not preserves_completed_reading_link(line,start,end,new_surface):
+        return None,'completed_source_clause_link'
+    from semantic_roles import changed_nominal_object_allowed
+    if not changed_nominal_object_allowed(line,line[:start]+new_surface+line[end:]):
+        return None,'unproven_changed_object_predicate'
+    from semantic_roles import changed_object_conflict_allowed
+    if not changed_object_conflict_allowed(line,line[:start]+new_surface+line[end:]):
+        return None,'unproven_semantic_conflict_repair'
+    from contextual_repair import changed_native_action_attachment_allowed
+    if not changed_native_action_attachment_allowed(line,start,end,new_surface):
+        return None,'unproven_native_action_attachment'
+    from contextual_repair import object_predicate_candidate_allowed
+    if not object_predicate_candidate_allowed(line,start,end,new_surface):
+        return None,'unproven_original_object_predicate'
+    from oddness import preserves_bound_verb
+    if not preserves_bound_verb(line,end,line[:start]+new_surface+line[end:],
+                                start+len(new_surface),tokenize_fn):
+        return None,'bound_verb_slot'
     # 48-XV: 異様な名詞の組でも、意味を持つ末尾を丸ごと削ることは
     # 隣接だけでは裏付けられない。全経路の候補検査で共有する。
     if _drops_nominal_head(original, new_surface, tokenize_fn):
@@ -22376,8 +22793,17 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
     # ずれようがなく、`め・ → ？？` `１ぬ → ！！` のように
     # **直した先が同じ記号の連続になるのが正しい形**。
     # この砦が食べていた。
-    if category != '記号' and _has_new_repetition(original, new_surface):
-        return None, 'new_repetition'
+    # Repetition can cross a replacement boundary as well as an insertion.
+    # Include the two untouched neighbors without changing the edit range.
+    left,right=line[max(0,start-1):start],line[end:end+1]
+    repeat_before,repeat_after=left+original+right,left+new_surface+right
+    if category != '記号' and _has_new_repetition(repeat_before,repeat_after):
+        joined=line[:start]+new_surface+line[end:]
+        seams=[edge for edge in range(max(1,start),min(len(joined),start+len(new_surface)+1))
+               if joined[edge-1]==joined[edge]]
+        if not seams or not all(_repeated_nominal_seam(joined,edge,tokenize_fn)
+                or _native_degree_repeat(joined,edge) for edge in seams):
+            return None, 'new_repetition'
     # **句読点の連続だけは、記号でも塞ぐ**（項目48-EI・
     # うにさん指定 (f)「『。。』に違和感を感じる必要がある」）。
     # 上で「記号」を対象外にした穴を、**元に無かった句読点の
@@ -22645,7 +23071,7 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
     # にゅうりょくミス 止まりになる・実測）。48-KS の異様判定が立つ
     # 連続だけ開く（①→③→④）。直した連続には い段＋大書き が
     # 残らないので、この入れ子は必ず止まる。
-    _kv = _misplaced_large_kana_fixes(line, store, dict_index)
+    _kv = _misplaced_large_kana_fixes(line, store, dict_index, tokenize_fn)
     _kv.extend(_partial_loanword_fixes(line,tokenize_fn,input_method,dict_index,store))
     _kv.extend(_particle_boundary_fixes(line, tokenize_fn, input_method, dict_index, store))
     _kv.extend(_shortcut_case_fixes(line, tokenize_fn))
@@ -22717,7 +23143,7 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
     # **いちばん最後**——これは「異様だから直す」ではなく
     # 「かなのままの確信が無いから変換する」という別の理由なので、
     # 直しの手が立つ場所には割り込ませない。
-    for _kg in _kango_kana_fixes(line, store, dict_index):
+    for _kg in _kango_kana_fixes(line, store, dict_index, tokenize_fn=tokenize_fn):
         if not any(not (_kg[1] <= s0 or _kg[0] >= e0)
                    for s0, e0, _f0, _c0 in _kv):
             _kv.append(_kg)
@@ -22729,19 +23155,14 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
     # （学び22——片方だけに置くと、そちらを迂回して素通りする）。
     _kv_kept = []
     for _t in _kv:
-        # 再解析へ進む置換にも、通常の最終検査と同じユーザー判断を掛ける。
-        # UIが保存する差分単位と、文法が使う語全体の両方で問い合わせる。
-        _original_piece = line[_t[0]:_t[1]]
-        if decisions is not None and (decisions.blocks(_original_piece, _t[2]) or
-                any(decisions.blocks(_original_piece[a:b], _t[2][c:d])
-                    for a, b, c, d in _diff_spans(_original_piece, _t[2]))):
-            _trace('置換', f'{_original_piece!r} → {_t[2]!r} はユーザーの判断で見送る')
-            continue
-        if _reading_spelled_in_bracket(line, _t[0], _t[1], tokenize_fn):
-            _trace('置換', f'{line[_t[0]:_t[1]]!r} → {_t[2]!r} は、直後の'
-                           f'括弧に表記が並ぶ読みの並記なので触らない')
-            continue
-        _kv_kept.append(_t)
+        # Reanalysis proposals share the same source-coordinate contract
+        # as ordinary replacements; do not clone selected checks here.
+        accepted,reason=_check_replacement(line,_t,store,tokenize_fn,dict_index,decisions,
+                                            conv_taken=((_t[0],_t[1]),))
+        if accepted is not None:
+            _kv_kept.append(accepted)
+        else:
+            _trace('最終検査',f'{_t!r} を再解析前に除外: {reason}')
     _kv = _kv_kept
     if _kv:
         _kv_chars = list(line)
@@ -23012,8 +23433,17 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
         #   ・**次に直すための材料が消える**
         # 合成（たんこ゛→たんご）が1つでも起きていれば、それは
         # 落としたのではないので、ここには入らない（`_only_dropped`）。
+        # 48-ZO: the deletion can itself be the completed physical-key
+        # repair. Require the original anomaly, adjacent-key evidence and
+        # the shared replacement/grammar checks before accepting that case.
+        _drop_proven=False
+        if (_only_dropped and not inner['changed']
+                and inner['corrected']==normalized and input_method=='kana'):
+            from mark_usage import normalized_intrusions
+            _drop_proven=normalized_intrusions(line,normalized,_mark_dropped,
+                tokenize_fn,store,dict_index,decisions)
         if _only_dropped and not inner['changed'] \
-                and inner['corrected'] == normalized:
+                and inner['corrected'] == normalized and not _drop_proven:
             _trace('かな入力', f'{line!r} → 印を落としただけで先へ'
                                f'進めないので、**元に戻す**（項目48-OG）')
             return {
@@ -24956,8 +25386,24 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
         _psplit_work.insert(0, (run_start, run_start + _k, run[:_k]))
         return True
 
+    # 48-ZY / GPT-6 / 2026-09-11: a completed child fragment does not
+    # erase the anomaly already judged over its containing kana clause.
+    # Revisit that original scope after the existing split work. It uses
+    # the same completion entry, windows and LU validation; no answer or
+    # new anomaly is inferred from the existence of a repair candidate.
+    _whole_odd_work=set()
+    for _sa,_sb in _line_odd_kana:
+        _whole=( _sa,_sb,line[_sa:_sb] )
+        if (4<=_sb-_sa<=14 and _whole not in _psplit_work
+                and any(_sa<=a and b<=_sb for a,b,_ in _psplit_work)
+                and all(is_hiragana(c) or c=='ー' for c in _whole[2])):
+            _psplit_work.append(_whole)
+            _whole_odd_work.add((_sa,_sb))
     while _psplit_work:
         run_start, run_end, run = _psplit_work.pop(0)
+        if ((run_start,run_end) in _whole_odd_work and any(
+                run_start<r[1] and r[0]<run_end for r in replacements)):
+            continue
         if _chunk_is_intact(run, tokenize_fn, context_only=True):
             continue
         # **数字の直後の助数詞（かな）は連続の頭に入れない**（項目48-TG・
@@ -25965,12 +26411,12 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
             # 同音の道は送り仮名を揃えて比べる（`_conjugated_alts`）ので
             # 「読みと表記の対応」の問題は起きない。戻り値は
             # 語尾込みの表記（`移る`）なので、そのまま置き換える。
-            if is_known_word and context_vec is not None and surrounding:
+            if is_known_word:
                 _hp = _homophone_by_context(
                     surface, reading, store, context_vec, surrounding,
                     dict_index=dict_index, attest_text=line,
-                    after_text=line[end:end + 4],
-                    prev_text=line[max(0, start - 1):start])
+                    after_text=line[end:],
+                    prev_text=line[:start])
                 if _hp is not None and _hp[0] != surface \
                         and len(_hp[0]) == len(surface):
                     replacements.append((start, end, _hp[0], _hp[1]))
@@ -25992,8 +26438,8 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                                     surrounding_words=surrounding,
                                     dict_index=dict_index,
                                     attest_text=line,
-                                    after_text=line[end:end + 4],
-                                    prev_text=line[max(0, start - 1):start])
+                                    after_text=line[end:],
+                                    prev_text=line[:start])
         if result is None:
             continue
         new_surface, category, evidence = result
@@ -26067,8 +26513,8 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                 tokens, start, end,
                 nearby_words=nearby_words, recent_words=recent_words)
             got = _design35_fix(surface, reading, _sur, line,
-                                after_text=line[end:end + 4],
-                                prev_text=line[max(0, start - 1):start])
+                                after_text=line[end:],
+                                prev_text=line[:start])
             if got and got is not _D35_KEEP:
                 replacements.append((start, end, got[0], got[1]))
 
@@ -26292,6 +26738,8 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                 kata = _LW.katakana_for_hiragana(_body, store)
                 if not kata:
                     continue
+                if _chunk_is_intact(_body,tokenize_fn,left_context=line[:h_s]):
+                    break
                 _rest = h_run[_len:]
                 if _rest and _len < _inner:
                     if _broken_whole is None:

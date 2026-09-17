@@ -749,6 +749,23 @@ def readings_for_char(ch, dict_index=None):
     return out
 
 
+
+def ime_reconstruction_readings_for_char(ch, dict_index=None):
+    """48-AJI: existing native stems may be hidden by another IME character.
+
+    Only inverse reading reconstruction of an already anomalous unknown run
+    uses this evidence. Ordinary lexical readings retain their okurigana
+    restrictions. The shared table is derived from IPAdic verb/adjective
+    spellings; no correction pairs or new pronunciation facts are added.
+    """
+    out=readings_for_char(ch,dict_index)
+    if _is_kanji(ch):
+        from okurigana import NEEDS_OKURIGANA
+        out+= [rd for rd in NEEDS_OKURIGANA.get(ch,())
+               if rd not in out and rd and all(_is_hiragana(c) or c=='ー' for c in rd)]
+    return out
+
+
 def reading_combos(text, dict_index=None, max_combos=MAX_COMBOS,
                    next_char=None):
     """

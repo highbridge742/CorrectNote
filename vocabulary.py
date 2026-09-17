@@ -793,7 +793,7 @@ def find_known_readings_flex(typed, store, max_dist=1.6, max_edits=2,
     # かな入力とローマ字入力では「近いキー」が違う。
     from kana_layout import mark_slip_enabled
     key = (typed, vocab_size, max_dist, max_edits, beam_width,
-           mark_slip_enabled(), input_method)
+           mark_slip_enabled(), input_method, dup_repair_enabled())
     cached = _FLEX_CACHE.get(key)
     if cached is not None:
         return cached
@@ -945,7 +945,7 @@ def _find_known_readings_flex_uncached(typed, store, max_dist=1.6,
                 progressed = True
 
             # --- 重複打鍵: 入力側だけ1文字進める（＝入力の余分な1文字を捨てる） ---
-            if pos < n:
+            if pos < n and deletion_respects_dup_setting(typed, pos):
                 _relax((node, pos + 1), cost + SKIP_COST, edits + 1)
                 progressed = True
 
@@ -990,6 +990,8 @@ def _find_known_readings_flex_uncached(typed, store, max_dist=1.6,
                     continue
             # 拗音・促音を開くだけの候補は作らない（にゃん→にやん）
             if _flattens_small_kana(typed, prefix):
+                continue
+            if repeat_collapse_is_disabled(typed, prefix):
                 continue
             results.append((prefix, cost, edits))
     if input_method != 'romaji' and len(results)>1:
@@ -1270,6 +1272,58 @@ def dup_repair_enabled():
     if v is not None:
         return v != '1'
     return DUP_REPAIR_DEFAULT_ON
+
+
+
+def deletion_respects_dup_setting(text, index):
+    """48-AAD: an equal neighbor defines a duplicate, even across a word cut.
+
+    This checks only an operation the caller is already considering. It
+    does not judge the source odd or declare a distinct deletion valid.
+    """
+    if not 0 <= index < len(text):
+        return False
+    repeated=((index > 0 and text[index-1] == text[index])
+              or (index+1 < len(text) and text[index+1] == text[index]))
+    return not repeated or dup_repair_enabled()
+
+
+def is_repeat_collapse(core, cand):
+    """
+    core から「隣と同じ文字」だけを削っていくと cand になるか。
+
+    「たたんご」→「たんご」（先頭の た の連打を1つ削る）が該当する。
+    連打の訂正で短くなった候補は、部分文字列の形をしていても
+    「切り詰め」（語の切り落とし）ではないので、除外してはいけない。
+    """
+    # 「隣と同じ文字を削る」を1文字ずつ判定すると、「みみ」の
+    # 両方を削って「みみこぴー」→「こぴー」まで許してしまう
+    # （どちらの み も「隣と同じ」だから）。これは連打の訂正ではなく
+    # 語の頭の切り落とし（実機で 耳コピー→コピー と壊れた）。
+    # 同じ文字の連続（run）ごとに比べ、**各連続から最低1文字は残る**
+    # 形だけを連打の畳み込みとみなす。
+    def _runs(s):
+        out = []
+        for ch in s:
+            if out and out[-1][0] == ch:
+                out[-1][1] += 1
+            else:
+                out.append([ch, 1])
+        return out
+
+    rc, rd = _runs(core), _runs(cand)
+    if len(rc) != len(rd):
+        return False
+    for (c1, n1), (c2, n2) in zip(rc, rd):
+        if c1 != c2 or not (1 <= n2 <= n1):
+            return False
+    return core != cand
+
+
+def repeat_collapse_is_disabled(source, candidate):
+    """A higher generic edit cost must not reactivate the disabled operation."""
+    return (len(candidate) < len(source) and not dup_repair_enabled()
+            and is_repeat_collapse(source, candidate))
 
 
 _REPEAT_GAP_COST = 0.6
@@ -1881,7 +1935,7 @@ def find_similar_readings(typed, store, max_cost=4.0, max_len_diff=3,
         vocab_size = len(store._by_reading)
     except Exception:
         vocab_size = -1
-    key = (typed, vocab_size, max_cost, max_len_diff, limit, min_count)
+    key = (typed, vocab_size, max_cost, max_len_diff, limit, min_count, dup_repair_enabled())
     cached = _SIM_CACHE.get(key)
     if cached is not None:
         return cached
@@ -1963,7 +2017,7 @@ def find_similar_readings(typed, store, max_cost=4.0, max_len_diff=3,
         m = len(reading)
         if m < _min_len or m > _max_len:
             continue
-        if reading == typed:
+        if reading == typed or repeat_collapse_is_disabled(typed, reading):
             continue
         # 長音「ー」の位置は動かさない。typed に ー が無いときは
         # 「相手にも ー が無い」だけを見ればよく、タプルを作らずに済む

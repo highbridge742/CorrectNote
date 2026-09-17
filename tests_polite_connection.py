@@ -8,9 +8,9 @@ import oddness as O
 import contextual_repair as R
 
 
-def pair(surface, pos, form='', start=0, auxiliary='ます'):
+def pair(surface, pos, form='', start=0, auxiliary='ます', reading=None):
     end=start+len(surface)
-    return ((surface,pos,surface,start,end,True,form),
+    return ((surface,pos,reading or surface,start,end,True,form),
             (auxiliary,'助動詞',auxiliary,end,end+len(auxiliary),True,'基本形'))
 
 
@@ -30,7 +30,14 @@ class PoliteConnectionTests(unittest.TestCase):
             self.assertFalse(O.polite_aux_mismatch(*pair('ろくし','動詞:自立','未然形')))
         with patch.object(M,'dictionary_inflections',return_value=((
                 '動詞,自立,*,*','未然形','書く','かか'),)):
-            self.assertTrue(O.polite_aux_mismatch(*pair('書か','動詞:自立','未然形')))
+            self.assertTrue(O.polite_aux_mismatch(*pair('書か','動詞:自立','未然形',reading='かか')))
+
+    def test_independent_irrealis_cannot_borrow_a_suffix_continuative(self):
+        forms=(('動詞,自立,*,*','未然ヌ接続','する','せ'),
+               ('動詞,接尾,*,*','連用形','せる','せ'))
+        with patch.object(M,'dictionary_inflections',return_value=forms):
+            self.assertTrue(O.polite_aux_mismatch(*pair('せ','動詞:自立','未然ヌ接続')))
+            self.assertFalse(O.polite_aux_mismatch(*pair('せ','動詞:接尾','連用形')))
 
     def test_dictionary_base_and_euphonic_forms_do_not_license_masu(self):
         for surface,form in (('読む','基本形'),('読ん','連用タ接続'),('美しく','連用テ接続')):
@@ -79,6 +86,7 @@ class PoliteConnectionTests(unittest.TestCase):
         entries={'記録':(('名詞,サ変接続,*,*','*','記録','きろく'),),
                  'し':(('動詞,自立,*,*','連用形','する','し'),)}
         with patch.object(M,'dictionary_inflections',side_effect=lambda sf:entries.get(sf,())), \
+             patch.object(M,'native_suru_form',side_effect=lambda sf,form,rd,*args:(sf,form,rd)==('し','連用形','し')), \
              patch.object(R,'_productive_predicate',return_value=True), \
              patch.object(R,'_grammatical_suffix',side_effect=lambda tail,state:tail=='て' and state=='R'):
             self.assertEqual(R._surfaces('きろくして',store,dictionary,compose=True),['記録して'])
@@ -179,7 +187,8 @@ class PoliteConnectionTests(unittest.TestCase):
              M.Token('ぜ','助詞','ぜ','ぜ',2,3,True,'終助詞'),
              M.Token('き','動詞','くる','き',3,4,True,'自立','連用形')]
         R._productive_predicate.cache_clear()
-        with patch.object(M,'tokenize',return_value=good):
+        with patch.object(M,'tokenize',return_value=good), \
+             patch.object(M,'native_suru_form',side_effect=lambda sf,form,rd,*args:(sf,form,rd)==('し','連用形','し')):
             self.assertTrue(R._productive_predicate('記録して','記録'))
         with patch.object(M,'tokenize',return_value=bad):
             self.assertFalse(R._productive_predicate('詰めぜき','詰め'))
@@ -280,6 +289,20 @@ class PoliteConnectionTests(unittest.TestCase):
             self.assertFalse(R._kana_grammar_boundary([a,b],0,3))
             c=('て','助詞:接続助詞','て',3,4,True,'')
             self.assertTrue(R._kana_grammar_boundary([a,b,c],0,3))
+
+    def test_native_irrealis_auxiliary_seam_reuses_inflection_and_requires_a_tail(self):
+        a=('よま','動詞:自立','よま',0,2,True,'未然形')
+        b=('み','動詞:非自立','み',2,3,True,'連用形')
+        c=('ます','助動詞','ます',3,5,True,'基本形')
+        entries={'ます':(('助動詞,*,*,*','基本形','ます','ます'),)}
+        with patch.object(M,'dictionary_inflections',side_effect=lambda x:entries.get(x,())):
+            self.assertTrue(O.infl_mismatch(a,b))
+            self.assertFalse(R._kana_grammar_boundary([a,b],0,3))
+            self.assertTrue(R._kana_grammar_boundary([a,b,c],0,3))
+            te=('て','助詞:接続助詞','て',1,2,True,'')
+            self.assertFalse(R._auxiliary_connection_mismatch(te,b))
+            unknown=a[:5]+(False,)+a[6:]
+            self.assertFalse(R._auxiliary_connection_mismatch(unknown,b))
 
     def test_generated_te_ta_follow_the_native_euphonic_form(self):
         cases=(('置き','おき','五段・カ行イ音便','連用形','置く','て',False),

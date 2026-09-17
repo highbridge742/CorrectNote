@@ -166,7 +166,7 @@ import zlib
 #              1件も変わらない**のは今までどおり。
 # 2026-09-06a: 項目48-RZ〜48-SC（格助詞の連続・人名＋を＋叙述動詞・濁点の
 #              位置ずれ・語の列として組み直す道を起こした）で答えが変わる。
-ENGINE_STAMP = '2026-09-11b'   # v1.8.0 / 48-XY〜YF: 文脈・活用・読み・編集の共有
+ENGINE_STAMP = '2026-09-16aam'   # 48-AKI: 既存異様と独立した読点節の文脈を共有
 
 # 控えの形式の版。作りを変えたら上げる（古い控えは捨てられる）。
 CACHE_VERSION = 1
@@ -309,14 +309,16 @@ def _engine_source_stamp(app_dir):
     if _seen is not None and _seen[0] == app_dir:
         return list(_seen[1])
     out = []
-    for name in ('corrector.py', 'vocabulary.py', 'kana_layout.py',
+    for name in ('analysis_worker.py', 'analysis_async.py', 'analysis_work_app.py',
+                 'analysis_work.py', 'tab_analysis.py', 'initial_setup.py', 'janome_import.py',
+                 'corrector.py', 'vocabulary.py', 'kana_layout.py',
                  'halfwidth.py', 'loanword.py', 'morphology.py',
                  'kanji_guess.py', 'context_vec.py', 'dict_index.py',
                  'okurigana.py', 'naturalness.py', 'charngram.py',
                  'ngram_ja.py', 'ngram_yomi.py',
                  'literal_examples.py', 'reading_segments.py',
                  'contextual_repair.py', 'inflected_lexicon.py', 'reading_likelihood.py',
-                 'semantic_roles.py',
+                 'semantic_roles.py', 'mark_usage.py',
                  'oddness.py', 'pos_grammar.py',
                  # **単語リストも補正の答えを変える**（項目48-BU で
                  # 触らない語を広げたら `callout` の扱いが変わった）。
@@ -392,7 +394,7 @@ def build_fingerprint(app_dir, app_version, input_method, recent_words,
 
 # 48-WN: 正常/未完を取り違えないため、診断と停止理由も保存する。
 _RESULT_METADATA = ('analysis_status', 'stop_reason', 'diagnostic_cycle',
-                    'diagnostic_limit', 'diagnosis')
+                    'diagnostic_limit', 'diagnosis', 'search_reports')
 
 
 def _pack(result):
@@ -450,6 +452,13 @@ def _unpack(item):
     return result
 
 
+def reusable_result(result):
+    """A value can be cached only after its computation actually completed."""
+    return (isinstance(result, dict) and bool(result)
+            and not result.get('pending') and not result.get('analysis_error')
+            and result.get('analysis_status') != 'incomplete')
+
+
 def save(path, fingerprint, tabs):
     """
     控えを書き出す。
@@ -474,7 +483,7 @@ def save(path, fingerprint, tabs):
     for text, results in (tabs or {}).items():
         if not text or results is None:
             continue
-        if any(r.get('analysis_status') == 'incomplete' for r in results):
+        if any(not reusable_result(r) for r in results):
             continue        # 打ち切られた行を次回起動の完成済み結果にしない
         lines = text.split('\n')
         if len(lines) != len(results):
@@ -526,7 +535,7 @@ def load(path, fingerprint):
             results = [_unpack(x) for x in entry['results']]
         except Exception:
             continue
-        if any(r.get('analysis_status') == 'incomplete' for r in results):
+        if any(not reusable_result(r) for r in results):
             continue
         if len(text.split('\n')) != len(results):
             continue

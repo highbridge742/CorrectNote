@@ -468,6 +468,29 @@ def correct_halfwidth(text, store, find_readings, max_dist=1.6, judge=None):
     if all(ch in '0123456789.,-:/()%+ ' for ch in text):
         return None
 
+    # Exact alternate source-key readings precede the digit/letter heuristic.
+    # Shape, quantities, identifiers and numeric-only guards already passed.
+    # --- 同じ文字を出す2つのキー（設計45・項目48-KB）---
+    # `\` は ろ／ー のどちらのキーでもある。既定（全部 ろ）で読めない
+    # とき、ー と読んだ形が**同梱のカタカナ語の表にただ1つ**当たるなら、
+    # それを採る（`rh\\.` → すくろーる → **スクロール**）。
+    # 証拠は回数を見ない閉じた表——初期語彙の実績（スクロールは1）に
+    # 頼らないので、初期状態でも立つ。2つ以上当たるなら決めない
+    # （異様判定の立っていない場面の門は「ただ1つのときだけ採る」）。
+    if '\\' in text:
+        hits = []
+        for v in halfwidth_to_kana_variants(text):
+            try:
+                from morphology import normalize_marks as _nm
+                v = _nm(v)
+            except Exception:
+                pass
+            kat = _hira_to_kata(v)
+            if _in_katakana_table(kat) and kat not in hits:
+                hits.append(kat)
+        if len(hits) == 1:
+            return hits[0]
+
     # 上の関門は英字が1〜2文字混ざるだけで破れる（検証レポート 2-E）。
     #   2.5kg → 震えのき / 12.5cm → ぬ震えそも / 1.5L → ぬるり
     #   35mm  → あ獲物   / v1.1.0 → ややひぬるぬるわやや
@@ -521,27 +544,6 @@ def correct_halfwidth(text, store, find_readings, max_dist=1.6, judge=None):
         # （もじにゅうりょく → 文字入力）。
         return kana_to_kanji_where_possible(kana, store, judge=judge)
 
-    # --- 同じ文字を出す2つのキー（設計45・項目48-KB）---
-    # `\` は ろ／ー のどちらのキーでもある。既定（全部 ろ）で読めない
-    # とき、ー と読んだ形が**同梱のカタカナ語の表にただ1つ**当たるなら、
-    # それを採る（`rh\\.` → すくろーる → **スクロール**）。
-    # 証拠は回数を見ない閉じた表——初期語彙の実績（スクロールは1）に
-    # 頼らないので、初期状態でも立つ。2つ以上当たるなら決めない
-    # （異様判定の立っていない場面の門は「ただ1つのときだけ採る」）。
-    if '\\' in text:
-        hits = []
-        for v in halfwidth_to_kana_variants(text):
-            try:
-                from morphology import normalize_marks as _nm
-                v = _nm(v)
-            except Exception:
-                pass
-            kat = _hira_to_kata(v)
-            if _in_katakana_table(kat) and kat not in hits:
-                hits.append(kat)
-        if len(hits) == 1:
-            return hits[0]
-
     # --- 訂正を伴う場合 ---
     # 半角モードでも隣のキーを押し間違えるので、
     # かなに戻した後の誤字も直せるようにする
@@ -550,7 +552,7 @@ def correct_halfwidth(text, store, find_readings, max_dist=1.6, judge=None):
     # 訂正後も「日本語として意味が通る」ことを必ず確かめる。
     #
     # 4〜5文字の短い語（「ふれろむ」→「ふれーむ」等、外来語の
-    # 長音を隣接キーと打ち間違えたような場合）は、6文字未満だと
+    # 長音キーを別の半角記号として解釈する場合など）は、6文字未満だと
     # 一律に対象外にしていたため訂正の機会が無かった
     # （実機で「半角入力の再変換候補にカタカナの補正が入らない。
     #   2;\\] ⇒ フレーム」と報告された）。

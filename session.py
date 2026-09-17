@@ -50,12 +50,13 @@ Windows 11 のメモ帳と同じ使い勝手を目指す:
 import json
 import os
 import time
+import file_format as file_formats
 
 SESSION_VERSION = 1
 
 
 def new_tab(text='', path=None, saved=True, cursor='1.0', scroll=0.0,
-            title=None, bookmarks=None, top=None):
+            title=None, bookmarks=None, top=None, file_format=None):
     """タブ1つぶんの控えを作る。
 
     top: 画面のいちばん上に見えていた**行番号**（1始まり）。
@@ -73,6 +74,7 @@ def new_tab(text='', path=None, saved=True, cursor='1.0', scroll=0.0,
         'top': top,
         'title': title,
         'bookmarks': sorted(bookmarks) if bookmarks else [],
+        'file_format': file_formats.clean(file_format, text),
     }
 
 
@@ -157,7 +159,11 @@ class SessionStore:
             self.active = 0
             return
         i = max(0, min(self.active, len(self.tabs) - 1))
-        self.tabs[i] = tab
+        # Saving the same tab must not replace its live document identity.
+        current = self.tabs[i]
+        if current is not tab:
+            current.clear()
+            current.update(tab)
 
     def add_tab(self, tab=None, activate=True):
         """タブを1つ足す。戻り値はその位置。"""
@@ -246,6 +252,15 @@ class SessionStore:
         for t in tabs:
             if not isinstance(t, dict):
                 continue
+            metadata = t.get('file_format')
+            if metadata is None and isinstance(t.get('path'), str):
+                # 旧セッションの書きかけは維持し、保存先から形式だけ引き継ぐ。
+                try:
+                    with open(t['path'], 'rb') as source:
+                        original, metadata = file_formats.decode(source.read())
+                    metadata = file_formats.rebase(metadata, original, t.get('text', ''))
+                except (OSError, UnicodeError, ValueError, TypeError):
+                    metadata = None
             clean.append(new_tab(
                 text=t.get('text', ''),
                 path=t.get('path'),
@@ -255,6 +270,7 @@ class SessionStore:
                 title=t.get('title'),
                 bookmarks=t.get('bookmarks'),
                 top=t.get('top'),  # 48-VI: 保存した表示行番号も復元する
+                file_format=metadata,
             ))
         if not clean:
             return False

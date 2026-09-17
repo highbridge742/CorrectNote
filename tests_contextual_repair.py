@@ -52,6 +52,25 @@ class ContextualRepairTests(unittest.TestCase):
             for row in R.key_repairs(reading):
                 self.assertLessEqual(sum(len(K.keystrokes(c)) for c in row.reading),n)
 
+    def test_chained_intrusion_uses_original_geometry_and_shift_identity(self):
+        remote=R.KeyRepair('もじ','adjacent_intrusion',1,'ん','',1.0)
+        shifted=R.KeyRepair('ちょう','adjacent_intrusion',2,'ょ','',1.0)
+        adjacent=R.KeyRepair('もと','adjacent_intrusion',1,'み','',1.0)
+        self.assertFalse(R._original_intrusion_allowed('もんじ',remote))
+        self.assertFalse(R._original_intrusion_allowed('ちよょう',shifted))
+        self.assertTrue(R._original_intrusion_allowed('もみと',adjacent))
+
+    def test_lazy_search_cutoff_is_not_candidate_exhaustion(self):
+        @R._with_search_report
+        def search():
+            while R._search_step('clause_key_tails',2):pass
+            return None,dict(status='no_candidate')
+        result,diagnostic=search()
+        self.assertIsNone(result)
+        self.assertEqual(diagnostic['status'],'unexplored_no_valid_candidate')
+        self.assertEqual(diagnostic['search']['state'],'truncated')
+        self.assertEqual(diagnostic['search']['limits']['clause_key_tails']['examined'],2)
+
     def test_known_inflection_is_not_split_into_character_guesses(self):
         t=self.target('読み直し')
         tk=lambda s:[token(s,'よみなおし','動詞:自立',form='連用形')]
@@ -111,6 +130,20 @@ class ContextualRepairTests(unittest.TestCase):
                                           None,None,None,None,None)
         self.assertEqual(R._apply(source,got),'A、BB')
         self.assertEqual(diagnostics[1]['status'],'selected_after_joint_validation')
+
+    def test_joint_validation_keeps_the_selected_owner_at_same_coordinates(self):
+        first=self.target('甲');second=R.RepairTarget('甲',0,1,0,1,(),True,'','kana_predicate')
+        diagnostics=[dict(start=0,end=1,candidates=[dict(surface='A',repair=dict(reading=reading))])
+                     for reading in ('first','second')]
+        seen=[]
+        def check(target,surface,*args):
+            seen.append((target,args[-2]));return True,''
+        owner={(0,1,'A'):(first,diagnostics[0])}
+        with patch.object(R,'validate',side_effect=check):
+            got=R._validate_joint_choices([(0,1,'A')],[],[first,second],diagnostics,
+                                          None,None,None,None,None,owner)
+        self.assertEqual(got,[(0,1,'A')])
+        self.assertEqual(seen,[(first,'first')])
 
     def test_unknown_ime_sequence_can_use_kun_without_written_okurigana(self):
         t=self.target('未知')
@@ -216,7 +249,8 @@ class ContextualRepairTests(unittest.TestCase):
     def test_unambiguous_polite_tail_is_context_even_after_a_mistyped_noun(self):
         line='移歯ます'
         parts=[token('移','い'),token('歯','は',start=1),token('ます','ます','助動詞',2)]
-        with patch('oddness.is_odd_run',return_value=[('歯','ます',1,4)]):
+        with patch('oddness.is_odd_run',return_value=[('歯','ます',1,4)]), \
+             patch('morphology.dictionary_inflections',return_value=None):
             targets=R.targets_for_line(line,lambda s:parts,None,None)
         # 構造的に異様な漢字2字も読み直す。正しい語尾は文脈に残す。
         self.assertEqual([(t.text,t.following,t.structural) for t in targets],
@@ -331,6 +365,88 @@ class ContextualRepairTests(unittest.TestCase):
         self.assertFalse(R._terminal_auxiliary_fragment('候補て尾','ます',tk))
         self.assertFalse(R._terminal_auxiliary_fragment('候補て尾','、',tk))
         self.assertFalse(R._terminal_auxiliary_fragment('完成語','',tk))
+
+
+    def suffix_candidate(self,surface,pos,form,after='て',new_suffix_pos='助詞:接続助詞',allowed=True,in_context_pos=None):
+        target=self.target('誤字',after)
+        def tk(text):
+            if text=='誤字'+after:
+                return [token('誤字','ごじ'),token(after,after,'助詞:接続助詞',2)]
+            if text==surface:
+                return [token(surface,surface,pos,form=form)]
+            if text==surface+after:
+                return [token(surface,surface,in_context_pos or pos,form=form),
+                        token(after,after,new_suffix_pos,len(surface))]
+            return []
+        engine=SimpleNamespace(_check_replacement=lambda source,c,*a,**kw:(c,None))
+        with patch('oddness.is_odd_run',return_value=[]), \
+             patch('oddness.preserves_bound_verb',return_value=True), \
+             patch.object(R,'_modern_te_allowed',return_value=allowed) as proof:
+            return R.validate(target,surface,engine,tk,None,None),proof
+
+    def test_unchanged_connective_checks_the_candidate_native_euphony(self):
+        result,proof=self.suffix_candidate('漕ぎ','動詞:自立','連用形',allowed=False)
+        self.assertEqual(result,(False,'euphonic_following_slot'))
+        proof.assert_called_with('漕ぎ','漕ぎ','て')
+
+    def test_original_connective_does_not_turn_into_nominal_case_for_new_noun(self):
+        result,proof=self.suffix_candidate('ブギ','名詞:一般','',
+            new_suffix_pos='助詞:格助詞:連語')
+        self.assertEqual(result,(False,'continuative_following_slot'))
+        proof.assert_not_called()
+
+    def test_grammatical_continuative_and_unclassified_modern_form_are_not_rejected(self):
+        for allowed in (True,None):
+            result,_=self.suffix_candidate('書い','動詞:自立','連用タ接続',allowed=allowed)
+            self.assertEqual(result,(True,'accepted'))
+
+    def test_conditional_auxiliary_has_its_own_connection_but_native_role_is_required(self):
+        rows=(('助動詞,*,*,*','仮定形','た','たら'),)
+        with patch('morphology.dictionary_inflections',return_value=rows):
+            self.assertTrue(R._self_contained_conditional(token('たら','たら','助動詞',form='仮定形')))
+            self.assertFalse(R._self_contained_conditional(token('たら','たら','名詞:一般',form='仮定形')))
+            self.assertFalse(R._self_contained_conditional(token('たら','別読み','助動詞',form='仮定形')))
+        with patch('morphology.dictionary_inflections',return_value=(('動詞,自立,*,*','仮定形','たる','たら'),)):
+            self.assertFalse(R._self_contained_conditional(token('たら','たら','助動詞',form='仮定形')))
+
+
+    def test_native_verbal_homograph_takes_its_role_in_the_changed_clause(self):
+        result,proof=self.suffix_candidate('調べ','名詞:一般','連用形',
+            in_context_pos='動詞:自立')
+        self.assertEqual(result,(True,'accepted'))
+        proof.assert_called_with('調べ','調べ','て')
+
+    def interjection_candidate(self,native=True,original_interjection=False):
+        source='読んであうげます';surface='あかげます';changed='読んで'+surface
+        target=R.RepairTarget(source,3,8,0,8,(('げ','ます',5,8),),True,'','auxiliary_connection')
+        prefix=[token('読ん','よん','動詞:自立',0,'連用タ接続'),token('で','で','助詞:接続助詞',2)]
+        original=prefix+[token('あう','あう','動詞:非自立',3,'基本形'),
+                         token('げ','げ','名詞:接尾:一般',5),token('ます','ます','助動詞',6,'基本形')]
+        cut=[token('あ','あ','フィラー'),token('う','う','形容詞:自立',1,'ガル接続'),
+             token('げ','げ','名詞:接尾:一般',2),token('ます','ます','助動詞',3,'基本形')]
+        cand=[token('あ','あ','フィラー'),token('かげ','かげ','動詞:自立',1,'連用形'),
+              token('ます','ます','助動詞',3,'基本形')]
+        if original_interjection:
+            original=prefix+[t[:3]+(t[3]+3,t[4]+3)+t[5:] for t in cut]
+        actual=prefix+[t[:3]+(t[3]+3,t[4]+3)+t[5:] for t in cand]
+        def tk(text):
+            return {source:original,changed:actual,'あうげます':cut,surface:cand}.get(text,[])
+        engine=SimpleNamespace(_check_replacement=lambda source,c,*a,**kw:(c,None))
+        entries=(('動詞,非自立,*,*','基本形','あう','あう'),) if native else ()
+        with patch('oddness.is_odd_run',return_value=[]), \
+             patch('oddness.preserves_completed_modifier',return_value=True), \
+             patch('oddness.preserves_bound_verb',return_value=True), \
+             patch('morphology.dictionary_inflections',return_value=entries):
+            return R.validate(target,surface,engine,tk,None,None)
+
+    def test_original_context_predicate_cannot_become_a_new_interjection(self):
+        self.assertEqual(self.interjection_candidate(),(False,'predicate_replaced_with_interjection'))
+
+    def test_existing_interjection_does_not_acquire_a_new_predicate_constraint(self):
+        self.assertEqual(self.interjection_candidate(original_interjection=True),(True,'accepted'))
+
+    def test_unproven_original_predicate_is_not_a_new_negative_judgement(self):
+        self.assertEqual(self.interjection_candidate(native=False),(True,'accepted'))
 
 
 if __name__=='__main__':unittest.main()
