@@ -27,8 +27,31 @@ class PoliteConnectionTests(unittest.TestCase):
             filename=getattr(module,'__file__',None)
             if not filename or Path(filename).resolve().parent!=directory:continue
             for value in tuple(vars(module).values()):
+                # DLL proxies can synthesize arbitrary attributes, including
+                # cache_clear. Only owned callables can be cached functions.
+                if not callable(value) or getattr(value,'__module__',None)!=name:continue
                 clear=getattr(value,'cache_clear',None)
-                if callable(clear) and getattr(value,'__module__',None)==name:clear()
+                if callable(clear):clear()
+
+
+    def test_cleanup_clears_owned_cache_without_probing_noncallable_objects(self):
+        import sys
+        from functools import lru_cache
+        from types import ModuleType
+        module=ModuleType('_correctnote_cleanup_fixture')
+        module.__file__=__file__
+        class Library:
+            def __getattr__(self,name):
+                raise AssertionError('Library attributes are not cached functions: '+name)
+        @lru_cache(maxsize=2)
+        def cached(value):return value
+        cached.__module__=module.__name__
+        module.cached=cached;module.library=Library()
+        cached('fixture')
+        self.assertEqual(cached.cache_info().currsize,1)
+        with patch.dict(sys.modules,{module.__name__:module}):
+            self.tearDownClass()
+        self.assertEqual(cached.cache_info().currsize,0)
 
 
     def test_native_connective_cannot_borrow_homographic_suru_for_masu(self):
