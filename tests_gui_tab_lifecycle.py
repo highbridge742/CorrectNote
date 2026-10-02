@@ -6,7 +6,7 @@ from pathlib import Path
 def child():
     import tkinter as tk
     from unittest.mock import Mock,patch
-    import app,analysis_work_app as input_work,analysis_worker
+    import app,analysis_cache,analysis_work_app as input_work,analysis_worker
     from session import new_tab
     assert (Path.cwd()/'.ui-test-isolated').is_file()
     sources=['最初の資料です。']+['確認用の文書です。番号'+str(i)+'。' for i in range(1,15)]
@@ -56,6 +56,33 @@ def child():
             a._switch_tab(1);until(done);a._switch_tab(0);until(done)
             delta=[count(k)-n for k,n in zip(('line','units','prepare'),before)]
             record('ime_occurrence_tab_restores_without_recomputing',delta==[0,0,0],calls=delta,reading_retained=input_work.has_readings(a))
+            a.open_find_dialog(False);a._find_dialog.withdraw()
+            a._find_query.set('です');a._do_find_all_tabs();a._all_tab_dialog.withdraw()
+            until(lambda:a._all_tab_search_job is None)
+            before=(count('line'),count('units'),count('prepare'));selected=[]
+            with patch.object(a,'_queue_background_tabs',return_value=None):
+                for index in (14,7,0,13,1,0):
+                    tab=a.session.tabs[index]
+                    hit=next(i for i,h in a._all_tab_hits.items() if h[0] is tab)
+                    a._all_tab_tree.selection_set(hit);a._open_all_tab_hit();until(done)
+                    selected.append(a.editor.get('sel.first','sel.last'))
+            delta=[count(k)-n for k,n in zip(('line','units','prepare'),before)]
+            record('all_tab_search_restores_completed_tabs_without_recomputing',
+                   delta==[0,0,0] and selected==['です']*6,calls=delta,selected=selected)
+            a._close_all_tab_results();a._close_find_dialog()
+            # Keep owner-specific results for every open tab even when the
+            # aggregate cache budget is smaller than the active documents.
+            a._stop_background_tabs()
+            with patch.object(a,'_queue_background_tabs',return_value=None), \
+                    patch.object(analysis_cache,'MAX_CACHED_LINES',3):
+                a._remember_tab_results()
+                for index in range(1,len(sources)):
+                    a._switch_tab(index);until(done)
+                before=(count('line'),count('units'),count('prepare'))
+                a._switch_tab(0);until(done)
+                delta=[count(k)-n for k,n in zip(('line','units','prepare'),before)]
+                record('live_tab_survives_cache_budget',delta==[0,0,0],calls=delta,
+                       reading_retained=input_work.has_readings(a))
             record('store_remains_initial',a.store.revision()==initial_store)
             print('TAB_REPORT '+json.dumps(events,ensure_ascii=False),flush=True)
         finally:
@@ -80,7 +107,7 @@ def parent():
 class TabLifecycleTkTests(unittest.TestCase):
     def test_many_completed_tabs_and_live_ime_resume_automatically(self):
         report=parent()
-        self.assertEqual(len(report),4)
+        self.assertEqual(len(report),6)
         self.assertTrue(all(item['ok'] for item in report),report)
 
 if __name__=='__main__':

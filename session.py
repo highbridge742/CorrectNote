@@ -56,7 +56,7 @@ SESSION_VERSION = 1
 
 
 def new_tab(text='', path=None, saved=True, cursor='1.0', scroll=0.0,
-            title=None, bookmarks=None, top=None, file_format=None):
+            title=None, bookmarks=None, top=None, file_format=None, calculations=None):
     """タブ1つぶんの控えを作る。
 
     top: 画面のいちばん上に見えていた**行番号**（1始まり）。
@@ -65,7 +65,7 @@ def new_tab(text='', path=None, saved=True, cursor='1.0', scroll=0.0,
         「タブ移動して戻ってくると、スクロール位置が変わって
         しまう」）。古い控えには無いので None を許す。
     """
-    return {
+    tab = {
         'text': text,
         'path': path,
         'saved': saved,
@@ -76,6 +76,10 @@ def new_tab(text='', path=None, saved=True, cursor='1.0', scroll=0.0,
         'bookmarks': sorted(bookmarks) if bookmarks else [],
         'file_format': file_formats.clean(file_format, text),
     }
+    from quote_calculator import clean_calculations
+    records = clean_calculations(text, calculations)
+    if records:tab['calculations'] = records
+    return tab
 
 
 FRESH_TAB_BOOKMARKS = (1,)
@@ -271,6 +275,7 @@ class SessionStore:
                 bookmarks=t.get('bookmarks'),
                 top=t.get('top'),  # 48-VI: 保存した表示行番号も復元する
                 file_format=metadata,
+                calculations=t.get('calculations'),
             ))
         if not clean:
             return False

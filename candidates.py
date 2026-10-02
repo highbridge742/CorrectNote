@@ -1098,3 +1098,72 @@ def is_symbol_word(text):
     if not text:
         return False
     return text in SYMBOL_WORDS or text in F2_SYMBOL_STOPS
+
+
+def _project_contextual_choices(result, shown, choice_store=None):
+    """Use proved source bounds; do not guess inside a changed word."""
+    if not isinstance(result,dict):return []
+    proof=result.get('contextual_choices') or {}
+    if proof.get('version')!=1:return []
+    original=result.get('original');corrected=result.get('corrected')
+    if proof.get('source')!=original:return []
+    if shown not in (original,corrected):
+        if choice_store is None:return []
+        matched=False
+        for prior in (original,corrected):
+            edits=[]
+            for c in _project_contextual_choices(result,prior):
+                try:chosen=choice_store.lookup(c['base'])
+                except Exception:continue
+                if chosen==c['surface']:edits.append((*c['choice_span'],chosen))
+            accepted=[]
+            for a,b,face in sorted(set(edits),key=lambda e:(e[1]-e[0]),reverse=True):
+                if any(a<y and x<b for x,y,_ in accepted):continue
+                accepted.append((a,b,face))
+            rendered=prior
+            for a,b,face in sorted(accepted,reverse=True):rendered=rendered[:a]+face+rendered[b:]
+            if rendered==shown:matched=True;break
+        if not matched:return []
+    from app import selection_correction_pair
+    out=[];seen=set()
+    for candidate in proof.get('candidates',()):
+        a=candidate.get('start');b=candidate.get('end');base=candidate.get('base')
+        face=candidate.get('surface')
+        if (not isinstance(a,int) or not isinstance(b,int) or not 0<=a<b<=len(original)
+                or original[a:b]!=base or not isinstance(face,str) or not face):continue
+        if shown==original:lo,hi=a,b
+        else:
+            pair=selection_correction_pair(original,shown,a,b,True)
+            if pair is None or pair[0]!=base:continue
+            lo,hi=pair[2:]
+        key=(lo,hi,face)
+        if key in seen:continue
+        seen.add(key)
+        out.append(dict(surface=face,reading=candidate.get('reading'),kind='typo',
+                        choice_span=(lo,hi),base=base,original_span=(a,b)))
+    return out
+
+
+def contextual_choice_candidates(result, shown, start, end, choice_store=None):
+    """Optional choices for this exact visible selection; caller checks decisions."""
+    if not 0<=start<end<=len(shown):return []
+    return [c for c in _project_contextual_choices(result,shown,choice_store)
+            if c['choice_span'][0]<=start<end<=c['choice_span'][1]
+            and shown[c['choice_span'][0]:c['choice_span'][1]]!=c['surface']]
+
+
+def contextual_choice_ranges(result, choice_store):
+    """Apply a stored explicit choice only to its revalidated original frame.
+
+    Automatic repairs can have changed the visible letters already. The
+    original-unit choice still wins, but only an exact validated alternative
+    from this result is projected. Unrelated or rejected choices gain nothing.
+    """
+    if choice_store is None:return []
+    out=[]
+    for c in _project_contextual_choices(result,result.get('corrected','')):
+        try:chosen=choice_store.lookup(c['base'])
+        except Exception:continue
+        if not isinstance(chosen,str) or chosen!=c['surface'] or chosen==c['base']:continue
+        out.append((*c['choice_span'],c['base'],chosen))
+    return out

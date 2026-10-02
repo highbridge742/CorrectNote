@@ -79,7 +79,13 @@ def child():
             t=time.monotonic();instance._switch_tab(1);switch_ms=(time.monotonic()-t)*1000
             assert instance.editor.get('1.0','1.end')=='これは別のタブです。'
             until(lambda:instance._analyze_text.startswith('これは別のタブ') and done())
-            instance._switch_tab(0)
+            # More than six visited tabs must not discard completed rows
+            # from this unfinished document.
+            with patch.object(instance,'_queue_background_tabs',return_value=None):
+                for index in range(7):
+                    instance.session.tabs.append(new_tab(text='巡回用の文書'+str(index)+'。'))
+                    instance._switch_tab(len(instance.session.tabs)-1);until(done)
+                instance._switch_tab(0)
             until(lambda:bool(instance.line_results) and instance.line_results[0]['original']=='寒ぃ日だ。' and not instance.line_results[0].get('pending'))
             assert sum(k=='line' and line=='寒ぃ日だ。' for k,line,_ in calls)==1,('First row reanalysed',calls)
             hold[0]=False

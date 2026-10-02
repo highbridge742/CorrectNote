@@ -94,9 +94,15 @@ class DuplicatePolicyTests(unittest.TestCase):
     def test_source_mapping_does_not_guess_inside_a_rewritten_word(self):
         token=C._CORRECTION_PATH.set(('ひとりよよがり。','一人ょよがり。'))
         try:
+            # The edited start is inside rewritten 一人: no ancestor
+            # coordinate is guessed. Its literal ょよ still repeats a key.
+            self.assertEqual(list(C._candidate_source_ranges('一人ょよがり。',1,6)),
+                             [('一人ょよがり。',1,6)])
             with patch.dict(os.environ,{'CN_NO_DUP':'1'}):
-                self.assertFalse(C._repeat_repair_disabled_in_source(
+                self.assertTrue(C._repeat_repair_disabled_in_source(
                     '一人ょよがり。',1,6,'人よがり'))
+                self.assertFalse(C._repeat_repair_disabled_in_source(
+                    '一人ょよがり。',1,6,'人よがき'))
         finally:
             C._CORRECTION_PATH.reset(token)
 

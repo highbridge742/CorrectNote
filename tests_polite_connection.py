@@ -15,6 +15,33 @@ def pair(surface, pos, form='', start=0, auxiliary='ます', reading=None):
 
 
 class PoliteConnectionTests(unittest.TestCase):
+    @classmethod
+    def tearDownClass(cls):
+        # Mocked native dictionary calls can populate transitive grammar and
+        # usage caches. Restore the test boundary once after this mock class;
+        # clearing only the direct dictionary leaves derived false evidence.
+        import sys
+        from pathlib import Path
+        directory=Path(__file__).resolve().parent
+        for name,module in tuple(sys.modules.items()):
+            filename=getattr(module,'__file__',None)
+            if not filename or Path(filename).resolve().parent!=directory:continue
+            for value in tuple(vars(module).values()):
+                clear=getattr(value,'cache_clear',None)
+                if callable(clear) and getattr(value,'__module__',None)==name:clear()
+
+
+    def test_native_connective_cannot_borrow_homographic_suru_for_masu(self):
+        entries={'し':(('助詞,接続助詞,*,*','*','し','し'),('動詞,自立,*,*','連用形','する','し')),
+                 'ます':(('助動詞,*,*,*','基本形','ます','ます'),)}
+        with patch.object(M,'dictionary_inflections',side_effect=lambda word:entries.get(word,())):
+            self.assertTrue(O.polite_aux_mismatch(*pair('し','助詞:接続助詞')))
+            self.assertFalse(O.polite_aux_mismatch(*pair('し','動詞:自立','連用形')))
+            self.assertFalse(O.polite_aux_mismatch(*pair('て','助詞:接続助詞')))
+            self.assertFalse(O.polite_aux_mismatch(*pair('で','助詞:接続助詞')))
+            self.assertFalse(O.polite_aux_mismatch(*pair('未知','助詞:接続助詞')))
+
+
     def test_pure_noun_cannot_attach_to_polite_auxiliary(self):
         with patch.object(M,'dictionary_inflections',return_value=(('名詞,サ変接続,*,*','*','記録','きろく'),)):
             self.assertTrue(O.polite_aux_mismatch(*pair('記録','名詞:サ変接続')))
@@ -74,7 +101,8 @@ class PoliteConnectionTests(unittest.TestCase):
                ('まし','助動詞','まし',2,4,True,'連用形'),
                ('て','助詞:接続助詞','て',4,5,True,'')]
         with patch.object(O,'is_odd_run',return_value=[('記録','まし',0,4)]), \
-             patch.object(O,'polite_aux_mismatch',return_value=True):
+             patch.object(O,'polite_aux_mismatch',return_value=True), \
+             patch('reading_segments.native_written_action_attachment_heads',return_value=((0,2),)):
             targets=R.targets_for_line('記録まして',lambda s:parts,None,None)
         self.assertEqual([(t.text,t.following,t.preserved_head) for t in targets],
                          [('記録まして','','記録'),('記録','まして','')])
@@ -187,7 +215,10 @@ class PoliteConnectionTests(unittest.TestCase):
              M.Token('ぜ','助詞','ぜ','ぜ',2,3,True,'終助詞'),
              M.Token('き','動詞','くる','き',3,4,True,'自立','連用形')]
         R._productive_predicate.cache_clear()
+        entries={'記録':(('名詞,サ変接続,*,*','*','記録','きろく'),),
+                 'し':(('動詞,自立,*,*','連用形','する','し'),)}
         with patch.object(M,'tokenize',return_value=good), \
+             patch.object(M,'dictionary_inflections',side_effect=lambda sf:entries.get(sf,())), \
              patch.object(M,'native_suru_form',side_effect=lambda sf,form,rd,*args:(sf,form,rd)==('し','連用形','し')):
             self.assertTrue(R._productive_predicate('記録して','記録'))
         with patch.object(M,'tokenize',return_value=bad):
@@ -431,6 +462,80 @@ class PoliteConnectionTests(unittest.TestCase):
             tokens[2]=('進め','動詞:自立','すすめ',2,4,True,'連用形')
             tokens[3]=('い','動詞:非自立','い',4,5,True,'連用形')
             self.assertFalse(C._chunk_is_intact('進めい',lambda s:tokens,context_only=True))
+
+
+@unittest.skipUnless(M.dictionary_inflections('くすり'),'requires native dictionary')
+class NativeChangedPoliteTests(unittest.TestCase):
+    @unittest.skipUnless(M.HAS_JANOME,'native auxiliary attachment')
+    def test_missing_aspect_seam_keeps_written_native_base_and_rejects_shi_masu(self):
+        self.assertFalse(R._productive_predicate('逝けしません','逝け'))
+        self.assertTrue(R._productive_predicate('行けてません','行け'))
+        def legacy(text):
+            return [(t.surface,t.pos+':'+t.pos_sub,t.reading,t.start,t.end,t.has_reading,t.infl_form) for t in M.tokenize(text)]
+        source='行けいません';target=R.RepairTarget(source,0,len(source),0,len(source),(),True,'')
+        self.assertIn(('surface','行ける'),R._source_preserved_verb_bases(target,legacy))
+        original='タフ背いません';other=R.RepairTarget(original,0,len(original),0,len(original),(),True,'')
+        self.assertNotIn(('surface','行ける'),R._source_preserved_verb_bases(other,legacy))
+
+    def test_common_final_validation_rejects_narrow_predicate_and_whole_proposals(self):
+        import corrector as C
+        from tests_analysis_async import initial
+        a=initial();tokenize=C.make_tokenizer(a.store)
+        for text in ('たまねぎとぷねらをきすります。','「たまねぎ」とにんじんをきすります。'):
+            start=text.index('きすり')
+            for lo,hi,surface in ((start,start+3,'くすり'),
+                    (start,len(text)-1,'くすります'),(0,len(text),text.replace('きすり','くすり'))):
+                with self.subTest(text=text,scope=(lo,hi)):
+                    accepted,reason=C._check_replacement(text,(lo,hi,surface,'かな入力'),
+                        a.store,tokenize,a.dict_index,a.decisions)
+                    self.assertIsNone(accepted)
+                    self.assertEqual(reason,'native_auxiliary_chain')
+
+    def test_changed_chain_keeps_actual_continuatives_and_auxiliaries(self):
+        for tail in ('きります','すります','たのしみます','かえります','みます',
+                     'よまれます','たべさせます','おしえられます','かえれます',
+                     'ございます','いらっしゃいます','なさいます','くださいませ'):
+            changed='ぷねらを'+tail+'。'
+            self.assertTrue(O.changed_auxiliary_chain_allowed(changed,0,len(changed),
+                original='ぷねらをきすります。'),tail)
+
+    def test_independent_edit_does_not_borrow_or_inherit_another_bad_chain(self):
+        original='きょうはしりょうをよみます。ぷねらをくすります。'
+        changed=original.replace('きょう','今日')
+        self.assertTrue(O.changed_auxiliary_chain_allowed(changed,0,len(changed),original=original))
+        changed='きょうはしりょうをよみます。ぷねらをくすります。'
+        self.assertFalse(O.changed_auxiliary_chain_allowed(changed,0,len(changed),
+            original=changed.replace('くすり','きすり')))
+
+    def test_unchanged_auxiliary_tail_of_the_changed_source_token_is_checked(self):
+        for original,changed in (('かいてはけっしますです。','かいてはけさしますです。'),
+                ('あねがつくっつたおかし。','あねがつくしつたおかし。'),
+                ('これはしんつた。','これはしきつた。')):
+            self.assertFalse(O.changed_auxiliary_chain_allowed(changed,0,len(changed),original=original),changed)
+
+    def test_known_whole_words_and_normal_examples_stay_literal(self):
+        import app
+        from tests_analysis_async import initial
+        a=initial()
+        for text in ('たまねぎとにんじんをきります。','ごまをすります。','ますますたのしみます。',
+                     'おちゃをのみます。','まつをみます。','めをさまします。',
+                     '本を読ませます。','きのうはよくやすみました。',
+                     '「くすります」という文字列を検索します。',
+                     '「たまねぎ」と「にんじん」をきります。'):
+            result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
+                context_vec=None,decisions=a.decisions)
+            self.assertEqual(result['corrected'],text)
+            self.assertEqual(result.get('odd_spans'),[],text)
+
+    def test_old_wrong_local_action_is_retained_and_still_odd(self):
+        import app
+        from tests_analysis_async import initial
+        a=initial()
+        for text in ('たまねぎとぷねらをきすります。','「たまねぎ」とにんじんをきすります。'):
+            result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
+                context_vec=None,decisions=a.decisions)
+            self.assertEqual(result['corrected'],text)
+            self.assertTrue(result.get('odd_spans'),text)
 
 
 if __name__=='__main__':unittest.main()

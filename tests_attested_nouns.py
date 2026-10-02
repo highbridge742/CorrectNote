@@ -70,4 +70,37 @@ class AttestedNounTests(unittest.TestCase):
         self.assertFalse(oddness._proper_noun_is_trusted(
             ('爽鍵美茶','名詞:固有名詞:一般','そうけんびちゃ',0,4,True),None,Index()))
 
+    @unittest.skipUnless(M.HAS_JANOME, "Requires real native tokenization")
+    def test_reviewed_unread_katakana_shares_exact_source_metadata(self):
+        import reading_segments as R
+        source='資料を保存したフォルダ'
+        parts=M.tokenize(source);word=next(t for t in parts if t.surface=='フォルダ')
+        self.assertEqual((word.reading,word.pos_sub,word.start,word.end,word.has_reading),
+                         ('ふぉるだ','一般',7,11,True))
+        self.assertEqual(R.native_surface_nominal_heads(source),('フォルダ',))
+    def test_reviewed_metadata_does_not_forge_native_rows_or_change_roster(self):
+        words=('フォルダ','ステータスバー','クリップボード')
+        before={word:M.dictionary_inflections(word) for word in words};roster=G.GENERAL_WORDS
+        for word in words:
+            parts=M._restore_attested_nouns(word,[self.token(word,0)])
+            if not before[word]:
+                self.assertEqual((parts[0].reading,parts[0].has_reading),(M.katakana_to_hiragana(word),True))
+        self.assertEqual(before,{word:M.dictionary_inflections(word) for word in words})
+        self.assertIs(G.GENERAL_WORDS,roster)
+    def test_reviewed_noun_still_requires_original_whole_nominal_boundaries(self):
+        for source,parts in (
+            ('プネラフォルダ',[self.token('プネラフォルダ',0)]),
+            ('フォルダプネラ',[self.token('フォルダプネラ',0)]),
+            ('フォル ダ',[self.token('フォル',0),self.token('ダ',4)]),
+            ('フォルダ',[self.token('フォル',0,pos='動詞'),self.token('ダ',3)]),
+        ):
+            with self.subTest(source=source):self.assertEqual(M._restore_attested_nouns(source,parts),parts)
+    def test_known_native_name_keeps_its_original_reading(self):
+        word=self.token('フォルダ',0,known=True);word.reading='native_name';word.pos_sub='固有名詞:一般'
+        native=(('名詞,固有名詞,一般,*','*','フォルダ','native_name'),)
+        with patch.object(M,'dictionary_inflections',return_value=native):
+            result=M._restore_attested_nouns('フォルダ',[word])
+        self.assertIs(result[0],word)
+        self.assertEqual((word.reading,word.pos_sub),('native_name','固有名詞:一般'))
+
 if __name__=='__main__':unittest.main()

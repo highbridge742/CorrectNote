@@ -35,7 +35,10 @@ class ParticleCandidateTests(unittest.TestCase):
         self.assertTrue(native_common_noun_reading('文書','ぶんしょ'))
         self.assertFalse(native_common_noun_reading('文書','ぶんしょう'))
         self.assertFalse(native_common_noun_reading('田中','たなか'))
-        with patch.object(M,'dictionary_inflections',return_value=()):
+        # Simulate absence of every native source, including the cached
+        # classified nouns that were already attested by the same dictionary.
+        with patch.object(M,'dictionary_inflections',return_value=()), \
+             patch('reading_segments._classified_nominal_readings',return_value={}):
             self.assertFalse(native_common_noun_reading('文書','ぶんしょ'))
 
     def test_selected_range_must_contain_intrusion(self):

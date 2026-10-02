@@ -23,7 +23,9 @@ class BackgroundOwnershipTests(unittest.TestCase):
   return dict(owner=owner,text=text,lines=text.split('\n'),ctx={},pos=1,
    results=[dict(original='資料です。',corrected='資料です。'),None],
    dependencies=analysis_async.state_key(a),readings=tab_analysis._readings(a,owner),
-   work_epoch=a._work_epoch,words={},attested={},units={},suspect_units={})
+   work_epoch=a._work_epoch,words={},attested={},
+   units={('資料です。','資料です。'):('資料です。',[])},
+   suspect_units={('資料です。','資料です。',False):('資料です。',[])})
  def test_text_only_cache_cannot_skip_a_document_with_live_ime(self):
   a=self.a;text=a.session.tabs[1]['text']
   a._analysis_cache[text]=[dict(original=line,corrected=line) for line in text.split('\n')]
@@ -47,27 +49,36 @@ class BackgroundOwnershipTests(unittest.TestCase):
   self.assertEqual(a._bg['pos'],1)
 
 
- def test_pending_input_parks_background_and_resumes_without_an_explicit_start(self):
+ def test_pending_input_does_not_starve_independent_worker(self):
   a=self.a;state=self.state(1);a._bg=state;a._after_id='input-check'
-  a._bg_step()
+  a._bg_step_once=Mock(return_value=True)
+  a._note_interaction();a._bg_step()
+  a._bg_step_once.assert_called_once_with()
+  self.assertIs(a._bg,state)
+  self.assertLess(a.root.after.call_args.args[0],a.ANALYZE_BG_GAP_MS)
+ def test_foreground_restart_preserves_background_request_and_rows(self):
+  from unittest.mock import patch
+  a=self.a;state=self.state(1);a._bg=state;a._bg_job='poll';a._work_epoch+=1
+  a._async_background_request=('independent',7)
+  a._cancel_analysis_job();job=a._bg_start_job
+  a._cancel_analysis_job()
+  self.assertEqual(a._bg_start_job,job)
+  self.assertEqual(a._async_background_request,('independent',7))
+  with patch.object(analysis_async,'background_step') as step:
+   a._bg_step_once();step.assert_called_once_with(a,state)
+  self.assertIs(a._bg,state)
+  self.assertEqual(state['pos'],1)
+  # Opening that same document transfers its partial values before foreground restore.
+  a.session.active=1;a._cancel_analysis_job()
   self.assertIsNone(a._bg)
   self.assertEqual(a._bg_parked[state['owner']]['pos'],1)
-  delay,callback=a.root.after.call_args.args
-  self.assertEqual(delay,300)
-  a._after_id=None;callback()
-  self.assertIsNone(a._bg_start_job)
-  self.assertEqual(a._bg_texts[0][0],state['owner'])
-  a._bg_step_once()
-  self.assertEqual(a._bg['pos'],1)
- def test_epoch_change_preserves_completed_background_rows(self):
-  a=self.a;state=self.state(1);a._bg=state;a._work_epoch+=1
-  a._bg_step_once()
-  self.assertIsNone(a._bg)
-  self.assertEqual(a._bg_parked[state['owner']]['pos'],1)
+  self.assertIsNone(a._async_background_request)
  def test_new_foreground_progress_merges_with_prior_background_rows(self):
   a=self.a;first=self.state(1)
   tab_analysis.park_background(a,first)
   later=self.state(1);later['results']=[None,dict(original='末尾',corrected='末尾')]
+  later['units'][('末尾','末尾')]=('末尾',[])
+  later['suspect_units'][('末尾','末尾',False)]=('末尾',[])
   tab_analysis.park_background(a,later)
   saved=a._bg_parked[first['owner']]
   self.assertEqual(saved['pos'],2)
@@ -94,5 +105,100 @@ class BackgroundOwnershipTests(unittest.TestCase):
   self.assertIsNone(tab_analysis.text_results(a,text,work.owner_for_tab(a,a.session.tabs[1])))
   a._start_background_tabs()
   self.assertEqual(len(a._bg_texts),2)
+
+ def test_child_layout_notification_does_not_starve_background(self):
+  a=self.a;a._bg_step_once=Mock(return_value=False)
+  a._note_interaction(SimpleNamespace(widget=object(),type='22'))
+  a._bg_step()
+  a._bg_step_once.assert_called_once_with()
+ def test_root_resize_and_real_input_keep_independent_worker_running(self):
+  a=self.a;a._track_window_position=Mock();a._bg_step_once=Mock(return_value=False)
+  for event in (SimpleNamespace(widget=a.root,type='22'),SimpleNamespace(widget=object(),type='2')):
+   a._note_interaction(event);a._bg_step()
+  self.assertEqual(a._bg_step_once.call_count,2)
+  a._track_window_position.assert_called_once()
+ def test_unchanged_root_geometry_does_not_extend_interaction(self):
+  a=self.a;a._bg_step_once=Mock(return_value=False)
+  a._last_window_rect=(20,30,800,600);a._last_interaction=0
+  event=SimpleNamespace(widget=a.root,type='22',x=20,y=30,width=800,height=600)
+  for unused in range(5):a._note_interaction(event)
+  a._bg_step()
+  a._bg_step_once.assert_called_once_with()
+  self.assertEqual(a._last_interaction,0)
+ def test_changed_root_geometry_does_not_starve_prefetch(self):
+  a=self.a;a._bg_step_once=Mock(return_value=False)
+  a._window_drag_button_down=Mock(return_value=False)
+  a._last_window_rect=(20,30,800,600);a._last_interaction=0
+  for rect in ((21,30,800,600),(21,30,801,600)):
+   a._note_interaction(SimpleNamespace(widget=a.root,type='22',x=rect[0],y=rect[1],width=rect[2],height=rect[3]))
+   a._bg_step();self.assertEqual(a._last_window_rect,rect)
+  self.assertEqual(a._bg_step_once.call_count,2)
+ def test_overview_and_held_scroll_keep_independent_worker_running(self):
+  a=self.a;a._bg_step_once=Mock(return_value=False)
+  a._overview=object();a._bg_step()
+  a._overview=None;a._drag={'mode':'scroll'};a._bg_step()
+  self.assertEqual(a._bg_step_once.call_count,2)
+ def test_finished_incomplete_tab_preserves_its_completed_rows(self):
+  a=self.a;state=self.state(1)
+  state['results'][1]=dict(original='末尾',corrected='末尾',analysis_status='incomplete')
+  state['pos']=len(state['lines']);a._bg=state
+  next_owner=work.owner_for_tab(a,a.session.tabs[2]);a._bg_texts=[(next_owner,a.session.tabs[2]['text'])]
+  self.assertTrue(a._bg_step_once())
+  self.assertIsNone(a._bg)
+  self.assertIsNone(tab_analysis.completed(a,state['text'],state['owner']))
+  self.assertNotIn(state['text'],a._analysis_cache)
+  saved=a._bg_parked[state['owner']]
+  self.assertEqual(saved['pos'],1)
+  self.assertEqual(saved['results'],[state['results'][0],None])
+  self.assertEqual(a._bg_texts,[(next_owner,a.session.tabs[2]['text'])])
+  # A later visit reuses the completed first row but retries the unfinished row.
+  a._bg_texts=[(state['owner'],state['text'])];a._bg_step_once()
+  self.assertEqual(a._bg['pos'],1)
+  self.assertEqual(a._bg['results'],saved['results'])
+
+
+ def test_background_local_evidence_keeps_units_only_with_its_owner(self):
+  a=self.a;a._prune_analysis_cache=Mock()
+  for kind in ('reading','calculation','plain'):
+   with self.subTest(kind=kind):
+    owner=work.owner_for_tab(a,a.session.tabs[1]);text=a.session.tabs[1]['text']
+    doc=Document(owner,text)
+    if kind=='reading':doc.remember(0,2,'資料','しりょう')
+    if kind=='calculation':
+     text='40';a.session.tabs[1]['text']=text;doc=Document(owner,text)
+     doc.remember_calculation(0,2,'40','40')
+    a._input_documents[owner]=doc
+    state=dict(owner=owner,text=text,ctx={},lines=text.split('\n'),pos=len(text.split('\n')),
+     results=[dict(original=line,corrected=line) for line in text.split('\n')],
+     dependencies=analysis_async.state_key(a),readings=doc.occurrences,calculations=doc.calculations,
+     work_epoch=a._work_epoch,units={(line,line):kind for line in text.split('\n')},suspect_units={})
+    a._analysis_cache={};a._analysis_cache_dependencies={};a._tab_units_cache={};a._bg=state
+    self.assertFalse(a._bg_step_once())
+    saved=tab_analysis.completed(a,text,owner)
+    self.assertIsNotNone(saved)
+    self.assertEqual(saved['units'],state['units'])
+    self.assertEqual(text in a._tab_units_cache,kind=='plain')
+    self.assertEqual(text in a._analysis_cache,kind=='plain')
+
+ def test_tab_swap_does_not_share_calculated_or_reading_units(self):
+  a=self.a;plain=({'plain':True},{})
+  for field in ('_analyze_readings','_analyze_calculations'):
+   with self.subTest(field=field):
+    a._analyze_text='40';a._units_cache={'local':True};a._suspect_units_cache={}
+    a._analyze_readings=();a._analyze_calculations=();setattr(a,field,('local',))
+    a._tab_units_cache={'40':plain}
+    a._swap_tab_units('40')
+    self.assertIs(a._units_cache,plain[0])
+
+ def test_tab_swap_reads_destination_document_before_it_becomes_current(self):
+  a=self.a;a._analyze_text='old';a._units_cache={'old':True};a._suspect_units_cache={}
+  owner=work.owner_for_tab(a,a.session.tabs[1]);a.session.tabs[1]['text']='40'
+  doc=Document(owner,'40');doc.remember_calculation(0,2,'40','40')
+  a._input_documents[owner]=doc;a.session.active=1
+  a._tab_units_cache={'40':({'plain':True},{})}
+  self.assertNotEqual(a._input_document.owner,owner)
+  a._swap_tab_units('40')
+  self.assertEqual(a._units_cache,{})
+  self.assertIn('40',a._tab_units_cache)
 
 if __name__=='__main__':unittest.main()

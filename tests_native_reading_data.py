@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Verified phonetics, unchanged variant words and complete native tails."""
+from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology
 
@@ -112,7 +113,7 @@ class NativeReadingDataTests(unittest.TestCase):
             ('小さいすぎます。','小さすぎます。')):
             with self.subTest(original=original):
                 result=self.correct(original)
-                self.assertEqual(result['corrected'],expected)
+                assert_repaired_spelling(self, result, expected)
                 self.assertFalse(result['odd_spans'])
                 self.assertEqual(self.correct(expected)['corrected'],expected)
         for text in ('高い杉です。','大きい杉を見ました。','安い椅子を買います。',
@@ -145,7 +146,7 @@ class NativeReadingDataTests(unittest.TestCase):
             ('そのようなは思えません。','そのようには思えません。')):
             with self.subTest(original=original):
                 result=self.correct(original)
-                self.assertEqual(result['corrected'],expected)
+                assert_repaired_spelling(self, result, expected)
                 self.assertFalse(result['odd_spans'])
                 self.assertEqual(self.correct(expected)['corrected'],expected)
         for text in ('きりがないようなものです。','そのようなものも見ました。',

@@ -19,8 +19,16 @@ class MarkUsageTests(unittest.TestCase):
     def predicate(base='叫ぶ', pos='動詞', known=True, start=0):
         return [M.Token('叫び',pos,base,'さけび',start,start+2,known,'自立','連用形')]
 
+    def test_equivalent_mark_keys_keep_native_halfwidth_notation(self):
+        for source,expected in [('かﾞ','が'),('はﾟ','ぱ'),('カﾞ','ガ'),('ハﾟ','パ'),
+                                ('ｶﾞ','ｶﾞ'),('ﾊﾟ','ﾊﾟ'),('ﾞ','ﾞ'),('Aﾞ','Aﾞ')]:
+            self.assertEqual(M.normalize_marks(source),expected,source)
+        # The notation rule consumes native predicate evidence; provide it in the mock suite.
+        with patch.object(M,'tokenize',return_value=self.predicate('唸る')):
+            self.assertEqual(U.intentional_ranges('うﾞうﾞと唸る'),((0,4),))
+
     def test_explicit_symbol_label_preserves_only_the_mark(self):
-        for mark in ('゛','゜','\u3099','\u309a'):
+        for mark in ('゛','゜','\u3099','\u309a','\uff9e','\uff9f'):
             line='記号は'+mark+'です。'
             self.assertEqual(U.intentional_ranges(line),((3,4),))
         self.assertEqual(U.intentional_ranges('準備゜を確認します。'),())

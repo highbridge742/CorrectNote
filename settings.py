@@ -77,6 +77,8 @@ DEFAULTS = {
     # 簡易入力ウィンドウに、呼び出したホットキーについての
     # 説明文を出すかどうか（一時解除ボタン自体は説明文とは別に常に出す）
     'show_quick_hint': True,
+    'capslock_backspace_enabled': True,
+    'insert_quote_enabled': True,
     # ダークモード。既定はオフ（既存の見た目を変えないため）
     'dark_mode': False,
     'editor_font_family': DEFAULT_EDITOR_FONT[0],

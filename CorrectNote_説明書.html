@@ -199,7 +199,7 @@
         CorrectNoteは、効率よく文字を打つための機能を集めたメモ帳です。
         <b>確定済みの単語をいつでも再変換</b>できるほか、
         別のアプリの操作中でも小さな下書きスペースを呼び出してすぐにメモを取れます。
-        さらに、<b>キーの押し間違い・打ち忘れ・押しすぎ・順序の入れ替わり</b>を、
+        さらに、<b>キーの押し間違い・打ち忘れ・余分な隣接キーの巻き込み・順序の入れ替わり</b>を、
         書いているそばから見つけて直します。
       </p>
       <div class="grid2">
@@ -264,7 +264,7 @@
       </div>
  
 
-      <p>文字を入力するとマウスポインターを隠します。マウスを動かす・ドラッグする・別のアプリへ切り替えると表示が戻り、次の文字入力で再び隠れます。</p>
+      <p>文字入力時、マウスポインターが入力欄・補正欄・簡易入力の本文上にある場合だけ隠します。上部メニューなどにある場合は表示したままです。マウスを動かす・ドラッグする・別のアプリへ切り替えると表示が戻り、次の文字入力で再び隠れます。</p>
 
       <h3><span class="dot"></span>色の意味</h3>
       <div class="swatch-row">
@@ -303,6 +303,10 @@
     <section id="choose">
       <h2><span class="num">03</span>再変換 ― 候補から選び直す</h2>
       <p class="sec-intro">確定済みの単語を、いつでも再変換できます。自動で直らなかった語や、直った語をさらに別の表記に変えたいときも、同じ操作で選び直せます。</p>
+
+      <p>文章の前後を含めて解析した別の候補も、選び直しの一覧に表示します。
+        入力欄・補正欄・簡易入力で利用でき、候補を選ぶと必要な語の範囲をまとめて変更します。
+        一覧を開いた後にその行を編集した場合は、候補を開き直してください。</p>
 
       <h3><span class="dot"></span>F2 でスムーズに直す</h3>
       <p>
@@ -381,6 +385,13 @@
         窓の中でも <span class="kbd">F1</span> または選択なしの <span class="kbd">Ctrl</span>+<span class="kbd">C</span> で
         引用モードに入り、本体のメモ欄にある語をクリックして拾えます（範囲をドラッグして選ぶこともできます）。
         <span class="kbd">F2</span> での再変換・遡りも本体と同じように使えます。
+        選んだ後も、同じ語の候補を開いて選び直せます。
+      </p>
+      <p>
+        <span class="kbd">F5</span> で括弧を挿入し、続けて押すと括弧の種類を切り替えます。
+        選択範囲や <span class="kbd">F2</span> で選んだ語を囲む操作、修飾キーとの組合せも本体と共通です。
+        IME変換中は確定した文字を囲みます。直後の <span class="kbd">Esc</span> で括弧を取り消し、
+        もう一度押すと簡易入力を閉じます。
       </p>
 
     </section>
@@ -388,21 +399,43 @@
     <!-- ============================================================ -->
     <section id="autofix">
       <h2><span class="num">05</span>自動補正のしくみ</h2>
-      <p class="sec-intro">「左右に並べるレイアウト」の補正欄は、次のような誤りを自動的に直します。</p>
+      <p class="sec-intro">「左右に並べるレイアウト」の補正欄は、入力の読みや前後の文章を調べて、次のような誤りを自動的に直します。漢字に変換された後の誤りも対象です。</p>
 
       <table class="keys">
-        <tr><th>誤りの種類</th><th>例</th></tr>
-        <tr><td>隣のキーの押し間違い</td><td></td></tr>
-        <tr><td>濁点・半濁点の付け忘れ／余分</td><td></td></tr>
-        <tr><td>「ゃ」「っ」などの小書き忘れ</td><td></td></tr>
-        <tr><td>1文字の打ち忘れ</td><td></td></tr>
-        <tr><td>キーの押しすぎ</td><td></td></tr>
-        <tr><td>打つ順番の入れ替わり</td><td></td></tr>
-        <tr><td>濁点だけが離れて入力された</td><td></td></tr>
+        <tr><th>誤りの種類</th><th>説明・例</th></tr>
+        <tr><td>キーの押し間違い</td><td>隣のキーに加え、少し離れたキーの取り違えも文脈と活用を確認して補正します。例：荷物を起きて → 荷物を置いて</td></tr>
+        <tr><td>濁点・半濁点の付け忘れ／余分</td><td>「゛」「゜」の有無や位置の誤り</td></tr>
+        <tr><td>「ゃ」「っ」などの小書き忘れ</td><td>小さいかなを、大きいかなで入力した誤り</td></tr>
+        <tr><td>1文字の打ち忘れ</td><td>囚虜時 → 終了時（「しゅうりょじ」と入力した場合も対象）</td></tr>
+        <tr><td>余分な隣接キーの巻き込み</td><td>右田でブルクリック → 右ダブルクリック</td></tr>
+        <tr><td>打つ順番の入れ替わり</td><td>続けて打つキーの順序が逆になった誤り</td></tr>
+        <tr><td>濁点・半濁点が離れて入力された</td><td>保存したか゜像を確認します。 → 保存した画像を確認します。</td></tr>
+        <tr><td>文中の誤変換</td><td>出るカマで考える → 出るかまで考える</td></tr>
         <tr><td>日本語入力をオフのまま入力</td><td>md@i(4l)h → 文字入力</td></tr>
         <tr><td>日本語入力オフのままローマ字入力</td><td>mojinyuuryoku → 文字入力</td></tr>
         <tr><td>文頭の「?」（変換前の記号の打ち間違い）</td><td>?今日の予定 → ・今日の予定</td></tr>
       </table>
+      <p>同じキーを余分に繰り返した入力を縮める補正は、現在の標準設定では行いません。</p>
+
+      <h3><span class="dot"></span>人名・地名と、一般的な言葉を見分ける</h3>
+      <p>
+        辞書に人名・地名として載っている語でも、文中で一般的な言葉として読むほうが自然かを比べます。
+        たとえば、<b>「資料の都築を編集します」→「資料の続きを編集します」</b>のように補正します。
+        一方、「都築氏」や「東京でダブルクリック」のように、敬称や文章のつながりから名前・場所として自然なものは残します。
+        珍しい名前という理由だけで誤りとは判断しません。
+      </p>
+      <p>
+        意図と違う補正になったときは、<a href="#decision">「補正の判断を伝える」</a>でその補正を使わないよう指定できます。
+        補正先を決められない不自然な箇所は、元の文字を残して紫で示します。
+      </p>
+
+      <h3><span class="dot"></span>絵文字を添えた文章や、欄を分けた入力</h3>
+      <p>
+        文章と<b>空白で離した絵文字・記号</b>があっても、文章部分を補正します。
+        たとえば「👩‍💻 集めた資料を名へら゛手」は「👩‍💻 集めた資料を並べて」になり、絵文字と空白はそのまま残ります。
+        この対応は、絵文字・記号が文章から空白で離れている場合が対象です。
+      </p>
+      <p>タブや矢印で分けた欄は、それぞれの入力をもとに補正します。</p>
     </section>
 
     <!-- ============================================================ -->
@@ -436,7 +469,7 @@
       </p>
       <ol class="steps">
         <li>ツールバーの <span class="kbd">クリックして引用</span> ボタンを押すか、
-          メモ欄で <span class="kbd">F1</span> を押します。案内文が出て、引用モードに入ります。</li>
+          メモ欄で選択範囲を外して <span class="kbd">F1</span> を押します。案内文が出て、引用モードに入ります。選択中のF1はコピーになります。</li>
         <li>引用したい語をクリックするか、範囲を選択して <span class="kbd">Enter</span> を押します。マウスでドラッグする方法も使えます。引用中も通常の縦長カーソルのままで、別のタブへ移ることもできます。</li>
         <li>別タブから引用すると元のタブへ戻り、モードに入ったときの位置へ差し込みます。先に範囲を選んでいた場合はその範囲を置き換えます。</li>
       </ol>
@@ -445,6 +478,19 @@
         キーからも同じモードに入れます。まず「＝」がその場に打たれ、
         そのまま文字を入力すると引用を解除し、「＝」の文字が残ります。矢印キーでの移動・範囲選択は続けられます。
         単語を引用できたときだけ、その「＝」は消えて引用した語に置き換わります。
+      </p>
+      <h3><span class="dot"></span>数式を入力して計算する</h3>
+      <p>
+        選択なしで <span class="kbd">Ctrl</span>+<span class="kbd">C</span> を押すか、
+        <span class="kbd">クリックして引用</span> ボタンを押してから数式を入力し、
+        <span class="kbd">Enter</span> で確定すると引用モードが終わります。イコールは不要です。
+        四則演算・小数・括弧と全角の数字や記号を使えます。
+      </p>
+      <p>
+        メモ欄には式の原文を残し、補正欄には半角の計算結果を表示します。
+        統合表示では自動補正オプションに従って結果を表示します。
+        簡易入力での選択なしコピーも利用でき、その窓の自動補正オプションに従います。
+        式が未完成なら、入力を続けてからEnterで確定できます。
       </p>
     </section>
 
@@ -465,12 +511,19 @@
         何も選んでいないときは、カーソルの位置に括弧だけが差し込まれ、
         カーソルは開き括弧のすぐ後ろに残るので、そのまま中身を書き始められます。
       </p>
+      <p>
+        <span class="kbd">F5</span>を続けて押すと、直前の括弧を置き換えながら
+        （）→「」→『』→【】→“”→（）の順に切り替わります。
+        別の括弧ボタンを続けて押しても置き換わり、同じボタンの再押下か
+        <span class="kbd">Esc</span>で括弧だけを取りやめます。
+        ほかの場所のクリック、上下キー、タブ移動の後はその括弧が確定します。
+      </p>
     </section>
 
     <!-- ============================================================ -->
     <section id="lineselect">
       <h2><span class="num">09</span>行をまるごと選ぶ</h2>
-      <p class="sec-intro">左端の行番号を使うと、行の単位で手早く選べます。カーソルがある行は、行番号の背景が明るくなります。</p>
+      <p class="sec-intro">左端の行番号を使うと、行の単位で手早く選べます。カーソルがある行は、左右両方の行番号の背景が明るくなります。補正欄をクリックしたときも連動し、タブを移ると移動先の行に切り替わります。大きい文字でも番号が収まるよう、番号だけ大きさを調整します。</p>
       <p>
         行番号を<b>クリック</b>すると、その行がまるごと選択されます。
         そのまま上下に<b>ドラッグ</b>すれば、複数の行をまとめて選べます。
@@ -479,8 +532,9 @@
       <h3><span class="dot"></span>キーボードだけで選ぶ・印を付ける</h3>
       <p>
         <b>Shift+スペース</b>で、カーソルのある<b>行の中身</b>が選ばれます。
-        行番号のクリックと違って<b>改行を含みません</b>ので、コピーしてそのまま別の行へ貼り直せます。
-        もう一度押すと、<b>前後の空白を除いた中身</b>まで狭まります。
+        行番号のクリックと違って<b>末尾の改行を含みません</b>ので、コピーしてそのまま別の行へ貼り直せます。
+        1行を選んでもう一度押すと、<b>前後の空白を除いた中身</b>まで狭まります。
+        複数行の一部を先に選んでいるときは、その範囲の行全体まで選択が広がります。
         Shiftを押したまま上下キーを押すと、最初の行を起点に行単位で選択を広げたり縮めたりできます。
       </p>
       <p>
@@ -551,6 +605,17 @@
       <p>
         最後のタブで <span class="kbd">Ctrl</span>+<span class="kbd">Tab</span> を押すと先頭のタブへ戻ります
         （逆向きも同じように回ります）。
+      </p>
+
+      <h3><span class="dot"></span>ホイールでタブを往復する</h3>
+      <p>
+        タブの上でホイールを回すと、下回転で右のタブへ、上回転で左のタブへ移動します。端まで来ると反対端へ戻ります。
+        <b>右ボタンを押したままホイールを回す</b>と、本文や行番号欄にポインターがあるときも同じ操作ができます。
+      </p>
+      <p>
+        右ボタンを離さなくても、<b>最後のタブ移動から0.3秒以上間を空けて逆に回す</b>と、逆方向へ移動できます。
+        切り替わった直後のごく短い逆回転は、意図しない跳ね戻りを防ぐため無視します。
+        ホイールでタブ移動した後に右ボタンを離しても、候補一覧やタブメニューは開きません。
       </p>
 
       <h3><span class="dot"></span>自動保存と続きから再開</h3>
@@ -635,7 +700,7 @@
       <p>
         「フォント → 種類・サイズを選択」で本文・補正欄・簡易入力の字を変更できます。
         サイズはメニューから直接選ぶこともできます。「初期設定に戻す」でYu Mincho・11ポイントに戻ります。
-        設定は次回起動にも引き継がれ、俯瞰表示を終えると選んだ大きさへ戻ります。
+        サイズだけを変更して「適用」「OK」を押すこともできます。ダイアログの「初期設定」はその場で反映します。設定は次回起動にも引き継がれ、俯瞰表示を終えると選んだ大きさへ戻ります。
       </p>
       <h3><span class="dot"></span>ダークモード</h3>
       <p>
@@ -661,18 +726,29 @@
         <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">S</span></td><td>保存</td></tr>
         <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">F</span></td><td>検索</td></tr>
         <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">H</span></td><td>置換</td></tr>
-        <tr><td class="k"><span class="kbd">F3</span> / <span class="kbd">Shift</span>+<span class="kbd">F3</span></td><td>次を検索 / 前を検索</td></tr>
+        <tr><td class="k"><span class="kbd">F3</span></td><td>Enterと同じ動作</td></tr>
+        <tr><td class="k"><span class="kbd">F4</span></td><td>貼り付け</td></tr>
+        <tr><td class="k"><span class="kbd">F5</span></td><td>括弧を挿入。続けて押すと（）→「」→『』→【】→“”→（）と切り替え</td></tr>
+        <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">F5</span></td><td>（）を挿入</td></tr>
+        <tr><td class="k"><span class="kbd">Shift</span>+<span class="kbd">F5</span></td><td>『』を挿入</td></tr>
+        <tr><td class="k"><span class="kbd">Alt</span>+<span class="kbd">F5</span></td><td>【】を挿入</td></tr>
+        <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">Shift</span>+<span class="kbd">F5</span></td><td>“”を挿入</td></tr>
+        <tr><td class="k"><span class="kbd">Shift</span>+<span class="kbd">F3</span></td><td>前を検索</td></tr>
         <tr><td class="k"><span class="kbd">F2</span></td><td>再変換 ― カーソル直前の語の候補を開く（押すたびに左の語へ遡る）</td></tr>
         <tr><td class="k"><span class="kbd">←</span> / <span class="kbd">→</span>（候補一覧が開いているとき）</td><td>再変換の対象の語を前後に移す</td></tr>
         <tr><td class="k"><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">Tab</span></span> / <span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">PageDown</span></span></td><td>次のタブへ</td></tr>
         <tr><td class="k"><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">Shift</span>+<span class="kbd">Tab</span></span> / <span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">PageUp</span></span></td><td>前のタブへ</td></tr>
         <tr><td class="k"><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">T</span></span> / <span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">W</span></span></td><td>新しいタブを開く / いまのタブを閉じる</td></tr>
-        <tr><td class="k"><span class="kbd">F1</span></td><td>語を拾って引用するモードの切り替え（メモ欄）</td></tr>
-        <tr><td class="k"><span class="kbd">=</span>（全角時 <span class="kbd">Shift</span>+<span class="kbd">-</span>）</td><td>同上（メモ欄限定）</td></tr>
+        <tr><td class="k"><span class="kbd">F1</span></td><td>選択中はコピー、無選択では引用モードの切り替え</td></tr>
+        <tr><td class="k"><span class="kbd">CapsLock</span></td><td>BackSpaceと同じ動作。編集メニューで切替可能（初期値オン）</td></tr>
+        <tr><td class="k"><span class="kbd">Insert</span></td><td>引用モードの切り替え。編集メニューで切替可能（初期値オン）</td></tr>
+        <tr><td class="k"><span class="kbd">Break</span> / <span class="kbd">Ctrl</span>+<span class="kbd">Space</span></td><td>ブックマークの作成／解除</td></tr>
+        <tr><td class="k"><span class="kbd">=</span>（全角時 <span class="kbd">Shift</span>+<span class="kbd">-</span>）</td><td>引用モードの切り替え（メモ欄限定）</td></tr>
         <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">C</span>（選択なし）</td><td>引用モードに入る（選択があるときは通常のコピー）</td></tr>
         <tr><td class="k"><span class="kbd">Esc</span></td><td>引用モードの中止</td></tr>
         <tr><td class="k"><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">Insert</span></span> / <span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">Shift</span>+<span class="kbd">-</span></span></td><td>簡易入力ウィンドウを開く</td></tr>
-        <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">←</span> / <span class="kbd">→</span></td><td>句読点・！・？の後、括弧の前、空白やタブの前後へ移動。Shiftも押すと同じ位置まで選択</td></tr>
+        <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">←</span> / <span class="kbd">→</span></td><td>接続詞・助詞の後（直後の句読点・！・？・…はつなげて連続の最後）、開き括弧の前・閉じ括弧の後、空白やタブの前後へ移動。空の括弧の前は通過。Shiftも押すと同じ位置まで選択</td></tr>
+        <tr><td class="k">タブ上の右クリック / ホイール</td><td>タブメニュー / 隣のタブへ移動。右ボタンを押しながらなら本文上でも移動でき、0.3秒以上間を空けると押したまま逆方向へ戻れます（<a href="#edit">12章</a>）</td></tr>
         <tr><td class="k">行番号ダブルクリック</td><td>ブックマークの作成／解除</td></tr>
         <tr><td class="k">右ダブルクリック（押したまま）</td><td>俯瞰 ― 字を小さくして見渡す（離すと元に戻る）</td></tr>
         <tr><td class="k">余白を右ドラッグ</td><td>画面のスクロール</td></tr>
@@ -691,8 +767,9 @@
 
       <h3><span class="dot"></span>同音異義語がうまく直りません</h3>
       <p>
-        複数の語にまたがる誤変換は、文脈が無いと正誤を判断できないため、
-        意図的に自動補正の対象から外しています。入力済みの単語をクリックして、候補一覧から選んでください（3章）。
+        読みや前後の文章から判断できる誤変換は補正しますが、複数の意味が自然に成り立つ場合など、意図を決められないものもあります。
+        たとえば「朝におきます」は、時刻だけでは「起きる／置く」を決めず、かなを残します。「箱におきます」のように場所の意味から選べる場合は「置きます」と表記します。
+        意図した表記と違うときは、入力済みの単語をクリックするか <span class="kbd">F2</span> を押し、候補一覧から選んでください（3章）。
       </p>
 
       <h3><span class="dot"></span>入力した内容は外部に送信されますか</h3>

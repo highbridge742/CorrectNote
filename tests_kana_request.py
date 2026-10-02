@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Native request-word repairs from independently anomalous kana tails."""
+from tests_spelling_reference import assert_repaired_spelling
 import unittest
 from unittest.mock import patch
 import morphology
@@ -24,7 +25,7 @@ class KanaRequestTests(unittest.TestCase):
                 source=prefix+bad+'。';wanted=prefix+'ください。'
                 with self.subTest(source=source):
                     result=self.correct(source)
-                    self.assertEqual(result['corrected'],wanted)
+                    assert_repaired_spelling(self, result, wanted)
                     self.assertFalse(result['odd_spans'])
                     again=self.correct(wanted)
                     self.assertEqual(again['corrected'],wanted)
@@ -35,11 +36,71 @@ class KanaRequestTests(unittest.TestCase):
             for bad in ('くたせさぃ','くだせさぃ'):
                 with self.subTest(prefix=prefix,bad=bad):
                     result=self.correct(prefix+bad+'。')
-                    self.assertEqual(result['corrected'],prefix+'ください。')
+                    assert_repaired_spelling(self, result, prefix+'ください。')
                     self.assertFalse(result['odd_spans'])
         result=self.correct('歩いてくたせさぃ。\t歩いてください。')
         self.assertEqual(result['corrected'],'歩いてください。\t歩いてください。')
         self.assertEqual(self.correct(result['corrected'])['corrected'],result['corrected'])
+
+    def test_explicit_shift_release_and_neighbor_retains_two_operations(self):
+        import contextual_repair as cr
+        from types import SimpleNamespace
+        for source,expected in (('なおしまぇ','なおします'),('よみまぇ','よみます'),('あけまぇ','あけます')):
+            target=SimpleNamespace(boundary_kind='kana_predicate',text=source)
+            rows=[r for r in cr.request_shift_key_repairs(target,source) if r.reading==expected]
+            self.assertEqual(len(rows),1)
+            first,second=rows[0].steps
+            self.assertEqual((first.operation,first.pressed,first.intended),('shift','ぇ','え'))
+            self.assertEqual((second.operation,second.pressed,second.intended),('adjacent_substitution','え','す'))
+            self.assertEqual(first.position,second.position)
+            self.assertAlmostEqual(rows[0].cost,1.4)
+        for source in ('すきにん','かくにん','なおしまえ','なおしまぇながら'):
+            target=SimpleNamespace(boundary_kind='kana_predicate',text=source)
+            self.assertFalse(tuple(cr.request_shift_key_repairs(target,source)))
+        for source,expected in (('ほんをよみまぇ。','本を読みます。'),('まどをあけまぇ。','窓を開けます。')):
+            result=self.correct(source)
+            self.assertEqual(result['corrected'],expected)
+            self.assertFalse(result['odd_spans'])
+            self.assertEqual(self.correct(expected)['corrected'],expected)
+        for source in ('ほんをよみます。','くださぃ。','「ほんをよみまぇ」と書きました。'):
+            self.assertEqual(self.correct(source)['corrected'],source)
+        from decisions import DecisionStore
+        ledger=DecisionStore();ledger.protect('よみまぇ')
+        self.assertEqual(self.correct('ほんをよみまぇ。',decisions=ledger)['corrected'],'ほんをよみまぇ。')
+
+    def test_written_shifted_tail_keeps_native_stem_and_both_physical_steps(self):
+        import pos_grammar as P,contextual_repair as R
+        from types import SimpleNamespace
+        for source,reading,expected in (('読みまぇ','よみまぇ','読みます'),('書きまぇ','かきまぇ','書きます'),
+                ('確認しまぇ','かくにんしまぇ','確認します'),('暗号化しまぇ','あんごうかしまぇ','暗号化します')):
+            frames=P.unexplained_shifted_predicate_tails(source)
+            self.assertEqual(frames,((0,len(source),len(source)-2,reading),))
+            target=SimpleNamespace(boundary_kind='auxiliary_connection',text=source)
+            repairs=[r for r in R.request_shift_key_repairs(target,reading) if r.reading==reading[:-1]+'す']
+            self.assertEqual(len(repairs),1)
+            self.assertEqual([step.operation for step in repairs[0].steps],['shift','adjacent_substitution'])
+            result=self.correct(source+'。')
+            if source=='確認しまぇ':
+                # Native しまい is a valid negative-volition alternative;
+                # it cannot be banned to force the synthetic intended ます.
+                # NHK research: https://www.jstage.jst.go.jp/article/bunken/68/12/68_46/_article/-char/ja
+                self.assertIn(result['corrected'],(expected+'。','確認しまい。'))
+            else:
+                self.assertEqual(result['corrected'],expected+'。')
+            self.assertFalse(result['odd_spans'])
+        import corrector as C
+        tokenize=C.make_tokenizer(self.a.store)
+        original='確認しまぇ。'
+        for lo,hi,new in ((0,5,'確認し前'),(3,5,'前'),(0,len(original),'確認し前。')):
+            accepted,reason=C._check_replacement(original,(lo,hi,new,'かな入力'),
+                self.a.store,tokenize,self.a.dict_index)
+            self.assertIsNone(accepted)
+            self.assertEqual(reason,'unproven_native_action_attachment')
+        self.assertTrue(R._changed_shifted_predicate_tail_allowed('資料を確認しまぇ。',0,9,'資料を確認します。'))
+        for source in ('読みますぅ','読みまぁす','読んでくださぃ','読みまえ','書きぃ','しらゆほまぇ','「読みまぇ」','未知名しまぇ','確認しますぅ','確認しまえ','確認しまぁす'):
+            self.assertFalse(P.unexplained_shifted_predicate_tails(source),source)
+        for source in ('読みますぅ。','読みまぁす。','読んでくださぃ。','「読みまぇ」と書きました。','確認しまえ。','確認しまぁす。'):
+            self.assertEqual(self.correct(source)['corrected'],source)
 
     def test_compound_slips_keep_original_key_evidence(self):
         import contextual_repair as cr
@@ -129,18 +190,21 @@ class KanaRequestTests(unittest.TestCase):
         ledger=DecisionStore();ledger.leave_odd_alone('くたせさい')
         self.assertEqual(self.correct('歩いてくたせさい。',decisions=ledger)['corrected'],'歩いてください。')
 
-    def test_fresh_import_keeps_existing_lexical_repairs(self):
+    def test_fresh_import_distinguishes_repairs_from_unknown_source_names(self):
         import app
         from tests_analysis_async import initial
         from janome_import import import_from_janome
         a=initial();import_from_janome(a.store)
         for source,wanted in (('かしゅあるをみます。','カジュアルをみます。'),
-                              ('ぴっづぁをみます。','ピッツァをみます。'),
+                              # 48-AOL-1: formerly forced to ピッツァ from
+                              # generation history; an unknown original name
+                              # with a complete predicate is not a proved typo.
+                              ('ぴっづぁをみます。','ぴっづぁをみます。'),
                               ('まじゅまろをみます。','ましゅまろをみます。')):
             with self.subTest(source=source):
                 result=app.correct_line(source,a.store,dict_index=a.dict_index,
                     context_vec=a.context_vec,decisions=a.decisions,input_method='kana')
-                self.assertEqual(result['corrected'],wanted)
+                assert_repaired_spelling(self, result, wanted)
                 self.assertFalse(result['odd_spans'])
 
     def test_two_columns_preserve_usable_original_ranges(self):

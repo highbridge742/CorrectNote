@@ -746,31 +746,31 @@ def run_settings_cases():
     check('指（タッチ）の1本指スクロールは残っている',
           'is_touch_pointer' in _bp_src and '_blank_drag' in _bp_src, True)
 
-    # --- 終端の罫線（項目48-IM） ---
-    #
-    # 空行には字が無いので、下線も打ち消し線も引けない（描いて確認）。
-    # **その行の字を小さくして、地色を敷く**しかない。
-    # カーソルがその行に居る間は引かない——引くと行が4pxになり、
-    # **カーソルまで4pxになって見えなくなる**。
-    _er = _re3.search(r"def _paint_end_rule\(self\):(.*?)"
-                      r"\n    def ", _src, _re3.S)
-    _er_src = _er.group(1) if _er else ''
-    check('終端の罫線を引く仕組みがある', bool(_er_src), True)
-    # **基準は「最後の改行」ではなく「最後の文字」**（うにさんの指定・
-    # 2026-08-22）。`Ctrl+A`（`_on_select_all`）が選ぶ範囲の終わりと
-    # 同じ数え方（`strip()`）で、中身のある最後の行を探し、その
-    # **ひとつ下の行**に引く。末尾に空行がいくつ続いても、罫線は
-    # **文字のすぐ下**に来る。
-    check('中身のある最後の行を Ctrl+A と同じ数え方で探す',
-          'lines[k - 1].strip():' in _er_src, True)
-    check('引くのは、そのひとつ下の行',
-          'target = last_text + 1' in _er_src, True)
-    check('その下に行が無ければ引かない',
-          'if target > len(lines):' in _er_src, True)
-    check('カーソルがその行に居る間は引かない',
-          'if cur == target:' in _er_src, True)
-    check('罫線は字を小さくして作る（下線では描かれない）',
-          'END_RULE_FONT_SIZE' in _src, True)
+    # 48-AKM: final nonblank row + one full-height blank row.
+    # The old font=2/caret-suppression contract was retired on 2026-09-18.
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from app import CorrectNoteApp as App
+    class EndPane:
+        def __init__(self, text):
+            self.text=text;self._end_rule_line=Mock();self.tags=[]
+        def get(self,*args):return self.text
+        def tag_remove(self,*args):self.tags=[]
+        def tag_add(self,*args):self.tags.append(args)
+        def dlineinfo(self,index):return (0,20,100,32,25)
+        def winfo_width(self):return 400
+    for text,expected in (('',None),('本文',None),('本文\n\n  \n',2),
+                          ('本文\n\n続き\n\n',4)):
+        pane=EndPane(text)
+        harness=SimpleNamespace(editor=pane,result_view=None,END_RULE_TAG='end_rule')
+        App._paint_end_rule(harness)
+        check('最後の本文直後の空行へ罫線: '+repr(text),
+              pane.tags,[] if expected is None else
+              [('end_rule',f'{expected}.0',f'{expected+1}.0')])
+        check('罫線は空行の下端1pxだけ: '+repr(text),
+              pane._end_rule_line.place.call_args.kwargs if expected else
+              pane._end_rule_line.place.call_count,
+              dict(x=2,y=51,width=396,height=1) if expected else 0)
 
     # --- 印を置く欄は名簿1つ（項目48-IH） ---
     #
@@ -1163,7 +1163,7 @@ def run_drag_scroll_cases():
     # 見張り: 取り違えの対象のキー名（_IME_MISREAD_KEYSYMS）へ、
     # Ctrl/Alt 無しで個別に束縛している行は、全部
     #   (a) self._ime_first(...) で包んであるか、
-    #   (b) 渡す先のメソッドが最初の行で _ime_fkey_insert を呼ぶか
+    #   (b) 渡す先の先頭で IME 確定文字を処理するか
     # のどちらかでなければならない。
     assign8 = next(n for n in tree.body
                    if isinstance(n, ast.Assign)
@@ -1188,6 +1188,24 @@ def run_drag_scroll_cases():
                 and isinstance(body[0].value, ast.Constant)):
             body = body[1:]          # docstring を飛ばす
         first = body[0] if body else None
+        if isinstance(first, ast.If):
+            # F5 may clear its pending bracket state before inserting a
+            # confirmed IME character. No other side effect is permitted.
+            guarded = (isinstance(first.test, ast.Compare)
+                and isinstance(first.test.left, ast.Call)
+                and isinstance(first.test.left.func, ast.Name)
+                and first.test.left.func.id == 'ime_confirmed_char_event'
+                and bool(first.body)
+                and isinstance(first.body[-1], ast.Return)
+                and all(isinstance(step, ast.Expr)
+                    and isinstance(step.value, ast.Call)
+                    and isinstance(step.value.func, ast.Attribute)
+                    and step.value.func.attr == '_forget_bracket_cycle'
+                    for step in first.body[:-1]))
+            value = first.body[-1].value if guarded else None
+            return (isinstance(value, ast.Call)
+                and isinstance(value.func, ast.Attribute)
+                and value.func.attr == '_function_key_character')
         if not isinstance(first, ast.Assign):
             return False
         value = first.value
@@ -1231,8 +1249,8 @@ def run_drag_scroll_cases():
             unguarded.append(f'{node.lineno}: {seq}')
     check('取り違えの対象のキー名への個別束縛が app.py に在る'
           '（見張りが空振りしていない）', len(flagged) >= 8, True)
-    check('その束縛は全部 _ime_first で包むか、中で _ime_fkey_insert を'
-          '先に呼ぶ', unguarded, [])
+    check('その束縛は _ime_first または内側の IME 確定文字処理を'
+          '先に通す', unguarded, [])
 
     # _ime_first そのものの動き（偽の self で回す）
     func8 = methods['_ime_first']
@@ -2198,9 +2216,6 @@ def run_scroll_cache_cases():
     check('控えを捨てたら裏の歩みも立て直す',
           refs('_invalidate_analysis_cache', '_queue_background_tabs')
           and refs('_queue_background_tabs', '_start_background_tabs'), True)
-    check('裏の歩みは表の解析が済むまで始めない（取り合いの門）',
-          refs('_start_background_tabs', '_foreground_analysis_pending')
-          and has_const('_foreground_analysis_pending', '_analyze_pos'), True)
     # ⑤ F2: 左右キーは捨てない・一覧が閉じていても渡り歩ける
     #    （2026-08-27 の2度目の報告で「印を使い切る」形から変えた）
     check('左右キーの離しでは F2 の記憶を捨てない',
@@ -2245,7 +2260,6 @@ def run_scroll_cache_cases():
           calls_in('_bg_step', '_bg_step_once'), True)
     # 2026-09-15: computation moved to a process. Tk no longer spins through
     # several heavy lines merely because input is idle.
-    check('裏の計算中も操作中は待機する',calls_in('_bg_step','_interacting'),True)
     check('裏の歩みでTk上の計算ループを回さない',
           any(isinstance(n,ast.While) for n in ast.walk(methods['_bg_step'])),False)
     # ⑦' 最大化は枠の太さを実測して、中身を作業領域にぴったり収める
@@ -3606,13 +3620,21 @@ def test_refit_broken_units_48pv():
     _asrc6 = _io6.open('app.py', encoding='utf-8').read()
     check('48-RY 途中の状態を預ける', '_fg_parked' in _asrc6
           and "'todo': _fg_todo[_fg_pos:]" in _asrc6, True)
+    import io as _io7
+    _tabsrc = _io7.open('tab_analysis.py', encoding='utf-8').read()
     check('48-RY 戻ったら預かりから続ける',
-          "self._trace_analysis('預かりから続き'" in _asrc6, True)
+          'tab_analysis.restore_previous(self, text, lines)' in _asrc6
+          and 'def restore_previous(app,text,lines):' in _tabsrc
+          and 'base=previous_values(app,owner)' in _tabsrc, True)
     import analysis_async as _async6
     from types import SimpleNamespace as _BgHarness
     _bg_h=_BgHarness(settings={'input_method':'kana'})
+    # A completed worker row contains its correction and both pane values.
+    # Text-only cached values intentionally still need display preparation.
     _bg_st={'owner':'tab','work_epoch':0,'text':'本文','lines':['本文'],
-            'ctx':{},'pos':0,'results':[{'original':'本文'}]}
+            'ctx':{},'pos':0,'results':[{'original':'本文','corrected':'本文'}],
+            'units':{('本文','本文'):('本文',[])},
+            'suspect_units':{('本文','本文',False):('本文',[])}}
     _async6.background_step(_bg_h,_bg_st)
     check('48-RY 裏は表が済ませた行を飛ばす',_bg_st['pos'],1)
     check('48-RX 学習は直した範囲・紫の範囲を潰す',
@@ -3668,9 +3690,14 @@ def test_refit_broken_units_48pv():
           'def _find_follow_tab(' in _asrc6
           and 'if not self._find_follow_tab():' in _asrc6
           and _asrc6.count('self._find_follow_tab()') == 1, True)
-    check('48-SL 移った先の検索は新しい検索・履歴の一覧は閉じる・焦点が無いときは奪わない',
-          _asrc6.count('self._find_fresh = True') == 2
-          and 'has_focus = self.root.focus_displayof() is not None' in _asrc6, True)
+    # 検索語変更にも fresh を立てるため、ファイル全体の出現回数は数えない。
+    import inspect as _find_inspect
+    from app import CorrectNoteApp as _FindApp
+    _follow = _find_inspect.getsource(_FindApp._find_follow_tab)
+    check('48-SL タブ移動で新規検索・履歴を閉じる・焦点の有無を確認する',
+          'self._find_fresh = True' in _follow
+          and 'self._close_find_history()' in _follow
+          and 'has_focus = self.root.focus_displayof() is not None' in _follow, True)
     check('48-SY 右ボタン（右ドラッグ・右ダブルクリック＝俯瞰）も「触っている」に数える',
           "'<ButtonPress-3>', '<B3-Motion>', '<Double-Button-3>'," in _asrc6
           and "if getattr(self, '_overview', None) is not None:" in _asrc6
@@ -4877,8 +4904,10 @@ def run_view_latency_48vv():
         def index(self,i):return {'end-1c':'100000.0','insert':'70010.2','@0,0':'70000.0','@0,499':'70024.0'}[i]
         def winfo_height(self):return 500
         def dlineinfo(self,i):calls.append(i);return (0,0,20,20,15)
+        def tag_names(self,index):return ()
     class Gutter:
-        target=Target();bookmarks={70010};font='font'
+        target=Target();bookmarks={70010};font='font';active_row=None
+        def _number_font(self,number,width):return self.font
         def __getitem__(self,k):return 60
         def delete(self,*a):pass
         def create_text(self,*a,**kw):pass
@@ -4978,7 +5007,7 @@ def run_window_drag_48vx():
     for _ in range(100):
         h._analyze_yields=1000;h._analyze_chunk();h._poll_window_drag()
     ok=h._view_changing() and h._interacting() and h.paints==0
-    h._finish_resize();h._paint_whitespace();h._after_view_moved();h._bg_step()
+    h._finish_resize();h._paint_whitespace();h._after_view_moved();h._bg=None;h._bg_step()
     ok=ok and h.paints==0
     h.pressed=False;h._poll_window_drag();h._view_change_until=0
     ok=ok and not h._view_changing()

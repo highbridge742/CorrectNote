@@ -23,8 +23,12 @@ class TypingPointerTests(unittest.TestCase):
             a._bind_typing_pointer(widget)
             widget.winfo_id()
         self.pointer = a._typing_pointer
+        self.pointer_location = patch.object(self.root, 'winfo_containing', return_value=a.editor)
+        self.pointer_location.start()
 
     def tearDown(self):
+        self.pointer_location.stop()
+        self.pointer_location = None
         self.root.destroy()
         release_tk_fixture(self, 'a', 'pointer', 'entry', 'root')
 
@@ -55,10 +59,19 @@ class TypingPointerTests(unittest.TestCase):
 
     def test_quick_and_search_fields_use_the_same_typing_tag(self):
         for widget in (self.a._quick_text, self.entry):
-            deliver_key(widget, '<KeyPress>', 'x', 88, char='字')
-            self.assertEqual(widget.cget('cursor'), 'none')
+            with patch.object(self.root, 'winfo_containing', return_value=widget):
+                deliver_key(widget, '<KeyPress>', 'x', 88, char='字')
+            self.assertEqual(widget.cget('cursor'), 'none' if widget is self.a._quick_text else 'xterm')
             self.activity(widget, '<MouseWheel>')
             self.assertEqual(widget.cget('cursor'), 'xterm')
+
+    def test_typing_with_pointer_over_menu_or_outside_never_hides(self):
+        for pointer in (self.root, self.entry, None):
+            with patch.object(self.root, 'winfo_containing', return_value=pointer):
+                deliver_key(self.a.editor, '<KeyPress>', 'x', 88, char='字')
+            self.assertFalse(self.pointer.saved)
+            self.assertEqual(self.a.editor.cget('cursor'), 'xterm')
+            self.assertNotEqual(self.root.cget('cursor'), 'none')
 
     def test_shortcuts_selection_drag_readonly_and_quote_enter_do_not_hide(self):
         a = self.a

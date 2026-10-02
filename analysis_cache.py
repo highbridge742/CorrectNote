@@ -166,7 +166,7 @@ import zlib
 #              1件も変わらない**のは今までどおり。
 # 2026-09-06a: 項目48-RZ〜48-SC（格助詞の連続・人名＋を＋叙述動詞・濁点の
 #              位置ずれ・語の列として組み直す道を起こした）で答えが変わる。
-ENGINE_STAMP = '2026-09-16aam'   # 48-AKI: 既存異様と独立した読点節の文脈を共有
+ENGINE_STAMP = '2026-10-03b'      # 実助動詞接続と修飾語の原文証拠を共通化
 
 # 控えの形式の版。作りを変えたら上げる（古い控えは捨てられる）。
 CACHE_VERSION = 1
@@ -319,6 +319,9 @@ def _engine_source_stamp(app_dir):
                  'literal_examples.py', 'reading_segments.py',
                  'contextual_repair.py', 'inflected_lexicon.py', 'reading_likelihood.py',
                  'semantic_roles.py', 'mark_usage.py',
+                 'repaired_spelling.py', 'kana_spelling.py', 'particle_frames.py',
+                 'small_vowel_repair.py', 'ime_inverse_gate.py',
+                 'ime_language.py', 'ime_candidates.py', 'ime_session.py',
                  'oddness.py', 'pos_grammar.py',
                  # **単語リストも補正の答えを変える**（項目48-BU で
                  # 触らない語を広げたら `callout` の扱いが変わった）。
@@ -394,7 +397,7 @@ def build_fingerprint(app_dir, app_version, input_method, recent_words,
 
 # 48-WN: 正常/未完を取り違えないため、診断と停止理由も保存する。
 _RESULT_METADATA = ('analysis_status', 'stop_reason', 'diagnostic_cycle',
-                    'diagnostic_limit', 'diagnosis', 'search_reports')
+                    'diagnostic_limit', 'diagnosis', 'search_reports', 'contextual_choices')
 
 
 def _pack(result):

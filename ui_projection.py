@@ -8,6 +8,11 @@ def _document(app):
 
 def results(app):
     current = app.line_results
+    source = getattr(_document(app), 'text', None)
+    if isinstance(source,str) and '\n'.join(r['original'] for r in current)!=source:
+        # A theme/scroll refresh can precede the new analysis plan. Position
+        # old completed rows against the current input, never stale row numbers.
+        current=[dict(original=line,corrected=line,pending=True) for line in source.split('\n')]
     state = getattr(app, '_display_state', None)
     if not state or state['document'] is not _document(app):
         return current
@@ -29,6 +34,95 @@ def results(app):
     return visible
 
 
+def _rebase_result_cursor(app,before,after,edit):
+    """Carry one live result cursor through actual source line edits.
+
+    No text history is stored. Before the next render, native Text indices
+    still address old displayed rows, so retain an unclamped current row.
+    A later explicit cursor move wins over this pending projection.
+    """
+    widget=getattr(app,'result_view',None)
+    if widget is None:return
+    lo,old_end=edit;new_end=old_end+len(after)-len(before)
+    if before.count('\n',lo,old_end)==after.count('\n',lo,new_end):return
+    native=str(widget.index('insert'));pending=getattr(app,'_result_cursor_pending',None)
+    if pending and pending['document'] is _document(app):
+        if pending['native']!=native:pending['overridden']=True
+        if pending.get('overridden'):return
+        row,column=pending['row'],pending['column']
+    else:
+        row,column=map(int,native.split('.'))
+    position=0
+    for unused in range(row-1):
+        end=before.find('\n',position)
+        if end<0:return
+        position=end+1
+    if position>=old_end:position+=new_end-old_end
+    elif position>=lo:position=new_end
+    row=after.count('\n',0,position)+1
+    app._result_cursor_pending=dict(document=_document(app),native=native,row=row,column=column)
+
+
+def result_cursor_pending(app):
+    value=getattr(app,'_result_cursor_pending',None)
+    return bool(value and value['document'] is _document(app) and not value.get('overridden'))
+
+
+def consume_result_cursor(app,native):
+    value=getattr(app,'_result_cursor_pending',None)
+    app._result_cursor_pending=None
+    if (value and value['document'] is _document(app) and not value.get('overridden')
+            and value['native']==native):
+        return '%s.%s' % (value['row'],value['column'])
+    return native
+
+
+def rebase(app, before, after, edit):
+    """Move displayed rows through one observed edit, without keeping history.
+
+    Text equality alone cannot identify repeated rows after several edits.
+    Only rows outside the actual edit and still bounded by newlines survive.
+    These values remain display-only; analysis invalidation is unchanged.
+    """
+    state = getattr(app, '_display_state', None)
+    if not state or state['document'] is not _document(app) or edit is None:
+        return
+    previous = state['results']
+    if '\n'.join(r['original'] for r in previous) != before:
+        return
+    lo, old_end = edit
+    new_end = old_end + len(after) - len(before)
+    if (not 0 <= lo <= old_end <= len(before) or not lo <= new_end <= len(after)
+            or before[:lo] != after[:lo] or before[old_end:] != after[new_end:]):
+        return
+    _rebase_result_cursor(app,before,after,edit)
+    first = before.count('\n', 0, lo)
+    last = before.count('\n', 0, old_end)
+    first_start = before.rfind('\n', 0, lo) + 1
+    middle_end = after.find('\n', new_end)
+    if middle_end < 0:
+        middle_end = len(after)
+    lines = after[first_start:middle_end].split('\n')
+    middle = [dict(original=line, corrected=line, pending=True) for line in lines]
+    offsets = {}
+    at = first_start
+    for row, line in enumerate(lines):
+        offsets[at] = row
+        at += len(line) + 1
+    # Only the two edge rows can survive within the affected band. Reuse
+    # prefix/tail rows directly, avoiding allocations for the whole document.
+    for old_row in sorted({first, last}):
+        result = previous[old_row]
+        original = result['original']
+        at = first_start if old_row == first else before.rfind('\n', 0, old_end) + 1
+        end = at + len(original)
+        moved = at if end <= lo else (at + new_end - old_end if at >= old_end else None)
+        row = offsets.get(moved)
+        if row is not None and lines[row] == original:
+            middle[row] = result
+    state['results'] = previous[:first] + middle + previous[last+1:]
+
+
 def cached_units(app, result, source=None):
     state = getattr(app, '_display_state', None)
     if not result.get('_display_only') or not state or state['document'] is not _document(app):
@@ -38,6 +132,9 @@ def cached_units(app, result, source=None):
 
 
 def remember(app, visible):
+    source=getattr(_document(app),'text',None)
+    if isinstance(source,str) and '\n'.join(r['original'] for r in visible)!=source:
+        return
     old = getattr(app, '_display_state', None)
     same = old and old['document'] is _document(app)
     units = dict(old['units']) if same else {}
@@ -57,7 +154,10 @@ def restore_tab(app, text):
         app._display_state = dict(document=_document(app), results=list(saved['results']),
                                   units=dict(saved['units']), suspect=dict(saved['suspect']))
     else:
-        app._display_state = None
+        saved = getattr(app, '_fg_parked', {}).get(owner(app), {}).get('display')
+        # The edit observer already moved these displayed rows through the
+        # actual cut. Never borrow another document's projection or evidence.
+        app._display_state = saved if saved and saved['document'] is _document(app) else None
 
 
 def corrections(result, source=True):

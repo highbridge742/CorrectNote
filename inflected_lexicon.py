@@ -25,7 +25,7 @@ from functools import lru_cache
 
 def include_entry(surface, reading, pos, sub):
     """名詞向け頻度で落とさず、用言の実辞書項を既存索引へ収める。"""
-    return (2 <= len(surface) <= 18 and pos in ('動詞','形容詞')
+    return (1 <= len(surface) <= 18 and pos in ('動詞','形容詞')
             and sub in ('自立','非自立') and bool(reading)
             and all('ぁ' <= c <= 'ゖ' or c == 'ー' for c in reading)
             and all('ぁ' <= c <= 'ゖ' or '一' <= c <= '鿿' or c in '々ー' for c in surface))

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Native auxiliary boundaries and resultative clauses share source evidence."""
+from tests_spelling_reference import assert_repaired_spelling
 import unittest
 from unittest.mock import patch
 import morphology as M,oddness as O,reading_segments as R,semantic_roles as S
@@ -68,7 +69,8 @@ class NativeReadingExtensionsTests(unittest.TestCase):
 
     @unittest.skipUnless(NATIVE,'requires the native dictionary')
     def test_short_noun_proof_stays_inside_a_complete_case_frame(self):
-        self.assertEqual(R._native_nominal_reading_faces('え'),())
+        # 48-AMP: exact one-kana nouns share the index; complete case proof remains below.
+        self.assertIn('絵',R._native_nominal_reading_faces('え'))
         for text in ('えをかきます。','てをあらいます。','えにかきます。',
                      'やまをえにかきます。','まどのそとにみえるやまをえにかきます。'):
             with self.subTest(text=text):
@@ -97,7 +99,7 @@ class NativeReadingExtensionsTests(unittest.TestCase):
             with self.subTest(text=text):
                 result=app.correct_line(text,a.store,dict_index=a.dict_index,context_vec=a.context_vec,
                                         decisions=a.decisions,input_method='kana')
-                self.assertEqual(result['corrected'],expected)
+                assert_repaired_spelling(self, result, expected)
                 self.assertEqual(result.get('odd_spans'),[])
 
     @unittest.skipUnless(NATIVE,'requires the native dictionary')
@@ -107,9 +109,20 @@ class NativeReadingExtensionsTests(unittest.TestCase):
         self.assertTrue(R.intact_native_reading('あついおちゃをさましてからのみます。'))
         # Kana evidence does not reinterpret an already written homophone.
         self.assertEqual(R.native_nominal_phrase_faces('あついお茶'),())
-        for text in ('このはこ','そのはこ','あのひと'):
+        for text in ('このはこ','そのはこ','あのひと','このは','そのは','あのは'):
             with self.subTest(text=text):self.assertTrue(R.native_adnominal_reading_parts(text))
-        for text in ('そのは','そのを','きのこ'):
+        # The one-kana reading は is the attested ordinary noun 葉.
+        # A matching particle spelling does not erase its nominal reading.
+        self.assertEqual(R.native_adnominal_reading_parts('そのは')[1][0],'葉')
+        import app
+        from tests_analysis_async import initial
+        a=initial()
+        for text in ('このはをみます。','そのはをみます。','あのはをみます。'):
+            result=app.correct_line(text,a.store,dict_index=a.dict_index,
+                context_vec=None,decisions=a.decisions,input_method='kana')
+            self.assertEqual(result['corrected'],text)
+            self.assertFalse(result.get('odd_spans'),text)
+        for text in ('その','そのを','きのこ'):
             with self.subTest(text=text):self.assertFalse(R.native_adnominal_reading_parts(text))
 
     @unittest.skipUnless(NATIVE,'requires the native dictionary')
@@ -124,6 +137,44 @@ class NativeReadingExtensionsTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertTrue(R.completed_native_reading_clause(text,True,True,True))
         self.assertFalse(R.completed_native_reading_clause('ものにほんをよんでもらいます',True,True,True))
+
+    @unittest.skipUnless(NATIVE,'requires the native dictionary')
+    def test_reflexive_manner_is_a_boundary_not_a_free_case_or_completed_tail(self):
+        for text in ('じぶんで','じしんで','自分で','自身で'):
+            self.assertTrue(R.native_reflexive_manner_prefix(text),text)
+        for text in ('せんせいで','たにんで','みずで','じぶんに','じぶんの','ぷねらで'):
+            self.assertFalse(R.native_reflexive_manner_prefix(text),text)
+        for text in ('じぶんでためしてみます','じぶんでえほんをよみます',
+                     'せつめいをきいてからじぶんでためしてみます'):
+            self.assertTrue(R.intact_native_reading(text),text)
+        for text in ('じぶんでしりょうをおきります','じぶんでよみますです',
+                     'じぶんでありた','じぶんでぷねらます'):
+            self.assertFalse(R.native_adverbial_predicate_reading(text,allow_open_tail=False),text)
+
+    @unittest.skipUnless(NATIVE,'requires the native dictionary')
+    def test_native_te_auxiliaries_share_tail_and_argument_proof(self):
+        import contextual_repair as C
+        import morphology as M
+        for face,reading,tail in (('よん','よん','であげます'),('読ん','よん','であげます'),
+                ('なおし','なおし','てくれます'),('はこん','はこん','でいただきました'),
+                ('読ん','よん','であげてくれます'),('書い','かい','てあげません')):
+            forms=M.dictionary_inflections(face)
+            self.assertTrue(C._allows_grammatical_tail(forms,tail,reading,face),(face,tail))
+            self.assertTrue(C._productive_predicate(face+tail,face),(face,tail))
+        for face,reading,tail in (('読ん','よん','てあげます'),('読む','よむ','であげます'),
+                ('書い','かい','であげます'),('読ん','よん','でぷねらます'),
+                ('読ん','よん','であげります'),('読ん','よん','であげますです')):
+            forms=M.dictionary_inflections(face)
+            self.assertFalse(C._allows_grammatical_tail(forms,tail,reading,face)
+                and C._productive_predicate(face+tail,face),(face,tail))
+        for tail in ('であげます','でくれます','でやります','でさしあげます'):
+            self.assertEqual(S.native_benefactive_case_roles('よん','連用タ接続','よん',tail,'に'),frozenset(('person',)),tail)
+            self.assertFalse(S.native_benefactive_case_roles('よん','連用タ接続','よん',tail,'から'),tail)
+        for text in ('こどもにえほんをよんであげます','ともだちにほんをよんでくれます',
+                     'ともだちにほんをよんでもらいます'):
+            self.assertTrue(R.completed_native_reading_clause(text,True,True,True),text)
+        for text in ('みずにえほんをよんであげます','こどもにみずをよんであげます'):
+            self.assertFalse(R.completed_native_reading_clause(text,True,True,True),text)
 
     @unittest.skipUnless(NATIVE,'requires the native dictionary')
     def test_receiving_role_requires_exact_attachment_and_a_completed_auxiliary(self):
@@ -150,7 +201,45 @@ class NativeReadingExtensionsTests(unittest.TestCase):
             with self.subTest(text=text):
                 result=app.correct_line(text,a.store,dict_index=a.dict_index,context_vec=None,
                                         decisions=a.decisions,input_method='kana')
-                self.assertEqual(result['corrected'],expected)
+                assert_repaired_spelling(self, result, expected)
                 self.assertEqual(result.get('odd_spans'),[])
+
+    def test_inflection_tail_keeps_the_original_cross_boundary_anomaly(self):
+        import morphology as M
+        if not M.HAS_JANOME:self.skipTest('requires native Janome dictionary')
+        import app
+        from tests_analysis_async import initial
+        a=initial()
+        # The shorter tail has a different adverb/predicate parse; it cannot
+        # erase the original preceding verb and its established anomaly.
+        self.assertTrue(R.intact_native_reading('ゆうになる',allow_incomplete=False))
+        self.assertFalse(R.intact_native_reading('分かるゆうになる',allow_incomplete=False))
+        for source,expected in (('分かるゆうになる','分かるようになる'),
+                                ('見つかるよわぅになる','見つかるようになる'),
+                                ('読むようらなる','読むようになる')):
+            result=app.correct_line(source,a.store,dict_index=a.dict_index,
+                context_vec=None,decisions=a.decisions,input_method='kana')
+            self.assertEqual(result['corrected'],expected,source)
+            self.assertFalse(result.get('odd_spans'),source)
+        tok=__import__('corrector').make_tokenizer(a.store)
+        for source in ('やみづきがありました。','あんじんしました。',
+                       'せつめをよみなおしてりかいしました。'):
+            self.assertFalse(__import__('corrector')._inflection_tail_fixes(
+                source,tok,'kana',a.dict_index,a.store),source)
+        for source,expected in (('あんじんしました。','安心しました。'),
+                ('みちがこんでいたためすこしおくれ゛ました。','道がこんでいたためすこし遅れました。'),
+                ('せつめをよみなおしてりかいしました。','説明をよみなおしてりかいしました。')):
+            result=app.correct_line(source,a.store,dict_index=a.dict_index,
+                context_vec=None,decisions=a.decisions,input_method='kana')
+            self.assertEqual(result['corrected'],expected,source)
+            self.assertFalse(result.get('diagnostic_cycle'),source)
+        result=app.correct_line('やみづきがありました。',a.store,dict_index=a.dict_index,
+                context_vec=None,decisions=a.decisions,input_method='kana')
+        self.assertFalse(result.get('diagnostic_cycle'))
+        for source in ('分かるようになる','読むようになる','分かる夕になる','見るはずだった'):
+            result=app.correct_line(source,a.store,dict_index=a.dict_index,
+                context_vec=None,decisions=a.decisions,input_method='kana')
+            self.assertEqual(result['corrected'],source)
+            self.assertFalse(result.get('odd_spans'),source)
 
 if __name__=='__main__':unittest.main()

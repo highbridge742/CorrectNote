@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """A communication channel, content and predicate retain separate roles."""
+from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
 import reading_segments as R
@@ -44,7 +45,7 @@ class CommunicationCaseTests(unittest.TestCase):
         text='かいぎのしりょうをめーるでおきります。'
         result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
             context_vec=None,decisions=a.decisions)
-        self.assertEqual(result['corrected'],'かいぎのしりょうをめーるでおくります。')
+        assert_repaired_spelling(self, result, 'かいぎのしりょうをめーるでおくります。')
         self.assertEqual(result.get('odd_spans'),[])
         # The hand-written おすり example is not a physical neighbour
         # of おくり; it remains a prohibition control, not a repair goal.
@@ -53,5 +54,26 @@ class CommunicationCaseTests(unittest.TestCase):
             context_vec=None,decisions=a.decisions)
         self.assertEqual(result['corrected'],text)
 
+
+    def test_person_is_the_recipient_of_contact_or_transmission(self):
+        import app
+        from tests_analysis_async import initial
+        a=initial()
+        for action,reading in (('連絡','れんらく'),('送信','そうしん'),('転送','てんそう')):
+            for noun in ('友人','友達','先生'):
+                for case in ('に','へ'):
+                    self.assertTrue(S.case_action_support(noun,case,action))
+            self.assertFalse(S.case_action_support('資料','に',action))
+            self.assertFalse(S.case_action_support('椅子','に',action))
+            for tail in ('します','し'):
+                text='ともだちに'+reading+tail
+                self.assertTrue(R.completed_native_reading_clause(text,allow_nonpolite=True,
+                    require_object_fit=True,allow_open_tail=True),text)
+                result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
+                    context_vec=None,decisions=a.decisions)
+                self.assertEqual(result['corrected'],text)
+                self.assertFalse(result.get('odd_spans'))
+            self.assertFalse(R.completed_native_reading_clause('ぷねらに'+reading+'し',
+                allow_nonpolite=True,require_object_fit=True,allow_open_tail=True))
 
 if __name__=='__main__':unittest.main()

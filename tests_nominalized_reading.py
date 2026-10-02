@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Native nominalized adjectives and attributive endings share their grammar."""
+from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
 import reading_segments as R
@@ -55,7 +56,7 @@ class NominalizedReadingTests(unittest.TestCase):
             with self.subTest(text=text):
                 result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                self.assertEqual(result['corrected'],expected)
+                assert_repaired_spelling(self, result, expected)
                 self.assertEqual(result.get('odd_spans'),[])
 
 

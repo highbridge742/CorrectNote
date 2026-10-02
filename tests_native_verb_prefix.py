@@ -52,8 +52,9 @@ class NativeVerbPrefixTests(unittest.TestCase):
         text='雨が降る前に洗濯物を取り退見ます。'
         result=app.correct_line(text,a.store,dict_index=a.dict_index,
             decisions=a.decisions,context_vec=None,input_method='kana')
-        self.assertEqual(result['corrected'],text)
-        self.assertTrue(result['odd_spans'])
+        # The exact source reading とりひみ now has adjacent ひ→こ proof.
+        self.assertEqual(result['corrected'],'雨が降る前に洗濯物を取り込みます。')
+        self.assertFalse(result['odd_spans'])
         result=app.correct_line('荷物を受け市取って住所を確かめます。',a.store,dict_index=a.dict_index,
             decisions=a.decisions,context_vec=None,input_method='kana')
         self.assertEqual(result['corrected'],'荷物を受け取って住所を確かめます。')

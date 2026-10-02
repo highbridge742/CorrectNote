@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """A noun/suru proof may not silently discard a coordinating particle."""
+from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
 import reading_segments as R
@@ -24,7 +25,7 @@ class SahenParticleContextTests(unittest.TestCase):
         a=initial()
         result=app.correct_line('しゃしんをえらんでほぞんゃします。',a.store,input_method='kana',
             dict_index=a.dict_index,context_vec=None,decisions=a.decisions)
-        self.assertEqual(result['corrected'],'しゃしんをえらんでほぞんします。')
+        assert_repaired_spelling(self, result, 'しゃしんをえらんでほぞんします。')
         self.assertEqual(result.get('odd_spans'),[])
         for text in ('保存や検索をします。','入力もします。','保存にします。',
                      '「保存やします」と書かれています。'):

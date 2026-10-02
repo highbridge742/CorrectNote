@@ -35,12 +35,21 @@ def choose(options,validate,budget):
         by_range.setdefault((option['start'],option['end']),[]).append(option)
     choices=[sorted(rows,key=lambda row:(row['rank'],row['surface']))
              for key,rows in sorted(by_range.items())]
+    # This is an optimistic bound: later choices may conflict, but cannot
+    # resolve facts outside this union. Every added rank makes the descending
+    # rank tuple lexicographically no better than its existing prefix.
+    suffix_facts=[frozenset() for _ in range(len(choices)+1)]
+    for i in range(len(choices)-1,-1,-1):
+        suffix_facts[i]=suffix_facts[i+1]|frozenset(a for row in choices[i] for a in row['anomalies'])
     best=[];best_key=(0,(),())
     examined=0;visited=0
     stack=[(0,[],frozenset())]
     prefix_limit=budget*(len(choices)+1)
     while stack and examined<budget and visited<prefix_limit:
         index,selected,solved=stack.pop();visited+=1
+        optimistic=(-len(solved|suffix_facts[index]),
+                    tuple(sorted((row['rank'] for row in selected),reverse=True)),())
+        if optimistic>=best_key:continue
         if index==len(choices):
             examined+=1
             key=(-len(solved),tuple(sorted((row['rank'] for row in selected),reverse=True)),

@@ -111,6 +111,9 @@ SMALL_KANA_PAIR = {
     'つ': 'っ', 'や': 'ゃ', 'ゆ': 'ゅ', 'よ': 'ょ',
 }
 
+# Printed kana on the same physical key, including JIS Shift+0.
+SHIFT_KANA_PAIR = dict(SMALL_KANA_PAIR, **{'わ': 'を', 'を': 'わ'})
+
 # 濁点・半濁点付き -> ベースとなる清音キー
 # かな入力では「清音キー + ゛キー」の2打鍵なので、
 # 濁点の有無違いは「゛キーの押し忘れ／余分」として近接扱いする
@@ -167,6 +170,30 @@ def _single_key_drop_positions(typed, restored):
     return keys,positions
 
 
+# Only the directly neighboring printable key on each side of a JIS Shift.
+# The source must actually require Shift; a hypothetical changed kana does not.
+_SHIFT_NEIGHBORS = {'left': frozenset('つ'), 'right': frozenset('ろ')}
+_SHIFT_KANA = frozenset('ぁぃぅぇぉっゃゅょを')
+
+
+@functools.lru_cache(maxsize=None)
+def intrusion_key_distance(pressed, neighbor):
+    """Distance to a source character's key or its required Shift modifier.
+
+    Modifier evidence is directional and only for deletion. It must not make
+    distant kana substitutions adjacent or change the cost of surviving keys.
+    """
+    distance = kana_key_distance(pressed, neighbor)
+    # Deletion removes a source key without changing any surviving Shift.
+    # The extra key may have been hit just before or after Shift was pressed;
+    # only its physical adjacency matters here, unlike substitution.
+    if pressed in KANA_POSITIONS and neighbor in KANA_POSITIONS:
+        distance = min(distance, _base_distance(pressed, neighbor))
+    if neighbor in _SHIFT_KANA and any(pressed in keys for keys in _SHIFT_NEIGHBORS.values()):
+        distance = min(distance, 1.0)
+    return distance
+
+
 def single_key_drop_adjacency(typed, restored, max_distance=1.0):
     """Physical proof for a length-reducing single kana keystroke deletion.
 
@@ -176,7 +203,7 @@ def single_key_drop_adjacency(typed, restored, max_distance=1.0):
     proof=_single_key_drop_positions(typed,restored)
     if proof is None:return None
     keys,positions=proof
-    return any(any(kana_key_distance(keys[i],keys[j])<=max_distance
+    return any(any(intrusion_key_distance(keys[i],keys[j])<=max_distance
                    for j in (i-1,i+1) if 0<=j<len(keys)) for i in positions)
 
 
@@ -197,7 +224,7 @@ def multiple_key_drop_adjacency(typed, restored, max_distance=1.0):
         reachable={0}
         for i,key in enumerate(keys):
             droppable=(key in KANA_POSITIONS and (not require_adjacency or
-                any(kana_key_distance(key,keys[j])<=max_distance
+                any(intrusion_key_distance(key,keys[j])<=max_distance
                     for j in (i-1,i+1) if 0<=j<len(keys))))
             following=set(reachable) if droppable else set()
             following.update(j+1 for j in reachable if j<len(target) and key==target[j])
@@ -462,6 +489,11 @@ def kana_key_distance(c1, c2):
     # Shift changes kana output on one physical key (including わ / を).
     if same_physical_key(c1,c2):
         return 0.3
+
+    # A different base key plus a Shift change is two operations, not an
+    # adjacent substitution. Same-key Shift repairs are handled above.
+    if (c1 in _SHIFT_KANA) != (c2 in _SHIFT_KANA):
+        return FAR
 
     base1 = DAKUTEN_BASE.get(c1, c1)
     base2 = DAKUTEN_BASE.get(c2, c2)

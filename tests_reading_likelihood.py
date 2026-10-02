@@ -24,6 +24,15 @@ class ReadingLikelihoodTests(unittest.TestCase):
         self.dic.stop(); self.ime.stop(); self.table.stop()
         L._distributions.cache_clear()
 
+    def test_context_length_requires_contiguous_native_or_literal_evidence(self):
+        self.assertEqual(L.context_reading_length('かな。',[token('かな','かな'),token('。','。',2)]),2)
+        self.assertIsNone(L.context_reading_length('未知',[token('未知','みち',known=False)]))
+        self.assertIsNone(L.context_reading_length('か な',[token('か','か'),token('な','な',2)]))
+        with patch.object(L,'_options',return_value=(('せい','なま'),'native_word_boundary')):
+            self.assertEqual(L.context_reading_length('生',[token('生','せい')]),2)
+        with patch.object(L,'_options',return_value=(('せい','い'),'native_word_boundary')):
+            self.assertIsNone(L.context_reading_length('生',[token('生','せい')]))
+
     def test_forward_and_backward_use_different_denominators(self):
         w=L.windows('あいう')[0]
         self.assertEqual((w.count,w.forward_total,w.backward_total),(10,40,100))

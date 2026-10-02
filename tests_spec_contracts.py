@@ -74,9 +74,9 @@ class CandidateContracts(unittest.TestCase):
 
     @staticmethod
     def candidate(surface,cost=None):
-        evidence=dict(direct=0,added=0,meaning=0,edits=1,physical=1.0,
+        evidence=dict(direct=0,added=0,meaning=0,written_native=0,method_spelling=0,edits=1,physical=1.0,
             bases=0,script=0,proper=0,terminal=0,guesses=0,
-            usage=1,context=0,cost=cost,continuation=0,parse_cost=0,start=0,end=2)
+            usage=1,context=0,cost=cost,local_reading=0,continuation=0,parse_cost=0,start=0,end=2)
         return dict(surface=surface,reading=dict(text='かな'),rank_evidence=evidence,
                     repair=dict(reading='かな',position=0,operation='adjacent_substitution',pressed='x',intended='y'))
 
@@ -90,6 +90,59 @@ class CandidateContracts(unittest.TestCase):
         self.assertTrue(all('cost' in r['omitted_numeric_evidence'] for r in rows))
         rows2=R.rank_candidates([self.candidate('仮名',10000),self.candidate('かな',None)])
         self.assertEqual([r['surface'] for r in rows],[r['surface'] for r in rows2])
+
+    def test_unjudged_usage_is_not_an_automatic_daily_word_rank(self):
+        known=self.candidate('既知',10);unknown=self.candidate('未評価',20)
+        known['rank_evidence']['usage']=2;unknown['rank_evidence']['usage']=None
+        rows=R.rank_candidates([unknown,known])
+        self.assertEqual(rows[0]['surface'],'既知')
+        self.assertTrue(all('usage' in row['omitted_numeric_evidence'] for row in rows))
+        self.assertIsNone(unknown['rank_evidence']['usage'])
+
+    def test_local_reading_scope_precedes_parse_without_target_length_bias(self):
+        fluent=self.candidate('自然');cheap=self.candidate('低費用')
+        fluent.update(context_scope=(0,8),context_reading_length=10)
+        cheap.update(context_scope=(0,8),context_reading_length=10)
+        fluent['rank_evidence'].update(parse_cost=50,local_reading=2)
+        cheap['rank_evidence'].update(parse_cost=1,local_reading=10)
+        self.assertEqual(R.rank_candidates([cheap,fluent])[0]['surface'],'自然')
+        cheap['repair']['reading']='な'
+        self.assertEqual(R.rank_candidates([cheap,fluent])[0]['surface'],'自然')
+        cheap['context_reading_length']=11
+        self.assertEqual(R.rank_candidates([cheap,fluent])[0]['surface'],'低費用')
+        cheap['context_reading_length']=10
+        fluent['rank_evidence']['local_reading']=None
+        self.assertEqual(R.rank_candidates([cheap,fluent])[0]['surface'],'低費用')
+        fluent['rank_evidence']['meaning']=-1
+        self.assertEqual(R.rank_candidates([cheap,fluent])[0]['surface'],'自然')
+
+    def test_same_key_edit_has_same_local_cost_with_or_without_unchanged_tail(self):
+        from reading_likelihood import edit_cost
+        full=edit_cost('きろまして','きけまして','を','しり')
+        short=edit_cost('きろ','きけ','を','まして')
+        self.assertEqual(full,short)
+
+    def test_weaker_unknown_cannot_erase_stronger_usage_comparison(self):
+        daily=self.candidate('日常',101);general=self.candidate('一般',70)
+        unknown=self.candidate('未評価',1)
+        daily['rank_evidence'].update(meaning=-1,usage=1)
+        general['rank_evidence'].update(meaning=-1,usage=2)
+        unknown['rank_evidence'].update(meaning=0,usage=None)
+        for candidates in ([daily,general,unknown],[unknown,general,daily]):
+            rows=R.rank_candidates(candidates)
+            self.assertEqual(rows[0]['surface'],'日常')
+            self.assertNotIn('usage',rows[0]['omitted_numeric_evidence'])
+            self.assertIn('usage',rows[-1]['omitted_numeric_evidence'])
+
+    def test_explicit_restricted_usage_survives_unknown_optional_evidence(self):
+        uncommon=self.candidate('稀な表記',1);unjudged=self.candidate('未評価',100)
+        uncommon['rank_evidence']['usage']=3
+        unjudged['rank_evidence']['usage']=None
+        self.assertEqual(R.rank_candidates([uncommon,unjudged])[0]['surface'],'未評価')
+        self.assertIsNone(unjudged['rank_evidence']['usage'])
+        # A concrete semantic relationship still precedes general familiarity.
+        uncommon['rank_evidence']['meaning']=-1
+        self.assertEqual(R.rank_candidates([unjudged,uncommon])[0]['surface'],'稀な表記')
 
     def test_duplicate_routes_are_not_votes(self):
         a,b=self.candidate('仮名'),self.candidate('かな')
@@ -161,6 +214,18 @@ class CandidateContracts(unittest.TestCase):
         self.assertEqual([r['surface'] for r in selected],['A'])
         self.assertEqual(report['state'],'truncated')
 
+    def test_joint_bound_proves_dominated_combinations_without_raising_cap(self):
+        from joint_candidates import choose
+        rows=[self.option(0,1,'A'+str(n),n,('first',)) for n in range(20)]
+        rows += [self.option(3,4,'B'+str(n),n,('second',)) for n in range(20)]
+        def valid(chosen):
+            return {r['surface'] for r in chosen}!={'A0','B0'}
+        result,report=choose(rows,valid,256)
+        self.assertEqual([r['surface'] for r in result],['A0','B1'])
+        self.assertEqual(report['state'],'complete')
+        self.assertEqual(report['resolved'],2)
+        self.assertLess(report['examined'],256)
+
     def test_cycle_restores_only_original_anomaly(self):
         import corrector as C
         @C._with_correction_source
@@ -177,7 +242,7 @@ class CandidateContracts(unittest.TestCase):
 
 
 class TkWorkContracts(unittest.TestCase):
-    def test_mutations_do_not_wait_for_idle_and_undo_forgets_readings(self):
+    def test_mutations_do_not_wait_for_idle_and_undo_preserves_only_untouched_readings(self):
         import tkinter as tk
         try:root=tk.Tk()
         except tk.TclError as exc:self.skipTest(str(exc))
@@ -192,7 +257,12 @@ class TkWorkContracts(unittest.TestCase):
             widget.edit_undo()
             self.assertEqual(doc.text,'😀資料')
             self.assertFalse(doc.accepts(work))
+            self.assertEqual([(o.start,o.end,o.surface,o.reading) for o in doc.occurrences],
+                             [(1,3,'資料','しりょう')])
+            widget.delete('1.0+2c','1.0+3c');widget.edit_separator()
             self.assertFalse(doc.occurrences)
+            widget.edit_undo();self.assertEqual(doc.text,'😀資料')
+            self.assertFalse(doc.occurrences)  # Deleted evidence is never resurrected.
         finally:root.destroy()
 
 

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """A native manner form keeps its verb and object independently accountable."""
+from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
 import reading_segments as R
@@ -45,7 +46,7 @@ class AdjectiveMannerTests(unittest.TestCase):
             with self.subTest(text=old):
                 result=app.correct_line(old,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                self.assertEqual(result['corrected'],new)
+                assert_repaired_spelling(self, result, new)
                 self.assertEqual(result.get('odd_spans'),[])
 
     def test_correct_source_and_ambiguous_native_actions_are_preserved(self):
@@ -78,7 +79,7 @@ class AdjectiveHostBoundaryTests(unittest.TestCase):
         result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
             context_vec=None,decisions=a.decisions)
         # AJE also supplies the original frame's comitative person role.
-        self.assertEqual(result['corrected'],'りょうりをつくってかぞくとたべました。')
+        assert_repaired_spelling(self, result, 'りょうりをつくってかぞくとたべました。')
         self.assertEqual(result.get('odd_spans'),[])
 
 

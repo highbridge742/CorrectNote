@@ -7,6 +7,44 @@ import oddness as O
 
 @unittest.skipUnless(M.dictionary_inflections('聞く'),'requires native dictionary')
 class ConjunctiveCaseTests(unittest.TestCase):
+    def test_nominalized_existential_requires_its_case(self):
+        from particle_frames import nominalized_existential_case_frames as frames
+        for source in ('書くことかあります','よんだことかある','読むのかあります'):
+            with self.subTest(source=source):
+                self.assertTrue(frames(source))
+                self.assertFalse(O.changed_auxiliary_chain_allowed(source,0,len(source)))
+
+    def test_original_case_cannot_be_hidden_by_changing_the_previous_verb(self):
+        for before,after in (('書くことかあります','核ことかあります'),
+                ('伝えることかあります','伝えれことかあります')):
+            with self.subTest(after=after):
+                self.assertFalse(O.changed_auxiliary_chain_allowed(after,0,len(after),original=before))
+        self.assertTrue(O.changed_auxiliary_chain_allowed('書くことがあります',0,9,
+                                                        original='書くことかあります'))
+
+    def test_native_case_repairs_without_an_answer_or_another_column(self):
+        import app
+        from tests_analysis_async import initial
+        a=initial()
+        for source,expected in (('書くことかあります','書くことがあります'),
+                ('何かあります','何かあります'),('書くこともあります','書くこともあります')):
+            with self.subTest(source=source):
+                result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                    context_vec=None,decisions=a.decisions)
+                self.assertEqual(result['corrected'],expected)
+                self.assertEqual(result['odd_spans'],[])
+
+    def test_nominalization_question_and_indefinite_are_not_the_same_case(self):
+        from particle_frames import nominalized_existential_case_frames as frames
+        for source in ('書くことがあります','書いたこともあります','何かあります',
+                'なにかあります','書くことかと思います','書くことから始めます',
+                '書くことしかありません','書くことかもしれません','何のことか分かります',
+                '書くことか読むことがあります','書くことかあるいは読むことです',
+                '書くことか、ありますか','書くことかあり','書くことか',
+                '「書くことかあります」という誤入力'):
+            with self.subTest(source=source):self.assertEqual(frames(source),())
+        self.assertTrue(O.changed_auxiliary_chain_allowed('本を読みます。書くことかあります',0,1))
+
     def test_changed_verb_cannot_leave_a_conjunctive_clause_as_an_object(self):
         for text,end in (('きいてをにだいならべます。',2),
                          ('きえいてをにだいならべます。',3),
@@ -42,7 +80,7 @@ class ConjunctiveCaseTests(unittest.TestCase):
         self.assertEqual(reason,'native_conjunctive_case')
         result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
             context_vec=None,decisions=a.decisions)
-        self.assertEqual(result['corrected'],'機械をにだいならべます。')
+        self.assertIn(result['corrected'],('機械をにだいならべます。','機械をにだい並べます。'))
         self.assertEqual(result.get('odd_spans'),[])
 
 

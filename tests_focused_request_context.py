@@ -39,21 +39,40 @@ class FocusedRequestContextTests(unittest.TestCase):
         self.assertFalse(S.support('乾燥','書く'))
         self.assertFalse(S.support('完走','飲む'))
 
+    def test_lexical_word_cannot_swallow_native_focused_connector(self):
+        import corrector as E
+        from tests_analysis_async import initial
+        a=initial();tok=E.make_tokenizer(a.store)
+        text='感想をかいてもください。'
+        self.assertFalse(R.native_lexical_core_boundary_allowed(text,3,6))
+        self.assertTrue(R.native_lexical_core_boundary_allowed(text,3,5))
+        candidate,reason=E._check_replacement(text,(3,6,'買手','かな入力'),a.store,tok,
+            a.dict_index,a.decisions,spelling=True)
+        self.assertEqual((candidate,reason),(None,'lexical_core_crosses_functional_word'))
+        candidate,reason=E._check_replacement(text,(3,5,'書い','かな入力'),a.store,tok,
+            a.dict_index,a.decisions,spelling=True)
+        self.assertIsNotNone(candidate)
+        for source,start,end in (('かいてを探します。',0,3),('買手も来た。',0,2),
+                                 ('本を読んでもらいました。',2,5),('駅では待ちます。',0,2)):
+            self.assertTrue(R.native_lexical_core_boundary_allowed(source,start,end),source)
+
     def test_application_keeps_focus_and_normal_homophone_meanings(self):
         import app
         from tests_analysis_async import initial
         a=initial();a.context_vec=None
-        normal=('あたらしいせっていをほぞんしてもください。',
-                'このほんをよんでもください。','ふぁいるをほぞんしてはください。',
-                'かんそうをかいてもください。','感想を書きます。',
-                '本を読んではいます。','文字を入力してもらいます。',
-                'しりょうをよんでもらいました。','衣服を乾燥します。',
-                'マラソンを完走します。','私は「してもください」と書きました。')
-        for text in normal:
+        normal=(('あたらしいせっていをほぞんしてもください。','あたらしいせっていを保存してもください。'),
+                ('このほんをよんでもください。','このほんを読んでもください。'),
+                ('ふぁいるをほぞんしてはください。','ファイルを保存してはください。'),
+                ('かんそうをかいてもください。','感想をかいてもください。'),
+                '感想を書きます。','本を読んではいます。','文字を入力してもらいます。',
+                ('しりょうをよんでもらいました。','資料を読んでもらいました。'),
+                '衣服を乾燥します。','マラソンを完走します。','私は「してもください」と書きました。')
+        for item in normal:
+            text,expected=item if isinstance(item,tuple) else (item,item)
             with self.subTest(text=text):
                 r=app.correct_line(text,a.store,dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions,input_method='kana')
-                self.assertEqual(r['corrected'],text)
+                self.assertEqual(r['corrected'],expected)
                 self.assertEqual(r['odd_spans'],[])
 
 

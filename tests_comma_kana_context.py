@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Keep full-source judgments when independent kana frames surround commas."""
+from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
 import contextual_repair as CR
@@ -85,12 +86,12 @@ class CommaKanaContextTests(unittest.TestCase):
             text=prefix+'やさいをこまかくきすります。'
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],prefix+'やさいをこまかくきります。')
+            assert_repaired_spelling(self, result, prefix+'やさいをこまかくきります。')
         ledger=DecisionStore();ledger.protect('ほきん')
         text='としょかんでかりたほきんをかえして、やさいをこまかくきすります。'
         result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
             context_vec=None,decisions=ledger)
-        self.assertEqual(result['corrected'],text.replace('きすります','きります'))
+        assert_repaired_spelling(self, result, text.replace('きすります','きります'))
 
 
 if __name__=='__main__':unittest.main()

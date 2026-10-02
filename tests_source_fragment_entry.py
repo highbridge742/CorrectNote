@@ -19,7 +19,10 @@ class SourceFragmentEntryTests(unittest.TestCase):
                 self.assertTrue(C._chunk_is_intact('どんでん',lambda _:parts,context_only=True))
                 # An unknown or shifted original token cannot supply this proof.
                 bad=parts[:2]+[parts[2][:5]+(False,)+parts[2][6:]]+parts[3:]
-                self.assertFalse(C._chunk_is_intact('どんでん',lambda _:bad,context_only=True))
+                # The entry may also retain the actual dictionary word via
+                # independent native source grammar. This injected unknown
+                # token itself must supply no lexical fragment proof.
+                self.assertFalse(R.native_word_fragment_context(source,3,7,lambda _:bad))
         finally:
             C._CORRECTION_SOURCE.reset(token)
 

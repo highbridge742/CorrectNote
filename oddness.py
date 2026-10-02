@@ -107,7 +107,6 @@
 「**正しく書いたものを壊さない**」に反する。
 """
 
-import gzip
 import os
 import collections
 
@@ -200,23 +199,22 @@ def _load():
     if path is None:
         return None                       # 表が無ければ**意見なし**
     try:
-        words = set()
-        with gzip.open(path, 'rt', encoding='utf-8') as f:
-            for raw in f:
-                w = raw.rstrip('\n')
-                if not w:
-                    continue
-                if w[0] == '*':           # 狭い側の印（`seed_japanese`）
-                    w = w[1:]
-                words.add(w)
+        from word_table import read_word_sets,read_compound_tables
+        words, _narrow = read_word_sets(path)
         if len(words) < MIN_WORDS:
             return None
+        derived=read_compound_tables(path)
+        if derived is not None:
+            _WORDS=words
+            _LEFT,_RIGHT,_PAIR=derived
+            return _WORDS
         left = collections.Counter()
         right = collections.Counter()
         pair = set()
-        kanji = lambda c: '一' <= c <= '鿿'
+        import re
+        kanji = re.compile(r'[\u4e00-\u9fff]+').fullmatch
         for w in words:
-            if not (2 <= len(w) <= 6) or not all(kanji(c) for c in w):
+            if not (2 <= len(w) <= 6) or not kanji(w):
                 continue
             for i in range(1, len(w)):
                 a, b = w[:i], w[i:]
@@ -488,6 +486,12 @@ def can_join(a, ap, b, bp, a_reading=''):
     # (1) 表の語の中で、その並びを見たことがある
     if (a, b) in _PAIR or (a + b) in words:
         return True
+    # Share positive nominal meaning with reading/candidate verification.
+    # Known nouns alone are not proof; names and inflected fragments do
+    # not inherit this compound relationship.
+    from semantic_roles import nominal_compound_support
+    if _plain_noun(ap) and _plain_noun(bp) and nominal_compound_support(a,b):
+        return True
     # (1') **否定の接頭辞**（不・非・未・無）を頭に持つ語は、
     #      「A の 不一致」のように何にでも付く（型不一致・色不一致・
     #      数未確定）。否定の接頭辞は**閉じた文法の類**（4字）であって
@@ -548,6 +552,12 @@ def can_join(a, ap, b, bp, a_reading=''):
         if _kun_noun_1(a, ap, a_reading):
             return True
         return (a + b) in words
+    # The opposite order asks the value of a category (day/color/type),
+    # not an arbitrary pronoun attached to an arbitrary noun.
+    from semantic_roles import interrogative_nominal_support
+    if ('代名詞' in ap and bp.startswith('名詞')
+            and '固有名詞' not in bp and interrogative_nominal_support(a,b)):
+        return True
     # (6') **名詞＋疑問の代名詞**（項目48-OX・2026-09-03）。
     #      `昼ご飯**何**にする` は「昼ご飯**は** 何にする」の
     #      **は が落ちた形**（助詞の省略の族・うにさんの検討）。
@@ -648,8 +658,7 @@ def can_join(a, ap, b, bp, a_reading=''):
     if len(b) == 1 and len(a) >= 2 and (a[-1] + b) in words:
         return True
     # (8) **名詞どうしの複合は、日本語では既定で作れる**（試し・48-NA）
-    if (_plain_noun(ap) and _plain_noun(bp)
-            and len(a) >= 2 and len(b) >= 2):
+    if ordinary_nominal_composition(a,ap,b,bp):
         return True
     # (5) 後ろに立った実績があるか
     if _RIGHT.get(b, 0) >= RIGHT_MIN:
@@ -663,6 +672,11 @@ _NOUN_NG = ('固有名詞', '接尾', '接頭', '非自立', '代名詞', '数',
 def _plain_noun(pos):
     return (pos or '').startswith('名詞') and not any(
         x in (pos or '') for x in _NOUN_NG)
+
+
+def ordinary_nominal_composition(a,ap,b,bp):
+    """Existing productive ordinary-noun syntax, without semantic inference."""
+    return bool(_plain_noun(ap) and _plain_noun(bp) and len(a)>=2 and len(b)>=2)
 
 
 # 「する」の活用形（解析が動詞:自立として切る表記）。項目48-IX
@@ -1025,9 +1039,7 @@ def shortcut_case_spans(text, tokens):
     """
     if '出' not in text or '+' not in text:
         return []
-    import re
-    chord = re.compile(r'(?<![A-Za-z0-9_])(?:(?:Ctrl|Control|Alt|Shift|Win|Cmd|Command|Option|Meta)\+)+'
-                       r'(?:[A-Za-z0-9]|F(?:[1-9]|1[0-9]|2[0-4])|Tab|Enter|Return|Esc|Escape|Space|Delete|Backspace|Home|End|PageUp|PageDown|Up|Down|Left|Right)$', re.I)
+    from halfwidth import keyboard_chord_ranges
     out = []
     for a,b in zip(tokens,tokens[1:]):
         if not (a[0] == '出' and a[2] == 'で' and a[5]
@@ -1036,7 +1048,8 @@ def shortcut_case_spans(text, tokens):
                 and (b[1] or '').startswith('名詞')
                 and not any(x in (b[1] or '') for x in ('接尾','非自立','固有名詞'))):
             continue
-        if chord.search(text[max(0,a[3]-96):a[3]]):
+        prefix=text[max(0,a[3]-96):a[3]]
+        if any(end==len(prefix) for start,end in keyboard_chord_ranges(prefix)):
             out.append((a[3],a[4]))
     return out
 
@@ -1159,15 +1172,78 @@ def bare_katakana_modifier_spans(text,tokens):
     return out
 
 
+def case_particle_mismatch(a, ap, b, bp):
+    """Existing consecutive-case restriction, using the actual source POS."""
+    return '格助詞' in ap and '格助詞' in bp and a not in ('から','へ')
+
+
 def object_particle_mismatch(a, ap, b, bp):
     """Existing restriction after を, shared with explicit phrase choices."""
     return (a == 'を' and ap.startswith('助詞')
             and bp.startswith('助詞') and b not in ('も', 'ば'))
 
 
+def _source_object_predicate_spans(text,source_tokens,tokenize_fn,store,dict_index):
+    """48-AMZ: expose a swallowed edge using the same unchanged object.
+
+    The original unknown token must cross the independently proved case.
+    Every exact ordinary noun reading must expose the same grammatical
+    conflict in the untouched predicate. Frequency-only joins are ignored;
+    no repaired word, missing predicate or shortened lexical word is used.
+    """
+    if not any(not t[5] for t in source_tokens):return ()
+    from reading_segments import (_native_source_clauses,native_object_predicate_contexts,
+        _native_nominal_reading_faces,native_nominal_case_boundary)
+    from morphology import tokenize
+    found=[]
+    for offset,clause in _native_source_clauses(text):
+        if not all('ぁ'<=c<='ゖ' or c=='ー' for c in clause):continue
+        for begin,cut,faces in native_object_predicate_contexts(clause):
+            edge=offset+cut
+            if not any(t[3]<edge<t[4] and not t[5] for t in source_tokens):continue
+            noun=clause[begin:cut-1]
+            ordinary=_native_nominal_reading_faces(noun)
+            exact=tuple(face for face in faces if face in ordinary)
+            if not exact:continue
+            proof=native_nominal_case_boundary(clause[begin:],tokenize(clause[begin:]),
+                                               cut-begin-1,'を',exact)
+            if proof is None or proof[1]:continue
+            alternatives=[]
+            for face in exact:
+                prefix=face+'を';shadow=prefix+clause[cut:]
+                native=tokenize_fn(shadow)
+                # The spelling locator must still give the same native
+                # ordinary noun reading, not a homographic name or suffix.
+                if not any(t[3]==0 and t[4]==len(face) and t[5] and t[2]==noun
+                        and t[1].startswith('名詞:')
+                        and not any(kind in t[1] for kind in ('固有名詞','接尾','非自立'))
+                        for t in native):
+                    alternatives.append({});continue
+                # complete_line=False keeps this one shared grammar call
+                # from re-entering source projection recursively.
+                rows=is_odd_run(shadow,tokenize_fn,with_spans=True,store=store,
+                    dict_index=dict_index,skip_join=True,complete_line=False)
+                # A locator spelling cannot impose its own homophone's
+                # meaning on the original kana object. Native boundaries
+                # locate the unchanged predicate; source grammar and meaning
+                # are proved again at the original coordinates.
+                for a,b in zip(native,native[1:]):
+                    if a[3]<len(prefix):continue
+                    def original(t):
+                        return (*t[:3],t[3]+cut-len(prefix),t[4]+cut-len(prefix),*t[5:])
+                    if source_past_attachment_mismatch(clause,original(a),original(b)):
+                        rows.append((a[0],b[0],a[3],b[4]))
+                alternatives.append({(edge+lo-len(prefix),edge+hi-len(prefix)):(left,right)
+                    for left,right,lo,hi in rows if len(prefix)<=lo<hi<=len(shadow)})
+            shared=set(alternatives[0]).intersection(*(set(x) for x in alternatives[1:]))
+            found.extend((*alternatives[0][span],*span) for span in sorted(shared))
+    return tuple(dict.fromkeys(found))
+
+
 def is_odd_run(text, tokenize_fn, with_spans=False,
                store=None, dict_index=None, skip_join=False, complete_line=False,
-               reading_reasons_out=None):
+               reading_reasons_out=None, preserve_unknown_source=False,
+               _ime_display_out=None):
     """
     **その塊に「その順ではくっつけない語の並び」があるか**。
 
@@ -1195,16 +1271,108 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
     spelling=original_spelling_facts(text)
     spelling_rows=[(f.original[:-1],f.original[-1],f.change_start,f.change_start+1)
                    if with_spans else (f.original[:-1],f.original[-1]) for f in spelling]
+    from context_meaning import anomalous_frames
+    for frame in anomalous_frames(text):
+        a,b=frame['start'],frame['end'];row=('意味接続',frame['kind'],a,b)
+        spelling_rows.append(row if with_spans else row[:2])
+        if reading_reasons_out is not None:reading_reasons_out[a,b]=frame['reason']
+    from ime_nominal_head import split_question_noun_frames
+    for frame in split_question_noun_frames(text):
+        a,b=frame['start'],frame['end'];row=('品詞文法','疑問と名詞内部のかなの区切り',a,b)
+        spelling_rows.append(row if with_spans else row[:2])
+        if reading_reasons_out is not None:reading_reasons_out[a,b]=frame['reason']
+    from familiar_nominal import conditional_reference_frames
+    for frame in conditional_reference_frames(text):
+        a,b=frame['start'],frame['end'];row=('意味接続','条件と程度比較の状況指示',a,b)
+        spelling_rows.append(row if with_spans else row[:2])
+        if reading_reasons_out is not None:reading_reasons_out[a,b]=frame['reason']
+    from ime_compound_contrast import frames as compound_frames
+    for frame in compound_frames(text):
+        a,b=frame['start'],frame['end'];row=('IME逆読み','接尾語だけの未登録複合',a,b)
+        spelling_rows.append(row if with_spans else row[:2])
+        if reading_reasons_out is not None:
+            reading_reasons_out[a,b]='動詞の後の未登録複合が接尾語だけに分割されています'
+    from relative_key_repair import frames as relative_frames
+    for frame in relative_frames(text):
+        a,b=frame['start'],frame['end'];row=('品詞文法','名詞を修飾する述語の前に受け先のない格',a,b)
+        spelling_rows.append(row if with_spans else row[:2])
+    from process_familiarity import frames as familiarity_frames
+    for frame in familiarity_frames(text):
+        a,b=frame['start'],frame['end'];row=('意味接続',frame.get('reason','単独の反復過程より一般的な程度変化'),a,b)
+        spelling_rows.append(row if with_spans else row[:2])
+        if reading_reasons_out is not None:reading_reasons_out[a,b]=row[1]
+    from particle_frames import interrogative_extent_frames
+    for frame in interrogative_extent_frames(text):
+        a,b=frame['start'],frame['end'];row=('意味接続','思考する内容と具体物の道具格',a,b)
+        spelling_rows.append(row if with_spans else row[:2])
+        if reading_reasons_out is not None:
+            reading_reasons_out[a,b]='思考の内容に具体物の道具格が入り、疑問と範囲の助詞の読みと競合しています'
+    from particle_frames import converted_suru_connection_frames
+    for frame in converted_suru_connection_frames(text):
+        start,end=frame['verb_start'],frame['end']
+        row=('サ変の接続','機能語の同音名詞',start,end)
+        spelling_rows.append(row if with_spans else row[:2])
+        if reading_reasons_out is not None:
+            reading_reasons_out[start,end]='動作名詞と接続助詞の間が動詞ではなく同音の名詞になっています'
+    from particle_frames import converted_connective_nominal_frames
+    for frame in converted_connective_nominal_frames(text):
+        start,end=frame['start'],frame['end']
+        row=('品詞文法','実動詞の基本形と接続助詞の同音名詞',start,end)
+        spelling_rows.append(row if with_spans else row[:2])
+        if reading_reasons_out is not None:
+            reading_reasons_out[start,end]='名詞の結合根拠がなく、直前の動詞に接続助詞の読みが続いています'
+    from particle_frames import broken_accusative_adverb_frames
+    for frame in broken_accusative_adverb_frames(text):
+        start,end=frame['start'],frame['end']
+        row=('品詞文法','物の目的語に動作がない',start,end)
+        spelling_rows.append(row if with_spans else row[:2])
+        if reading_reasons_out is not None:
+            reading_reasons_out[start,end]='物の目的語の後が助詞・副詞だけで、帰る動作へ直接つながっています'
+    from particle_frames import unlinked_past_predicate_frames
+    for frame in unlinked_past_predicate_frames(text):
+        start,end=frame['start'],frame['end']
+        row=('品詞文法','過去形と終止述語の直結',start,end)
+        spelling_rows.append(row if with_spans else row[:2])
+        if reading_reasons_out is not None:
+            reading_reasons_out[start,end]='過去形で終わった動作の後に、名詞や接続なしで別の終止述語が続きます'
+    from particle_frames import broken_nominal_te_frames
+    for frame in broken_nominal_te_frames(text):
+        start,end=frame['start'],frame['end']
+        row=('品詞文法','目的語の後の名詞に接続のてが直結',start,end)
+        spelling_rows.append(row if with_spans else row[:2])
+        if reading_reasons_out is not None:
+            reading_reasons_out[start,end]='目的語に続くかなが名詞として分割され、て形の動詞を作れていません'
+    from particle_frames import nominalized_existential_case_frames
+    for frame in nominalized_existential_case_frames(text):
+        start,end=frame['start'],frame['end']
+        row=('名詞化の接続','存在述語の格',start,end)
+        spelling_rows.append(row if with_spans else row[:2])
+        if reading_reasons_out is not None:
+            reading_reasons_out[start,end]='名詞化した節と存在述語の間に格を表す助詞がありません'
     if reading_reasons_out is not None:
         for f in spelling:reading_reasons_out[f.change_start,f.change_start+1]=f.reason
     if complete_line:
-        from particle_frames import interrupted_topic_frames
-        for frame in interrupted_topic_frames(text,dict_index):
+        from pos_grammar import _completed_kana_attachment_spans
+        for start,end in _completed_kana_attachment_spans(text):
+            row=('完成節の接続','未完ではない助詞・連体接続',start,end)
+            spelling_rows.append(row if with_spans else row[:2])
+            if reading_reasons_out is not None:
+                reading_reasons_out[start,end]='完成した欄で連体形に受ける名詞がない、または副助詞の後の格接続が崩れています'
+    if complete_line:
+        from pos_grammar import _completed_orphan_attachment_spans
+        for start,end in _completed_orphan_attachment_spans(text):
+            row=('完成節の接続','文頭の連体助詞と引用・補助動詞',start,end)
+            spelling_rows.append(row if with_spans else row[:2])
+            if reading_reasons_out is not None:
+                reading_reasons_out[start,end]='完成した欄で文頭の連体助詞に係る名詞がなく、引用と補助動詞が続いています'
+    if complete_line:
+        from particle_frames import interrupted_particle_frames
+        for frame in interrupted_particle_frames(text,dict_index):
             a,b=frame['case_start'],frame['end']
             row=(text[a:frame['extra']+1],frame['topic'])
             spelling_rows.append(row+(a,b) if with_spans else row)
             if reading_reasons_out is not None:
-                reading_reasons_out[a,b]='助詞間の巻き込み（文脈判定）'
+                reading_reasons_out[a,b]=frame.get('reason','助詞間の巻き込み（文脈判定）')
     if complete_line:
         from particle_frames import closed_question_frames
         for frame in closed_question_frames(text):
@@ -1217,12 +1385,23 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
             a,b=frame['start'],frame['end'];row=(text[a:b-len(frame['topic'])],frame['topic'])
             spelling_rows.append(row+(a,b) if with_spans else row)
             if reading_reasons_out is not None:reading_reasons_out[a,b]='連体形と係助詞の間に名詞がない'
+    from morphology import source_yoon_spans
+    for a,b in source_yoon_spans(text):
+        row=(text[a:a+1],text[a+1:b])
+        spelling_rows.append(row+(a,b) if with_spans else row)
+        if reading_reasons_out is not None:reading_reasons_out[a,b]='かなの小書き接続'
     if _load() is None:
         return spelling_rows
     # 48-ZM: a complete native reading of this whole kana clause precedes
     # anomaly judgments about a competing accidental token boundary.
     from reading_segments import intact_native_reading,native_context_ranges
     source_ranges=native_context_ranges(text)
+    from morphology import mixed_kana_syllable_ranges
+    syllables=mixed_kana_syllable_ranges(text)
+    if preserve_unknown_source:
+        from reading_segments import source_opaque_object_ranges
+        source_ranges+=tuple((a,z) for a,cut,z in source_opaque_object_ranges(text))
+    source_adjunct_edges = None
     if intact_native_reading(text):
         return spelling_rows
     try:
@@ -1257,6 +1436,13 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         pos = e0
     kanji = lambda c: '一' <= c <= '鿿'
     out = list(spelling_rows)
+    meaning_conflict_rows=set()
+    if complete_line:
+        for left,right,start,end in _source_object_predicate_spans(
+                text,source_tokens,tokenize_fn,store,dict_index):
+            out.append((left,right,start,end) if with_spans else (left,right))
+            if reading_reasons_out is not None:
+                reading_reasons_out[start,end]=f'「{left}」と「{right}」は続けて置けない'
     if complete_line:
         from semantic_roles import subject_only_predicate_spans
         for obj, predicate, start, end in subject_only_predicate_spans(text, source_tokens):
@@ -1268,11 +1454,17 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         from semantic_roles import conflicting_object_predicates,object_predicate_conflict_reason
         for obj,predicate,start,end in conflicting_object_predicates(text,source_tokens):
             if not in_reading_gloss(text,start):
+                meaning_conflict_rows.add((obj,predicate,start,end))
                 out.append((obj,predicate,start,end) if with_spans else (obj,predicate))
                 if reading_reasons_out is not None:
                     reading_reasons_out[start,end]=object_predicate_conflict_reason(obj,predicate)
     # 48-ACA: known words can still have an incongruous ordinary meaning.
     # Keep the source evidence and span identical for marks and repairs.
+    from semantic_roles import unadorned_action_conflicts
+    for left,right,start,end in unadorned_action_conflicts(text,source_tokens):
+        out.append((left,right,start,end) if with_spans else (left,right))
+        if reading_reasons_out is not None:
+            reading_reasons_out[start,end]='加工していない物を表す素と、手順・動作を表す名詞の接続が不自然です'
     from semantic_roles import conflicting_nominal_compounds
     for left,right,start,end in conflicting_nominal_compounds(text,source_tokens):
         out.append((left,right,start,end) if with_spans else (left,right))
@@ -1326,6 +1518,8 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
             continue
         if any(lo<=a_s and b_e<=hi for lo,hi in source_ranges):
             continue
+        if any(lo<a_e<hi for lo,hi in syllables):
+            continue
         # **読みの注記の中では見ない**（項目48-NW）。括弧の中の
         # かなは書きたくて書いたもので、解析はほぼ必ず壊れる。
         if in_reading_gloss(text, a_s):
@@ -1341,17 +1535,23 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
                 continue
         if (infl_mismatch(a, b, _prev) or suffix_then_yougen(spans, i)
                 or noun_past_aux_mismatch(a, b, text, dict_index)
-                or polite_aux_mismatch(a, b)
+                or polite_aux_mismatch(a, b, source_tokens[:i])
                 or excess_aux_mismatch(a,b)
                 or repeated_polite_aux_mismatch(_prev, a, b)
                 or past_auxiliary_mismatch(a,b)
+                or source_past_attachment_mismatch(text,tuple(a),tuple(b))
+                or closed_nominal_volitional_mismatch(text,a,b,allow_line_end=complete_line)
                 or mai_aux_mismatch(a,b)
+                or negative_source_mismatch(a,b)
                 or completed_tsu_source_mismatch(a,b,_prev,
                     spans[i+2][2] if i+2<len(spans) else None)
+                or noncontinuative_independent_verb_mismatch(a,b)
                 or causative_aux_mismatch(a, b)
                 or passive_aux_mismatch(a, b)
                 or orphan_sokuon_mismatch(a, b, _prev)
+                or orphan_case_leading_mismatch(a, b, _prev)
                 or auxiliary_te_mismatch(a, b)
+                or desiderative_source_mismatch(text, a, b)
                 or contracted_aux_mismatch(a, b)):
             _one = (a[0], b[0], a_s, b_e) if with_spans else (a[0], b[0])
             # **同じ対を二重に出さない**（項目48-NY）。語の対の表
@@ -1365,6 +1565,8 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         if a_e != b_s:
             continue
         if any(lo<=a_s and b_e<=hi for lo,hi in source_ranges):
+            continue
+        if any(lo<a_e<hi for lo,hi in syllables):
             continue
         a_sf, b_sf = a[0] or '', b[0] or ''
         ap, bp = a[1] or '', b[1] or ''
@@ -1438,8 +1640,7 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         #     実機メモの正しい5行に紫が立った。`もみとにもどります` の
         #     ①は、かな連続の側の `pos_grammar`（K/Bk・行頭の裸の助詞）が
         #     立てる）
-        elif ('格助詞' in ap and '格助詞' in bp
-                and a_sf not in ('から', 'へ')):
+        elif case_particle_mismatch(a_sf,ap,b_sf,bp):
             _kz = True
         # (E) **名詞の読みを持たない接続詞に格助詞は付かない**
         #     （しかしを）。それゆえ・そのうえ・だから は名詞や
@@ -1577,6 +1778,24 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
             if (_a_fk and a_sf and a_sf[-1] in _SMALL_KANA
                     and _b_fk == 'カタカナ断片'):
                 _frag_hit = True
+        if _frag_hit:
+            # The same whole-word evidence used before reconstruction also
+            # owns internal parser fragments when producing anomaly marks.
+            from corrector import _kata_run_is_word
+            if _kata_run_is_word(text,a_s,b_e):
+                continue
+            # A proved source adjunct ends before this content word. A best
+            # tokenization's unknown tail is not a word directly joined to it.
+            if source_adjunct_edges is None:
+                from reading_segments import (native_adverbial_reading_cuts,
+                    _native_source_clauses,source_honorific_name_ranges)
+                source_adjunct_edges = {start + cut
+                    for start, clause in _native_source_clauses(text)
+                    for cut in native_adverbial_reading_cuts(clause)}
+                source_adjunct_edges.update(end for start,end in
+                    source_honorific_name_ranges(text,case_only=True))
+            if b_s in source_adjunct_edges:
+                continue
         if _frag_hit and _fragment_has_parallel_noun_context(text, a_s, b_e, tokenize_fn):
             # 未知の漢字名詞について、未知断片/未知の名詞結合を重ねて異様としない。
             # 活用・助詞接続の規則はこの分岐より前で検査済み。
@@ -1776,6 +1995,22 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         if _run_is_word(text, a_s, b_e):
             continue
         out.append((a_sf, b_sf, a_s, b_e) if with_spans else (a_sf, b_sf))
+    if complete_line:
+        # Reuse the original noun/copula boundary when an unknown best-parse
+        # token swallowed the next clause. That boundary supplies no anomaly;
+        # the same native connection checks judge the unchanged remainder.
+        # Each recursive scope is strictly shorter and retains its punctuation.
+        from reading_segments import native_nominal_connective_boundaries
+        for edge in native_nominal_connective_boundaries(text):
+            reasons={} if reading_reasons_out is not None else None
+            for left,right,start,end in is_odd_run(text[edge:],tokenize_fn,with_spans=True,
+                    store=store,dict_index=dict_index,skip_join=skip_join,
+                    complete_line=True,reading_reasons_out=reasons,
+                    preserve_unknown_source=preserve_unknown_source):
+                row=(left,right,start+edge,end+edge) if with_spans else (left,right)
+                if row not in out:out.append(row)
+            if reasons is not None:
+                reading_reasons_out.update({(a+edge,b+edge):why for (a,b),why in reasons.items()})
     # **位置の順にそろえて返す**（項目48-NT・2026-09-01）。
     # `odd_spans` は「印は位置順に来る」前提で隣り合う印を繋いでいる:
     #
@@ -1789,7 +2024,29 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
     if with_spans:
         out.sort(key=lambda t: (t[2], t[3]))
     if with_spans and source_ranges:
-        out=[row for row in out if not any(lo<=row[2] and row[3]<=hi for lo,hi in source_ranges)]
+        # Native grammar protects the written syntax, not an independently
+        # established object/action meaning conflict at the same position.
+        out=[row for row in out if row in meaning_conflict_rows
+             or not any(lo<=row[2] and row[3]<=hi for lo,hi in source_ranges)]
+    # Search-candidate membership is only a source-side clue. An independently
+    # malformed kana reading must explain the exact written field as well;
+    # accepted candidate spellings are still checked by the common validator.
+    # A lexical mark can be narrower than the IME's mistaken boundaries.
+    # Preserve both independent source facts instead of treating the first
+    # lexical finding as proof that a whole-field reading is unnecessary.
+    if complete_line and not skip_join:
+        try:
+            from ime_inverse_gate import anomalous_source_fields
+            marks=tuple((row[2],row[3]) for row in out) if with_spans else ()
+            for start,end,reading in anomalous_source_fields(text,tokenize_fn,store,dict_index,marks,_ime_display_out):
+                if any(lo<=start and end<=hi for lo,hi in source_ranges):
+                    continue
+                row=('IME逆読み','原文候補と異様な読み',start,end)
+                out.append(row if with_spans else row[:2])
+                if reading_reasons_out is not None:
+                    reading_reasons_out[start,end]='IME候補に原文があり、復元した読みの接続が異様です'
+        except (ImportError,OSError,AttributeError):
+            pass
     return out
 
 
@@ -2093,6 +2350,8 @@ def renyou_no_polite_spans(text, toks, tokenize_fn=None):
 # 継続・結果状態の補助動詞。移動・方向・授受の動詞は、連用形に
 # 直結して複合動詞や敬語にもなるため、この規則には含めない。
 _TE_AUXILIARY_BASES = frozenset(('いる','居る','おる'))
+# Existing bound shimau contractions, shared by source and candidate seams.
+_SHIMAU_CONTRACTED_BASES = frozenset(('ちゃう','じゃう','ちまう','じまう'))
 
 
 from functools import lru_cache
@@ -2132,8 +2391,48 @@ def excess_aux_mismatch(a,b):
     return native_excess_head(a[0],a[2]) is False
 
 
+def euphonic_verb_attachment_mismatch(a,b):
+    """An onbin stem cannot directly introduce a second verb.
+
+    TUFS V-te (043), Japan Foundation BTS00084; reviewed by Astra 2026-09-24.
+    Ordinary continuative compounds and dictionary whole verbs are separate.
+    """
+    if (len(a)<7 or len(b)<7 or not a[5] or not b[5] or a[4]!=b[3]
+            or not a[1].startswith('動詞') or a[6]!='連用タ接続'
+            or not b[1].startswith('動詞')):return False
+    from morphology import dictionary_inflections
+    own=[(p,f,base,rd) for p,f,base,rd in dictionary_inflections(a[0]) or ()
+         if p.startswith('動詞,') and rd==a[2]]
+    if not any(f=='連用タ接続' for p,f,base,rd in own):return False
+    if any(f=='連用形' for p,f,base,rd in own):return False
+    # Native contracted auxiliaries already contain te/de (teru, toku,
+    # chau and their voiced forms). Reuse the existing euphonic paradigm
+    # and suffix automaton instead of classifying them as a new verb.
+    from contextual_repair import _modern_te_allowed,_grammatical_suffix
+    from pos_grammar import _PIECES
+    if any(_modern_te_allowed(a[0],a[2],link) is True
+           and (any(piece==b[0] for piece,next_state in _PIECES[state])
+                or _grammatical_suffix(b[0],state))
+           for link,state in (('て','TSU'),('で','N'))):return False
+    # A split contracted verb may end at its irrealis/onbin stem (doko + u,
+    # chimat + ta). Its exact native lemma carries the same connective;
+    # requiring this token alone to be a completed suffix loses valid forms.
+    for pos,form,base,rd in dictionary_inflections(b[0]) or ():
+        if not pos.startswith('動詞,') or form!=b[6] or rd!=b[2]:continue
+        if any(_modern_te_allowed(a[0],a[2],link) is True
+               and (_grammatical_suffix(base,state) or
+                    base in _SHIMAU_CONTRACTED_BASES and
+                    ((link=='て' and base.startswith('ち')) or
+                     (link=='で' and base.startswith('じ'))))
+               for link,state in (('て','TSU'),('で','N'))):return False
+    compound=dictionary_inflections(a[0]+b[0]) or ()
+    return not any(p.startswith('動詞,') and rd==a[2]+b[2]
+                   for p,f,base,rd in compound)
+
+
 def aspect_auxiliary_needs_te(a,b):
     """継続の補助動詞へ動詞を直結していないか。生成の検算とも共有する。"""
+    if euphonic_verb_attachment_mismatch(a,b):return True
     if (len(a)<7 or len(b)<7 or not a[5] or not b[5] or a[4]!=b[3]
             or not a[1].startswith('動詞')
             or not b[1].startswith('動詞:非自立')):
@@ -2164,7 +2463,29 @@ def contracted_aux_mismatch(a,b):
     if any(pos.startswith(('名詞,','動詞,自立,')) for pos,form,base,rd in entries):
         return False
     bases={base for pos,form,base,rd in entries if pos.startswith('動詞,非自立,')}
-    return bool(bases and bases.issubset({'ちゃう','じゃう','ちまう','じまう'}))
+    return bool(bases and bases.issubset(_SHIMAU_CONTRACTED_BASES))
+
+
+def orphan_case_leading_mismatch(a,b,previous):
+    """Case + bare nominalizer or unconnected suru stem + native action."""
+    if (previous is None or len(a)<7 or len(b)<7 or not a[5]
+            or previous[0]!='を' or not previous[1].startswith('助詞:格助詞')
+            or previous[4]!=a[3] or a[4]!=b[3]
+            or not b[5] or not b[1].startswith('動詞:自立')
+            or b[6] not in ('連用形','連用タ接続')):
+        return False
+    if a[0]=='ん' and a[1].startswith('名詞:非自立'):
+        return True
+    from morphology import native_suru_form,dictionary_inflections,tokenize
+    if (a[0]!='し' or not a[1].startswith('動詞:自立')
+            or not native_suru_form(a[0],a[6],a[2],False)):
+        return False
+    if any(pos.startswith('動詞,') and reading==a[2]+b[2]
+           for pos,form,base,reading in dictionary_inflections(a[0]+b[0]) or ()):
+        return False
+    from contextual_repair import _native_continuative_attachment
+    native=tokenize(a[0]+b[0])
+    return not (len(native)==2 and _native_continuative_attachment(*native))
 
 
 def orphan_sokuon_mismatch(a,b,previous):
@@ -2262,7 +2583,7 @@ def mai_aux_mismatch(a,b):
 
 
 
-def past_auxiliary_mismatch(a,b):
+def past_auxiliary_mismatch(a,b,include_finite_verbs=False,*,include_adjective_forms=False):
     """An actual past auxiliary requires an attested preceding connection.
 
     Auxiliary chains cannot borrow an unrelated noun. A native volitional
@@ -2273,6 +2594,31 @@ def past_auxiliary_mismatch(a,b):
     """
     if (min(len(a),len(b))<7 or not a[5] or not b[5] or a[4]!=b[3]
             or not b[1].startswith('助動詞')):return False
+    # The actual modern adjective -ku form is not its past -katta stem.
+    # Share exact native form/reading evidence in source and candidate checks;
+    # classical auxiliaries and other adjective forms remain outside this seam.
+    if a[1].startswith('形容詞') and (a[6]=='連用テ接続' or include_adjective_forms):
+        from morphology import dictionary_inflections
+        past=any(pos.startswith('助動詞,') and base=='た' and form==b[6] and rd==b[2]
+                 for pos,form,base,rd in dictionary_inflections(b[0]) or ())
+        forms=tuple(form for pos,form,base,rd in dictionary_inflections(a[0]) or ()
+                    if pos.startswith('形容詞,') and rd==a[2])
+        if past and a[6] in forms and '連用タ接続' not in forms:return True
+    # Native modern non-Godan finite verbs cannot attach past た directly.
+    # Source and candidate paths share the same actual form/readings and
+    # existing te/ta attachment proof. Regional Godan and literary forms
+    # remain outside this new negative source check.
+    # NINJAL たら: https://mmsrv.ninjal.ac.jp/kamus/data/item3443.html
+    if include_finite_verbs and a[1].startswith('動詞') and a[6]=='基本形':
+        from morphology import dictionary_inflections,dictionary_paradigms
+        past=any(pos.startswith('助動詞,') and base=='た' and form==b[6] and rd==b[2]
+                 for pos,form,base,rd in dictionary_inflections(b[0]) or ())
+        native=any(pos.startswith('動詞,') and kind.startswith(('一段','カ変','サ変'))
+                   and form==a[6] and rd==a[2]
+                   for pos,kind,form,base,rd in dictionary_paradigms(a[0]) or ())
+        if past and native:
+            from contextual_repair import _modern_te_allowed
+            if _modern_te_allowed(a[0],a[2],b[0][0]) is False:return True
     auxiliary=a[1].startswith('助動詞')
     volitional=a[1].startswith('動詞') and a[6]=='未然ウ接続'
     if not (auxiliary or volitional) or a[6].startswith('連用'):return False
@@ -2283,42 +2629,257 @@ def past_auxiliary_mismatch(a,b):
                for pos,form,base,rd in dictionary_inflections(a[0]) or ())
 
 
+@lru_cache(maxsize=4096)
+def source_past_attachment_mismatch(text,a,b):
+    """The unchanged completed object predicate owns a newly attached past.
+
+    A native-looking pair inside an unknown name is not source evidence.
+    Candidate validation has its own positive completion requirement.
+    """
+    if not (min(len(a),len(b))>=7 and a[1].startswith('動詞') and a[6]=='基本形'
+            and past_auxiliary_mismatch(a,b,include_finite_verbs=True)):
+        return False
+    from reading_segments import (_native_source_clauses,native_object_predicate_contexts,
+                                  native_object_predicate_proof)
+    for offset,clause in _native_source_clauses(text):
+        if not offset<=a[3]<b[4]<=offset+len(clause):continue
+        prefix=clause[:b[3]-offset]
+        return any(native_object_predicate_proof(prefix[begin:],cut-begin,faces)
+            for begin,cut,faces in native_object_predicate_contexts(prefix,allow_written_predicate=True))
+    return False
+
+
+def closed_nominal_volitional_mismatch(text,a,b,allow_line_end=False):
+    """Native noun + volitional auxiliary at an explicit finished boundary.
+
+    A written ordinary noun cannot supply the auxiliary's irrealis form.
+    Whole-source analysis may also close at its actual line end; a fragment
+    still needs punctuation, column closure, or an actual case particle.
+    Kana colloquial forms and proper names are not this rule.
+    """
+    if (min(len(a),len(b))<7 or not a[5] or not b[5] or a[4]!=b[3]
+            or not a[1].startswith('名詞:一般') or b[1]!='助動詞'
+            or not any('一'<=c<='鿿' for c in a[0])
+            or b[4]>=len(text) and not allow_line_end):
+        return False
+    from contextual_repair import _SEPARATOR
+    if b[4]<len(text) and _SEPARATOR.match(text,b[4]) is None:
+        from morphology import tokenize
+        following=tokenize(text[b[4]:])
+        if not (following and following[0].start==0 and following[0].has_reading
+                and following[0].pos=='助詞' and following[0].pos_sub=='格助詞:一般'):
+            return False
+        # A case particle closes this noun only when its left boundary is
+        # coherent. Adjacent particles immediately before the noun leave a
+        # larger malformed segment; do not correct an isolated suffix.
+        preceding=tokenize(text[:a[3]])
+        if (len(preceding)>=2 and preceding[-1].end==a[3]
+                and preceding[-2].end==preceding[-1].start
+                and preceding[-1].pos=='助詞' and preceding[-2].pos=='助詞'):
+            return False
+    from morphology import dictionary_inflections
+    auxiliary=tuple(row for row in dictionary_inflections(b[0]) or ()
+                    if row[0].startswith('助動詞,') and row[2] in ('う','よう')
+                    and row[1]==b[6]=='基本形' and row[3]==b[2])
+    if not auxiliary:return False
+    # Native nominal homographs (e.g. a written-as-kana suffix) retain
+    # that interpretation instead of being forced into the auxiliary slot.
+    if any(pos.startswith('名詞,') and rd==b[2]
+           for pos,form,base,rd in dictionary_inflections(b[0]) or ()):
+        return False
+    left=dictionary_inflections(a[0]) or ()
+    if not any(pos.startswith('名詞,一般,') and rd==a[2] for pos,form,base,rd in left):
+        return False
+    if any(pos.startswith(('動詞,','形容詞,','助動詞,')) and form.startswith('未然')
+           and rd==a[2] for pos,form,base,rd in left):
+        return False
+    if dictionary_inflections(a[0]+b[0]):return False
+    from literal_examples import protected_ranges,overlaps
+    return not overlaps(a[3],b[4],protected_ranges(text))
+
+
 def volitional_auxiliary_mismatch(a,b):
     """A native う/よう auxiliary needs an attested mizen attachment.
 
     This is positive candidate validation. A different kana homograph with
     the same POS and reading may supply the native unrealized form; noun
-    homophones cannot. It does not label an unchanged colloquial input odd.
+    homophones cannot. A nominal candidate also needs an attested same-reading
+    irrealis form. This does not label unchanged colloquial input odd.
     """
     if (min(len(a),len(b))<7 or not a[5] or not b[5] or a[4]!=b[3]
-            or not a[1].startswith(('動詞','形容詞','助動詞'))
+            or not a[1].startswith(('名詞','動詞','形容詞','助動詞'))
             or not b[1].startswith('助動詞')):return False
     from morphology import dictionary_inflections
     if not any(pos.startswith('助動詞,') and base in ('う','よう') and rd==b[2]
                and form==b[6] for pos,form,base,rd in dictionary_inflections(b[0]) or ()):return False
+    if a[1].startswith('名詞'):
+        forms=tuple(dictionary_inflections(a[0]) or ())
+        nominal=any(pos.startswith('名詞,') and rd==a[2] for pos,form,base,rd in forms)
+        unrealized=any(pos.startswith(('動詞,','形容詞,','助動詞,')) and rd==a[2]
+                       and form.startswith('未然') for pos,form,base,rd in forms)
+        return nominal and not unrealized
     forms=[form for pos,form,base,rd in dictionary_inflections(a[0]) or ()
            if pos.split(',')[0]==a[1].split(':')[0] and rd==a[2]]
     return bool(forms and not any(form.startswith('未然') for form in forms))
 
 
-def finite_copula_aux_mismatch(a,b):
-    """48-AHZ: a finite polite/perfective/negative-volitional auxiliary
+def negative_aux_mismatch(a,b,*,include_adjective=False):
+    """48-ANQ: a native negative needs the same attested irrealis head.
+
+    GPT-6 Astra / 2026-09-20; source sharing / 2026-09-29. A source may
+    parse native ない as an independent adjective after a malformed finite
+    head. Its exact auxiliary reading/form still has to exist. Candidate
+    validation keeps its original category requirement; unknown and dialect
+    auxiliaries stay unclassified.
+    Adjectives share their exact native continuative or classical irrealis form.
+    https://www.jpf.go.jp/j/urawa/j_rsorcs/methods/dl/grammar_u2_01.pdf
+    The accepted verb states are the existing pos_grammar continuation states.
+    https://www.nihongokentei.jp/check/level3/bunpou-3-1.html
+    """
+    if (min(len(a),len(b))<7 or not a[5] or not b[5] or a[4]!=b[3]
+            or not (a[1].startswith(('動詞','形容詞','助動詞','助詞:接続助詞'))
+                    or a[1].startswith('名詞') and b[0]==b[2]=='ず')
+            or not (b[1].startswith('助動詞')
+                or (include_adjective or a[1].startswith('形容詞')) and b[1].startswith('形容詞:自立'))):
+        return False
+    from morphology import dictionary_inflections
+    negative_bases={base for pos,form,base,rd in dictionary_inflections(b[0]) or ()
+                    if pos.startswith('助動詞,') and base in ('ない','ぬ','ん')
+                    and form==b[6] and rd==b[2]}
+    if not negative_bases:return False
+    # The native te/de link may omit iru before nai. It is not an
+    # irrealis host for a newly generated literal nu. Nasal contractions
+    # keep their existing treatment; this is candidate proof, not a new
+    # label on unchanged colloquial source text.
+    if a[1].startswith('助詞:接続助詞'):
+        return (a[0] in ('て','で') and b[0]==b[2]=='ぬ' and 'ぬ' in negative_bases
+                and any(pos.startswith('助詞,接続助詞,') and rd==a[2]
+                        for pos,form,base,rd in dictionary_inflections(a[0]) or ()))
+    # A newly generated native ず still requires an inflected host.
+    # Known nominal fragments have no irrealis form; unchanged source
+    # text remains outside negative_source_mismatch's narrower categories.
+    # https://assets.mitsumura-tosho.co.jp/3417/4218/8941/07c-kokugo-ikou-k-h.pdf
+    from pos_grammar import continuation_state
+    forms=tuple((pos,form,base) for pos,form,base,rd in dictionary_inflections(a[0]) or ()
+                if pos.split(',')[0]==a[1].split(':')[0] and rd==a[2])
+    # Native adjectival auxiliaries use the continuative before ない:
+    # たい -> たく, らしい -> らしく, ない -> なく. The copula uses で.
+    # A verb's plain continuative or a past auxiliary is not this category.
+    def allowed(pos,form,base):
+        if pos.startswith('形容詞,'):
+            # Modern く+ない and dictionary-attested classical から+ぬ
+            # have different native forms; neither licenses a finite head.
+            return (form=='連用テ接続' and 'ない' in negative_bases
+                    or form=='未然ヌ接続' and bool(negative_bases.intersection(('ぬ','ん'))))
+        return (continuation_state(form) in ('MZ','MN')
+            or pos.startswith('助動詞,') and 'ない' in negative_bases
+                and (form=='連用テ接続' or base=='だ' and form=='連用形'))
+    return bool(forms and not any(allowed(*row) for row in forms))
+
+
+def negative_source_mismatch(a,b):
+    """Definite native ない attachment; nasal/contraction parses stay clues.
+
+    ん/ぬ may be misparsed nasal inflection or nominalized の. Their
+    candidate checks stay available, but do not declare the written source
+    malformed from that single best parse. Unknown auxiliaries add no proof.
+    """
+    if (min(len(a),len(b))<7 or not a[5] or not b[5] or a[4]!=b[3]
+            or not a[1].startswith(('動詞','形容詞','助動詞'))
+            or not b[1].startswith(('助動詞','形容詞:自立'))):return False
+    from morphology import dictionary_inflections
+    if not any(pos.startswith('助動詞,') and base=='ない' and form==b[6] and rd==b[2]
+               for pos,form,base,rd in dictionary_inflections(b[0]) or ()):return False
+    # Repeated identical finite adjectives can be emphatic original speech.
+    # The source label does not reinterpret that repetition as negation.
+    if (a[1].startswith('形容詞') and a[2]==b[2]
+            and a[6]==b[6]=='基本形'):return False
+    return negative_aux_mismatch(a,b,include_adjective=True)
+
+
+def finite_copula_aux_mismatch(a,b,previous=None):
+    """48-AHZ/ANO: a finite native verb or polite auxiliary chain
     cannot itself become a nominal stem for an immediately attached copula.
 
     Native POS, form and reading prove both pieces. This is candidate
     validation, not a new anomaly label for an unchanged colloquial source.
     """
+    # Conditional to links predicates; it cannot supply a nominal stem
+    # for a new finite copula. Do not generalize this to causal kara-desu,
+    # nominalizers, a quotative case particle, or unchanged source wording.
+    if (min(len(a),len(b))>=7 and a[5] and b[5] and a[4]==b[3]
+            and a[0]==a[2]=='と' and a[1].startswith('助詞:接続助詞')
+            and b[1].startswith('助動詞')):
+        from morphology import dictionary_inflections
+        if (any(pos.startswith('助詞,接続助詞,') and rd==a[2]
+                for pos,form,base,rd in dictionary_inflections(a[0]) or ())
+                and any(pos.startswith('助動詞,') and base in ('だ','です')
+                        and form==b[6]=='基本形' and rd==b[2]
+                        for pos,form,base,rd in dictionary_inflections(b[0]) or ())):
+            return True
     if (min(len(a),len(b))<7 or not a[5] or not b[5] or a[4]!=b[3]
-            or not a[1].startswith('助動詞') or not b[1].startswith('助動詞')
-            or a[6]!='基本形'):
+            or not a[1].startswith(('動詞','助動詞')) or not b[1].startswith('助動詞')
+            or a[6]!='基本形' and not a[1].startswith('動詞')):
         return False
     from morphology import dictionary_inflections
-    return (any(pos.startswith('助動詞,') and base in ('ます','です','つ','まい')
-                and form==a[6] and rd==a[2]
-                for pos,form,base,rd in dictionary_inflections(a[0]) or ())
-            and any(pos.startswith('助動詞,') and base in ('だ','です')
-                and form==b[6] and rd==b[2]
-                for pos,form,base,rd in dictionary_inflections(b[0]) or ()))
+    left=tuple((base,form) for pos,form,base,rd in dictionary_inflections(a[0]) or ()
+               if pos.split(',')[0]==a[1].split(':')[0] and form==a[6] and rd==a[2])
+    right=tuple((base,form) for pos,form,base,rd in dictionary_inflections(b[0]) or ()
+                if pos.startswith('助動詞,') and form==b[6] and rd==b[2])
+    # 48-ANO: a finite verb also needs nominalization before finite だ/です.
+    # Conditional なら and conjectural だろう are separate native forms.
+    # Source wording, dialect and quotations gain no new anomaly label.
+    if a[1].startswith('動詞'):
+        # Native voiced past だ shares spelling with the copula. Keep
+        # its positively proved euphonic verb connection as the same past.
+        if b[0]=='だ' and any(base in ('た','だ') for base,form in right):
+            from contextual_repair import _modern_te_allowed
+            if _modern_te_allowed(a[0],a[2],b[0]) is True:return False
+        from reading_segments import native_common_noun_reading
+        return bool(left and any(base in ('だ','です') and form=='基本形'
+                                 for base,form in right)
+                    and not native_common_noun_reading(a[0],a[2]))
+    # Polite past ました/でした keeps its politeness across native た.
+    # A two-token-only check would admit another です after that past.
+    if (previous is not None and len(previous)>=7 and previous[5]
+            and previous[4]==a[3] and previous[1].startswith('助動詞')
+            and any(base=='た' for base,form in left)
+            and any(base in ('だ','です') and form=='基本形' for base,form in right)
+            and any(pos.startswith('助動詞,') and base in ('ます','です')
+                    and form==previous[6] and rd==previous[2]
+                    for pos,form,base,rd in dictionary_inflections(previous[0]) or ())):
+        return True
+    if (any(base in ('ます','です','つ','まい') for base,form in left)
+            and any(base in ('だ','です') for base,form in right)):return True
+    # 48-ANF / GPT-6 Astra / 2026-09-20: a completed native past or
+    # copula is not a nominal stem for another finite だ. Conditional なら
+    # has its own attachment and stays outside this candidate-only check.
+    return (any(base in ('た','だ') for base,form in left)
+            and any(base=='だ' and form=='基本形' for base,form in right))
+
+
+def modern_ba_mismatch(a,b):
+    """Generated modern ba connects to its actual native conditional form."""
+    return bool(a[5] and b[5] and a[4]==b[3]
+        and b[0]=='ば' and b[1].startswith('助詞:接続助詞')
+        and a[1].startswith(('動詞','形容詞','助動詞')) and a[6]!='仮定形')
+
+
+@lru_cache(maxsize=4096)
+def changed_modern_ba_allowed(original,changed):
+    from morphology import tokenize
+    from difflib import SequenceMatcher
+    parts=tokenize(changed)
+    blocks=None
+    for left,right in zip(parts,parts[1:]):
+        a=(left.surface,left.pos+':'+left.pos_sub,left.reading,left.start,left.end,left.has_reading,left.infl_form)
+        b=(right.surface,right.pos+':'+right.pos_sub,right.reading,right.start,right.end,right.has_reading,right.infl_form)
+        if not modern_ba_mismatch(a,b):continue
+        if blocks is None:blocks=SequenceMatcher(None,original,changed,autojunk=False).get_matching_blocks()
+        # A new neighboring repair does not rewrite an original literary link.
+        if any(y<=left.start and right.end<=y+n for x,y,n in blocks):continue
+        return False
+    return True
 
 
 @lru_cache(maxsize=4096)
@@ -2352,33 +2913,248 @@ def changed_conjunctive_case_allowed(changed,start,end):
     return True
 
 
+def desiderative_aux_mismatch(a,b):
+    """Native euphonic stems cannot host the desiderative auxiliary tai."""
+    if (min(len(a),len(b))<7 or not a[5] or not b[5] or a[4]!=b[3]
+            or not a[1].startswith('動詞:') or a[6]!='連用タ接続'
+            or not b[1].startswith('助動詞')):
+        return False
+    from morphology import dictionary_inflections
+    if not any(pos.startswith('助動詞,') and base=='たい'
+               and form==b[6] and reading==b[2]
+               for pos,form,base,reading in dictionary_inflections(b[0]) or ()):
+        return False
+    role=a[1].replace(':',',')+','
+    forms=tuple(row for row in dictionary_inflections(a[0]) or ()
+                if row[0].startswith(role) and row[3]==a[2])
+    return (any(form==a[6] for pos,form,base,reading in forms)
+            and not any(form=='連用形' for pos,form,base,reading in forms))
+
+
+def desiderative_source_mismatch(text,a,b):
+    """A following small vowel/glide still belongs to the source kana run."""
+    return (desiderative_aux_mismatch(a,b)
+            and not (b[4]<len(text) and text[b[4]] in 'ゃゅょぁぃぅぇぉャュョァィゥェォ'))
+
+
+def noncontinuative_independent_verb_mismatch(a,b):
+    """An attested non-continuative cannot directly compose an independent verb.
+
+    Check native paradigms and same-surface alternatives, not merely the
+    best tokenization. Unclassified/classical forms are not negative proof.
+    """
+    if (len(a)<7 or len(b)<7 or not a[5] or not b[5] or a[4]!=b[3]
+            or a[1]!='動詞:自立' or b[1]!='動詞:自立'
+            or not a[6].startswith(('未然','体言接続特殊'))):return False
+    from morphology import dictionary_paradigms,dictionary_inflections
+    rows=[row for row in dictionary_paradigms(a[0]) or () if row[4]==a[2]]
+    modern=[row for row in rows if row[0].startswith('動詞,')
+            and row[1].startswith(('五段','一段','サ変','カ変'))]
+    if not modern or any(not row[2].startswith(('未然','体言接続特殊')) for row in modern):return False
+    if any(not row[0].startswith('動詞,') or not row[1].startswith(('五段','一段','サ変','カ変'))
+           for row in rows):return False
+    return not any(pos.startswith('動詞,') and rd==a[2]+b[2]
+                   for pos,form,base,rd in dictionary_inflections(a[0]+b[0]) or ())
+
+
+def auxiliary_connection_mismatch(a,b,previous=None):
+    """Reuse native grammar for both target ownership and its complete tail."""
+    return bool(noncontinuative_independent_verb_mismatch(a,b)
+        or causative_aux_mismatch(a,b)
+        or passive_aux_mismatch(a,b)
+        or auxiliary_te_mismatch(a,b)
+        or desiderative_aux_mismatch(a,b)
+        or completed_tsu_aux_mismatch(a,b)
+        or orphan_sokuon_mismatch(a,b,previous)
+        or orphan_case_leading_mismatch(a,b,previous)
+        or (a[5] and b[5] and a[1].startswith('動詞')
+            and b[1].startswith('動詞:非自立')
+            and infl_mismatch(a,b,previous)))
+
+
 @lru_cache(maxsize=4096)
-def changed_auxiliary_chain_allowed(changed,start,end):
-    """Validate the affected native chain, including unchanged auxiliaries."""
-    if not any(c in changed for c in ('た','だ','き','け','う','で')):return True
+def changed_auxiliary_chain_allowed(changed,start,end,original=None):
+    """Validate changed native chains through their unchanged auxiliaries."""
     from morphology import tokenize
     parts=tokenize(changed)
-    hit=[i for i,t in enumerate(parts) if t.start<end and start<t.end]
-    if not hit:return True
-    lo=max(0,hit[0]-1);hi=hit[-1]+1
-    while hi<len(parts) and parts[hi-1].end==parts[hi].start:
-        t=parts[hi]
-        if not (t.pos=='助動詞' or t.pos=='動詞' and t.pos_sub.startswith(('非自立','接尾'))
-                or t.pos=='助詞' and ('接続助詞' in t.pos_sub or '終助詞' in t.pos_sub)):break
-        hi+=1
-    native=[(t.surface,t.pos+(':'+t.pos_sub if t.pos_sub else ''),t.reading,
-             t.start,t.end,t.has_reading,t.infl_form) for t in parts[lo:hi]]
-    mismatches=[(a[3],b[4]) for a,b in zip(native,native[1:])
-        if past_auxiliary_mismatch(a,b) or volitional_auxiliary_mismatch(a,b)
-        or finite_copula_aux_mismatch(a,b)]
+    case_particles=('を','に','で','が','へ','と','は','も')
+    matcher=None
+    if original is not None:
+        from difflib import SequenceMatcher
+        matcher=SequenceMatcher(None,original,changed,autojunk=False)
+        opcodes=matcher.get_opcodes()
+        edits=[(c,d) for tag,a,b,c,d in opcodes if tag!='equal']
+        def mapped_boundary(position,right=False):
+            for tag,a,b,c,d in opcodes:
+                if a<=position<=b:
+                    if tag=='equal':return c+position-a
+                    if position==a:return c
+                    if position==b:return d
+                    return d if right else c
+            return len(changed)
+        before_parts=tokenize(original);chains=[]
+        # A broken native adjective/auxiliary seam owns its lexical head.
+        # Repairing the attachment cannot invent an unrelated noun or verb.
+        from morphology import dictionary_inflections
+        for left,right in zip(before_parts,before_parts[1:]):
+            if left.pos!='形容詞' or not left.has_reading or not right.has_reading:
+                continue
+            a=(left.surface,left.pos+':'+left.pos_sub,left.reading,left.start,left.end,True,left.infl_form)
+            b=(right.surface,right.pos+':'+right.pos_sub,right.reading,right.start,right.end,True,right.infl_form)
+            if not (negative_aux_mismatch(a,b,include_adjective=True)
+                    or past_auxiliary_mismatch(a,b)):continue
+            if not any(tag!='equal' and (a0<right.end and left.start<b0
+                       or a0==b0 and left.start<=a0<right.end)
+                       for tag,a0,b0,c,d in opcodes):continue
+            begin=mapped_boundary(left.start)
+            candidate=next((t for t in parts if t.start==begin),None)
+            if not candidate or not candidate.has_reading or candidate.pos!='形容詞':return False
+            if candidate.infl_form=='ガル接続':
+                # Keeping the lemma is insufficient when the proposal leaves
+                # a bare adjective stem before a contracted te auxiliary.
+                # Reuse the existing positive stem/tail grammar in this chain.
+                edge=candidate.end
+                for following in parts[parts.index(candidate)+1:]:
+                    if following.start!=edge or not (following.pos=='助動詞'
+                        or following.pos=='動詞' and following.pos_sub.startswith(('非自立','接尾'))
+                        or following.pos=='名詞' and following.pos_sub.startswith('接尾')
+                        or following.pos=='助詞' and following.pos_sub.startswith(('接続助詞','係助詞','終助詞'))):break
+                    edge=following.end
+                from contextual_repair import _allows_grammatical_tail
+                forms=tuple(row for row in dictionary_inflections(candidate.surface) or ()
+                            if row[0].startswith('形容詞,') and row[1]==candidate.infl_form
+                            and row[3]==candidate.reading)
+                if not _allows_grammatical_tail(forms,changed[candidate.end:edge],
+                                               candidate.reading,candidate.surface):return False
+            if candidate.base_form==left.base_form:continue
+            # Kana and its native spelling can name the same lexical head.
+            # Written homophones do not silently change an existing meaning.
+            if any('一'<=c<='鿿' for c in left.base_form):return False
+            original_readings={rd for pos,form,base,rd in dictionary_inflections(left.base_form) or ()
+                               if pos.startswith('形容詞,') and form=='基本形'}
+            candidate_readings={rd for pos,form,base,rd in dictionary_inflections(candidate.base_form) or ()
+                                if pos.startswith('形容詞,') and form=='基本形'}
+            if not original_readings.intersection(candidate_readings):return False
+        for tag,a,b,c,d in opcodes:
+            if tag=='equal':continue
+            affected=[t for t in before_parts if t.start<b and a<t.end
+                      or a==b and t.start<=a<t.end]
+            left=min([c]+[mapped_boundary(t.start) for t in affected])
+            right=max([d]+[mapped_boundary(t.end,True) for t in affected])
+            chains.append((left,right))
+    else:edits=chains=[(start,end)]
+    from particle_frames import nominalized_existential_case_frames
+    if original is not None:
+        # Changing a preceding verb cannot hide the same faulty case/aru
+        # attachment by making the parser reinterpret that verb as a noun.
+        blocks=matcher.get_matching_blocks()
+        for frame in nominalized_existential_case_frames(original):
+            for block in blocks:
+                if not (block.a<=frame['nominal_start'] and frame['end']<=block.a+block.size):continue
+                a=mapped_boundary(frame['start']);z=mapped_boundary(frame['end'],True)
+                if any(c<z and a<d or c==d and a<=c<z for c,d in edits):return False
+    if any(a<frame['end'] and frame['start']<z or a==z and frame['start']<=a<frame['end']
+           for frame in nominalized_existential_case_frames(changed) for a,z in edits):
+        return False
+    mismatches=[]
+    # Use each actual edit to locate its chain, not just the immediately
+    # overlapping pair. A bad ます+です or つ+た can remain beyond the edit
+    # while belonging to that same changed predicate. Separate clauses stop it.
+    for begin,finish in chains:
+        hit=[i for i,t in enumerate(parts) if t.start<finish and begin<t.end
+             or begin==finish and t.start<=begin<t.end]
+        if not hit:continue
+        lo=max(0,hit[0]-1);hi=hit[-1]+1
+        while hi<len(parts) and parts[hi-1].end==parts[hi].start:
+            t=parts[hi]
+            if not (t.pos=='助動詞' or t.pos=='動詞' and t.pos_sub.startswith(('非自立','接尾'))
+                    or t.pos=='助詞' and ('接続助詞' in t.pos_sub or '終助詞' in t.pos_sub)):break
+            hi+=1
+        native=[(t.surface,t.pos+(':'+t.pos_sub if t.pos_sub else ''),t.reading,
+                 t.start,t.end,t.has_reading,t.infl_form) for t in parts[lo:hi]]
+        mismatches.extend((a[3],b[4]) for i,(a,b) in enumerate(zip(native,native[1:]))
+            if auxiliary_connection_mismatch(a,b,native[i-1] if i else None)
+            or past_auxiliary_mismatch(a,b,include_finite_verbs=True,include_adjective_forms=True) or volitional_auxiliary_mismatch(a,b)
+            or finite_copula_aux_mismatch(a,b,native[i-1] if i else None)
+            or negative_aux_mismatch(a,b) or polite_aux_mismatch(a,b))
+    # An unknown best-parse token can swallow a known noun+ます. Original
+    # case edges expose the same candidate seam for wide and narrow edits;
+    # internal edges of known lexical words are never reopened here.
+    edges=set()
+    if matcher is not None and any(not t.has_reading and 'ま' in t.surface for t in parts):
+        from reading_segments import native_case_positions
+        blocks=matcher.get_matching_blocks()
+        for position in native_case_positions(original,particles=case_particles):
+            block=next((b for b in blocks if b.a<=position<b.a+b.size),None)
+            if block is not None:edges.add(block.b+position-block.a+1)
+    elif original is None and changed[end:].startswith('ま'):
+        edges.add(start)
+    for edge in edges:
+        if not any(not t.has_reading and t.start<=edge<t.end for t in parts):continue
+        local=tokenize(changed[edge:])
+        if len(local)<2 or local[0].start!=0:continue
+        a,b=((t.surface,t.pos+(':'+t.pos_sub if t.pos_sub else ''),t.reading,
+              edge+t.start,edge+t.end,t.has_reading,t.infl_form) for t in local[:2])
+        if original is None and a[4]!=end:continue
+        if not any(c<b[4] and a[3]<d or c==d and a[3]<=c<b[4] for c,d in edits):continue
+        if polite_aux_mismatch(a,b):mismatches.append((a[3],b[4]))
     if not mismatches:return True
-    # 48-AJL: an independently proved native noun/case or complete source
-    # phrase may have an accidental auxiliary parse (さんまいのしりょう:
-    # さんま / いの / し / りょう). Reuse the same exact-range proof as
-    # the source/anomaly checks; an unproved tail remains outside it.
-    from reading_segments import native_context_ranges
+    # An independently proved original-coordinate noun/case or full phrase
+    # explains accidental native auxiliary parsing; an unproved tail does not.
+    from reading_segments import (native_context_ranges,native_lexical_reading_faces,
+        native_common_noun_reading,native_case_positions,native_nominal_case_boundary)
     proved=native_context_ranges(changed)
-    return all(any(lo<=a and b<=hi for lo,hi in proved) for a,b in mismatches)
+    cases=native_case_positions(changed,parts,case_particles)
+    for a,b in mismatches:
+        if any(lo<=a and b<=hi for lo,hi in proved):continue
+        # 48-ANN / GPT-6 Astra / 2026-09-20: the complete native word
+        # セレクション can be misparsed as several verbs in kana. The same
+        # lexical-reading proof already used by moved-word boundaries owns
+        # only its own internal seam, never a following malformed auxiliary.
+        lo=a;hi=b
+        kana=lambda char:'ぁ'<=char<='ゖ' or char=='ー'
+        while lo and kana(changed[lo-1]):lo-=1
+        while hi<len(changed) and kana(changed[hi]):hi+=1
+        # A noun found only inside an unexplained kana word does not
+        # establish a new word onset. Use the run edge or an actual native
+        # nominal particle; a proved complete context is handled above.
+        previous=next((t for t in parts if t.end==lo),None)
+        run_edge=(lo==0 or previous is not None and previous.has_reading and (
+            previous.pos in ('副詞','感動詞','接続詞','記号')
+            or previous.pos=='名詞' and previous.pos_sub=='副詞可能'))
+        lefts=sorted(({lo} if run_edge else set())|{t.end for t in parts
+            if lo<=t.end<=a and t.has_reading and t.pos=='助詞'
+            and t.pos_sub.startswith(('格助詞','係助詞','連体化'))})
+        rights=[t.end for t in parts if b<=t.end<=hi]
+        if any(native_lexical_reading_faces(changed[left:right])
+               for left in reversed(lefts) for right in rights):continue
+        # The same native genitive proof can expose の when the best
+        # parse swallowed it into a verb (昨日 + のせ + ...). The right
+        # word itself, rather than a suffix inside it, must cover the seam.
+        from reading_segments import native_genitive_nominal_splits
+        nominal_left=min([lo]+[t.start for t in parts if t.has_reading
+            and t.pos=='名詞' and t.start<lo<=t.end])
+        if any(nominal_left+cut+1<=a and native_lexical_reading_faces(
+                changed[nominal_left+cut+1:right])
+                for right in rights
+                for cut,parents,heads in native_genitive_nominal_splits(changed[nominal_left:right])):
+            continue
+        # An unknown native token may swallow a real noun's final kana
+        # and its case. Reuse that same exact noun/case projection rather
+        # than inventing a lexical boundary inside the unknown fragment.
+        nominal_cover=False
+        for left in reversed(lefts):
+            for right in cases:
+                if not b<=right<=hi:continue
+                word=changed[left:right]
+                faces=tuple(face for face in native_lexical_reading_faces(word)
+                            if native_common_noun_reading(face,word))
+                if faces and native_nominal_case_boundary(changed,parts,right,changed[right],faces) is not None:
+                    nominal_cover=True;break
+            if nominal_cover:break
+        if nominal_cover:continue
+        return False
+    return True
 
 
 def completed_tsu_aux_mismatch(a,b):
@@ -2386,17 +3162,24 @@ def completed_tsu_aux_mismatch(a,b):
 
     Evidence: School-Net, 古文 第2章「連用形接続の助動詞②」,
     https://www.gakko-net.co.jp/print/pdf/kobun_2_2_q.pdf
+    48-ANV: the same native continuative requirement applies after
+    auxiliaries too; past き has no such form. This candidate/positive
+    predicate proof does not widen the separate source-anomaly ownership.
     Native lexical alternatives and unknown forms remain unclassified.
     """
     if (min(len(a),len(b))<7 or not a[5] or not b[5] or a[4]!=b[3]
             or b[0]!='つ' or not b[1].startswith('助動詞')
-            or not a[1].startswith('動詞') or a[6]=='連用形'):
+            or not a[1].startswith(('動詞','助動詞')) or a[6]=='連用形'):
         return False
     from morphology import dictionary_inflections
     if not any(p.startswith('助動詞,') and base=='つ' and form==b[6] and rd==b[2]
                for p,form,base,rd in dictionary_inflections(b[0]) or ()):
         return False
-    if dictionary_inflections(a[0]+b[0]) or _kana_nominal_alternative(a[0]+b[0]):
+    # A native auxiliary pair remains inside the verb chain. The open
+    # adjective stem きつ cannot replace that chain's past き + perfective つ.
+    # Whole lexical words retain the common word-boundary validation.
+    if a[1].startswith('動詞') and (dictionary_inflections(a[0]+b[0])
+                                  or _kana_nominal_alternative(a[0]+b[0])):
         return False
     return native_tsu_connection(a) is False
 
@@ -2407,7 +3190,7 @@ def completed_tsu_source_mismatch(a,b,previous=None,following=None):
     Keep the inflection check shared, but require a written verb or an
     actual case-owned predicate ending before declaring source text odd.
     """
-    if not completed_tsu_aux_mismatch(a,b):return False
+    if not a[1].startswith('動詞') or not completed_tsu_aux_mismatch(a,b):return False
     auxiliary=bool(following and len(following)>=7 and following[3]==b[4]
         and following[5] and following[1].startswith('助動詞'))
     if (following is not None and following[3]==b[4]
@@ -2457,7 +3240,7 @@ def repeated_polite_aux_mismatch(previous, a, b):
                for t in (previous,b))
 
 
-def polite_aux_mismatch(a, b):
+def polite_aux_mismatch(a, b, preceding=None):
     """48-XY: 丁寧のますは動詞の連用形に接続する。
 
     活用した表記の辞書別解まで確かめる。名詞のまま直結した形や
@@ -2466,8 +3249,34 @@ def polite_aux_mismatch(a, b):
     """
     if (min(len(a),len(b))<7 or not a[5] or not b[5] or a[4]!=b[3]
             or not b[1].startswith('助動詞') or b[0] not in ('ます','まし','ませ','ましょ')
-            or not a[1].startswith(('名詞','動詞','形容詞','助動詞'))):
+            or not a[1].startswith(('名詞','動詞','形容詞','助動詞','助詞'))):
         return False
+    if a[1].startswith('助詞:'):
+        # Only native connective te/de can contract the aspect auxiliary.
+        # Case, topic and final particles do not provide a continuative host.
+        # Require the actual particle role, reading and auxiliary inflection.
+        if a[1].startswith('助詞:接続助詞') and a[0] in ('て','で'):return False
+        from morphology import dictionary_inflections
+        if not a[1].startswith('助詞:接続助詞'):
+            # A kana verb can be fragmented into final particles. Establish
+            # its whole original host at the actual preceding case/clause
+            # boundary before treating the pair as a syntax contradiction.
+            if preceding is None:return False
+            host=[a]
+            for token in reversed(preceding):
+                if token[4]!=host[0][3]:return False
+                if (token[1].startswith('記号') or
+                        token[1].startswith(('助詞:格助詞','助詞:係助詞'))):break
+                if not all('ぁ'<=c<='ゖ' or c=='ー' for c in token[0]):return False
+                host.insert(0,token)
+            reading=''.join(token[0] for token in host)
+            from reading_segments import native_continuative_reading_faces
+            if native_continuative_reading_faces(reading):return False
+        role=a[1].replace(':',',')+','
+        return (any(pos.startswith(role) and rd==a[2]
+                    for pos,form,base,rd in dictionary_inflections(a[0]) or ())
+                and any(pos.startswith('助動詞,') and base=='ます' and rd==b[2]
+                        and form==b[6] for pos,form,base,rd in dictionary_inflections(b[0]) or ()))
     if a[1].startswith('動詞') and a[6]=='連用形':
         return False
     # かなで書いた一つの名詞を、語中のますだけで丁寧語と断定しない。
@@ -2649,7 +3458,7 @@ def adverb_ni_dangling(spans, i):
 
 
 def odd_spans(text, tokenize_fn, reasons_out=None,
-              store=None, dict_index=None):
+              store=None, dict_index=None, preserve_unknown_source=False):
     """
     **異様と見た範囲**（項目48-IR・画面で紫にする）。
 
@@ -2664,11 +3473,17 @@ def odd_spans(text, tokenize_fn, reasons_out=None,
     """
     spans = []
     reading_reasons = {}
+    ime_display={}
     for _a, _b, s, e in is_odd_run(text, tokenize_fn, with_spans=True, complete_line=True,
                                    store=store, dict_index=dict_index,
-                                   reading_reasons_out=reading_reasons):
+                                   reading_reasons_out=reading_reasons,
+                                   preserve_unknown_source=preserve_unknown_source,
+                                   _ime_display_out=ime_display):
+        reason=reading_reasons.get((s,e), f'「{_a}」と「{_b}」は続けて置けない')
+        # Whole-context reading proof does not extend the original fault's color.
+        if _a=='IME逆読み':s,e=ime_display.get((s,e),(s,e))
         if reasons_out is not None:
-            reasons_out.append((s, e, reading_reasons.get((s,e), f'「{_a}」と「{_b}」は続けて置けない')))
+            reasons_out.append((s,e,reason))
         if spans and s <= spans[-1][1]:
             spans[-1] = (spans[-1][0], max(spans[-1][1], e))
         else:
@@ -2740,8 +3555,42 @@ def preserves_bound_verb(source,source_end,changed,changed_end,tokenize):
             after=source[source_end:match.end()]
             if (changed[changed_end:changed_end+len(after)]==after
                     and changed[max(0,changed_end-len(before)):changed_end]!=before):
+                # A whole same-reading action may change spelling while
+                # retaining its original suru chain. A fragment inside the
+                # original noun still cannot supply this lexical boundary.
+                from reading_segments import native_bare_action_faces
+                from morphology import native_spelling_only
+                from contextual_repair import _productive_predicate
+                head=changed[match.start():changed_end]
+                if (source[:match.start()]==changed[:match.start()]
+                        and head in native_bare_action_faces(before)
+                        and native_spelling_only(before,head)
+                        and _productive_predicate(head+after,head)):
+                    continue
                 return False
     original=list(tokenize(source) or ())
+    # A retained native te/de link also needs a predicate after a head edit.
+    # Trim a repeated suffix only to locate the effective edit edge; the
+    # original replacement coordinates and bound-verb check stay unchanged.
+    left,right=source_end,changed_end
+    while left and right and source[left-1]==changed[right-1]:
+        left-=1;right-=1
+    from contextual_repair import _modern_te_allowed,_productive_predicate
+    for head,link in zip(original,original[1:]):
+        if not (head[3]<left<=head[4] and head[4]==link[3]
+                and head[5] and head[1].startswith('動詞:')
+                and link[5] and link[1].startswith('助詞:接続助詞')
+                and link[0] in ('て','で')
+                and _modern_te_allowed(head[0],head[2],link[0]) is True):continue
+        mapped=right+link[3]-left;finish=mapped+len(link[0])
+        if changed[mapped:finish]!=link[0]:continue
+        new_parts=list(tokenize(changed) or ())
+        new_head=next((t for t in new_parts if t[4]==mapped),None)
+        new_link=next((t for t in new_parts if t[3]==mapped and t[4]==finish),None)
+        if (not new_head or not new_link or not new_head[5]
+                or not _productive_predicate(changed[new_head[3]:finish],new_head[0],
+                                             before=changed[:new_head[3]])):
+            return False
     following=next((t for t in original if t[3]==source_end),None)
     previous=next((t for t in reversed(original) if t[4]==source_end),None)
     if (not following or not previous or len(following)<7 or len(previous)<7

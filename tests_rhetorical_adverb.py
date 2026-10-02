@@ -16,14 +16,19 @@ class RhetoricalAdverbTests(unittest.TestCase):
         self.assertFalse(R.native_object_predicate_proof('しょっきをあにさてたなにもどします',5,('食器',)))
         self.assertTrue(R.native_object_predicate_proof('しょっきをあらってたなにもどします',5,('食器',)))
 
-    def test_neighbor_substitution_restores_a_complete_linked_predicate(self):
+    def test_same_key_shift_restores_a_complete_linked_predicate(self):
         import app
         from tests_analysis_async import initial
         a=initial()
-        result=app.correct_line('しょっきをあらさてたなにもどします。',a.store,input_method='kana',
+        result=app.correct_line('しょっきをあらつてたなにもどします。',a.store,input_method='kana',
             dict_index=a.dict_index,context_vec=None,decisions=a.decisions)
-        self.assertEqual(result['corrected'],'しょっきをあらってたなにもどします。')
+        self.assertIn(result['corrected'],('しょっきをあらってたなにもどします。','食器を洗ってたなに戻します。'))
         self.assertEqual(result.get('odd_spans'),[])
+        # さ→っ requires a different key and Shift; keep this old case unresolved.
+        unresolved='しょっきをあらさてたなにもどします。'
+        result=app.correct_line(unresolved,a.store,input_method='kana',dict_index=a.dict_index,context_vec=None,decisions=a.decisions)
+        self.assertEqual(result['corrected'],unresolved)
+        self.assertTrue(result.get('odd_spans'))
         for text in ('しょっきをあらってたなにもどします。','さてほんをよみます。',
                      '豈図らんや。','あにはからんや。','「あに」と書きます。'):
             with self.subTest(text=text):

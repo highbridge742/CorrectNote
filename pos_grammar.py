@@ -198,7 +198,7 @@ def _load_tables():
 
 _PIECES = {
     'R': (
-        ('ます', 'END'), ('ました', 'TA'), ('まして', 'TE'),
+        ('ます', 'END'), ('ませ', 'END'), ('ました', 'TA'), ('まして', 'TE'),
         ('ません', 'END'), ('ませんでした', 'END'), ('ましょう', 'END'),
         ('ますまい', 'END'), ('まい', 'END'),
         ('た', 'TA'), ('て', 'TE'), ('た', 'IST'),      # たい はイ形容詞
@@ -406,6 +406,25 @@ def _possible_i_adjective(word):
             or not any(p.startswith('名詞,形容動詞語幹,') for p in kinds))
 
 
+def _native_verb_family_allows(word, family):
+    """48-AKT: an attested verb keeps its actual inflectional family.
+
+    Unknown dictionary evidence retains the previous grammar fallback.
+    Multiple native homographs keep every attested family available.
+    """
+    from morphology import dictionary_paradigms
+    kana=all('ぁ'<=c<='ゖ' or c=='ー' for c in word)
+    faces=(word,)
+    if kana:
+        from corrector import table_surfaces_for_reading
+        faces=tuple(dict.fromkeys((word,*table_surfaces_for_reading(word,limit=12))))
+    kinds={kind for face in faces
+           for pos,kind,form,base,reading in dictionary_paradigms(face) or ()
+           if pos.startswith('動詞,') and form=='基本形' and base==face
+           and (not kana or reading==word)}
+    return not kinds or any(kind.startswith(family) for kind in kinds)
+
+
 def _looks_verb(word, words):
     """
     その表記は**用言（動詞）の形**か（項目48-MR・2026-08-31）。
@@ -509,6 +528,11 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
     if 'ぅ' in run:
         from morphology import colloquial_auxiliary_normal_form
         run = colloquial_auxiliary_normal_form(run)
+    if 'ょ' in run:
+        from morphology import colloquial_particle_normal_form
+        original=kanji_stem+run if after_kanji and kanji_stem else run
+        normalized=colloquial_particle_normal_form(original)
+        run=normalized[len(kanji_stem):] if after_kanji and kanji_stem else normalized
     _tbl_words, funcs, p1 = _load_tables()
     if not _tbl_words:
         return True                      # 表が無ければ意見なし
@@ -587,6 +611,10 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
                         continue
                     a, i_, e, o, onb = row
                     c = run[k]
+                    if not _native_verb_family_allows(stem+u,'五段'):
+                        if u=='る' and _native_verb_family_allows(stem+u,'一段'):
+                            stack.append((k,'E'))
+                        continue
                     if c == u:
                         stack.append((k + 1, 'Ev' if stems_only else 'END'))
                     if c == a:
@@ -599,8 +627,8 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
                         stack.append((k + 1, 'TSU' if onb != 'ん' else 'N'))
                     if c == o and k + 1 < n and run[k + 1] == 'う':
                         stack.append((k + 2, 'Ev' if stems_only else 'END'))
-                    if u == 'る' and (not ('ぁ' <= stem[-1] <= 'ゖ')
-                                      or stem[-1] in _ICHIDAN_TAIL):
+                    if (u == 'る' and _native_verb_family_allows(stem+u,'一段')
+                            and (not ('ぁ' <= stem[-1] <= 'ゖ') or stem[-1] in _ICHIDAN_TAIL)):
                         stack.append((k, 'E'))       # 一段（見る・出る）
     while stack:
         i, st = stack.pop()
@@ -669,6 +697,12 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
                     stack.append((i + len(piece), st2))
             continue
         if st in ('Bf', 'Bw', 'Bk', 'Bn'):
+            if st in ('Bf','Bk') and initial_state is None and not no_words and not stems_only and c in 'おご':
+                from reading_segments import native_honorific_request_heads
+                # A real prefix and continuative can be an unfinished
+                # request. This is source grammar, not a finite candidate.
+                if native_honorific_request_heads(run[i:],allow_open=True):
+                    stack.append((n,'END'))
             # 1字の格助詞（形の変わらない品詞は、表との一致で置ける。
             # 終助詞は END からだけ——「文の間だから助詞」の場所の決まり）
             # **格助詞の直後（Bk）には、もう1つ格助詞を置かない**（48-RZ）。
@@ -688,9 +722,7 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
                     # 助動詞の尾（てた・ます・ない…）は用言のあとにだけ——
                     # 文節の頭には立てない（`てた＋とおす`。漢字の直後の
                     # 連続の頭は 送り仮名＋尾 なので除く。48-TH''''）
-                    if ((stems_only or initial_state is not None)
-                            and _f in _ATAILS and (st in ('Bf', 'Bk', 'Bn')
-                                                   or (initial_state == 'Bw' and st == 'Bw'))
+                    if (_f in _ATAILS and st in ('Bf', 'Bk', 'Bn', 'Bw')
                             and not (after_kanji and i == 0)):
                         continue
                     stack.append((i + ln, 'Ev' if (
@@ -720,6 +752,19 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
             for ln in range(1, min(11, n - i) + 1):
                 stem = run[i:i + ln]
                 j = i + ln
+                # A native continuative, including a one-kana stem, owns
+                # its auxiliary tail. A nominal word ending at the same
+                # position does not supply that inflectional evidence.
+                if not no_words:
+                    from morphology import dictionary_inflections
+                    if any(pos.startswith('動詞,自立,') and form=='連用形' and rd==stem
+                           for pos,form,base,rd in dictionary_inflections(stem) or ()):
+                        # Share the actual auxiliary transitions, without
+                        # using the bare stem as a newly invented noun.
+                        for piece,state in _PIECES['R']:
+                            if run.startswith(piece,j):
+                                stack.append((j+len(piece),
+                                    _stems_target('R',piece,state) if stems_only else state))
                 # イ形容詞は文節の頭から（動詞の語幹の直後には立たない
                 # ——`入れ|ちいさい` を許すと的を取りこぼす・実測）
                 # **stems_only では、活用形が2つ表に在る語だけを用言と読む**
@@ -768,6 +813,11 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
                     a, i_, e, o, onb = row
                     if stems_only and u != 'る' and (stem + i_) not in words:
                         continue                  # 連用形が無い＝用言ではない
+                    if not _native_verb_family_allows(stem+u,'五段'):
+                        if (u=='る' and not _onbin_only
+                                and _native_verb_family_allows(stem+u,'一段')):
+                            stack.append((j,'E'))
+                        continue
                     if _onbin_only:
                         if onb and c2 == onb:
                             stack.append((j + 1,
@@ -785,7 +835,8 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
                         stack.append((j + 1, 'TSU' if onb != 'ん' else 'N'))
                     if c2 == o and j + 1 < n and run[j + 1] == 'う':
                         stack.append((j + 2, 'Ev' if stems_only else 'END'))
-                    if u == 'る' and stem[-1] in _ICHIDAN_TAIL:
+                    if (u == 'る' and stem[-1] in _ICHIDAN_TAIL
+                            and _native_verb_family_allows(stem+u,'一段')):
                         stack.append((j, 'E'))
     return False
 
@@ -800,6 +851,25 @@ def _is_kanji(c):
 
 def _is_kata(c):
     return 'ァ' <= c <= 'ヶ'
+
+
+def prolonged_small_vowel(text):
+    """A small vowel that extends the preceding kana's own vowel sound."""
+    if len(text)<2 or text[-1] not in 'ぁぃぅぇぉ':return False
+    vowels=('あかさたなはまやらわがざだばぱゃ',
+            'いきしちにひみりぎじぢびぴ',
+            'うくすつぬふむゆるぐずづぶぷゅ',
+            'えけせてねへめれげぜでべぺ',
+            'おこそとのほもよろをごぞどぼぽょ')
+    return text[-2] in vowels['ぁぃぅぇぉ'.index(text[-1])]
+
+def prolonged_quotative(text):
+    """A prolonged voice before と, including the expressive small っ."""
+    for index,small in enumerate(text):
+        if (small in 'ぁぃぅぇぉ' and prolonged_small_vowel(text[:index+1])
+                and text[index+1:].startswith(('と','っと','ーと','ーっと'))):
+            return True
+    return False
 
 
 def _exclamation_shape(run):
@@ -829,10 +899,7 @@ def _exclamation_shape(run):
             from morphology import HAS_JANOME, tokenize, dictionary_inflections
             if not HAS_JANOME:return True
             large=run[:-1]+dict(zip('ぁぃぅぇぉ','あいうえお'))[run[-1]]
-            vowels=('あかさたなはまやらわがざだばぱ','いきしちにひみりぎじぢびぴ',
-                    'うくすつぬふむゆるぐずづぶぷ','えけせてねへめれげぜでべぺ',
-                    'おこそとのほもよろをごぞどぼぽ')
-            prolonged=run[-2] in vowels['ぁぃぅぇぉ'.index(run[-1])]
+            prolonged=prolonged_small_vowel(run)
             if not (prolonged or dictionary_inflections(run) or dictionary_inflections(large)
                     or any(t.has_reading and t.pos in ('感動詞','フィラー') for text in (run,large) for t in tokenize(text))
                     or explain_kana_run(large,before_kanji=False)):
@@ -843,7 +910,746 @@ def _exclamation_shape(run):
     return False
 
 
-def odd_kana_spans(line, dict_index=None, store=None):
+def _completed_kana_attachment_spans(line):
+    """An explicit field end closes two otherwise pending grammatical slots.
+
+    A small unfinished fragment remains untouched. The evidence concerns the
+    source POS and attachment, never a correction candidate or intended word.
+    """
+    from morphology import COLUMN_SEPARATOR, HAS_JANOME, tokenize
+    if not HAS_JANOME:
+        return ()
+    from reading_segments import native_nominal_phrase_faces
+    out = []
+    left = 0
+    for separator in COLUMN_SEPARATOR.finditer(line):
+        right = separator.start()
+        field = line[left:right].rstrip()
+        if field and all('ぁ' <= c <= 'ゖ' or c == 'ー' for c in field):
+            parts = tokenize(field)
+            if (len(parts) >= 2 and parts[-2].surface == 'な'
+                    and parts[-2].pos == '助動詞'
+                    and parts[-2].infl_form == '体言接続'
+                    and parts[-1].surface == 'も'
+                    and parts[-1].pos == '助詞'
+                    and parts[-1].end == len(field)):
+                out.append((left, left + len(field)))
+            if (len(parts) >= 4 and parts[0].pos == '助詞'
+                    and parts[0].pos_sub == '副助詞'
+                    and parts[1].surface == 'の'
+                    and parts[1].pos_sub == '連体化'
+                    and parts[2].pos == '動詞'
+                    and parts[3].surface == 'た'
+                    and parts[3].pos == '助動詞'
+                    and native_nominal_phrase_faces(field[parts[3].end:])):
+                out.append((left, left + len(field)))
+        left = separator.end()
+    return tuple(dict.fromkeys(out))
+
+
+
+def _completed_orphan_attachment_spans(line):
+    """A closed field cannot attach initial genitive の to an absent noun.
+
+    Require a dependent nominal followed by quotative って and an existential
+    auxiliary parse. Ordinary quoted names and open fragments stay outside.
+    """
+    from morphology import COLUMN_SEPARATOR, HAS_JANOME, tokenize
+    if not HAS_JANOME:
+        return ()
+    out=[];left=0
+    for separator in COLUMN_SEPARATOR.finditer(line):
+        field=line[left:separator.start()].rstrip()
+        parts=tokenize(field) if field.startswith('の') else ()
+        if (len(parts)==5 and parts[0].surface=='の'
+                and parts[0].pos=='助詞' and parts[0].pos_sub=='連体化'
+                and parts[1].pos=='名詞' and parts[1].pos_sub.startswith('非自立')
+                and parts[2].surface=='って' and parts[2].pos=='助詞'
+                and parts[3].surface=='い' and parts[3].pos=='動詞'
+                and parts[4].surface=='ます' and parts[4].pos=='助動詞'
+                and parts[4].end==len(field)):
+            out.append((left,left+len(field)))
+        left=separator.end()
+    return tuple(out)
+
+def unexplained_shifted_predicate_tails(line):
+    """Original written predicate stem plus a broken functional prefix.
+
+    A visible terminal small vowel cannot be a prolongation of another
+    vowel, a native voice spelling, or a quoted example here. No repaired
+    word supplies the source boundary or the anomaly.
+    """
+    if not line or not any(c in line for c in 'ぁぃぅぇぉ'):return ()
+    import re
+    from morphology import (HAS_JANOME,tokenize,dictionary_inflections,
+                            native_suru_form,native_sahen_compound_reading)
+    from literal_examples import protected_ranges,overlaps
+    if not HAS_JANOME:return ()
+    protected=protected_ranges(line);out=[]
+    for match in re.finditer(r'[^\t\r\n⇒→、,。！？!?;；]+',line):
+        field=match.group().rstrip();end=match.start()+len(field)
+        if not field or field[-1] not in 'ぁぃぅぇぉ':continue
+        for head in tokenize(field):
+            if not head.has_reading or not any('一'<=c<='鿿' for c in head.surface):continue
+            forms=dictionary_inflections(head.surface) or ()
+            stems=[]
+            if (head.pos=='動詞' and head.pos_sub=='自立' and head.infl_form=='連用形'
+                    and any(pos.startswith('動詞,自立,') and form==head.infl_form and rd==head.reading
+                            for pos,form,base,rd in forms)):
+                stems.append((head.end,head.reading))
+            elif (head.pos=='名詞' and head.pos_sub=='サ変接続'
+                    and (any(pos.startswith('名詞,サ変接続,') and rd==head.reading
+                             for pos,form,base,rd in forms)
+                         or native_sahen_compound_reading(head.surface)==head.reading)):
+                # A malformed tail can swallow the source suru stem (しま).
+                # Exact native suru forms recover only that existing boundary.
+                following=field[head.end:]
+                for size in range(1,min(3,len(following))+1):
+                    literal=following[:size]
+                    if native_suru_form(literal,'連用形',literal,False):
+                        stems.append((head.end+size,head.reading+literal))
+            for cut,reading in stems:
+                tail=field[cut:]
+                if (not 2<=len(tail)<=10 or not all('ぁ'<=c<='ゖ' for c in tail)
+                        or any(c in tail[:-1] for c in 'ぁぃぅぇぉゃゅょ')
+                        or prolonged_small_vowel(tail)):continue
+                start=match.start()+head.start
+                if overlaps(start,end,protected):continue
+                prefix=tail[:-1]
+                if not any(piece.startswith(prefix) and piece!=prefix for piece,state in _PIECES['R']):continue
+                large=prefix+dict(zip('ぁぃぅぇぉ','あいうえお'))[tail[-1]]
+                if any(explain_kana_run(value,no_words=True,initial_state='R',before_kanji=False)
+                       for value in (tail,large)):continue
+                out.append((start,end,match.start()+cut,reading+tail))
+    return tuple(dict.fromkeys(out))
+
+
+
+def _interrupted_sahen_past_spans(line, store):
+    """Native object + sahen noun + stray verb + しました cannot connect."""
+    if 'を' not in line or 'しました' not in line:
+        return ()
+    from corrector import make_tokenizer
+    from literal_examples import protected_ranges, overlaps
+
+    parts=list(make_tokenizer(store)(line))
+    protected=protected_ranges(line)
+    out=[]
+    for i in range(len(parts)-6):
+        obj,case,head,extra,suru,aux,past=parts[i:i+7]
+        if (not obj[5] or not obj[1].startswith('名詞')
+                or case[0]!='を' or not case[5]
+                or not case[1].startswith('助詞:格助詞')
+                or not head[5] or not head[1].startswith('名詞:サ変接続')
+                or not extra[5] or len(extra[0])!=1
+                or extra[0] in ('し','て')
+                or not extra[1].startswith('動詞:自立')
+                or suru[0]!='し' or not suru[5]
+                or not suru[1].startswith('動詞:自立')
+                or suru[6]!='連用形'
+                or aux[0]!='まし' or not aux[5]
+                or not aux[1].startswith('助動詞')
+                or past[0]!='た' or not past[5]
+                or not past[1].startswith('助動詞')
+                or any(a[4]!=b[3] for a,b in
+                       ((obj,case),(case,head),(head,extra),
+                        (extra,suru),(suru,aux),(aux,past)))
+                or overlaps(head[3],past[4],protected)):
+            continue
+        out.append((extra[3],suru[4]))
+    return tuple(out)
+
+
+
+
+def _interrupted_sahen_auxiliary_spans(line, store):
+    """A non-independent verb cannot follow native し without a connective."""
+    if 'を' not in line or 'まし' not in line:
+        return ()
+    from corrector import make_tokenizer
+    from literal_examples import protected_ranges, overlaps
+
+    parts = list(make_tokenizer(store)(line))
+    protected = protected_ranges(line)
+    out = []
+    for i in range(len(parts)-6):
+        obj, case, head, suru, extra, aux, past = parts[i:i+7]
+        if (not obj[5] or not obj[1].startswith('名詞')
+                or case[0] != 'を' or not case[5]
+                or not case[1].startswith('助詞:格助詞')
+                or not head[5] or not head[1].startswith('名詞:サ変接続')
+                or suru[0] != 'し' or not suru[5]
+                or not suru[1].startswith('動詞:自立') or suru[6] != '連用形'
+                or extra[0] != 'い' or not extra[5]
+                or not extra[1].startswith('動詞:非自立')
+                or aux[0] != 'まし' or not aux[5]
+                or not aux[1].startswith('助動詞')
+                or past[0] != 'た' or not past[5]
+                or not past[1].startswith('助動詞')
+                or any(a[4] != b[3] for a, b in
+                       ((obj, case), (case, head), (head, suru),
+                        (suru, extra), (extra, aux), (aux, past)))
+                or overlaps(head[3], past[4], protected)):
+            continue
+        out.append((suru[3], extra[4]))
+    return tuple(out)
+
+
+def _trailing_noun_after_polite_past_spans(line, store):
+    """A bare noun after completed しました is not a sentence ending."""
+    if 'を' not in line or 'ました' not in line:
+        return ()
+    from corrector import make_tokenizer
+    from literal_examples import protected_ranges, overlaps
+
+    parts=list(make_tokenizer(store)(line))
+    protected=protected_ranges(line)
+    out=[]
+    for i in range(len(parts)-7):
+        obj,case,head,suru,aux,past,extra,punct=parts[i:i+8]
+        if (not obj[5] or not obj[1].startswith('名詞')
+                or case[0]!='を' or not case[5]
+                or not case[1].startswith('助詞:格助詞')
+                or not head[5] or not head[1].startswith('名詞:サ変接続')
+                or suru[0]!='し' or not suru[5]
+                or not suru[1].startswith('動詞:自立') or suru[6]!='連用形'
+                or aux[0]!='まし' or not aux[5]
+                or not aux[1].startswith('助動詞')
+                or past[0]!='た' or not past[5]
+                or not past[1].startswith('助動詞')
+                or len(extra[0])!=1 or not extra[5]
+                or not extra[1].startswith('名詞') or len(extra[2])!=1
+                or punct[0]!='。' or not punct[1].startswith('記号:句点')
+                or any(a[4]!=b[3] for a,b in
+                       ((obj,case),(case,head),(head,suru),(suru,aux),
+                        (aux,past),(past,extra),(extra,punct)))
+                or overlaps(head[3],extra[4],protected)):
+            continue
+        out.append((past[3],extra[4]))
+    return tuple(out)
+
+
+def _past_before_sahen_without_connective_spans(line, store):
+    """A completed てた action cannot directly take another finite action."""
+    if 'を' not in line or 'てた' not in line or 'します' not in line:
+        return ()
+    from corrector import make_tokenizer
+    from literal_examples import protected_ranges, overlaps
+
+    parts=list(make_tokenizer(store)(line))
+    protected=protected_ranges(line)
+    out=[]
+    for i in range(len(parts)-7):
+        obj,case,verb,te,past,head,suru,aux=parts[i:i+8]
+        if (not obj[5] or not obj[1].startswith('名詞')
+                or case[0]!='を' or not case[5]
+                or not case[1].startswith('助詞:格助詞')
+                or not verb[5] or not verb[1].startswith('動詞:自立')
+                or verb[6]!='連用形'
+                or te[0]!='て' or not te[5]
+                or not te[1].startswith('動詞:非自立')
+                or past[0]!='た' or not past[5]
+                or not past[1].startswith('助動詞')
+                or not head[5] or not head[1].startswith('名詞:サ変接続')
+                or suru[0]!='し' or not suru[5]
+                or not suru[1].startswith('動詞:自立') or suru[6]!='連用形'
+                or aux[0]!='ます' or not aux[5]
+                or not aux[1].startswith('助動詞')
+                or any(a[4]!=b[3] for a,b in
+                       ((obj,case),(case,verb),(verb,te),(te,past),
+                        (past,head),(head,suru),(suru,aux)))
+                or overlaps(verb[3],aux[4],protected)):
+            continue
+        out.append((te[3],past[4]))
+    return tuple(out)
+
+
+def _double_native_verb_polite_tail_spans(line, store):
+    """Native し + native まし + てた lacks a valid verb connection."""
+    if 'を' not in line or 'してた' not in line:
+        return ()
+    from corrector import make_tokenizer
+    from literal_examples import protected_ranges, overlaps
+
+    parts=list(make_tokenizer(store)(line))
+    protected=protected_ranges(line)
+    out=[]
+    for i in range(len(parts)-6):
+        obj,case,head,suru,second,te,past=parts[i:i+7]
+        if (not obj[5] or not obj[1].startswith('名詞')
+                or case[0]!='を' or not case[5]
+                or not case[1].startswith('助詞:格助詞')
+                or not head[5] or not head[1].startswith('名詞:サ変接続')
+                or suru[0]!='し' or not suru[5]
+                or not suru[1].startswith('動詞:自立') or suru[6]!='連用形'
+                or not second[5] or second[2]!='まし'
+                or not second[1].startswith('動詞:自立') or second[6]!='連用形'
+                or te[0]!='て' or not te[5]
+                or not te[1].startswith('動詞:非自立')
+                or past[0]!='た' or not past[5]
+                or not past[1].startswith('助動詞')
+                or any(a[4]!=b[3] for a,b in
+                       ((obj,case),(case,head),(head,suru),(suru,second),
+                        (second,te),(te,past)))
+                or overlaps(head[3],past[4],protected)):
+            continue
+        out.append((suru[3],te[4]))
+    return tuple(out)
+
+
+def _terminal_polite_connective_spans(line, store):
+    """A polite connective with no following clause is an unfinished action."""
+    if 'を' not in line or not line.endswith('しまして。'):
+        return ()
+    from corrector import make_tokenizer
+    from literal_examples import protected_ranges, overlaps
+
+    parts=list(make_tokenizer(store)(line))
+    protected=protected_ranges(line)
+    out=[]
+    for i in range(len(parts)-6):
+        obj,case,head,suru,aux,te,punct=parts[i:i+7]
+        if (not obj[5] or not obj[1].startswith('名詞')
+                or case[0]!='を' or not case[5]
+                or not case[1].startswith('助詞:格助詞')
+                or not head[5] or not head[1].startswith('名詞:サ変接続')
+                or suru[0]!='し' or not suru[5]
+                or not suru[1].startswith('動詞:自立') or suru[6]!='連用形'
+                or aux[0]!='まし' or not aux[5]
+                or not aux[1].startswith('助動詞')
+                or te[0]!='て' or not te[5]
+                or not te[1].startswith('助詞:接続助詞')
+                or punct[0]!='。' or not punct[1].startswith('記号:句点')
+                or any(a[4]!=b[3] for a,b in
+                       ((obj,case),(case,head),(head,suru),(suru,aux),
+                        (aux,te),(te,punct)))
+                or overlaps(head[3],te[4],protected)):
+            continue
+        out.append((aux[3],te[4]))
+    return tuple(out)
+
+
+def _orphaned_particle_before_sahen_action_windows(parts):
+    """Yield original sahen noun/orphaned case/suru source windows."""
+    for i in range(2,len(parts)-3):
+        left,link=parts[i-2:i]
+        head,extra,suru,aux=parts[i:i+4]
+        connective=(aux[0]=='て' and aux[5]
+                    and aux[1].startswith('助詞:接続助詞'))
+        polite=(aux[0]=='ます' and aux[5] and aux[1].startswith('助動詞'))
+        prior_action=(left[5] and left[1].startswith('動詞:自立')
+            and left[6] in ('連用形','連用タ接続')
+            and link[0]=='て' and link[5] and link[1].startswith('助詞:接続助詞'))
+        prior_object=(left[5] and left[1].startswith('名詞')
+            and link[0]=='を' and link[5] and link[1].startswith('助詞:格助詞'))
+        orphan=(extra[5] and ((extra[0]=='て'
+            and extra[1].startswith('助詞:格助詞:連語') and prior_action and polite)
+            or (extra[0]=='ん' and extra[1].startswith('助詞:格助詞')
+                and prior_object and (connective or polite))))
+        if (not head[5] or not head[1].startswith('名詞:サ変接続')
+                or not orphan or suru[0]!='し' or not suru[5]
+                or not suru[1].startswith('動詞:自立') or suru[6]!='連用形'
+                or any(a[4]!=b[3] for a,b in
+                       ((left,link),(link,head),(head,extra),
+                        (extra,suru),(suru,aux)))):
+            continue
+        yield head,extra,aux
+
+
+def _single_key_between_sahen_actions_spans(line, store):
+    """A stray source key after て cannot attach to the next action."""
+    if 'を' not in line or (('して' not in line or 'します' not in line)
+                                 and 'んし' not in line):
+        return ()
+    from corrector import make_tokenizer
+    from literal_examples import protected_ranges, overlaps
+    from kana_layout import intrusion_key_distance
+
+    parts=list(make_tokenizer(store)(line))
+    protected=protected_ranges(line)
+    out=[]
+    for i in range(len(parts)-8):
+        obj,case,head,suru,te,extra,nexthead,nextsuru,aux=parts[i:i+9]
+        if (not obj[5] or not obj[1].startswith('名詞')
+                or case[0]!='を' or not case[5]
+                or not case[1].startswith('助詞:格助詞')
+                or not head[5] or not head[1].startswith('名詞:サ変接続')
+                or suru[0]!='し' or not suru[5]
+                or not suru[1].startswith('動詞:自立') or suru[6]!='連用形'
+                or te[0]!='て' or not te[5]
+                or not te[1].startswith('助詞:接続助詞')
+                or not extra[5] or len(extra[0])!=1
+                or not ((extra[0]=='と' and extra[1].startswith('助詞:格助詞:引用'))
+                        or (len(extra[2])==1 and nexthead[2]
+                            and (extra[1].startswith('助詞:副助詞')
+                                 or extra[1].startswith('動詞:非自立') and extra[6]=='基本形')
+                            and intrusion_key_distance(extra[2],nexthead[2][0])<=1.0))
+                or not nexthead[5] or not nexthead[1].startswith('名詞:サ変接続')
+                or nextsuru[0]!='し' or not nextsuru[5]
+                or not nextsuru[1].startswith('動詞:自立')
+                or aux[0]!='ます' or not aux[5]
+                or not aux[1].startswith('助動詞')
+                or any(a[4]!=b[3] for a,b in
+                       ((obj,case),(case,head),(head,suru),(suru,te),
+                        (te,extra),(extra,nexthead),(nexthead,nextsuru),(nextsuru,aux)))
+                or overlaps(head[3],nextsuru[4],protected)):
+            continue
+        out.append((te[3],extra[4]))
+    if 'てし' in line or 'んし' in line:
+        for head,extra,aux in _orphaned_particle_before_sahen_action_windows(parts):
+            if not overlaps(head[3],aux[4],protected):
+                out.append((extra[3],extra[4]))
+    return tuple(out)
+
+
+def _orphaned_key_before_direct_action_windows(parts):
+    """Yield native te-action seams with a bare auxiliary or stray quote."""
+    from semantic_roles import native_verb_lexemes,RETURN_MOTION_ACTIONS
+    for i in range(len(parts)-6):
+        obj,case,verb,te,extra,nextverb,aux=parts[i:i+7]
+        if (not obj[5] or not obj[1].startswith('名詞')
+                or case[0]!='を' or not case[5]
+                or not case[1].startswith('助詞:格助詞')
+                or not verb[5] or not verb[1].startswith('動詞:自立')
+                or verb[6] not in ('連用形','連用タ接続')
+                or te[0]!='て' or not te[5]
+                or not te[1].startswith('助詞:接続助詞')
+                or not extra[5]
+                or not ((extra[0]=='い' and extra[1].startswith('動詞:非自立')
+                         and extra[6]=='連用形')
+                        or (extra[0]=='と' and extra[1].startswith('助詞:格助詞:引用')
+                            and native_verb_lexemes(nextverb[0],nextverb[6],nextverb[2])
+                                & RETURN_MOTION_ACTIONS))
+                or not nextverb[5] or not nextverb[1].startswith('動詞:自立')
+                or nextverb[6]!='連用形'
+                or aux[0]!='ます' or not aux[5]
+                or not aux[1].startswith('助動詞')
+                or any(a[4]!=b[3] for a,b in
+                       ((obj,case),(case,verb),(verb,te),(te,extra),
+                        (extra,nextverb),(nextverb,aux)))):
+            continue
+        yield verb,te,extra,aux
+
+
+def _stray_key_before_next_object_spans(line, store):
+    """An orphaned source key after て before another case/action."""
+    if 'を' not in line or ('てと' not in line and 'てい' not in line) or 'ます' not in line:
+        return ()
+    from corrector import make_tokenizer
+    from literal_examples import protected_ranges, overlaps
+
+    parts=list(make_tokenizer(store)(line))
+    protected=protected_ranges(line)
+    out=[]
+    for i in range(len(parts)-8):
+        obj,case,verb,te,extra,nextnoun,nextcase,nextverb,aux=parts[i:i+9]
+        after=parts[i+9] if i+9<len(parts) else None
+        simple_action=(nextverb[5] and nextverb[1].startswith('動詞:自立')
+            and nextverb[6]=='連用形' and aux[0]=='ます' and aux[5]
+            and aux[1].startswith('助動詞'))
+        sahen_action=(nextcase[0]=='を' and nextverb[5]
+            and nextverb[1].startswith('名詞:サ変接続')
+            and aux[0]=='し' and aux[5]
+            and aux[1].startswith('動詞:自立') and aux[6]=='連用形'
+            and after is not None and after[0]=='ます' and after[5]
+            and after[1].startswith('助動詞'))
+        last=after if sahen_action else aux
+        if (not obj[5] or not obj[1].startswith('名詞')
+                or case[0]!='を' or not case[5]
+                or not case[1].startswith('助詞:格助詞')
+                or not verb[5] or not verb[1].startswith('動詞:自立')
+                or verb[6] not in ('連用形','連用タ接続')
+                or te[0]!='て' or not te[5]
+                or not te[1].startswith('助詞:接続助詞')
+                or not extra[5]
+                or not ((extra[0]=='と' and extra[1].startswith('助詞:格助詞:引用'))
+                        or (extra[0]=='い' and extra[1].startswith('動詞:非自立')
+                            and extra[6]=='連用形'))
+                or not nextnoun[5] or not nextnoun[1].startswith('名詞')
+                or nextcase[0] not in ('を','へ','に') or not nextcase[5]
+                or not nextcase[1].startswith('助詞:格助詞')
+                or not (simple_action or sahen_action)
+                or any(a[4]!=b[3] for a,b in
+                       ((obj,case),(case,verb),(verb,te),(te,extra),
+                        (extra,nextnoun),(nextnoun,nextcase),
+                        (nextcase,nextverb),(nextverb,aux)))
+                or (sahen_action and aux[4]!=last[3])
+                or overlaps(verb[3],last[4],protected)):
+            continue
+        out.append((te[3],extra[4]))
+    if 'てい' in line or 'てと' in line:
+        for verb,te,extra,aux in _orphaned_key_before_direct_action_windows(parts):
+            if not overlaps(verb[3],aux[4],protected):
+                out.append((te[3],extra[4]))
+    return tuple(out)
+
+
+def _stray_to_between_verb_and_sahen_past_spans(line, store):
+    """A quote particle cannot join two direct finite actions after て."""
+    if 'を' not in line or 'してと' not in line or 'しました' not in line:
+        return ()
+    from corrector import make_tokenizer
+    from literal_examples import protected_ranges, overlaps
+
+    parts=list(make_tokenizer(store)(line))
+    protected=protected_ranges(line)
+    out=[]
+    for i in range(len(parts)-8):
+        obj,case,verb,te,extra,nexthead,nextsuru,aux,past=parts[i:i+9]
+        if (not obj[5] or not obj[1].startswith('名詞')
+                or case[0]!='を' or not case[5]
+                or not case[1].startswith('助詞:格助詞')
+                or not verb[5] or not verb[1].startswith('動詞:自立')
+                or verb[6]!='連用形'
+                or te[0]!='て' or not te[5]
+                or not te[1].startswith('助詞:接続助詞')
+                or extra[0]!='と' or not extra[5]
+                or not extra[1].startswith('助詞:格助詞:引用')
+                or not nexthead[5] or not nexthead[1].startswith('名詞:サ変接続')
+                or nextsuru[0]!='し' or not nextsuru[5]
+                or not nextsuru[1].startswith('動詞:自立') or nextsuru[6]!='連用形'
+                or aux[0]!='まし' or not aux[5]
+                or not aux[1].startswith('助動詞')
+                or past[0]!='た' or not past[5]
+                or not past[1].startswith('助動詞')
+                or any(a[4]!=b[3] for a,b in
+                       ((obj,case),(case,verb),(verb,te),(te,extra),
+                        (extra,nexthead),(nexthead,nextsuru),
+                        (nextsuru,aux),(aux,past)))
+                or overlaps(verb[3],past[4],protected)):
+            continue
+        out.append((te[3],extra[4]))
+    return tuple(out)
+
+
+def _unsupported_one_key_object_tail_spans(line, store):
+    """An unlicensed one-key suffix after a known object is source-odd."""
+    if 'を' not in line or store is None:
+        return ()
+    from corrector import make_tokenizer
+    from morphology import dictionary_inflections
+    from semantic_roles import nominal_roles, nominal_compound_support
+    from ime_inverse_gate import exact_context_reading
+    from kana_layout import single_key_drop_adjacency
+    from literal_examples import protected_ranges, overlaps
+
+    parts=list(make_tokenizer(store)(line))
+    protected=protected_ranges(line)
+    out=[]
+    for i in range(len(parts)-3):
+        head,tail,case,action=parts[i:i+4]
+        if (not head[5] or not head[1].startswith('名詞:一般')
+                or not nominal_roles(head[0])
+                or not tail[5] or not tail[1].startswith('名詞:接尾')
+                or len(tail[0])!=1
+                or tail[1].startswith('名詞:接尾:サ変接続')
+                or case[0]!='を' or not case[5]
+                or not case[1].startswith('助詞:格助詞')
+                or not (action[5] and action[1].startswith(('動詞:自立','名詞:サ変接続'))
+                        or (action[5] and action[1].startswith('名詞')
+                            and nominal_roles(action[0]) & {'container','place'}
+                            and i+5<len(parts) and parts[i+4][5]
+                            and parts[i+4][0] in ('に','へ')
+                            and parts[i+4][1].startswith('助詞:格助詞')
+                            and parts[i+5][5]
+                            and parts[i+5][1].startswith('動詞:自立')
+                            and action[4]==parts[i+4][3]
+                            and parts[i+4][4]==parts[i+5][3]))
+                or any(a[4]!=b[3] for a,b in ((head,tail),(tail,case),(case,action)))
+                or dictionary_inflections(head[0]+tail[0])
+                or nominal_compound_support(head[0],tail[0])
+                or overlaps(head[3],tail[4],protected)):
+            continue
+        exact=exact_context_reading(line,head[3],tail[4])
+        if (not exact or len(exact[1])!=2
+                or exact[1][0][:2]!=(0,len(head[0]))
+                or exact[1][0][2]!=head[2]
+                or exact[1][1][:2]!=(len(head[0]),len(head[0])+len(tail[0]))
+                or len(exact[1][1][2])!=1
+                or exact[0]!=head[2]+exact[1][1][2]
+                or single_key_drop_adjacency(exact[0],head[2]) is not True):
+            continue
+        out.append((tail[3],tail[4]))
+    return tuple(out)
+
+
+def _source_destination_connective_spans(line, store):
+    """A noun/object followed by と and a destination action needs a link."""
+    if 'を' not in line or 'と' not in line or 'へ' not in line or 'ます' not in line or store is None:
+        return ()
+    from corrector import make_tokenizer
+    from morphology import dictionary_inflections
+    from semantic_roles import nominal_roles
+    from ime_inverse_gate import exact_context_reading
+    from kana_layout import kana_key_distance
+    from literal_examples import protected_ranges, overlaps
+
+    parts=list(make_tokenizer(store)(line))
+    protected=protected_ranges(line)
+    out=[]
+    for i in range(len(parts)-7):
+        obj,case,head,link,destination,destcase,action,aux=parts[i:i+8]
+        if (not obj[5] or not obj[1].startswith('名詞')
+                or case[0]!='を' or not case[5]
+                or not case[1].startswith('助詞:格助詞')
+                or not head[5] or not head[1].startswith(('名詞:一般','動詞:自立'))
+                or link[0]!='と' or not link[5]
+                or not link[1].startswith(('助詞:並立助詞','助詞:格助詞:引用'))
+                or not destination[5] or not destination[1].startswith('名詞')
+                or 'place' not in nominal_roles(destination[0])
+                or destcase[0]!='へ' or not destcase[5]
+                or not destcase[1].startswith('助詞:格助詞')
+                or not action[5] or not action[1].startswith('動詞:自立')
+                or action[6]!='連用形'
+                or aux[0]!='ます' or not aux[5]
+                or not aux[1].startswith('助動詞')
+                or any(a[4]!=b[3] for a,b in ((obj,case),(case,head),(head,link),
+                       (link,destination),(destination,destcase),(destcase,action),(action,aux)))
+                or not any(p.startswith('動詞,自立,') and f=='連用形' and rd==head[2]
+                           for p,f,b,rd in dictionary_inflections(head[0]) or ())
+                or overlaps(head[3],aux[4],protected)):
+            continue
+        exact=exact_context_reading(line,head[3],link[4])
+        intended=head[2]+'て'
+        if (not exact or exact[0]!=head[2]+'と'
+                or kana_key_distance('と','て')>1.05):
+            continue
+        out.append((link[3],link[4]))
+    return tuple(out)
+
+
+def _source_one_key_before_adverbial_spans(line, store):
+    """A one-key noun between an object case and adverbial adjective."""
+    if 'を' not in line or store is None:
+        return ()
+    from corrector import make_tokenizer
+    from morphology import dictionary_inflections
+    from ime_inverse_gate import exact_context_reading
+    from kana_layout import single_key_drop_adjacency
+    from literal_examples import protected_ranges, overlaps
+
+    parts=list(make_tokenizer(store)(line))
+    protected=protected_ranges(line)
+    out=[]
+    for i in range(len(parts)-4):
+        obj,case,extra,adverb,action=parts[i:i+5]
+        if (not obj[5] or not obj[1].startswith('名詞')
+                or case[0]!='を' or not case[5]
+                or not case[1].startswith('助詞:格助詞')
+                or not extra[5] or not extra[1].startswith('名詞:一般')
+                or len(extra[0])!=1 or len(extra[2])!=1
+                or not adverb[5] or not adverb[1].startswith('形容詞:自立')
+                or not adverb[6].startswith('連用')
+                or not action[5] or not action[1].startswith(('動詞:自立','名詞:サ変接続'))
+                or any(a[4]!=b[3] for a,b in ((obj,case),(case,extra),
+                       (extra,adverb),(adverb,action)))
+                or dictionary_inflections(extra[0]+adverb[0])
+                or overlaps(extra[3],adverb[4],protected)):
+            continue
+        exact=exact_context_reading(line,extra[3],adverb[4])
+        if (not exact or exact[0]!=extra[2]+adverb[2]
+                or single_key_drop_adjacency(exact[0],adverb[2]) is not True):
+            continue
+        out.append((extra[3],extra[4]))
+    return tuple(out)
+
+
+def _source_adnominal_particle_spans(line, store):
+    """Source は interrupts a native modifier and its accusative head."""
+    if 'は' not in line or 'を' not in line or store is None:
+        return ()
+    from corrector import make_tokenizer
+    from ime_inverse_gate import exact_context_reading
+    from kana_layout import single_key_drop_adjacency
+    from literal_examples import protected_ranges, overlaps
+
+    tokenize=make_tokenizer(store)
+    parts=list(tokenize(line))
+    protected=protected_ranges(line)
+    out=[]
+    for i in range(len(parts)-5):
+        left,link,extra,noun,case,action=parts[i:i+6]
+        genitive=(left[5] and left[1].startswith('名詞') and link[0]=='の'
+                  and link[5] and link[1].startswith(('名詞:非自立','助詞:連体化')))
+        adnominal=(left[5] and left[1].startswith('名詞:形容動詞語幹')
+                   and link[0]=='な' and link[5]
+                   and link[1].startswith('助動詞') and link[6]=='体言接続')
+        if (not (genitive or adnominal)
+                or extra[0]!='は' or not extra[5]
+                or not extra[1].startswith('助詞:係助詞')
+                or not noun[5] or not noun[1].startswith('名詞')
+                or case[0]!='を' or not case[5]
+                or not case[1].startswith('助詞:格助詞')
+                or not action[5] or not action[1].startswith(('動詞:自立','名詞:サ変接続'))
+                or any(a[4]!=b[3] for a,b in ((left,link),(link,extra),
+                       (extra,noun),(noun,case),(case,action)))
+                or overlaps(link[3],noun[4],protected)):
+            continue
+        exact=exact_context_reading(line,link[3],noun[4])
+        intended=link[2]+noun[2]
+        if (not exact or exact[0]!=link[2]+'は'+noun[2]
+                or single_key_drop_adjacency(exact[0],intended) is not True):
+            continue
+        trial=line[:extra[3]]+line[extra[4]:]
+        trial_parts=list(tokenize(trial))
+        matched=False
+        for j in range(len(trial_parts)-3):
+            a,b,c,d=trial_parts[j:j+4]
+            if (a[3]==left[3] and a[0]==left[0]
+                    and b[0]==link[0] and c[0]==noun[0] and d[0]=='を'
+                    and all(x[4]==y[3] for x,y in ((a,b),(b,c),(c,d)))
+                    and (b[1].startswith('助詞:連体化') if genitive
+                         else b[1].startswith('助動詞') and b[6]=='体言接続')
+                    and c[1].startswith('名詞') and d[1].startswith('助詞:格助詞')):
+                matched=True
+                break
+        if matched:out.append((extra[3],extra[4]))
+    return tuple(out)
+
+
+from functools import lru_cache
+
+
+@lru_cache(maxsize=4096)
+def closed_subject_topic_spans(line):
+    """A closed N-ga-N-topic field lacks the predicate joining its two slots.
+
+    The original native noun/case/topic identities establish this mark before
+    any candidate. Open typing, relative clauses and literal examples stay out.
+    """
+    if not line or 'が' not in line:return ()
+    from morphology import COLUMN_SEPARATOR,tokenize
+    from reading_segments import native_lexical_phrase
+    from literal_examples import protected_ranges,overlaps
+    protected=protected_ranges(line);out=[];edge=0
+    def legacy(value):
+        return [(t.surface,t.pos+(':'+t.pos_sub if t.pos_sub else ''),t.reading,
+                 t.start,t.end,t.has_reading,t.infl_form) for t in tokenize(value)]
+    for separator in COLUMN_SEPARATOR.finditer(line):
+        end=separator.start();start=edge;edge=separator.end()
+        while start<end and line[start].isspace():start+=1
+        while start<end and line[end-1].isspace():end-=1
+        field=line[start:end]
+        if not field or overlaps(start,end,protected):continue
+        if native_lexical_phrase(field,legacy):continue
+        parts=tokenize(field)
+        if (len(parts)<4 or not all(t.has_reading for t in parts)
+                or parts[-1].surface not in ('は','も')
+                or parts[-1].pos!='助詞' or parts[-1].pos_sub!='係助詞'):continue
+        cases=[i for i,t in enumerate(parts[:-1]) if t.pos=='助詞']
+        if len(cases)!=1:continue
+        i=cases[0];case=parts[i]
+        if (case.surface!='が' or not case.pos_sub.startswith('格助詞')
+                or i==0 or i==len(parts)-2):continue
+        nouns=parts[:i]+parts[i+1:-1]
+        if any(t.pos!='名詞' or t.pos_sub.startswith(('固有名詞','非自立','形容動詞'))
+               for t in nouns):continue
+        if not native_lexical_phrase(field[:case.start],legacy):continue
+        out.append((start,end))
+    return tuple(out)
+
+
+def odd_kana_spans(line, dict_index=None, store=None, preserve_unknown_source=True):
     """
     **行の中の、説明の付かない ひらがな連続**（項目48-KS の①-a）。
 
@@ -860,25 +1666,40 @@ def odd_kana_spans(line, dict_index=None, store=None):
     """
     if not line:
         return []
+    # Share the same original native final-particle evidence as tokenization.
+    # This changes only the analysis reading and preserves all source offsets.
+    from morphology import colloquial_particle_normal_form
+    line=colloquial_particle_normal_form(line)
     from morphology import original_spelling_facts
     out0 = [(f.change_start,f.change_start+1) for f in original_spelling_facts(line)]
+    out0.extend(_completed_kana_attachment_spans(line))
+    from reading_segments import native_reading_polite_mismatches
+    out0.extend(native_reading_polite_mismatches(line))
+    out0.extend(closed_subject_topic_spans(line))
+    out0.extend(_interrupted_sahen_past_spans(line, store))
+    out0.extend(_interrupted_sahen_auxiliary_spans(line, store))
+    out0.extend(_trailing_noun_after_polite_past_spans(line, store))
+    out0.extend(_past_before_sahen_without_connective_spans(line, store))
+    out0.extend(_double_native_verb_polite_tail_spans(line, store))
+    out0.extend(_terminal_polite_connective_spans(line, store))
+    out0.extend(_single_key_between_sahen_actions_spans(line, store))
+    out0.extend(_stray_key_before_next_object_spans(line, store))
+    out0.extend(_stray_to_between_verb_and_sahen_past_spans(line, store))
+    out0.extend(_unsupported_one_key_object_tail_spans(line, store))
+    out0.extend(_source_destination_connective_spans(line, store))
+    out0.extend(_source_adnominal_particle_spans(line, store))
+    out0.extend(_source_one_key_before_adverbial_spans(line, store))
+    out0.extend((cut,end) for start,end,cut,reading in unexplained_shifted_predicate_tails(line))
+    from particle_frames import nominalized_existential_case_frames,converted_suru_connection_frames
+    out0.extend((frame['start'],frame['end']) for frame in nominalized_existential_case_frames(line))
+    out0.extend((frame['verb_start'],frame['end']) for frame in converted_suru_connection_frames(line))
     if dict_index is not None and store is not None and 'ー' in line:
         from reading_segments import odd_partial_loanwords
         from corrector import make_tokenizer
         out0.extend((a,b) for a,b,_h,_t,_s in
                     odd_partial_loanwords(line,dict_index,store,make_tokenizer(store)))
-    # 48-WM: 小書き母音は口語の語尾・文字の言及にも現れるため、
-    # 前接文字だけでは異様と断定しない。拗音の構造判定は分けて残す。
-    # 促音っは送り仮名にも使うので従来どおり対象外。
-    for p, c in enumerate(line):
-        if c not in 'ゃゅょ':
-            continue
-        prev = line[p - 1] if p > 0 else ''
-        if not prev or _is_hira(prev) or prev == 'ー' \
-                or prev in '「『（(［[｛{【〔・　 \t':
-            continue
-        out0.append((p - 1, p + 1))
-
+    from morphology import source_yoon_spans
+    out0.extend(source_yoon_spans(line))
     def _is_word(frag):
         if len(frag) < 2:
             return False
@@ -896,6 +1717,8 @@ def odd_kana_spans(line, dict_index=None, store=None):
                 pass
         return False
 
+    from morphology import COLUMN_SEPARATOR
+    column_starts=[0]+[match.end() for match in COLUMN_SEPARATOR.finditer(line)]
     out = out0
     n = len(line)
     i = 0
@@ -931,7 +1754,8 @@ def odd_kana_spans(line, dict_index=None, store=None):
             stem = line[k:i0]
         # **本当の行頭**（前に空白しか無い）に立つ連続だけ、裸の1字助詞を
         # 頭に置かない（項目48-RZ。読点・括弧のあとは前の句を受ける形）
-        _bare = (not after) and not line[:i0].strip(' \t\u3000')
+        column_start=next(start for start in reversed(column_starts) if start<=i0)
+        _bare = not after and not line[column_start:i0].strip(' \t\u3000')
         try:
             ok = explain_kana_run(run, after_kanji=after,
                                   before_kanji=before, kanji_stem=stem,
@@ -971,9 +1795,29 @@ def odd_kana_spans(line, dict_index=None, store=None):
                 pass
         if not ok:
             from reading_segments import intact_native_reading
-            ok=intact_native_reading(run)
+            ok=intact_native_reading(run,allow_incomplete=False)
         if not ok:
-            out.append((i0, j))
+            # 48-AKS: the same original-coordinate proof used by the
+            # correction entry also explains a kana fragment after kanji.
+            # A proved prefix never certifies the run's unexplained tail.
+            from reading_segments import native_context_ranges
+            ok=any(lo<=i0 and j<=hi for lo,hi in native_context_ranges(line))
+        if not ok and preserve_unknown_source:
+            from reading_segments import source_opaque_object_ranges
+            ok=any(lo<=i0 and j<=hi for lo,cut,hi in source_opaque_object_ranges(line))
+        if not ok:
+            # A complete modifier is independent of the unknown nominal
+            # head. Keep only the still unexplained remainder marked.
+            from reading_segments import native_adnominal_modifier_ranges
+            pending=[(i0,j)]
+            for lo,hi in native_adnominal_modifier_ranges(line):
+                split=[]
+                for a,b in pending:
+                    if hi<=a or b<=lo:split.append((a,b));continue
+                    if a<lo:split.append((a,lo))
+                    if hi<b:split.append((hi,b))
+                pending=split
+            out.extend(pending)
     return out
 
 

@@ -7,10 +7,70 @@ import semantic_roles as S
 
 
 class SemanticRoleTests(unittest.TestCase):
+
+    @unittest.skipUnless(M.HAS_JANOME,'native issue and suru predicate')
+    def test_issue_resolution_proves_the_actual_accusative(self):
+        for noun in ('問題','課題','不具合','矛盾'):
+            with self.subTest(noun=noun):
+                proof=S.candidate_evidence(noun,'解決し','ます',before=noun+'を')
+                self.assertIn('issue',proof['shared_roles'])
+        for noun in ('石','人','資料'):
+            with self.subTest(noun=noun):
+                proof=S.candidate_evidence(noun,'解決し','ます',before=noun+'を')
+                self.assertFalse(proof and proof['shared_roles'])
+        self.assertIsNone(S.candidate_evidence('未知ぷねら','解決し','ます',before='未知ぷねらを'))
+        proof=S.candidate_evidence('問題','解決し','ます',before='問題に',case='に')
+        self.assertFalse(proof and proof['shared_roles'])
+
+
+    @unittest.skipUnless(M.HAS_JANOME,'native table-field predicate boundaries')
+    def test_terminal_action_owns_only_its_tab_or_arrow_field(self):
+        def conflicts(text):
+            tokens=[(t.surface,t.pos+':'+t.pos_sub,t.reading,t.start,t.end,
+                     t.has_reading,t.infl_form) for t in M.tokenize(text)]
+            return S.conflicting_object_predicates(text,tokens)
+        for text in ('いとをさして','\t\tいとをさして⇒\t\t',
+                     '意図をさして⇒説明','意図をさして\t資料を確認します'):
+            with self.subTest(text=text):
+                self.assertTrue(conflicts(text))
+        for text in ('意図をさしている人','意図をさして、発言します',
+                     '針をさして⇒説明','未知ぷねらをさして⇒説明'):
+            with self.subTest(text=text):
+                self.assertFalse(conflicts(text))
+
     def tearDown(self):
         S._action_head.cache_clear()
         S.predicate_roles.cache_clear()
         S.native_verb_roles.cache_clear()
+
+    @unittest.skipUnless(M.HAS_JANOME,'native argument boundaries')
+    def test_internal_argument_uses_the_same_written_noun_roles(self):
+        proof=S.candidate_internal_argument_evidence('食器を洗って','')
+        self.assertTrue(proof and proof['shared_roles'])
+        self.assertEqual(proof['object'],'食器')
+        self.assertEqual(proof['source'],'candidate_internal_argument')
+        self.assertIsNone(S.candidate_internal_argument_evidence('式を洗って',''))
+        self.assertIsNone(S.candidate_internal_argument_evidence('洗って','',before='食器を'))
+        self.assertIsNone(S.candidate_internal_argument_evidence('食器','を洗って'))
+        self.assertIsNone(S.candidate_internal_argument_evidence('食器を','洗って'))
+
+    @unittest.skipUnless(M.HAS_JANOME,'native reference nouns and predicates')
+    def test_opening_reference_material_keeps_original_spelling_and_case(self):
+        import app,reading_segments as R
+        from tests_analysis_async import initial
+        a=initial()
+        for noun in ('辞書','辞典','索引','史料'):
+            for verb in ('開く','閉じる'):
+                self.assertTrue(S.support(noun,verb),(noun,verb))
+            self.assertFalse(S.support(noun,'食べる'),noun)
+        for text in ('じしょをひらく。','じてんをひらきます。','さくいんをとじます。',
+                     '辞書を開きます。','辞典を閉じます。'):
+            result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
+                context_vec=None,decisions=a.decisions)
+            self.assertEqual(result['corrected'],text)
+            self.assertFalse(result.get('odd_spans'),text)
+        self.assertFalse(R.completed_native_reading_clause('じしょをのむ',require_object_fit=True))
+        self.assertFalse(R.completed_native_reading_clause('じしょをひら',require_object_fit=True))
 
     def test_roles_supply_positive_evidence_without_declaring_other_senses_invalid(self):
         self.assertTrue(S.support('理由','説明'))
@@ -38,13 +98,13 @@ class SemanticRoleTests(unittest.TestCase):
         from tests_analysis_async import initial
         a=initial()
         for text,expected in (
-            ('しょっきをふらってたなにもどします。','しょっきをあらってたなにもどします。'),
+            ('しょっきをふらってたなにもどします。',('しょっきをあらってたなにもどします。','食器を洗ってたなに戻します。')),
             ('しょっきをあらってたなにもどします。','しょっきをあらってたなにもどします。'),
             ('しょっきをあらってはたなにもどします。','しょっきをあらってはたなにもどします。'),
             ('ふらっとたなにもどります。','ふらっとたなにもどります。')):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],expected,text)
+            self.assertIn(result['corrected'],expected if isinstance(expected,tuple) else (expected,),text)
             self.assertEqual(result.get('odd_spans'),[],text)
 
     @unittest.skipUnless(M.dictionary_inflections('保存'),'requires native dictionary')
@@ -136,6 +196,50 @@ class SemanticRoleTests(unittest.TestCase):
             for left,right in (('意味','ストール'),('文書','乳力'),('右','インストール'),('本人','飲む'),('巨人','服用')):
                 self.assertFalse(S.nominal_compound_support(left,right),(left,right))
 
+    @unittest.skipUnless(M.HAS_JANOME,'native common noun boundaries')
+    def test_compound_content_relation_is_shared_by_source_and_candidate(self):
+        import app,oddness,reading_segments as R
+        from tests_analysis_async import initial
+        for left,right in (('炭酸','湯'),('温泉','湯'),('薬草','湯'),
+                           ('香草','湯'),('構文','木'),('系統','木')):
+            self.assertTrue(S.nominal_compound_support(left,right),(left,right))
+            self.assertTrue(oddness.can_join(left,'名詞:一般',right,'名詞:一般'))
+        for left,right in (('構文','湯'),('炭酸','木'),('資料','湯'),
+                           ('引き','月'),('画面','繁栄'),('未知','湯')):
+            self.assertFalse(S.nominal_compound_support(left,right),(left,right))
+        self.assertFalse(S.nominal_compound_support('資料','乳力'))
+        a=initial();revision=a.store.revision()
+        for head in ('炭酸湯','温泉湯','薬草湯','清涼炭酸湯','無香料炭酸湯',
+                     '構文木','系統木'):
+            for tail in ('','の話です','を確認します'):
+                text=head+tail
+                result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
+                    context_vec=None,decisions=a.decisions)
+                self.assertEqual(result['corrected'],text)
+                self.assertFalse(result.get('odd_spans'),text)
+        self.assertEqual(a.store.revision(),revision)
+
+    @unittest.skipUnless(M.HAS_JANOME,'native humble action construction')
+    def test_humble_action_keeps_native_head_tail_and_object_meaning(self):
+        import app,reading_segments as R
+        from tests_analysis_async import initial
+        for text,head in (('おかけいたしました','かけ'),('およみいたします','よみ'),
+                          ('おわたしいたしました','わたし'),('ごあんないいたします','案内')):
+            self.assertIn(head,R.native_humble_action_heads(text),text)
+        for text in ('おかけいたしまし','おかけいたすます','おかくいたします',
+                     'おしらゆほいたします','ごしらゆほいたします','およみいたしますう'):
+            self.assertFalse(R.native_humble_action_heads(text),text)
+        a=initial();revision=a.store.revision()
+        for source in ('お手数をおかけいたしました。','おてすうをおかけいたしました。',
+                       '手間をかけました。','ご迷惑をおかけいたしました。',
+                       '資料をおよみいたします。','にもつをおわたしいたします。'):
+            result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                context_vec=None,decisions=a.decisions)
+            self.assertEqual(result['corrected'],source)
+            self.assertFalse(result.get('odd_spans'),source)
+        self.assertFalse(R.completed_native_reading_clause('りんごをおよみいたします',require_object_fit=True))
+        self.assertEqual(a.store.revision(),revision)
+
     def test_unknown_argument_needs_no_predicate_analysis(self):
         with patch.object(S,'_action_head') as analyze:
             self.assertIsNone(S.candidate_evidence('未知','説明','します'))
@@ -197,13 +301,13 @@ class SemanticRoleTests(unittest.TestCase):
             ('ふでをあらいます。','ふでをあらいます。'),
             ('ぶらしをつかいます。','ぶらしをつかいます。'),
             ('ぞうきんをほします。','ぞうきんをほします。'),
-            ('ふでをあらいんす。','ふでをあらいます。'),
+            ('ふでをあらいんす。',('ふでをあらいます。','筆を洗います。')),
             ('権利を放棄します。','権利を放棄します。'),
             ('軍が蜂起します。','軍が蜂起します。')):
             with self.subTest(text=text):
                 result=app.correct_line(text,a.store,dict_index=a.dict_index,
                     decisions=a.decisions,context_vec=None,input_method='kana')
-                self.assertEqual(result['corrected'],expected)
+                self.assertIn(result['corrected'],expected if isinstance(expected,tuple) else (expected,))
                 self.assertEqual(result['odd_spans'],[])
 
 if __name__=='__main__':unittest.main()

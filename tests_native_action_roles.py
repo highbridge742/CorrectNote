@@ -101,19 +101,23 @@ class NativeActionRoleTests(unittest.TestCase):
 
 
     def test_nominal_phrase_keeps_actual_genitive_boundary_and_head(self):
+        self.addCleanup(R.native_genitive_nominal_splits.cache_clear)
         no=M.Token('の','助詞','の','の',2,3,True,'連体化','')
         R.native_nominal_phrase_faces.cache_clear()
+        R.native_genitive_nominal_splits.cache_clear()
         with patch.object(R,'_native_nominal_reading_faces',side_effect=lambda rd:
                     {'ひと':('人',),'ぺーじ':('頁',)}.get(rd,())), \
              patch.object(M,'tokenize',return_value=[no]):
             self.assertEqual(R.native_nominal_phrase_faces('ひとのぺーじ'),('頁',))
         R.native_nominal_phrase_faces.cache_clear()
+        R.native_genitive_nominal_splits.cache_clear()
         with patch.object(R,'_native_nominal_reading_faces',side_effect=lambda rd:
                     {'ひと':('人',),'ぺーじ':('頁',)}.get(rd,())), \
              patch.object(M,'tokenize',return_value=[]), \
              patch.object(R,'native_bare_action_faces',return_value=()):
             self.assertEqual(R.native_nominal_phrase_faces('ひとのぺーじ'),())
         R.native_nominal_phrase_faces.cache_clear()
+        R.native_genitive_nominal_splits.cache_clear()
 
     def test_relational_head_does_not_accept_arbitrary_noun_pairs(self):
         R.native_nominal_phrase_faces.cache_clear()

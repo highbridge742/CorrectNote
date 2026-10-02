@@ -12,6 +12,104 @@ def token(surface, reading, pos='名詞:一般', start=0, form=''):
 
 
 class ContextualRepairTests(unittest.TestCase):
+
+    def test_late_shift_candidate_requires_a_complete_native_structure(self):
+        import morphology as M
+        if not M.HAS_JANOME:self.skipTest('native candidate structure')
+        target=self.target('ごにゆぅ力下キー')
+        cases=(('誤入力したキー','ごにゅうりょくしたきー',True),
+               ('入力','にゅうりょく',True),
+               ('ご入力がキー','ごにゅうりょくがきー',False),
+               ('ごにゆうりきがキー','ごにゆうりきがきー',False))
+        for surface,reading,expected in cases:
+            with self.subTest(surface=surface):
+                self.assertEqual(R._late_shift_candidate_complete(target,surface,reading),expected)
+
+    def test_blocked_late_shift_candidate_keeps_original_and_purple(self):
+        import app
+        import morphology as M
+        if not M.HAS_JANOME:self.skipTest('native source and candidate')
+        from tests_analysis_async import initial
+        a=initial();revision=a.store.revision();source='ごにゆぅ力下キー'
+        a.decisions.reject(source,'誤入力したキー')
+        result=app.correct_line(source,a.store,input_method='kana',
+            dict_index=a.dict_index,decisions=a.decisions)
+        self.assertEqual(result['corrected'],source)
+        self.assertTrue(result['odd_spans'])
+        self.assertEqual(result['analysis_status'],'complete')
+        a.decisions=type(a.decisions)()
+        result=app.correct_line(source,a.store,input_method='kana',
+            dict_index=a.dict_index,decisions=a.decisions)
+        self.assertEqual(result['corrected'],'誤入力したキー')
+        self.assertFalse(result['odd_spans'])
+        self.assertEqual(a.store.revision(),revision)
+
+
+    def test_adjacent_shift_window_retains_both_physical_events(self):
+        import kana_layout as k
+        rows=tuple(R.adjacent_shift_key_repairs('ごにゆぅりょくしたきー'))
+        chosen=next(r for r in rows if r.reading=='ごにゅうりょくしたきー')
+        self.assertEqual(len(chosen.steps),2)
+        self.assertEqual(chosen.steps[1].position,chosen.steps[0].position+1)
+        self.assertAlmostEqual(chosen.cost,sum(s.cost for s in chosen.steps))
+        self.assertTrue(R._repair_uses_shift(chosen))
+        for step in chosen.steps:
+            self.assertEqual(step.operation,'shift')
+            self.assertTrue(k.same_physical_key(step.pressed,step.intended))
+        for source in ('ゆぅ','にゆう','にゅぅ','にゆあぅ','にゅう'):
+            with self.subTest(source=source):
+                self.assertFalse(tuple(R.adjacent_shift_key_repairs(source)))
+
+    def test_late_shift_window_joins_original_onset_and_prefix_in_own_field(self):
+        import app
+        import morphology as M
+        if not M.HAS_JANOME:self.skipTest('native original segmentation')
+        from tests_analysis_async import initial
+        a=initial();revision=a.store.revision()
+        cases=(
+            ('ごにゆぅ力下キー\t\t\t\t','誤入力したキー\t\t\t\t'),
+            ('\t\tごにゆぅ力下キー⇒\t\t','\t\t誤入力したキー⇒\t\t'),
+            ('誤入力したキー','誤入力したキー'),
+            ('ご入力したキー','ご入力したキー'),
+            ('自由に設定','自由に設定'),
+            ('「ごにゆぅ力下キー」という誤入力です。','「ごにゆぅ力下キー」という誤入力です。'))
+        for source,expected in cases:
+            with self.subTest(source=source):
+                result=app.correct_line(source,a.store,input_method='kana',
+                    dict_index=a.dict_index,decisions=a.decisions)
+                self.assertEqual(result['corrected'],expected)
+                self.assertFalse(result['odd_spans'])
+                self.assertEqual(result['analysis_status'],'complete')
+        self.assertEqual(a.store.revision(),revision)
+
+    def test_late_shift_window_retains_proved_original_noun_case(self):
+        import app
+        import morphology as M
+        if not M.HAS_JANOME:self.skipTest('native original argument')
+        from tests_analysis_async import initial
+        a=initial();revision=a.store.revision()
+        for source,preserved in (('木にゆぅ力下キー','木に'),('机にゆぅ力を置く','机に')):
+            with self.subTest(source=source):
+                result=app.correct_line(source,a.store,input_method='kana',
+                    dict_index=a.dict_index,decisions=a.decisions)
+                self.assertTrue(result['corrected'].startswith(preserved),result['corrected'])
+        self.assertEqual(a.store.revision(),revision)
+
+    def test_late_shift_validation_keeps_native_adjectival_action_notes(self):
+        import app
+        import morphology as M
+        if not M.HAS_JANOME:self.skipTest('native manner and action')
+        from tests_analysis_async import initial
+        a=initial();revision=a.store.revision()
+        for source,expected in (('じゆぅに設定','自由に設定'),('じゆぅに補正','自由に補正')):
+            with self.subTest(source=source):
+                result=app.correct_line(source,a.store,input_method='kana',
+                    dict_index=a.dict_index,decisions=a.decisions)
+                self.assertEqual(result['corrected'],expected)
+                self.assertFalse(result['odd_spans'])
+                self.assertEqual(result['analysis_status'],'complete')
+        self.assertEqual(a.store.revision(),revision)
+
     def target(self, text, after=''):
         return R.RepairTarget(text+after,0,len(text),0,len(text+after),
                               (('異','様',0,len(text)),),True,after)
@@ -21,6 +119,25 @@ class ContextualRepairTests(unittest.TestCase):
         self.assertEqual(t.substitute('候補文字'),'候補文字です。')
         self.assertEqual(t.text,'対象')
         with self.assertRaises(FrozenInstanceError):t.start=0
+
+    def test_shift_free_source_is_a_preference_not_a_gate(self):
+        direct = self.target('しゆうりようします')
+        self.assertTrue(R._source_shift_free(direct, ()))
+        shifted = self.target('しゅうりょうします')
+        self.assertFalse(R._source_shift_free(shifted, ()))
+        first='しゅう';second='しゆうりようします'
+        joined=first+'\t'+second+'\t'
+        lo=len(first)+1
+        own=R.RepairTarget(joined,lo,lo+len(second),lo,lo+len(second),
+                           (),True,'')
+        self.assertTrue(R._source_shift_free(own, ()))
+        written = self.target('詩有料します')
+        self.assertTrue(R._source_shift_free(written, (
+            R.Reading('しゆうりようします', 'ime_first_roundtrip', 0),)))
+        self.assertFalse(R._source_shift_free(written, (
+            R.Reading('しゆうりようします', 'ime_reverse', 0),)))
+        self.assertTrue(R._repair_uses_shift(R.KeyRepair(
+            'しゅうりようします', 'shift', 1, 'ゆ', 'ゅ', 0.4)))
 
     def test_physical_mark_is_one_substitution(self):
         with patch.dict(os.environ,{'CN_MARK_SLIP':'1'}):
@@ -45,12 +162,18 @@ class ContextualRepairTests(unittest.TestCase):
         with patch.dict(os.environ,{'CN_NO_DUP':'0'}):
             self.assertIn('か',[r.reading for r in R.key_repairs('かか')])
 
-    def test_no_missing_key_is_added_by_the_one_stroke_stage(self):
+    def test_only_one_missing_voicing_mark_is_added_by_the_one_stroke_stage(self):
         import kana_layout as K
         for reading in ('もみと','たふせ','かか','がぞう','しゅうりょ'):
             n=sum(len(K.keystrokes(c)) for c in reading)
             for row in R.key_repairs(reading):
-                self.assertLessEqual(sum(len(K.keystrokes(c)) for c in row.reading),n)
+                count=sum(len(K.keystrokes(c)) for c in row.reading)
+                if row.operation=='omission':
+                    self.assertEqual(count,n+1)
+                    self.assertEqual(row.pressed,'')
+                    self.assertIn(row.intended,'゛゜')
+                    self.assertEqual(row.cost,K.MISSING_KEY_COST)
+                else:self.assertLessEqual(count,n)
 
     def test_chained_intrusion_uses_original_geometry_and_shift_identity(self):
         remote=R.KeyRepair('もじ','adjacent_intrusion',1,'ん','',1.0)
@@ -81,11 +204,25 @@ class ContextualRepairTests(unittest.TestCase):
         self.assertEqual(readings[0].text,'よみなおし')
         guessed.assert_not_called()
 
-    def test_saved_ime_pair_precedes_dictionary_reading(self):
+    def test_saved_ime_pair_precedes_dictionary_when_live_ime_is_absent(self):
         with patch('kanji_guess.ime_readings_for',return_value=['いめ']), \
-             patch('inflected_lexicon.dictionary_readings',return_value=('じしょ',)):
+             patch('inflected_lexicon.dictionary_readings',return_value=('じしょ',)), \
+             patch('ime_language.JapaneseIME') as ime, \
+             patch('ime_native_reading.source_roundtrips',return_value=()):
+            ime.return_value.__enter__.return_value.available=False
             rows=R.reading_evidence(self.target('文字'),lambda s:[token(s,'じしょ')],None)
         self.assertEqual((rows[0].text,rows[0].source),('いめ','saved_ime_pair'))
+
+    def test_confirmed_native_ime_roundtrip_ranks_before_saved_fallback(self):
+        # Control the source hypotheses; do not depend on the machine's IME.
+        with patch('kanji_guess.ime_readings_for',return_value=['かんし']), \
+             patch('inflected_lexicon.dictionary_readings',return_value=()), \
+             patch('ime_language.JapaneseIME') as ime, \
+             patch('ime_native_reading.source_roundtrips',return_value=(('かんじ',()),)):
+            ime.return_value.__enter__.return_value.available=False
+            rows=R.reading_evidence(self.target('漢字'),lambda s:[token(s,'かんじ')],None)
+        self.assertEqual((rows[0].text,rows[0].source),('かんじ','ime_first_roundtrip'))
+        self.assertIn('かんし',[row.text for row in rows])
 
     def test_candidate_reading_must_survive_in_context(self):
         target=self.target('異字','に戻る')
@@ -337,17 +474,21 @@ class ContextualRepairTests(unittest.TestCase):
               token('帰る','かえる','動詞:自立',6,'基本形')]
         cut=[token('貸','かし'),token('さ','さ',start=1),token('って','って','助詞:格助詞',2)]
         with patch('kanji_guess.ime_readings_for',return_value=[]), \
-             patch('inflected_lexicon.dictionary_readings',return_value=()):
+             patch('inflected_lexicon.dictionary_readings',return_value=()), \
+             patch('ime_inverse_gate.exact_context_reading',return_value=None):
             readings=R.reading_evidence(t,lambda x:full if x==line else cut,None)
         self.assertEqual(readings[0].text,'かさって')
         self.assertEqual(readings[0].source,'contextual_token_sequence')
         self.assertEqual(readings[0].segments[0][:2],(0,2))
 
-    def test_in_context_reading_does_not_override_a_saved_whole_ime_pair(self):
+    def test_native_context_keeps_saved_whole_pair_when_live_ime_is_absent(self):
         t=self.target('漢字')
         tk=lambda s:[token(s,'かんじ')]
         with patch('kanji_guess.ime_readings_for',side_effect=lambda s:['かんし'] if s=='漢字' else []), \
-             patch('inflected_lexicon.dictionary_readings',return_value=()):
+             patch('inflected_lexicon.dictionary_readings',return_value=()), \
+             patch('ime_language.JapaneseIME') as ime, \
+             patch('ime_native_reading.source_roundtrips',return_value=()):
+            ime.return_value.__enter__.return_value.available=False
             rows=R.reading_evidence(t,tk,None)
         self.assertEqual((rows[0].text,rows[0].source),('かんし','saved_ime_pair'))
         self.assertIn('かんじ',[r.text for r in rows])
@@ -379,8 +520,12 @@ class ContextualRepairTests(unittest.TestCase):
                         token(after,after,new_suffix_pos,len(surface))]
             return []
         engine=SimpleNamespace(_check_replacement=lambda source,c,*a,**kw:(c,None))
+        # This mock tokenizer tests the unchanged seam below. Native whole
+        # chain validation is covered by the real-dictionary tests; allowing
+        # it here would reject 漕ぎて before this isolated seam is exercised.
         with patch('oddness.is_odd_run',return_value=[]), \
              patch('oddness.preserves_bound_verb',return_value=True), \
+             patch.object(R,'_productive_predicate',return_value=True), \
              patch.object(R,'_modern_te_allowed',return_value=allowed) as proof:
             return R.validate(target,surface,engine,tk,None,None),proof
 
@@ -447,6 +592,57 @@ class ContextualRepairTests(unittest.TestCase):
 
     def test_unproven_original_predicate_is_not_a_new_negative_judgement(self):
         self.assertEqual(self.interjection_candidate(native=False),(True,'accepted'))
+
+
+class Image16adSourceFlowTests(unittest.TestCase):
+    """Source words, grammatical links and list spelling through the app entry."""
+
+    def _correct(self, source):
+        import app
+        from tests_analysis_async import initial
+        state=initial()
+        result=app.correct_line(source,state.store,input_method='kana',
+            dict_index=state.dict_index,decisions=state.decisions,context_vec=None)
+        self.assertEqual(result['analysis_status'],'complete')
+        self.assertFalse(result['odd_spans'])
+        return result['corrected']
+
+    def test_continuative_keeps_its_actual_auxiliary_tail(self):
+        for source in ('入れります。','いれります。'):
+            with self.subTest(source=source):
+                self.assertEqual(self._correct(source),'入れます。')
+        self.assertEqual(self._correct('おくます。'),'置きます。')
+
+    def test_repaired_origin_keeps_its_nominal_sense(self):
+        for source in ('も水戸に戻ります','もみとにもどります','もとにもどります'):
+            with self.subTest(source=source):
+                self.assertEqual(self._correct(source),'元に戻ります')
+        for source in ('下に戻ります','本に戻ります'):
+            with self.subTest(source=source):
+                self.assertEqual(self._correct(source),source)
+
+    def test_interrogative_extent_keeps_its_source_frame(self):
+        self.assertEqual(self._correct('出るカマで考える'),'出るかまで考える')
+        self.assertEqual(self._correct('出るカマで切る'),'出るカマで切る')
+        self.assertEqual(self._correct('出るカナで考える'),'出るカナで考える')
+
+    def test_repaired_kana_compound_keeps_attested_source_head(self):
+        self.assertEqual(self._correct('かなりゅうりょく'),'かな入力')
+        self.assertEqual(self._correct('カナりゅうりょく'),'カナ入力')
+        self.assertEqual(self._correct('仮名りゅうりょく'),'仮名入力')
+        self.assertEqual(self._correct('「かなりゅうりょく」という誤入力'),
+                         '「かなりゅうりょく」という誤入力')
+
+    def test_native_genitive_remains_a_particle(self):
+        self.assertEqual(self._correct('肩のこり'),'肩のこり')
+        self.assertEqual(self._correct('肩のこりを感じる'),'肩の凝りを感じる')
+        self.assertEqual(self._correct('本の残り'),'本の残り')
+
+    def test_intact_enumerated_nouns_keep_their_source_spelling(self):
+        source=('効能効果：疲労回復、荒れ性、あせも、にきび、しっしん、肩のこり、'
+            '腰痛、神経痛、うちみ、くじき、痔、リウマチ、ひび、あかぎれ、'
+            'しもやけ、冷え症、産前産後の冷え症')
+        self.assertEqual(self._correct(source),source)
 
 
 if __name__=='__main__':unittest.main()

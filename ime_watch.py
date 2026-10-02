@@ -47,6 +47,52 @@ import sys
 
 HAS_SUPPORT = sys.platform.startswith('win')
 
+_IMM = None
+
+
+def _imm32():
+    """Declare pointer-sized handles before any IMM call, including on x64."""
+    global _IMM
+    if _IMM is None:
+        import ctypes as C
+        from ctypes import wintypes as W
+        imm=C.WinDLL('imm32')
+        signatures={
+            'ImmGetContext': ([W.HWND],W.HANDLE),
+            'ImmReleaseContext': ([W.HWND,W.HANDLE],W.BOOL),
+            'ImmGetOpenStatus': ([W.HANDLE],W.BOOL),
+            'ImmGetConversionStatus': ([W.HANDLE,C.POINTER(W.DWORD),C.POINTER(W.DWORD)],W.BOOL),
+            'ImmGetCompositionStringW': ([W.HANDLE,W.DWORD,C.c_void_p,W.DWORD],W.LONG),
+            'ImmCreateContext': ([],W.HANDLE),
+            'ImmDestroyContext': ([W.HANDLE],W.BOOL),
+            'ImmAssociateContext': ([W.HWND,W.HANDLE],W.HANDLE),
+            'ImmAssociateContextEx': ([W.HWND,W.HANDLE,W.DWORD],W.BOOL),
+            'ImmSetConversionStatus': ([W.HANDLE,W.DWORD,W.DWORD],W.BOOL),
+            'ImmSetOpenStatus': ([W.HANDLE,W.BOOL],W.BOOL),
+            'ImmSetCompositionFontW': ([W.HANDLE,C.c_void_p],W.BOOL),
+        }
+        for name,(arguments,result) in signatures.items():
+            fn=getattr(imm,name);fn.argtypes=arguments;fn.restype=result
+        _IMM=imm
+    return _IMM
+
+
+def _composition_string(imm,himc,index):
+    """Read one complete UTF-16 value; a changing/truncated value is no evidence."""
+    import ctypes
+    n=imm.ImmGetCompositionStringW(himc,index,None,0)
+    if n is None or n<=0 or n%2:
+        return ''
+    raw=ctypes.create_string_buffer(n)
+    got=imm.ImmGetCompositionStringW(himc,index,raw,n)
+    if got!=n:
+        return ''
+    try:
+        return raw.raw.decode('utf-16-le')
+    except UnicodeError:
+        return ''
+
+
 # IMM32 の変換モードビット（imm.h より）
 IME_CMODE_ROMAN = 0x0010
 
@@ -76,7 +122,7 @@ def current_input_method(hwnd):
         return None
     try:
         import ctypes
-        imm = ctypes.windll.imm32
+        imm = _imm32()
         himc = imm.ImmGetContext(hwnd)
         if not himc:
             return None
@@ -99,7 +145,9 @@ def current_input_method(hwnd):
 GCS_COMPREADSTR = 0x0001
 GCS_COMPSTR = 0x0008
 GCS_RESULTREADSTR = 0x0200
+GCS_RESULTREADCLAUSE = 0x0400
 GCS_RESULTSTR = 0x0800
+GCS_RESULTCLAUSE = 0x1000
 
 # read_composition が返す4つ（項目48-GX で実機から取れた）。
 COMPOSITION_FIELDS = (
@@ -127,7 +175,7 @@ def composition_active(hwnd):
         return None
     try:
         import ctypes
-        imm = ctypes.windll.imm32
+        imm = _imm32()
         himc = imm.ImmGetContext(hwnd)
         if not himc:
             return None
@@ -136,11 +184,35 @@ def composition_active(hwnd):
             # バイト数を返す（バッファ無しで長さだけ聞ける）。
             # 0 より大きければ、いま未確定の文字がある。
             n = imm.ImmGetCompositionStringW(himc, GCS_COMPSTR, None, 0)
-            return bool(n and n > 0)
+            return None if n is None or n < 0 else bool(n)
         finally:
             imm.ImmReleaseContext(hwnd, himc)
     except Exception:
         return None
+
+
+def complete_composition(hwnd):
+    """Ask only this editor's IME to commit its current composition."""
+    if not HAS_SUPPORT or not hwnd:
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+        imm = _imm32()
+        imm.ImmNotifyIME.argtypes = [wintypes.HANDLE, wintypes.DWORD,
+                                     wintypes.DWORD, wintypes.DWORD]
+        imm.ImmNotifyIME.restype = wintypes.BOOL
+        himc = imm.ImmGetContext(hwnd)
+        if not himc:
+            return False
+        try:
+            # NI_COMPOSITIONSTR / CPS_COMPLETE sets the actual result. The
+            # requesting action handles delivery outside the native callback.
+            return bool(imm.ImmNotifyIME(himc, 0x15, 1, 0))
+        finally:
+            imm.ImmReleaseContext(hwnd, himc)
+    except Exception:
+        return False
 
 
 def give_own_context(hwnds):
@@ -154,10 +226,9 @@ def give_own_context(hwnds):
     交互に点滅していた（うにさんの報告。probe_quick_ime3 で
     0.25〜0.3秒ごとの往復を実測）。
 
-    hwnds: 同じ専用文脈に結び付ける窓の並び。簡易入力では
-        「入力の焦点が向かう包み（wrapper）」と「Text 自身」の両方
-        （IME は焦点の窓の文脈を読み、Tk は Text の窓へ位置を書く。
-          片方だけだと素通りする——学び22）。
+    hwnds: 同じ専用文脈へ結び付ける窓。簡易入力では外枠・Toplevel
+        本体・Text。Tk_SetCaretPos は Toplevel 本体の文脈へ変換位置を
+        書くため、外枠と Text だけを分離しても本体アプリへ干渉する。
 
     戻り値: 作った HIMC（restore_default_context に渡して片付ける）
         か None（作れない・Windows 以外）。
@@ -166,7 +237,7 @@ def give_own_context(hwnds):
         return None
     try:
         import ctypes
-        imm = ctypes.windll.imm32
+        imm = _imm32()
         # **いまの文脈の「IME が開いているか・変換モード」を先に写し
         # 取る**。作りたての文脈は IME が閉じた状態で始まるので、
         # 写さないと、開いた簡易入力でいきなり日本語が打てない
@@ -221,7 +292,7 @@ def restore_default_context(hwnds, himc):
         return
     try:
         import ctypes
-        imm = ctypes.windll.imm32
+        imm = _imm32()
         for h in hwnds or ():
             if h:
                 try:
@@ -283,7 +354,7 @@ def set_composition_font(hwnd, face, height_px):
         lf.lfCharSet = 1                        # DEFAULT_CHARSET
         lf.lfQuality = 5                        # CLEARTYPE_QUALITY
         lf.lfFaceName = str(face or '')[:31]
-        imm = ctypes.windll.imm32
+        imm = _imm32()
         himc = imm.ImmGetContext(hwnd)
         if not himc:
             return None
@@ -295,7 +366,43 @@ def set_composition_font(hwnd, face, height_px):
         return None
 
 
-def read_composition(hwnd):
+def _composition_clauses(imm,himc,index,text):
+    """Read a complete bounded DWORD array, including its final UTF-16 end."""
+    import ctypes,struct
+    from ime_readings import utf16_positions
+    size=imm.ImmGetCompositionStringW(himc,index,None,0)
+    if size is None or not 8<=size<=4*65 or size%4:return ()
+    raw=ctypes.create_string_buffer(size)
+    if imm.ImmGetCompositionStringW(himc,index,raw,size)!=size:return ()
+    offsets=struct.unpack('<'+'I'*(size//4),raw.raw)
+    positions=utf16_positions(text)
+    if (offsets[0]!=0 or offsets[-1]!=max(positions)
+            or any(a>=b for a,b in zip(offsets,offsets[1:]))
+            or any(offset not in positions for offset in offsets)):return ()
+    return tuple(positions[offset] for offset in offsets)
+
+
+def result_clause_pairs(surface,reading,surface_ends,reading_ends):
+    """Pair only matching native clause counts and complete original strings.
+
+    IMM Unicode clauses use UTF-16 units, not bytes or Python offsets:
+    https://learn.microsoft.com/en-us/windows/win32/intl/composition-string
+    Offsets here have already been decoded to Python boundaries. No word
+    split is inferred if either IME array is missing or inconsistent.
+    """
+    if not surface_ends or len(surface_ends)!=len(reading_ends):return ()
+    if (surface_ends[0]!=0 or reading_ends[0]!=0 or surface_ends[-1]!=len(surface)
+            or reading_ends[-1]!=len(reading)):return ()
+    if (any(a>=b for a,b in zip(surface_ends,surface_ends[1:]))
+            or any(a>=b for a,b in zip(reading_ends,reading_ends[1:]))):return ()
+    parts=tuple((surface[a:b],reading[c:d])
+        for a,b,c,d in zip(surface_ends,surface_ends[1:],reading_ends,reading_ends[1:]))
+    from ime_readings import reading_to_hiragana
+    if ''.join(reading_to_hiragana(y) for x,y in parts)!=reading_to_hiragana(reading):return ()
+    return parts
+
+
+def read_composition(hwnd,result_clauses=False):
     """
     **変換中／確定した文字列と、その読みを取る**（設計25(甲)）。
 
@@ -334,7 +441,7 @@ def read_composition(hwnd):
         return None
     try:
         import ctypes
-        imm = ctypes.windll.imm32
+        imm = _imm32()
         himc = imm.ImmGetContext(hwnd)
         if not himc:
             return None
@@ -343,16 +450,20 @@ def read_composition(hwnd):
             for name, idx in COMPOSITION_FIELDS:
                 out[name] = ''
                 try:
-                    n = imm.ImmGetCompositionStringW(himc, idx, None, 0)
-                    if not n or n <= 0:
-                        continue
-                    raw = ctypes.create_string_buffer(n)
-                    got = imm.ImmGetCompositionStringW(himc, idx, raw, n)
-                    if got is None or got <= 0:
-                        continue
-                    out[name] = raw.raw[:got].decode('utf-16-le', 'ignore')
+                    out[name] = _composition_string(imm,himc,idx)
                 except Exception:
                     pass    # 1つ取れなくても、ほかは取る
+            # Native result notifications request this optional evidence;
+            # ordinary composition polling keeps its four-string contract.
+            if result_clauses:
+                out['result_clauses']=()
+                try:
+                    surface,reading=out['result'],out['result_reading']
+                    if surface and reading:
+                        left=_composition_clauses(imm,himc,GCS_RESULTCLAUSE,surface)
+                        right=_composition_clauses(imm,himc,GCS_RESULTREADCLAUSE,reading)
+                        out['result_clauses']=result_clause_pairs(surface,reading,left,right)
+                except (ValueError,TypeError,OSError):pass
             return out
         finally:
             imm.ImmReleaseContext(hwnd, himc)

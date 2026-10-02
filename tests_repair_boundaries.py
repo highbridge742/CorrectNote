@@ -63,7 +63,20 @@ class RepairBoundaryTests(unittest.TestCase):
         with patch('oddness.is_odd_run',return_value=[('じ','゛',1,3)]), \
              patch('mark_usage.unattached_positions',return_value=(2,)):
             rows=R.targets_for_line(line,lambda _:tokens,None,None)
-        self.assertEqual([(r.text,r.following) for r in rows],[('もじ゛つ','を見ます')])
+        # The lexical and native-object hypotheses share this same edit span.
+        self.assertEqual({(r.text,r.following) for r in rows},{('もじ゛つ','を見ます')})
+        self.assertTrue(all(r.context==line for r in rows))
+
+    def test_whole_ime_reading_does_not_mark_each_sound_word_odd(self):
+        line='資料を変更しました'
+        tokens=parts(('資料','しりょう','名詞:一般'),('を','を','助詞:格助詞'),
+            ('変更','へんこう','名詞:サ変接続'),('し','し','動詞:自立','連用形'),
+            ('まし','まし','助動詞','連用形'),('た','た','助動詞','基本形'))
+        marks=[('IME逆読み','復元した読み',0,len(line)),('資料','を',0,3)]
+        with patch('oddness.is_odd_run',return_value=marks):
+            rows=R.targets_for_line(line,lambda _:tokens,None,None)
+        self.assertTrue(any(r.boundary_kind=='ime_scope' and r.text==line for r in rows))
+        self.assertTrue(all(r.boundary_kind=='ime_scope' or all(f[0]!='IME逆読み' for f in r.anomalies) for r in rows))
 
     def test_dictionary_absence_does_not_prove_a_completed_modifier(self):
         token=parts(('聞く','きく','動詞:自立','基本形'))[0]

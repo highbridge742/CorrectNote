@@ -608,6 +608,10 @@ if __name__ == '__main__':
     from tests_kana_action_repair import KanaActionRepairTests
     from tests_compound_meaning import CompoundMeaningTests
     from tests_native_action_roles import NativeActionRoleTests
+    from tests_native_verb_grammar import NativeVerbGrammarTests
+    from tests_native_conditionals import NativeConditionalTests
+    from tests_native_phase_nominal import NativePhaseNominalTests
+    from tests_native_preposed_arguments import NativePreposedArgumentTests
     from tests_mai_connection import MaiConnectionTests
     from tests_native_adjuncts import NativeAdjunctTests
     from tests_lexical_usage import LexicalUsageTests
@@ -642,11 +646,12 @@ if __name__ == '__main__':
     from tests_parallel_evidence import ParallelEvidenceTests
     from tests_reading_likelihood import ReadingLikelihoodTests
     from tests_contextual_repair import ContextualRepairTests
-    from tests_polite_connection import PoliteConnectionTests
+    from tests_polite_connection import PoliteConnectionTests, NativeChangedPoliteTests
     from tests_unknown_clauses import UnknownClauseTests
     from tests_semantic_roles import SemanticRoleTests
     from tests_contextual_tail import ContextualTailTests, BareModifierTests, WrittenErrorActionTests, SahenHomophoneTests, LayoutPositionTests
     from tests_spec_contracts import WorkContracts,CandidateContracts
+    from tests_analysis_async import AsyncIdentityTests
     from tests_tab_analysis import CompletedTabTests
     from tests_background_ownership import BackgroundOwnershipTests
     from tests_application_cache import ApplicationCacheTests
@@ -671,8 +676,18 @@ if __name__ == '__main__':
     from tests_search_boundaries import SearchBoundaryTests
     from tests_file_format import FileFormatTests
     from tests_spatial_nominal_context import SpatialNominalContextTests
+    from tests_shift_intrusion import SourceShiftIntrusionTests
+    from tests_ime_source_context import SourceContextIMEContractTests
+    from tests_tokenization_scope import TokenizationScopeTests
+    from tests_ime_session import IMESessionTests,NativeIMESessionTests
+    from tests_ime_commit_ranges import IMECommitRangeTests, AdjacentActualReadingTests,LiteralActualReadingTests
+    from tests_ime_watch import IMMReadingTests, IMMResultClauseTests
+    from tests_context_meaning import ContextMeaningTests
+    from tests_natural_default import NaturalDefaultTests
+    from tests_familiar_spelling import FamiliarSpellingTests
+    from tests_mark_clusters import MarkClusterTests
     context_suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(c)
-        for c in (FileFormatTests,NativeVerbPrefixTests,CountedNominalTests,AdverbialHostTests,BiologicalCaseTests,LegacyCoverageTests,NativeLegacyCoverageTests,FocusedSequenceTests,OriginalCaseStyleTests,CounterReadingTests,NominalSourceRangeTests,ShortCausativeTests,FloatingQuantityTests,OrdinaryQuantityMeaningTests,ProlongedClauseTests,SearchBoundaryTests,FocusedRequestContextTests,SpatialNominalContextTests,NegativeDegreeContextTests,ActionNominalContextTests,CompletedTabTests,BackgroundOwnershipTests,ApplicationCacheTests,InitialSetupTests,ReadingRowsTests,NativeReadingExtensionsTests,WorkContracts,CandidateContracts,MaiConnectionTests, NativeAdjunctTests, KanaActionRepairTests, CompoundMeaningTests, NativeActionRoleTests, ActionNoteTests, AttestedNounTests, SelectionContextTests, LexicalUsageTests, DuplicatePolicyTests, AdnominalReadingTests, PredicateConversionTests, SourceFragmentEntryTests, NativeNominalContextTests, EuphonicLiteralBoundaryTests, NativePhraseContextTests, QuotationAndPositionTests, NativeAdverbialTests, WordMentionTests, RepairBoundaryTests, SubjectRoleTests, ResolvedDiagnosticTests, UnattachedMarkTests, MarkUsageTests, SubjectValencyTests, WordformMentionTests, UnknownClauseTests, SemanticRoleTests, PoliteConnectionTests, ReadingLikelihoodTests, ContextualRepairTests, ContextualTailTests, BareModifierTests, WrittenErrorActionTests, SahenHomophoneTests, LayoutPositionTests, LiteralExampleTests, ReadingBoundaryTests, IntrudedStrokeTests, ShortReadingTests, PartialEngineTests, PartialReadingTests, ContinuationTests, MissingKeyPriorityTests, MarkSlipSearchTests, PropertyPrefixTests, HeadSemanticsTests, ExpressiveContextTests, ShortcutCaseTests, ParallelEvidenceTests))
+        for c in (ContextMeaningTests,NaturalDefaultTests,FamiliarSpellingTests,MarkClusterTests,IMESessionTests,TokenizationScopeTests,SourceContextIMEContractTests,IMMReadingTests,IMMResultClauseTests,IMECommitRangeTests,AdjacentActualReadingTests,LiteralActualReadingTests,SourceShiftIntrusionTests,FileFormatTests,NativeVerbPrefixTests,CountedNominalTests,AdverbialHostTests,BiologicalCaseTests,LegacyCoverageTests,NativeLegacyCoverageTests,FocusedSequenceTests,OriginalCaseStyleTests,CounterReadingTests,NominalSourceRangeTests,ShortCausativeTests,FloatingQuantityTests,OrdinaryQuantityMeaningTests,ProlongedClauseTests,SearchBoundaryTests,FocusedRequestContextTests,SpatialNominalContextTests,NegativeDegreeContextTests,ActionNominalContextTests,AsyncIdentityTests,CompletedTabTests,BackgroundOwnershipTests,ApplicationCacheTests,InitialSetupTests,ReadingRowsTests,NativeReadingExtensionsTests,WorkContracts,CandidateContracts,MaiConnectionTests, NativeAdjunctTests, KanaActionRepairTests, CompoundMeaningTests, NativeActionRoleTests, NativeVerbGrammarTests, NativeConditionalTests, NativePhaseNominalTests, NativePreposedArgumentTests, NativeChangedPoliteTests, ActionNoteTests, AttestedNounTests, SelectionContextTests, LexicalUsageTests, DuplicatePolicyTests, AdnominalReadingTests, PredicateConversionTests, SourceFragmentEntryTests, NativeNominalContextTests, EuphonicLiteralBoundaryTests, NativePhraseContextTests, QuotationAndPositionTests, NativeAdverbialTests, WordMentionTests, RepairBoundaryTests, SubjectRoleTests, ResolvedDiagnosticTests, UnattachedMarkTests, MarkUsageTests, SubjectValencyTests, WordformMentionTests, UnknownClauseTests, SemanticRoleTests, PoliteConnectionTests, ReadingLikelihoodTests, ContextualRepairTests, ContextualTailTests, BareModifierTests, WrittenErrorActionTests, SahenHomophoneTests, LayoutPositionTests, LiteralExampleTests, ReadingBoundaryTests, IntrudedStrokeTests, ShortReadingTests, PartialEngineTests, PartialReadingTests, ContinuationTests, MissingKeyPriorityTests, MarkSlipSearchTests, PropertyPrefixTests, HeadSemanticsTests, ExpressiveContextTests, ShortcutCaseTests, ParallelEvidenceTests))
     context_result = unittest.TextTestRunner().run(context_suite)
     all_ok = context_result.wasSuccessful() and preserved_result.wasSuccessful() and dictionary_result.wasSuccessful() and acceptor_result.wasSuccessful() and input_pending_result.wasSuccessful() and nearby_result.wasSuccessful() and reading_evidence_result.wasSuccessful() and state_result.wasSuccessful() and small_vowel_result.wasSuccessful() and fallback_result.wasSuccessful() and replacement_result.wasSuccessful() and all_ok and contract_result.wasSuccessful() and ime_result.wasSuccessful() and colloquial_result.wasSuccessful()
     print('ALL OK:', all_ok)

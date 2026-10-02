@@ -78,7 +78,8 @@ class TextObserverTkTests(unittest.TestCase):
         self.assertEqual(self.edits[-1], ('資料と資料', False, (2, 2)))
         w.edit_undo()
         self.assertEqual(w.get('1.0', 'end-1c'), '資料')
-        self.assertTrue(self.edits[-1][1])
+        # Undo now reports its exact source range, preserving other rows.
+        self.assertEqual(self.edits[-1], ('資料', False, (2, 5)))
         w.insert('1.0', '😀')
         w.insert('end-1c', 'と資料')
         self.assertEqual(self.edits[-1], ('😀資料と資料', False, (3, 3)))

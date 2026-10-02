@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Automatic intrusion proof, original-key constraints, and usable UI ranges."""
+from tests_spelling_reference import assert_repaired_spelling
 import unittest
 from unittest.mock import patch
 import morphology
@@ -27,7 +28,7 @@ class AutomaticParticleTests(unittest.TestCase):
             ('文書に気は、注釈があります。','文書には、注釈があります。')):
             with self.subTest(source=source):
                 result=self.correct(source)
-                self.assertEqual(result['corrected'],wanted)
+                assert_repaired_spelling(self, result, wanted)
                 self.assertFalse(result['odd_spans'])
                 self.assertEqual(result['analysis_status'],'complete')
 
@@ -101,7 +102,7 @@ class AutomaticParticleTests(unittest.TestCase):
         import ui_projection
         source='資料に気は、  しりょうにきは、'
         result=self.correct(source)
-        self.assertEqual(result['corrected'],'資料には、  しりょうには、')
+        assert_repaired_spelling(self, result, '資料には、  しりょうには、')
         self.assertEqual(len(result['details']),2)
         for src in (False,True):
             text=result['original' if src else 'corrected']

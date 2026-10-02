@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """The candidate index and native nominal evidence may have different coverage."""
+from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
 import contextual_repair as R
@@ -25,8 +26,40 @@ class AttestedNominalCandidateTests(unittest.TestCase):
             with self.subTest(source=source):
                 result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                self.assertEqual(result['corrected'],expected)
+                assert_repaired_spelling(self, result, expected)
                 self.assertEqual(result.get('odd_spans'),[])
 
+
+    def test_existing_kana_anomaly_reaches_the_shared_object_interpretation(self):
+        import corrector as C
+        from tests_analysis_async import initial
+        a=initial();tokenize=C.make_tokenizer(a.store)
+        for text in ('まとがいをなおします。','まとがいをたべます。'):
+            targets=R.targets_for_line(text,tokenize,a.store,a.dict_index)
+            nouns=[t for t in targets if t.boundary_kind=='nominal_object']
+            self.assertEqual([(t.start,t.end) for t in nouns],[(0,4)])
+            self.assertTrue(nouns[0].anomalies)
+            self.assertIn(('まと','がい',0,4),nouns[0].anomalies)
+            self.assertFalse(C._chunk_is_intact(nouns[0].text,tokenize,repair_context=nouns[0]))
+        for text in ('まちがいをなおします。','まてがいをたべます。',
+                     '葦原を眺めます。','ぷねらという名前です。',
+                     '「まとがいをたべます」という誤入力例です。'):
+            self.assertFalse([t for t in R.targets_for_line(text,tokenize,a.store,a.dict_index)
+                              if t.boundary_kind=='nominal_object'],text)
+
+    def test_candidate_meaning_uses_the_same_unchanged_predicate(self):
+        import app
+        from tests_analysis_async import initial
+        a=initial()
+        # 2026-09-22: the explicit everyday-word judgment gives 間違い
+        # the same usage tier as its kana spelling; native cost selects kanji.
+        for source,expected in (('まとがいをなおします。','間違いをなおします。'),
+                                 ('まとがいをたべます。','マテガイをたべます。'),
+                                 ('まとがいをしゅうせいします。','間違いをしゅうせいします。'),
+                                 ('まとがいをやきます。','マテガイをやきます。')):
+            result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                context_vec=None,decisions=a.decisions)
+            assert_repaired_spelling(self, result, expected, source)
+            self.assertEqual(result.get('odd_spans'),[],source)
 
 if __name__=='__main__':unittest.main()

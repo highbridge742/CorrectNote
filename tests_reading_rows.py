@@ -55,4 +55,13 @@ class ReadingRowsTests(unittest.TestCase):
         state.update(text='注釈\n資料',lines=['注釈','資料'],readings=(Occurrence(3,5,'資料','しりょう'),))
         self.assertTrue(_background_readings(state,1));self.assertIsNot(state['_reading_document'],doc)
 
+    def test_background_calculation_is_row_scoped_and_not_a_phonetic_reading(self):
+        from analysis_work import Calculation
+        state=dict(owner=1,text='注釈\n12+3',lines=['注釈','12+3'],readings=(),
+            calculations=(Calculation(3,7,'12+3','15'),))
+        self.assertEqual(_background_readings(state,0,'calculations'),())
+        values=_background_readings(state,1,'calculations')
+        self.assertEqual(values,(Calculation(0,4,'12+3','15'),))
+        self.assertEqual(_background_readings(state,1),())
+
 if __name__=='__main__':unittest.main()

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Repairing a malformed verb must retain its actual native manner form."""
+from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
 import reading_segments as R
@@ -41,7 +42,7 @@ class SourceMannerTests(unittest.TestCase):
         text='たまねぎをうすくきすります。'
         result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
             context_vec=None,decisions=a.decisions)
-        self.assertEqual(result['corrected'],'たまねぎをうすくきります。')
+        assert_repaired_spelling(self, result, 'たまねぎをうすくきります。')
         self.assertEqual(result.get('odd_spans'),[])
 
 

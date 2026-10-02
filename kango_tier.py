@@ -36,15 +36,19 @@
   ・異様な長い読みに対し、普通名詞2語の候補同士の意味的な結び付きを
     比べる（`compound_relations`）。誤入力と正解の対は保存しない
 
-**稀語だけで異様とは判定しない。** 「異様か」は別の判定が行う。
-2026-09-12の版付きusage_judgmentsは、辞書費用の抽出範囲を越えて
+2026-09-12以降の版付きusage_judgmentsは、辞書費用の抽出範囲を越えて
 日常の入力可能性をAIで評価する。候補順位と、全かなを未編集の普通語と
-説明する肯定証拠に共有する。辞書にある稀語だけでは普通の読みと認定しない。
-既に書かれた専門用語の綴りや利用者の明示選択は、この表だけで変更しない。
+説明する肯定証拠に共有する。2026-09-27から、明示的に稀と評価した動詞に
+同じ実辞書の読み・活用を持つ一般的表記がある場合は、原文の既定にも使う。
+本人の同じ読みへの明示選択と、表記そのものの引用は別に扱う。
+名詞・サ変動作でも、同じ実読みの一般語が実際の対象・後続動作に合うかを
+比較する。原文の専門的な意味がその対象に合う場合はそちらを選ぶ。
+同読みの一般的表記が無い専門語を、この評価だけで別語へ変えない。
 
 旧tier()の未収録=3は旧順位の互換用。known_usage_tier()は未評価をNoneと
 返す。明示的な稀語の判断と、旧表に収録されていないだけの語を混同しない。
 """
+from functools import lru_cache
 import json
 import os
 
@@ -138,6 +142,19 @@ def known_usage_tier(surface):
 
 
 
+def known_reading_usage_tier(reading):
+    """Positive ordinary-use evidence for a literal-kana candidate head.
+
+    The shared roster and exact native noun readings own this evidence;
+    spelling alternatives are not counted as votes. Restricted senses alone
+    do not prove that an otherwise uncovered reading is restricted.
+    """
+    tiers=[usage_tier_for_reading(word,reading)
+           for word in _explicit_reading_faces().get(reading,())]
+    ordinary=[tier for tier in tiers if tier in (1,2)]
+    return min(ordinary) if ordinary else None
+
+
 def usage_tier_for_reading(surface, reading):
     """48-AAW: an ordinary spelling does not make all its readings ordinary."""
     _load()
@@ -151,6 +168,9 @@ def is_restricted(surface):
 
 def _explicit_reading_faces():
     """Native readings of all explicit usage judgments; no guessed readings."""
+    from public_nominal_cache import load
+    cached=load()
+    if cached is not None:return cached['explicit']
     _load()
     from morphology import dictionary_inflections
     result={}
@@ -246,3 +266,42 @@ def prefer_predicate_spelling(reading, preferred, tail):
         if usage_tier_for_reading(word,reading) in (1,2) and accepts(word)]
     return min(ordinary,key=lambda word:(usage_tier_for_reading(word,reading),
         _table_cost(word) if _table_cost(word) is not None else 10**9,word)) if ordinary else preferred
+
+
+@lru_cache(maxsize=8192)
+def candidate_usage_tier(surface,reading=None):
+    """A native inflection retains the explicit usage judgment of its lemma.
+
+    Missing lexical judgments remain unknown. Another same-reading spelling
+    supplies neither rarity nor everyday status for the written candidate.
+    """
+    direct=known_usage_tier(surface)
+    if direct is not None:return direct
+    from morphology import dictionary_inflections
+    forms=[row for row in dictionary_inflections(surface) or ()
+           if row[0].startswith(('動詞,自立,','形容詞,自立,'))
+           and (reading is None or row[3]==reading)]
+    if forms:
+        tiers=[known_usage_tier(base) for pos,form,base,rd in forms]
+        return min(tiers) if all(t is not None for t in tiers) else None
+    # A validated candidate can contain several lexical units. Do not make
+    # all their known familiarity disappear merely because the editing
+    # window includes an unchanged noun or an inflection/particle tail.
+    # Every content word must have an explicit judgment; an unknown part
+    # remains unknown, and functional tokens are not extra positive votes.
+    from morphology import tokenize
+    parts=tokenize(surface)
+    if (len(parts)<2 or ''.join(t.surface for t in parts)!=surface
+        or any(not t.has_reading for t in parts)):return None
+    tiers=[]
+    for t in parts:
+        if t.pos in ('助詞','助動詞'):continue
+        if t.pos not in ('名詞','動詞','形容詞','副詞') or t.pos_sub.startswith('固有名詞'):return None
+        tier=known_usage_tier(t.surface)
+        if tier is None and t.pos in ('動詞','形容詞'):
+            matching=[known_usage_tier(base) for pos,form,base,rd in dictionary_inflections(t.surface) or ()
+                if pos.startswith(t.pos+',') and form==t.infl_form and rd==t.reading]
+            if matching and all(value is not None for value in matching):tier=min(matching)
+        if tier is None:return None
+        tiers.append(tier)
+    return max(tiers) if tiers else None

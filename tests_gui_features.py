@@ -40,7 +40,7 @@ def child():
             time.sleep(.005)
         raise AssertionError('Application did not settle: '+str(getattr(a, '_analyze_last_error', None)))
     def done():
-        return (a._warmup is None and getattr(a, '_async_context_scope', None) is None
+        return (not a._foreground_analysis_pending()
                 and a._analyze_text == a.editor_source_text()
                 and a._analyze_pos >= len(a._analyze_todo)
                 and a._analyze_dependencies == analysis_worker.state_key(a)
@@ -69,9 +69,13 @@ def child():
 
             w.tag_remove('sel', '1.0', 'end')
             w.tag_add('sel', '2.0+2c', '2.0+6c')
+            selected = w.get('sel.first', 'sel.last')
             origin = a.session.current()
             with patch.object(root, 'focus_get', return_value=a.editor):
                 deliver_key(a.editor, '<F1>', 'F1', 112)
+            assert a._pick_mode is None
+            assert root.clipboard_get() == selected
+            a.pick_mode_btn.invoke()
             assert a._pick_mode == 'f1'
             deliver_key(a.editor, '<Control-Tab>', 'Tab', 9, state=4); until(done)
             assert a.editor.cget('cursor') == 'xterm'
@@ -115,6 +119,165 @@ def child():
             assert a._encoding_var.get() == 'utf-8-sig'
             assert a._write_to_file(str(path))
             assert path.read_bytes() == b'\xef\xbb\xbf' + '保存する資料\r\n次の行\n\n'.encode()
+            for layout,automatic in (('split',False),('unified',False),('unified',True)):
+                a.settings.set('unified_autofix',automatic)
+                a._choose_layout(layout);until(done)
+                for button,expression,answer in ((False,'12+3*4','24'),(True,'１２÷４','3')):
+                    a._replace_editor_text('前😀後');until(done)
+                    w=a.editor;w.tag_remove('sel','1.0','end');w.mark_set('insert','1.0+2c')
+                    if button:a.pick_mode_btn.invoke()
+                    else:deliver_key(w,'<Control-c>','c',67,state=4)
+                    assert a._pick_mode=='f1' and a._pick_calculate
+                    for char in expression:
+                        deliver_key(w,'<KeyPress>',char,0,char=char)
+                        deliver_key(w,'<KeyRelease>',char,0,event_type=3,char=char)
+                    until(done)
+                    source=a.editor_source_text()
+                    deliver_key(w,'<KeyPress>','KP_Enter' if button else 'Return',13,char='\r')
+                    until(done)
+                    assert a._pick_mode is None
+                    expected='前😀'+answer+'後'
+                    assert a.line_results[0]['corrected']==expected,(layout,automatic,a.line_results[0])
+                    assert a.editor_source_text()==source,(layout,automatic,repr(a.editor_source_text()),repr(source))
+                    shown=w.get('1.0','1.end')
+                    assert shown==(expected if automatic else source.split('\n')[0]),(layout,automatic,shown)
+                    if layout=='split':assert a.result_view.get('1.0','1.end')==expected
+                    # Returning to the same tab retains this explicit result.
+                    origin=a.session.active
+                    a._switch_tab(0 if origin else 1);until(done)
+                    a._switch_tab(origin);until(done)
+                    assert a.line_results[0]['corrected']==expected
+                    if layout=='unified' and automatic:
+                        a.unified_autofix_var.set(False);a._on_toggle_unified_autofix();until(done)
+                        assert w.get('1.0','1.end')==source.split('\n')[0]
+                        a.unified_autofix_var.set(True);a._on_toggle_unified_autofix();until(done)
+                        assert w.get('1.0','1.end')==expected
+                        # Use the existing correction Undo action and decision gate.
+                        record=a._autofix_record_for_row(1)
+                        span=next(span for span in record['spans'] if span[3]==expression)
+                        a._undo_autofix(1,span);until(done)
+                        assert w.get('1.0','1.end')==source.split('\n')[0]
+                        assert not any(d[2]=='計算' for d in a.line_results[0]['details'])
+                        a.decisions.unreject(expression,answer)
+                    if layout=='split' and not button:
+                        # Same source in a new tab has no explicit calculation.
+                        a.session.tabs.append(new_tab(text=source))
+                        a._switch_tab(len(a.session.tabs)-1);until(done)
+                        assert not any(d[2]=='計算' for d in a.line_results[0]['details'])
+                        assert a.line_results[0]['corrected']!=expected
+                        a._switch_tab(origin);until(done)
+                        assert a.line_results[0]['corrected']==expected
+
+            # Quick input uses its existing auto-correction option too.
+            with patch.object(a,'_set_window_icons_win32',side_effect=lambda win:win.withdraw()), \
+                    patch.object(a,'_place_quick_window'),patch.object(a,'_focus_quick_window'):
+                a._open_quick_capture()
+            q=a._quick_text
+            from tests_ime_context import assert_quick_context_isolation
+            assert_quick_context_isolation(a)
+            for automatic in (False,True):
+                a.settings.set('quick_autofix',automatic)
+                a._quick_autofix_records=[];q.replace('1.0','end-1c','前後');q.mark_set('insert','1.1')
+                deliver_key(q,'<Control-c>','c',67,state=4)
+                for char in '8*5':
+                    deliver_key(q,'<KeyPress>',char,0,char=char)
+                    deliver_key(q,'<KeyRelease>',char,0,event_type=3,char=char)
+                deliver_key(q,'<KeyPress>','Return',13,char='\r')
+                until(lambda: getattr(a,'_quick_after_id',None) is None)
+                assert a._pick_mode is None
+                assert q.get('1.0','end-1c')==('前40後' if automatic else '前8*5後')
+                if not automatic:assert a._quick_results[0]['corrected']=='前40後'
+                else:
+                    a.choices.remember('40','四十')
+                    a._analyze_quick()
+                    assert q.get('1.0','end-1c')=='前40後'
+
+            # Close and reopen without sending synthetic text or touching the clipboard.
+            q.delete('1.0','end');a._close_quick_capture()
+            assert a._quick_himc is None and a._quick_himc_hwnds==()
+            with patch.object(a,'_set_window_icons_win32',side_effect=lambda win:win.withdraw()), \
+                    patch.object(a,'_place_quick_window'),patch.object(a,'_focus_quick_window'):
+                a._open_quick_capture()
+            assert_quick_context_isolation(a)
+            a._close_quick_capture()
+
+            # Direct choice setup above needs the same invalidation as the UI.
+            a._invalidate_units_cache();a._analyze();until(done)
+            # Identical numeric text can have different explicit calculation state.
+            a._choose_layout('split');until(done)
+            def open_new(text):
+                a.session.tabs.append(new_tab(text=text))
+                a._switch_tab(len(a.session.tabs)-1);until(done)
+                return a.session.active
+            ordinary=open_new('40')
+            assert a.result_view.get('1.0','1.end')=='四十'
+            calculated=open_new('');w=a.editor;w.mark_set('insert','1.0')
+            deliver_key(w,'<Control-c>','c',67,state=4)
+            for char in '40':
+                deliver_key(w,'<KeyPress>',char,0,char=char)
+                deliver_key(w,'<KeyRelease>',char,0,event_type=3,char=char)
+            until(done)
+            deliver_key(w,'<KeyPress>','Return',13,char='\r');until(done)
+            assert a.result_view.get('1.0','1.end')=='40'
+            open_new('40')
+            assert a.result_view.get('1.0','1.end')=='四十', 'Calculated display units leaked into a plain identical tab'
+            a._switch_tab(calculated);until(done)
+            assert a.result_view.get('1.0','1.end')=='40'
+            a._switch_tab(ordinary);until(done)
+            assert a.result_view.get('1.0','1.end')=='四十'
+
+            # The formula still belongs to source text if normal number choices
+            # have already changed the unified display before Enter.
+            a.unified_autofix_var.set(True);a._on_toggle_unified_autofix()
+            a._choose_layout('unified');until(done)
+            open_new('前😀後');w=a.editor;w.mark_set('insert','1.0+2c')
+            deliver_key(w,'<Control-c>','c',67,state=4)
+            for char in '40':
+                deliver_key(w,'<KeyPress>',char,0,char=char)
+                deliver_key(w,'<KeyRelease>',char,0,event_type=3,char=char)
+            until(done)
+            assert w.get('1.0','1.end')=='前😀四十後', 'Expected the existing number choice to be displayed first'
+            deliver_key(w,'<KeyPress>','Return',13,char='\r');until(done)
+            assert a._pick_mode is None, 'A projected number prevented calculation confirmation'
+            assert w.get('1.0','1.end')=='前😀40後'
+            assert a.editor_source_text().split('\n')[0]=='前😀40後'
+
+            with patch.object(a,'_set_window_icons_win32',side_effect=lambda win:win.withdraw()), \
+                    patch.object(a,'_place_quick_window'),patch.object(a,'_focus_quick_window'):
+                a._open_quick_capture()
+            q=a._quick_text
+            q.delete('1.0','end');q.mark_set('insert','1.0')
+            deliver_key(q,'<Control-c>','c',67,state=4)
+            for char in '40':
+                deliver_key(q,'<KeyPress>',char,0,char=char)
+                deliver_key(q,'<KeyRelease>',char,0,event_type=3,char=char)
+            until(lambda:getattr(a,'_quick_after_id',None) is None)
+            assert q.get('1.0','end-1c')=='40', 'Number choices must wait while the formula is being entered'
+            for char in '+2':
+                deliver_key(q,'<KeyPress>',char,0,char=char)
+                deliver_key(q,'<KeyRelease>',char,0,event_type=3,char=char)
+            until(lambda:getattr(a,'_quick_after_id',None) is None)
+            assert q.get('1.0','end-1c')=='40+2'
+            deliver_key(q,'<KeyPress>','Return',13,char='\r')
+            until(lambda:getattr(a,'_quick_after_id',None) is None)
+            assert a._pick_mode is None, 'A quick-input number choice prevented calculation confirmation'
+            assert q.get('1.0','end-1c')=='42'
+            q.delete('1.0','end');q.mark_set('insert','1.0')
+            deliver_key(q,'<Control-c>','c',67,state=4)
+            for char in '40':
+                deliver_key(q,'<KeyPress>',char,0,char=char)
+                deliver_key(q,'<KeyRelease>',char,0,event_type=3,char=char)
+            until(lambda:getattr(a,'_quick_after_id',None) is None)
+            assert q.get('1.0','end-1c')=='40'
+            deliver_key(q,'<KeyPress>','Escape',27)
+            until(lambda:getattr(a,'_quick_after_id',None) is None)
+            assert a._pick_mode is None and q.get('1.0','end-1c')=='四十'
+            q.delete('1.0','end');q.mark_set('insert','1.0')
+            deliver_key(q,'<Control-c>','c',67,state=4)
+            assert a._pick_mode=='f1'
+            a._close_quick_capture()
+            assert a._pick_mode is None and a._quick_after_id is None
+
             assert not errors, errors
             print('EDITOR_FEATURES_INTEGRATION_PASSED', flush=True)
         finally:

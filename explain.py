@@ -923,11 +923,11 @@ def odd_reason(text, line='', start=None, end=None, tokenize_fn=None,
         try:
             import oddness as _odd
             for a, b, s1, e1 in _odd.is_odd_run(src, tokenize_fn,
-                                                with_spans=True):
+                                                with_spans=True, preserve_unknown_source=True):
                 if not (e0 <= s1 or s0 >= e1):
                     return f'「{a}」と「{b}」は続けて置けない'
             if src is not text:
-                for pair in _odd.is_odd_run(text, tokenize_fn):
+                for pair in _odd.is_odd_run(text, tokenize_fn, preserve_unknown_source=True):
                     return f'「{pair[0]}」と「{pair[1]}」は続けて置けない'
         except Exception:
             pass

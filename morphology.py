@@ -28,7 +28,49 @@ janome があれば正確に区切れる。無い場合も動くよう、
 """
 
 import threading
+import re
 from functools import lru_cache
+from contextlib import contextmanager
+from contextvars import ContextVar
+
+# Tabs, arrows and column spacing end the native grammatical context.
+# Padding adjacent to an explicit boundary belongs to that boundary.
+COLUMN_SEPARATOR = re.compile(r'[ \u3000]*(?:[\t\r\n⇒→]|\s{2,})[ \u3000]*')
+
+def source_column_bounds(text,start,end):
+    """The original tab/arrow column containing the whole requested span."""
+    if not 0<=start<end<=len(text):return None
+    lo,hi=0,len(text)
+    for match in COLUMN_SEPARATOR.finditer(text):
+        if match.end()<=start:lo=match.end()
+        elif match.start()>=end:
+            hi=match.start();break
+        else:return None
+    return lo,hi
+
+
+def detached_symbol_separators(text):
+    """Whitespace-detached symbols keep the following source grammar separate.
+
+    Unicode So/Sk identifies symbols, not arbitrary unknown words. ZWJ and
+    presentation selectors may remain inside the same symbol run (UTS #51).
+    This is not an emoji recognizer and does not split symbols used inside
+    a word/argument. Return original Python positions including padding.
+    """
+    import unicodedata
+    out=[]
+    for match in re.finditer(r'(?<!\S)\S+(?!\S)',text):
+        word=match.group()
+        if (unicodedata.category(word[0])!='So' or
+                any(unicodedata.category(ch) not in ('So','Sk')
+                    and ch not in '\u200d\ufe0e\ufe0f' for ch in word)):
+            continue
+        a,b=match.span()
+        while a and text[a-1].isspace():a-=1
+        while b<len(text) and text[b].isspace():b+=1
+        out.append((a,b))
+    return tuple(out)
+
 
 try:
     from janome.tokenizer import Tokenizer
@@ -234,8 +276,8 @@ def _is_kana_char(ch):
         or ch == 'ー')
 
 
-DAKUTEN_MARKS = ('\u309b', '\u3099', '゛')      # 濁点
-HANDAKUTEN_MARKS = ('\u309c', '\u309a', '゜')   # 半濁点
+DAKUTEN_MARKS = ('\u309b', '\u3099', '\uff9e')      # 濁点
+HANDAKUTEN_MARKS = ('\u309c', '\u309a', '\uff9f')   # 半濁点
 
 _DAKUTEN_COMPOSE = {
     'か': 'が', 'き': 'ぎ', 'く': 'ぐ', 'け': 'げ', 'こ': 'ご',
@@ -302,7 +344,7 @@ def _compose_across_one(out, table):
     return True
 
 
-def normalize_marks(text, swap_across=False, dropped=None):
+def normalize_marks(text, swap_across=False, dropped=None, miskeyed=None):
     """
     分離した濁点・半濁点を前の文字と合成する。
 
@@ -317,12 +359,15 @@ def normalize_marks(text, swap_across=False, dropped=None):
         持つ**——同じ判定を別の場所で書き直すと、片方だけ直して
         素通りする（学び22）。
 
+    miskeyed: 半濁点を濁点として読み替えた元の印の位置を返す。
+        通常の合成とは異なる、既存処理の誤打判断を共有する。
+
     かな入力では濁点が独立したキーなので、
     「たんこ゛」のように濁点だけが残ることがある。
     これを「たんご」に直してから照合できるようにする。
 
-    「こ゜」のように合成できない組み合わせは、
-    濁点キーの誤打なので取り除く。
+    半濁点が付かないかなでは濁点としての合成も試す。
+    どちらでも合成できない印は、かなの直後に限り取り除く。
 
     **ただし、かなの後ろでなければ落とさない**（2026-08-11）。
     落とす根拠は「かなを打った直後に濁点キーを叩いた」ことなので、
@@ -367,6 +412,7 @@ def normalize_marks(text, swap_across=False, dropped=None):
                 composed = _DAKUTEN_COMPOSE.get(out[-1])
                 if composed:
                     out[-1] = composed
+                    if miskeyed is not None:miskeyed.append(i)
                     continue
                 if not _is_kana_char(out[-1]):
                     out.append(ch)      # わざと書かれた半濁点。残す
@@ -540,7 +586,42 @@ def original_spelling_facts(line):
     return tuple(sorted(out,key=lambda f:(f.start,f.end,f.rule)))
 
 
+_YOON_BASES = frozenset('きぎしじちぢにひびぴみりふゔてでとど')
+
+
+@lru_cache(maxsize=2048)
+def kana_syllable_ranges(text):
+    # A written kana syllable cannot supply an internal word boundary.
+    # This proves a source range, never the existence of a dictionary word.
+    out=[]
+    for i,c in enumerate(text):
+        normalized=katakana_to_hiragana(c)
+        if not i or normalized not in 'ゃゅょぁぃぅぇぉ':continue
+        previous=text[i-1];base=katakana_to_hiragana(previous)
+        if not ('ぁ'<=base<='ゖ'):continue
+        if normalized in 'ゃゅょ' and base not in _YOON_BASES:continue
+        end=i+1
+        while end<len(text) and text[end]=='ー':end+=1
+        out.append((i-1,end))
+    return tuple(out)
+
+
+@lru_cache(maxsize=2048)
+def mixed_kana_syllable_ranges(text):
+    return tuple((start,end) for start,end in kana_syllable_ranges(text)
+                 if ('ぁ'<=text[start]<='ゖ')!=('ぁ'<=text[start+1]<='ゖ'))
+
+
+def kana_syllable_boundary(text,cut):
+    return not any(start<cut<end for start,end in kana_syllable_ranges(text))
+
+def mixed_kana_syllable_scope(line,start,end):
+    return not any(lo<end and start<hi and not (start<=lo and hi<=end)
+                   for lo,hi in mixed_kana_syllable_ranges(line))
+
+
 def spelling_edit_allowed(line,start,end,replacement):
+    if line[start:end]!=replacement and not mixed_kana_syllable_scope(line,start,end):return False
     """None: unrelated; False: loses a proven stem; True: exact scoped size edit."""
     facts=[f for f in original_spelling_facts(line) if f.start<end and start<f.end]
     if not facts:
@@ -556,11 +637,12 @@ def spelling_edit_allowed(line,start,end,replacement):
 
 
 def _restore_colloquial_auxiliaries(line, tokens):
-    normal = colloquial_auxiliary_normal_form(line)
+    normal = colloquial_particle_normal_form(colloquial_auxiliary_normal_form(line))
     if normal == line:
         return tokens
-    # 未知語が後続の「か」まで巻き込んでいても、通常表記の解析で
-    # 境界を取り直す。全トークンの表記は原文へ戻し、本文は変更しない。
+    # 証明した助動詞・終助詞の通常の読みで境界を取り直す。
+    # 未知語が後続の「か」まで巻き込んでいる場合も同じ。
+    # 全トークンの表記は原文へ戻し、本文は変更しない。
     return [Token(line[t.start:t.end],t.pos,t.base_form,t.reading,
                   t.start,t.end,t.has_reading,t.pos_sub,t.infl_form)
             for t in _tokenize_janome(normal)]
@@ -648,11 +730,13 @@ def _restore_attested_nouns(line, tokens):
     tokens retain their original evidence and still undergo anomaly judgment.
     Native dictionary_inflections remains native-only; no fact is forged there.
     """
-    from general_words import EXACT_NOUNS
+    from general_words import (EXACT_NOUNS,SOURCED_COMMON_NOUNS,sourced_common_noun_evidence,
+                               GENERAL_WORDS,general_katakana_noun_reading)
+    attested=EXACT_NOUNS.keys() | SOURCED_COMMON_NOUNS.keys() | GENERAL_WORDS
     if not tokens:
         return tokens
     katakana=lambda text:bool(text) and all('ァ'<=c<='ヶ' or c=='ー' for c in text)
-    if not any(w in line for w in EXACT_NOUNS) and not any(
+    if not any(w in line for w in attested) and not any(
             katakana(a.surface) and katakana(b.surface) and a.end==b.start
             for a,b in zip(tokens,tokens[1:])):
         return tokens
@@ -667,6 +751,21 @@ def _restore_attested_nouns(line, tokens):
             if line[first.start:end]!=word:
                 break
             entry=EXACT_NOUNS.get(word)
+            if (entry is None and word in SOURCED_COMMON_NOUNS
+                    and any(not item.has_reading for item in tokens[i:j+1])
+                    and not dictionary_inflections(word)):
+                # External facts restore only a whole unread nominal range.
+                # Known native homographs and ambiguous readings stay native.
+                readings={(item['reading'],item['pos'].split(',')[1])
+                          for item in sourced_common_noun_evidence(word)}
+                if len(readings)==1:entry=next(iter(readings))
+            # The existing reviewed ordinary Katakana roster already proves
+            # this exact script reading. Share it only with a whole unread
+            # nominal range; native words and proper-name readings stay native.
+            if (entry is None and any(not item.has_reading for item in tokens[i:j+1])
+                    and not dictionary_inflections(word)
+                    and general_katakana_noun_reading(word,katakana_to_hiragana(word))):
+                entry=(katakana_to_hiragana(word),'一般')
             # Whole, unchanged dictionary nouns may be split into names by
             # the surrounding text. A cost-table spelling is not this proof.
             native=katakana(word) and len(word)<=32
@@ -678,7 +777,7 @@ def _restore_attested_nouns(line, tokens):
             if entry:
                 best=(j+1,Token(word,'名詞',word,entry[0],first.start,end,
                                True,entry[1],''))
-            if not native and not any(w.startswith(word) for w in EXACT_NOUNS):
+            if not native and not any(w.startswith(word) for w in attested):
                 break
         if best:
             i,merged=best;out.append(merged)
@@ -733,9 +832,12 @@ def _restore_counter_readings(line,tokens):
     The native dictionary supplies the full counting reading; no substring
     inside an unknown token or corrected candidate supplies this evidence.
     """
-    from reading_segments import native_counter_readings
-    counters=native_counter_readings()
-    if not any(word in line for word in counters):return tokens
+    from reading_segments import (native_counted_surface_readings,native_counted_surface_prefixes,
+                                  native_counter_readings,native_numeric_quantity_spans)
+    quantities=native_numeric_quantity_spans(line)
+    counters=native_counted_surface_readings()
+    prefixes=native_counted_surface_prefixes()
+    kana_counters=native_counter_readings()
     out=[];i=0
     while i<len(tokens):
         first=tokens[i];best=None;word='';edge=first.start
@@ -743,17 +845,30 @@ def _restore_counter_readings(line,tokens):
         # Do not turn 子供 + に + 本 into a new 二本 counter token.
         # Quantity proof after a case (本を二冊) remains independent.
         previous=tokens[i-1] if i else None
+        # A suffix of a larger written number is not a separate count.
+        # In １２３冊, the known ２３冊 reading cannot consume only that tail.
+        if (first.start and first.surface[:1] in '0123456789０１２３４５６７８９'
+                and (line[first.start-1] in '0123456789０１２３４５６７８９'
+                     or any(start<first.start<end for start,end in quantities))):
+            out.append(first);i+=1;continue
         if (previous and previous.has_reading and previous.end==first.start
                 and previous.pos=='名詞' and first.has_reading
                 and first.pos=='助詞' and first.pos_sub.startswith('格助詞')):
             out.append(first);i+=1;continue
         for j in range(i,min(len(tokens),i+5)):
             part=tokens[j]
-            if part.start!=edge or not part.has_reading:break
+            numeral=(part.pos=='名詞' and part.pos_sub=='数' and part.surface
+                     and all(c in '0123456789０１２３４５６７８９' for c in part.surface))
+            if part.start!=edge or not (part.has_reading or numeral):break
             word+=part.surface;edge=part.end
-            if not any(counter.startswith(word) for counter in counters):break
-            if word in counters and line[first.start:edge]==word:
-                best=(j+1,Token(word,'名詞',word,word,first.start,edge,True,'一般'))
+            if word not in prefixes:break
+            # Keep existing kanji token POS. Only the established kana
+            # restoration and exact digit-counter spellings need merging.
+            if (word in counters and line[first.start:edge]==word
+                    and (word in kana_counters or word[0] in '0123456789０１２３４５６７８９')):
+                reading=word if word in kana_counters else counters[word][0]
+                best=(j+1,Token(surface=word,pos='名詞',base_form=word,reading=reading,
+                               start=first.start,end=edge,has_reading=True,pos_sub='一般'))
         if best:
             i,merged=best;out.append(merged)
         else:
@@ -761,7 +876,62 @@ def _restore_counter_readings(line,tokens):
     return out
 
 
+_TOKENIZATION_CACHE=ContextVar('correctnote_native_tokenization_cache',default=None)
+_TOKENIZATION_CACHE_LIMIT=2048
+_NATIVE_TOKENIZATION_CACHE=ContextVar('correctnote_raw_tokenization_cache',default=None)
+
+
+@contextmanager
+def tokenization_scope():
+    """Reuse native parsing during one analysis, then release all source text."""
+    if _TOKENIZATION_CACHE.get() is not None:
+        yield
+        return
+    token=_TOKENIZATION_CACHE.set({})
+    native_token=_NATIVE_TOKENIZATION_CACHE.set({})
+    try:yield
+    finally:
+        _NATIVE_TOKENIZATION_CACHE.reset(native_token)
+        _TOKENIZATION_CACHE.reset(token)
+
+
 def tokenize(line):
+    cache=_TOKENIZATION_CACHE.get()
+    if cache is None or not HAS_JANOME:return _tokenize_uncached(line)
+    rows=cache.get(line)
+    if rows is None:
+        result=_tokenize_uncached(line)
+        rows=tuple((t.surface,t.pos,t.base_form,t.reading,t.start,t.end,
+                    t.has_reading,t.pos_sub,t.infl_form) for t in result)
+        if len(cache)>=_TOKENIZATION_CACHE_LIMIT:cache.pop(next(iter(cache)))
+        cache[line]=rows
+    # Token is mutable. Neither a returned list nor one changed token may
+    # corrupt a later grammar/reading caller's view of the same source.
+    return [Token(*row) for row in rows]
+
+
+def _tokenize_uncached(line):
+    if not line:return []
+    if not HAS_JANOME:return _tokenize_fallback(line)
+    separators=list(COLUMN_SEPARATOR.finditer(line))
+    if not separators:return _tokenize_field(line)
+    out=[];cursor=0
+    for match in separators+[None]:
+        end=match.start() if match is not None else len(line)
+        if cursor<end:
+            for token in _tokenize_field(line[cursor:end]):
+                out.append(Token(token.surface,token.pos,token.base_form,token.reading,
+                    cursor+token.start,cursor+token.end,token.has_reading,
+                    token.pos_sub,token.infl_form))
+        if match is not None:
+            surface=match.group()
+            out.append(Token(surface,'記号',surface,surface,match.start(),match.end(),
+                             False,'空白' if surface.isspace() else '一般'))
+            cursor=match.end()
+    return out
+
+
+def _tokenize_field(line):
     """
     1行を形態素に分割する。
 
@@ -822,6 +992,24 @@ def dictionary_paradigms(surface):
         return None
 
 
+@lru_cache(maxsize=4096)
+def dictionary_prefix_paradigms(text):
+    """Actual native entries at the unchanged start, from one trie lookup.
+
+    None means unavailable/failed, so callers can retain an exhaustive
+    fallback. These entries locate spans; they are not grammatical proof.
+    """
+    if not HAS_JANOME or not text:return None
+    try:
+        with _TOKENIZE_LOCK:
+            entries=[e for e in _TOKENIZER.sys_dic.lookup(
+                text.encode('utf-8'),_TOKENIZER.matcher) if text.startswith(e[1])]
+            rows=[(e[1],_TOKENIZER.sys_dic.lookup_extra(e[0])) for e in entries]
+        return tuple(dict.fromkeys((surface,row[0],row[1],row[2],row[3],
+            katakana_to_hiragana(row[4])) for surface,row in rows))
+    except (Exception,SystemExit):return None
+
+
 @lru_cache(maxsize=8192)
 def dictionary_inflections(surface):
     """表記の全辞書項。未登録は空tuple、辞書なし/失敗はNone。"""
@@ -846,15 +1034,16 @@ def native_suru_form(surface,form,reading,allow_potential=True):
                for pos,kind,inflection,base,rd in dictionary_paradigms(surface) or ())
 
 
-@lru_cache(maxsize=8192)
-def native_potential_auxiliary(surface,form,reading):
-    """An attested ichidan potential of an attested native godan auxiliary.
+@lru_cache(maxsize=4096)
+def native_potential_origins(surface,form,reading,pos_prefix='動詞,自立,'):
+    """Native ichidan/godan pairs with the same spelling stem and reading.
 
-    2026-09-14 / GPT-6 Astra. Both lemmas and exact readings are native
-    dictionary entries; the shared godan paradigm relates them. This
-    supplies a grammatical role, never a replacement or a new vocabulary.
+    Both complete lemmas and the observed inflection must be dictionary
+    entries. The godan paradigm supplies only their potential relation,
+    never a replacement, guessed reading, or a new vocabulary entry.
     """
     from pos_grammar import _GODAN_ROW
+    found=[]
     for pos,kind,inflection,base,rd in dictionary_paradigms(surface) or ():
         if (not pos.startswith('動詞,') or kind!='一段' or inflection!=form
                 or rd!=reading or len(base)<2 or not base.endswith('る')):continue
@@ -862,14 +1051,21 @@ def native_potential_auxiliary(surface,form,reading):
             if base[-2]!=row[2]:continue
             origin=base[:-2]+terminal
             for p,k,f,b,r in dictionary_paradigms(origin) or ():
-                if not (p.startswith('動詞,非自立,') and k.startswith('五段')
+                if not (p.startswith(pos_prefix) and k.startswith('五段')
                         and f=='基本形' and b==origin):continue
                 expected=r[:-1]+row[2]+'る'
                 if any(p2.startswith('動詞,') and k2=='一段' and f2=='基本形'
                        and b2==base and r2==expected
                        for p2,k2,f2,b2,r2 in dictionary_paradigms(base) or ()):
-                    return origin
-    return None
+                    found.append((origin,r))
+    return tuple(dict.fromkeys(found))
+
+
+@lru_cache(maxsize=8192)
+def native_potential_auxiliary(surface,form,reading):
+    """An attested potential of a native non-independent godan auxiliary."""
+    origins=native_potential_origins(surface,form,reading,'動詞,非自立,')
+    return origins[0][0] if origins else None
 
 
 # 48-ZU / GPT-6 / 2026-09-11. Inspection of all 1,821 native basic
@@ -910,13 +1106,50 @@ def _split_literal_character_objects(tokens):
     return out
 
 
+def native_prolonged_adverb_token_ranges(tokens):
+    """Exact native adverbs behind same-vowel expressive source spellings.
+
+    GPT-6 Astra / 2026-09-24. The dictionary proves the unprolonged
+    adverb, not a new lexical entry or the following sentence. Keep
+    original token edges and require the same vowel before と/っと.
+    """
+    if not any(c in t.surface for t in tokens for c in 'ぁぃぅぇぉ'):return ()
+    import re
+    from pos_grammar import prolonged_small_vowel
+    out=[]
+    for i,first in enumerate(tokens):
+        source='';edge=first.start
+        for part in tokens[i:]:
+            if part.start!=edge:break
+            source+=part.surface;edge=part.end
+            if len(source)>18 or not all('ぁ'<=c<='ゖ' or c=='ー' for c in source):break
+            match=re.search('[ぁぃぅぇぉ]ー?っ?と$',source)
+            if not match or not prolonged_small_vowel(source[:match.start()+1]):continue
+            compact=source[:match.start()]+source[match.start()+1:].lstrip('ー')
+            if any(pos.startswith('副詞,') and rd==compact
+                   for pos,form,base,rd in dictionary_inflections(compact) or ()):
+                out.append((first.start,part.end));break
+    return tuple(sorted(set(out)))
+
+
 def _contextualize_expressive_adverbs(tokens):
     """未知の短い伸ばし音＋と＋用言を、副詞の用法として読む。
 
     GPT-6による構造規則、2026-09-10。既知名詞の再分類はしない。
     綴りの実在性ではなく、発音を写す形と明示された係り先を証拠にする。
     """
-    out = list(tokens)
+    ranges=dict(native_prolonged_adverb_token_ranges(tokens))
+    out=[];index=0
+    while index<len(tokens):
+        token=tokens[index];end=ranges.get(token.start)
+        if end is None:
+            out.append(token);index+=1;continue
+        parts=[]
+        while index<len(tokens) and tokens[index].end<=end:
+            parts.append(tokens[index]);index+=1
+        surface=''.join(t.surface for t in parts)
+        out.append(Token(surface,'副詞',surface,katakana_to_hiragana(surface),
+                         token.start,end,False,'擬音文脈'))
     for i in range(len(out) - 2):
         t, particle, predicate = out[i:i + 3]
         sf = t.surface
@@ -1016,6 +1249,52 @@ def _restore_polite_aux_boundaries(tokens):
     return out
 
 
+@lru_cache(maxsize=4096)
+def native_sahen_compound_reading(surface):
+    """An independently classified action with a native sahen suffix.
+
+    GPT-6 Astra / 2026-09-24: the whole action already has meaning evidence;
+    contiguous native nouns and its actual suffix supply the reading/POS.
+    This does not add a dictionary entry or allow arbitrary noun+suffix words.
+    """
+    if not HAS_JANOME or not surface or not 2<=len(surface)<=24:return ''
+    from semantic_roles import VERB_ROLES
+    if surface not in VERB_ROLES:return ''
+    parts=_tokenize_janome(surface)
+    if (len(parts)<2 or ''.join(t.surface for t in parts)!=surface
+            or parts[0].start!=0 or parts[-1].end!=len(surface)
+            or any(a.end!=b.start for a,b in zip(parts,parts[1:]))
+            or not all(t.has_reading and t.pos=='名詞' for t in parts)):
+        return ''
+    suffix=parts[-1]
+    if not any(p.startswith('名詞,接尾,サ変接続,') and b==suffix.surface and r==suffix.reading
+               for p,f,b,r in dictionary_inflections(suffix.surface) or ()):return ''
+    if not all(any(p.startswith(('名詞,一般,','名詞,サ変接続,','名詞,形容動詞語幹,'))
+                   and b==t.surface and r==t.reading
+                   for p,f,b,r in dictionary_inflections(t.surface) or ()) for t in parts[:-1]):
+        return ''
+    return ''.join(t.reading for t in parts)
+
+
+def _contextualize_sahen_compounds(tokens):
+    out=[];i=0
+    while i<len(tokens):
+        head=tokens[i];merged=False
+        if head.pos=='名詞' and head.has_reading:
+            for j in range(i+1,min(len(tokens),i+8)):
+                tail=tokens[j]
+                if (tokens[j-1].end!=tail.start or tail.end-head.start>24
+                        or tail.pos!='名詞' or not tail.has_reading):break
+                if tail.pos_sub!='接尾:サ変接続':continue
+                word=''.join(t.surface for t in tokens[i:j+1])
+                reading=native_sahen_compound_reading(word)
+                if reading and reading==''.join(t.reading for t in tokens[i:j+1]):
+                    out.append(Token(word,'名詞',word,reading,head.start,tail.end,True,'サ変接続',''))
+                    i=j+1;merged=True;break
+        if not merged:out.append(head);i+=1
+    return out
+
+
 def _contextualize_nominal_actions(tokens):
     """48-XS・AGH: 実辞書の一般名詞にある動作用法を、するの文脈で読む。
 
@@ -1025,7 +1304,7 @@ def _contextualize_nominal_actions(tokens):
     接頭要素だけで造語を認めず、全体が実辞書の普通名詞であることを要求。
     既存の意味役割表が持つ動作用法も同じ口で共有する。
     """
-    out=list(tokens)
+    out=_contextualize_sahen_compounds(tokens)
     for i,(a,b) in enumerate(zip(out,out[1:])):
         if (a.pos == '名詞' and a.pos_sub == '一般' and a.has_reading
                 and b.pos == '動詞' and b.base_form == 'する' and b.has_reading
@@ -1036,7 +1315,12 @@ def _contextualize_nominal_actions(tokens):
             from semantic_roles import classified_nominal_action
             written_error=(len(a.surface)==2 and a.surface[0] in '誤脱衍'
                            and a.surface[1] in '字語句文')
-            if written_error or classified_nominal_action(a.surface,a.reading):
+            # An exact native sahen homograph is the same action evidence
+            # used by completed readings and omissions. Keep the actual
+            # suru attachment and the noun's whole original reading.
+            from reading_segments import native_action_noun_reading
+            if (written_error or native_action_noun_reading(a.surface,a.reading)
+                    or classified_nominal_action(a.surface,a.reading)):
                 out[i]=Token(a.surface,a.pos,a.base_form,a.reading,a.start,a.end,
                              a.has_reading,'サ変接続',a.infl_form)
     return out
@@ -1358,6 +1642,22 @@ def contextualize_tokens(tokens):
 
 
 def _tokenize_janome(line):
+    # Restoration and native spelling validation also call the raw parser.
+    # Share only its immutable rows within the same analysis; restored POS
+    # and lexical boundaries remain a separate result.
+    cache=_NATIVE_TOKENIZATION_CACHE.get()
+    if cache is None:return _tokenize_janome_uncached(line)
+    rows=cache.get(line)
+    if rows is None:
+        result=_tokenize_janome_uncached(line)
+        rows=tuple((t.surface,t.pos,t.base_form,t.reading,t.start,t.end,
+                    t.has_reading,t.pos_sub,t.infl_form) for t in result)
+        if len(cache)>=_TOKENIZATION_CACHE_LIMIT:cache.pop(next(iter(cache)))
+        cache[line]=rows
+    return [Token(*row) for row in rows]
+
+
+def _tokenize_janome_uncached(line):
     # 分割そのものは錠前の中で済ませ、結果を控えてから外で組み立てる
     # （錠前を握っている時間を最短にするため）。
     # tokenize() は生成器なので、**錠前の中で全部取り出す**こと。
@@ -1800,3 +2100,148 @@ def native_excess_head(surface, reading):
     if any(p.startswith(('名詞,','副詞,','感動詞,')) for p,f,b,rd in rows):return None
     if any(p.startswith(('動詞,','形容詞,','助動詞,')) for p,f,b,rd in rows):return False
     return None
+
+
+@lru_cache(maxsize=1024)
+def native_final_particle_tail(reading):
+    """The entire reading is an attested sequence of sentence particles."""
+    if not reading:return True
+    reachable={0}
+    for start in range(len(reading)):
+        if start not in reachable:continue
+        for end in range(start+1,len(reading)+1):
+            piece=reading[start:end]
+            if any(pos.startswith('助詞,終助詞,') and rd==piece
+                   for pos,form,base,rd in dictionary_inflections(piece) or ()):
+                reachable.add(end)
+    return len(reading) in reachable
+
+
+def _native_small_particle_tail(word,index,parts):
+    # The source's actual native forms can explain a colloquial small よ.
+    # A competing first POS label is not the only possible native reading.
+    if katakana_to_hiragana(word[index])!='ょ':return False
+    from pos_grammar import continuation_state,explain_kana_run
+    # A final particle must explain its complete unchanged kana tail.
+    # Proving only the left verb + よ would protect an interior typo while
+    # silently discarding the remaining い (or another lexical fragment).
+    tail_end=index+1
+    while tail_end<len(word) and ('ぁ'<=word[tail_end]<='ゖ' or 'ァ'<=word[tail_end]<='ヶ' or word[tail_end]=='ー'):
+        tail_end+=1
+    # A final particle ends at an actual textual boundary. Stopping the
+    # kana scan before a kanji/Latin word does not complete the utterance.
+    if (tail_end<len(word) and not word[tail_end].isspace()
+            and word[tail_end] not in '、。，,！？!?;；:：…‥()（）[]［］【】「」『』〈〉《》⇒→'):
+        return False
+    after=katakana_to_hiragana(word[index+1:tail_end])
+    if not native_final_particle_tail(after):return False
+    for j,t in enumerate(parts):
+        if not (t.has_reading and t.start<=index-1<t.end==index):continue
+        native=[row for row in dictionary_inflections(t.surface) or () if row[3]==t.reading]
+        for pos,form,base,reading in native:
+            if not pos.startswith(('動詞,自立,','形容詞,自立,')):continue
+            state=continuation_state(form)
+            if state is not None and explain_kana_run('よ'+after,no_words=True,initial_state=state):return True
+        if t.pos not in ('助詞','助動詞'):continue
+        tail=katakana_to_hiragana(word[t.start:index]+'よ'+after)
+        if not j:
+            if t.pos=='助動詞' and explain_kana_run(tail,no_words=True,initial_state='Bw'):return True
+            continue
+        previous=parts[j-1]
+        if previous.end!=t.start:continue
+        states={'Bw'} if previous.pos=='名詞' else set()
+        for pos,form,base,reading in dictionary_inflections(previous.surface) or ():
+            if reading!=previous.reading:continue
+            state='Bw' if pos.startswith('名詞,') else continuation_state(form)
+            if state is not None:states.add(state)
+        if any(explain_kana_run(tail,no_words=True,initial_state=state) for state in states):return True
+    return False
+
+
+@lru_cache(maxsize=2048)
+def colloquial_particle_normal_form(line):
+    """Read a proved casual final よ without changing text or positions."""
+    if not HAS_JANOME or 'ょ' not in line:return line
+    parts=_tokenize_janome(line)
+    changes=[i for i,c in enumerate(line) if c=='ょ'
+             and _native_small_particle_tail(line,i,parts)]
+    if not changes:return line
+    chars=list(line)
+    for i in changes:chars[i]='よ'
+    return ''.join(chars)
+
+
+@lru_cache(maxsize=2048)
+def source_yoon_spans(text):
+    """Malformed palatalized syllables in the original kana sequence.
+
+    Ordinary/foreign yoon bases and native grammatical tails are retained.
+    Neither an unknown word nor script mixing alone supplies this evidence.
+    """
+    import re
+    from literal_examples import protected_ranges,overlaps
+    protected=protected_ranges(text)
+    out=[]
+    for i,char in enumerate(text):
+        if char not in 'ゃゅょ' or not i:continue
+        prev=text[i-1]
+        if ('ぁ'<=prev<='ゖ' or prev=='ー' or prev in '「『（(［[｛{【〔・　 \t'):continue
+        if 'ァ'<=prev<='ヶ':
+            normalized=chr(ord(prev)-0x60)
+            if normalized in _YOON_BASES:continue
+            if char=='ょ' and i+1<len(text) and text[i+1]=='ー':continue
+        if not overlaps(i-1,i+1,protected):out.append((i-1,i+1))
+    native_parts=None
+    for m in re.finditer('[ぁ-ゖァ-ヶー]+',text):
+        word=m.group()
+        if not 2<=len(word)<=40:continue
+        normalized=''.join(chr(ord(c)-0x60) if 'ァ'<=c<='ヶ' else c for c in word)
+        if not any(c in 'ゃゅょ' for c in normalized):continue
+        if overlaps(m.start(),m.end(),protected):continue
+        if dictionary_inflections(word):continue
+        for i,char in enumerate(normalized):
+            if char not in 'ゃゅょ' or not 0<i<len(word):continue
+            if normalized[i-1] in _YOON_BASES:continue
+            if (normalized[i-1] in 'ゃゅょぁぃぅぇぉっー'
+                    or char=='ょ' and i+1<len(word) and normalized[i+1]=='ー'):continue
+            # Colloquial small よ after an actual auxiliary/final particle
+            # is a grammatical tail, not a broken interior loanword syllable.
+            if native_parts is None:native_parts=_tokenize_janome(text)
+            if _native_small_particle_tail(text,m.start()+i,native_parts):continue
+            out.append((m.start()+i-1,m.start()+i+1))
+    return tuple(out)
+
+
+def native_spelling_only(original,changed):
+    """Prove literal kana-to-written projection, with no key or written-word edit."""
+    if not original or not changed:return False
+    parts=tokenize(changed)
+    # The native tokenizer may read the first kanji of an attested noun as an
+    # unrelated verb. Use the whole shipped noun and its attested reading.
+    if (original and 'ぁ'<=original[0]<='ゖ' and len(parts)>1
+            and parts[0].start==0 and parts[0].end==parts[1].start):
+        from reading_segments import native_attested_prefix_noun_readings
+        face=parts[0].surface+parts[1].surface
+        for reading in native_attested_prefix_noun_readings(face):
+            if original.startswith(reading) and (len(reading)==len(original)
+                    and len(face)==len(changed) or len(reading)<len(original)
+                    and len(face)<len(changed)
+                    and native_spelling_only(original[len(reading):],changed[len(face):])):
+                return True
+    cursors={0}
+    for token in parts:
+        following=set()
+        readings={rd for pos,form,base,rd in dictionary_inflections(token.surface) or ()
+                  if pos.startswith(token.pos+',') and rd and all('ぁ'<=c<='ゖ' or c=='ー' for c in rd)} if token.has_reading else set()
+        # Exact externally sourced nouns share the same reading proof;
+        # the native dictionary API remains unchanged. No substring proof.
+        from general_words import sourced_common_noun_evidence
+        readings.update(entry['reading'] for entry in sourced_common_noun_evidence(token.surface)
+                        if entry['pos'].startswith(token.pos+','+token.pos_sub.replace(':',',')+','))
+        for cursor in cursors:
+            if original.startswith(token.surface,cursor):following.add(cursor+len(token.surface))
+            if any(not ('ぁ'<=c<='ゖ' or c=='ー') for c in token.surface):
+                following.update(cursor+len(rd) for rd in readings if original.startswith(rd,cursor))
+        if not following:return False
+        cursors=following
+    return len(original) in cursors

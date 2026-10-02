@@ -148,6 +148,9 @@ class DecisionStore:
         """
         if (original, corrected) in self._rejected:
             return True
+        # An exact selected phrase owns its unchanged prefix/tail as well.
+        # Rejection remains pair-specific; another spelling is still allowed.
+        if self.rejected_spans(original,corrected):return True
         # 守るべき語が置換範囲に含まれているなら触らせない。
         # 「縦シュー」を守った場合、「縦シューが」のように
         # 助詞を巻き込んだ範囲の補正も止める必要がある。
@@ -157,6 +160,36 @@ class DecisionStore:
         # `_odd_only` は**見ない**（項目48-QU）。あれは紫を下げる
         # だけの台帳で、補正を止める判断ではない。
         return False
+
+    def rejected_spans(self, original, corrected):
+        """Exact rejected selections, aligned through other independent edits."""
+        if not self._rejected or original==corrected:return ()
+        import difflib
+        edits=None;out=[]
+        for before,after in self._rejected:
+            at=original.find(before)
+            while at>=0:
+                end=at+len(before)
+                if edits is None:edits=difflib.SequenceMatcher(None,original,corrected,autojunk=False).get_opcodes()
+                # A boundary inside a replacement has no exact projection.
+                if not any(tag!='equal' and any(a<edge<b for edge in (at,end))
+                           for tag,a,b,_,_ in edits):
+                    def projected_edges(edge):
+                        # An insertion on a selection boundary has two valid
+                        # projections. The exact rejected output decides which
+                        # side owns it; neighboring edits remain independent.
+                        points=set()
+                        for tag,a,b,c,d in edits:
+                            if a<=edge<=b:
+                                if tag=='equal':points.add(c+edge-a)
+                                if edge==a:points.add(c)
+                                if edge==b:points.add(d)
+                        return points
+                    if any(lo<=hi and corrected[lo:hi]==after
+                           for lo in projected_edges(at) for hi in projected_edges(end)):
+                        out.append((at,end))
+                at=original.find(before,at+1)
+        return tuple(sorted(set(out)))
 
     def is_protected(self, word):
         return word in self._protected

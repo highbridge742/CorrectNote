@@ -153,13 +153,36 @@ def is_kana_reading(s):
     return True
 
 
+def literal_reading_core(surface,reading):
+    """Trim only matching literal punctuation/space at actual result edges.
+
+    The caller has already verified the full result's live insertion range.
+    Internal punctuation and letters remain invalid phonetic evidence.
+    Stored general spelling/reading pairs keep their existing strict format.
+    """
+    lo=0;hi=len(surface);rlo=0;rhi=len(reading)
+    def literal(c):
+        return unicodedata.category(c).startswith('P') or c in ' \u3000'
+    while lo<hi and rlo<rhi and literal(surface[lo]):
+        c=unicodedata.normalize('NFKC',surface[lo])
+        if c!=reading[rlo]:break
+        lo+=1;rlo+=1
+    while lo<hi and rlo<rhi and literal(surface[hi-1]):
+        c=unicodedata.normalize('NFKC',surface[hi-1])
+        if c!=reading[rhi-1]:break
+        hi-=1;rhi-=1
+    core=reading[rlo:rhi]
+    if lo<hi and is_kana_reading(core):return lo,hi,core
+    return None
+
+
 class IMEReadings:
     """
     (表記 → 打った読み) の対の置き場。
 
-    **補正の答えを変える置き場である。** 足したときは
-    `app.py` 側で `_invalidate_analysis_cache()` を呼ぶこと
-    （覚えている解析結果が古い判断のまま残る・項目48-BN と同じ形）。
+    保存読みは補正の依存状態である。追加・削除・読み順の変更は
+    revisionで通知し、呼出し側はその読みを参照した行を更新する。
+    同じ参照結果の完成行と次タブ先読みは保持する（48-APF）。
 
     Windows 以外・IME を使っていない環境では、ただ空のまま
     （`remember` が呼ばれないだけ）。**空なら補正は今までどおり**。
@@ -172,6 +195,7 @@ class IMEReadings:
         self.per_surface = max(1, int(per_surface or DEFAULT_PER_SURFACE))
         # 挿入順＝**最後に打たれた順**（Python の dict は順を保つ）
         self._pairs = {}
+        self._revision = 0
         self._dirty = False
         self._loaded = False
         self._existed = False    # 「まだ無い」と「0件」を分けるため
@@ -222,6 +246,7 @@ class IMEReadings:
             if got:
                 self._pairs[surface] = got
         self._trim()
+        self._revision += 1
         return self
 
     def save(self):
@@ -253,8 +278,8 @@ class IMEReadings:
         surface: 確定した表記（`奥悠久子帝`）
         reading: IME が返した読み（半角カタカナでも可・ここで直す）
 
-        戻り値: **中身が変わったら True**（呼び出し側は、そのとき
-            だけ覚えている解析結果を捨てればよい）
+        戻り値: 中身が変わったらTrue。呼出し側は保存を予約し、
+        保存読みの依存版を通常の差分解析へ渡す。
 
         覚えないもの:
           - 表記か読みが空
@@ -292,6 +317,7 @@ class IMEReadings:
         self._pairs[surface] = got
         self._dirty = True
         self._trim()
+        self._revision += 1
         return True
 
     def forget(self, surface, reading=None):
@@ -313,7 +339,12 @@ class IMEReadings:
         else:
             del self._pairs[surface]
         self._dirty = True
+        self._revision += 1
         return removed
+
+    def revision(self):
+        """Semantic changes only; revisiting the same reading does not invalidate work."""
+        return self._revision
 
     def readings_for(self, surface):
         """
@@ -432,3 +463,14 @@ def attach_to_engine(path='ime_readings.json'):
             return -1
     except Exception:
         return None
+
+
+def utf16_positions(text):
+    """Map only valid UTF-16 boundaries to Python codepoint offsets."""
+    result={0:0};offset=0
+    for index,char in enumerate(text,1):
+        value=ord(char)
+        if 0xd800<=value<=0xdfff:raise ValueError('unpaired surrogate')
+        offset+=2 if value>0xffff else 1
+        result[offset]=index
+    return result

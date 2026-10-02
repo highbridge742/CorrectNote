@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Native readings prove a modifier and noun without choosing output kanji."""
 import unittest
-from types import SimpleNamespace
+import contextual_repair as X
 from unittest.mock import patch
 import corrector as C
 import morphology as M
@@ -10,7 +10,8 @@ import reading_segments as R
 
 class AdnominalReadingTests(unittest.TestCase):
     def setUp(self):
-        for fn in (R._native_nominal_reading_faces,R.native_adnominal_reading_parts,R.completed_native_reading,
+        for fn in (R._native_nominal_reading_faces,R.native_adnominal_modifier_parts,
+                   R.native_adnominal_reading_parts,R.completed_native_reading,
                    R.completed_native_reading_clause,R.completed_sahen_reading):
             fn.cache_clear()
 
@@ -60,8 +61,11 @@ class AdnominalReadingTests(unittest.TestCase):
                      'しずかなしょるいがを','しずかなしょるいします'):
             self.assertEqual(self.proof(text),(),text)
 
-    def test_original_structural_anomaly_precedes_the_positive_reading_entry(self):
-        target=SimpleNamespace(text='しずかなしょるい',structural=True,anomalies=((0,3),))
+    def test_explicit_semantic_conflict_precedes_the_positive_reading_entry(self):
+        source='しずかなしょるい'
+        target=X.RepairTarget(source,0,len(source),0,len(source),
+                              (('意味接続','synthetic conflict',0,len(source)),),
+                              True,'',semantic_conflict=True)
         with patch.object(R,'completed_native_reading',return_value=True) as proof:
             self.assertFalse(C._chunk_is_intact(target.text,lambda _:[],repair_context=target))
             proof.assert_not_called()

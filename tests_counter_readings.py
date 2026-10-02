@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Native numeral/counter identity and conventional allomorphs preserve kana."""
+from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
 import reading_segments as R
@@ -69,7 +70,7 @@ class CounterReadingTests(unittest.TestCase):
                 # 48-AJF also compares the grammatical lexical repair 資料.
                 # Both preserve the intended noun; unchanged kana sources
                 # are still required to remain byte-for-byte above.
-                self.assertIn(r['corrected'],(expected,expected.replace('しりょう','資料')))
+                assert_repaired_spelling(self, r, (expected,expected.replace('しりょう','資料')))
                 self.assertEqual(r['odd_spans'],[])
 
 

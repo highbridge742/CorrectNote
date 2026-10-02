@@ -19,6 +19,63 @@ class FocusedSequenceTests(unittest.TestCase):
                      'かいてはけしますです','かいてはけしま'):
             with self.subTest(text=text):self.assertFalse(R.completed_native_reading_sequence(text))
 
+    def test_linked_plain_final_uses_native_finite_tail_not_an_open_link(self):
+        for text in ('かくにんした','はなした','かいた','けした'):
+            self.assertTrue(R.completed_native_link_clause(text),text)
+        for text in ('かくにんして','はなして','かいて','かくにんし',
+                     'かくにんしたする','けしますです','ぷねらます'):
+            self.assertFalse(R.completed_native_link_clause(text),text)
+        for text in ('しりょうをよんでかくにんした','ゆうじんをしょうたいしてはなした',
+                     'かいてはけした','よんでもかいた'):
+            self.assertTrue(R.completed_native_reading_sequence(text),text)
+        for text in ('しりょうをよんでかくにんして','かいてはけして',
+                     'かくてはけした','しりょうをよんでかくにんしたする'):
+            self.assertFalse(R.completed_native_reading_sequence(text),text)
+
+    def test_sleep_wake_meaning_is_subject_evidence_only(self):
+        import semantic_roles as S
+        for surface,form,reading in (('寝','連用形','ね'),('眠り','連用形','ねむり'),
+                                     ('起き','連用形','おき'),('目覚め','連用形','めざめ')):
+            self.assertIn('person',S.native_verb_roles(surface,form,reading,subject=True))
+            self.assertNotIn('person',S.native_verb_roles(surface,form,reading))
+        self.assertIn('issue',S.SUBJECT_VERB_ROLES['起きる'])
+        for text in ('ねました','ねむった','おきた','めざめました'):
+            self.assertTrue(R.completed_native_link_clause(text),text)
+        self.assertTrue(R.native_object_predicate_proof('資料を保存して寝ました',3,('資料',)))
+        self.assertFalse(R.native_object_predicate_proof('資料を寝ました',3,('資料',)))
+        for text in ('ねま','ねむりて','ぷねらました'):
+            self.assertFalse(R.completed_native_link_clause(text),text)
+
+    def test_actual_subject_fit_reaches_source_preservation(self):
+        import app
+        from tests_analysis_async import initial
+        a=initial();a.context_vec=None
+        for text in ('かんじゃがねています。','びょうにんがねています。',
+                     'けがにんがやすみます。','かんじゃがめざめた。','かんじゃがねま',
+                     'てがみがあります。','こどもがいます。','はなみずがでます。'):
+            result=app.correct_line(text,a.store,dict_index=a.dict_index,
+                decisions=a.decisions,context_vec=None,input_method='kana')
+            self.assertEqual(result['corrected'],text)
+            self.assertFalse(result['odd_spans'],text)
+        # An unfinished source can be retained without proving completion.
+        self.assertFalse(R.completed_native_link_clause('ねま'))
+        self.assertTrue(R.completed_native_reading_clause('かんじゃがねています',
+            require_nominal=True,require_object_fit=True))
+
+    def test_classified_subject_addition_keeps_existing_basic_predicates(self):
+        for text in ('しりょうがあります','かんじゃがねています'):
+            self.assertTrue(R.completed_native_reading_clause(text,require_object_fit=True),text)
+        for text in ('しりょうがありた','しりょうがありますかん'):
+            self.assertFalse(R.completed_native_reading_clause(text,require_object_fit=True),text)
+        parts=M.tokenize('がありました')
+        legacy=[(t.surface,t.pos+(':'+t.pos_sub if t.pos_sub else ''),t.reading,
+                 t.start,t.end,t.has_reading,t.infl_form) for t in parts]
+        # Explicit subject constraints retain their strict default.
+        self.assertFalse(R._native_nominal_functional_tail(legacy,
+            content_subject_faces=('資料',),source_prefix='資料'))
+        self.assertTrue(R._native_nominal_functional_tail(legacy,
+            content_subject_faces=('資料',),source_prefix='資料',strict_subject_fit=False))
+
     def test_actual_auxiliary_does_not_borrow_homographic_verb(self):
         import oddness
         def legacy(t):

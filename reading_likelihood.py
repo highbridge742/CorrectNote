@@ -111,12 +111,31 @@ def edit_cost(original, revised, before='', after=''):
     return sum(values)/len(values) if values else None
 
 
-def adjacent_readings(text, tokens, start, end):
+def context_reading_length(text,tokens):
+    """Length of one fully covered native/literal context, or missing.
+
+    Actual source readings may disagree in sound but must agree in length;
+    neither unknown kanji nor a guessed character reading supplies length.
+    """
+    import unicodedata
+    cursor=0;total=0
+    for token in tokens:
+        if token[3]!=cursor or text[token[3]:token[4]]!=token[0]:return None
+        cursor=token[4]
+        if all(c.isspace() or unicodedata.category(c).startswith('P') for c in token[0]):continue
+        choices,_=_options(token,native_boundaries=True)
+        sizes={len(value) for value in choices}
+        if len(sizes)!=1:return None
+        total+=next(iter(sizes))
+    return total if cursor==len(text) and total else None
+
+
+def adjacent_readings(text, tokens, start, end, native_boundaries=False):
     """編集範囲外の読み。明示されたかなは原文座標、漢字は語の根拠を使う。"""
     before = ''; after = ''; cursor = start
     for t in reversed([t for t in tokens if t[4] <= start]):
         if t[4] != cursor: break
-        options, _ = _options(t)
+        options, _ = _options(t, native_boundaries=native_boundaries)
         if len(options) != 1: break
         before = options[0]+before; cursor = t[3]
         if len(before) >= 2: break
@@ -124,7 +143,7 @@ def adjacent_readings(text, tokens, start, end):
     for t in tokens:
         if t[3] < end: continue
         if t[3] != cursor: break
-        options, _ = _options(t)
+        options, _ = _options(t, native_boundaries=native_boundaries)
         if len(options) != 1: break
         after += options[0]; cursor = t[4]
         if len(after) >= 2: break
@@ -144,7 +163,34 @@ def adjacent_readings(text, tokens, start, end):
     return before[-2:], after[:2]
 
 
-def _options(token, dictionary_alternatives=True):
+def native_joined_word_neighbors(text,tokens,start,end):
+    """Constrain actual source readings by the same unchanged compound glyphs.
+
+    48-AOM / GPT-6 Astra / 2026-09-21.
+    Neither the edited reading nor a character guess supplies a key. Both
+    native source nouns and their exact joined dictionary word must agree.
+    Ambiguous segmentation and saved IME disagreements remain unresolved.
+    """
+    left=next((t for t in tokens if t[4]==start),None)
+    right=next((t for t in tokens if t[3]==end),None)
+    if not left or not right or start>=end:return '',''
+    if any(not t[5] or not t[1].startswith('名詞') or text[t[3]:t[4]]!=t[0]
+           for t in (left,right)):
+        return '',''
+    from morphology import dictionary_inflections
+    word=left[0]+right[0]
+    native={rd for pos,form,base,rd in dictionary_inflections(word) or ()
+            if pos.startswith('名詞,') and base==word and _reading(rd)}
+    if not native:return '',''
+    first,_=_options(left,native_boundaries=True)
+    last,_=_options(right,native_boundaries=True)
+    pairs={(a,b) for a in first for b in last if a+b in native}
+    if len(pairs)!=1:return '',''
+    a,b=next(iter(pairs))
+    return a[-2:],b[:2]
+
+
+def _options(token, dictionary_alternatives=True, native_boundaries=False):
     import kanji_guess
     saved = tuple(dict.fromkeys(r for r in kanji_guess.ime_readings_for(token[0]) if _reading(r)))
     if saved:
@@ -153,6 +199,19 @@ def _options(token, dictionary_alternatives=True):
     if _reading(literal):
         return (literal,), 'literal_kana'
     if len(token) > 5 and token[5] and _reading(token[2]):
+        if native_boundaries:
+            # A different POS homograph cannot erase the actual edge.
+            # Ambiguity within that same native role remains unresolved.
+            from morphology import dictionary_inflections,HAS_JANOME
+            # The fallback tokenizer already attests this word reading.
+            # Native alternatives cannot be requested without its analyzer.
+            if not HAS_JANOME:return (token[2],), 'analyzed_word_boundary'
+            prefix=token[1].replace(':',',')+','
+            form=token[6] if len(token)>6 else ''
+            choices=tuple(dict.fromkeys(rd for pos,f,base,rd in
+                dictionary_inflections(token[0]) or ()
+                if pos.startswith(prefix) and (not form or form==f) and _reading(rd)))
+            return (choices if token[2] in choices else ()), 'native_word_boundary'
         from inflected_lexicon import dictionary_readings
         others = list(dictionary_readings(token[0])) if dictionary_alternatives else []
         return tuple(dict.fromkeys([token[2]] + others)), 'dictionary_word'

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Short native genitives and locative nouns retain their own readings."""
+from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
 import reading_segments as R
@@ -40,7 +41,7 @@ class SpatialNominalContextTests(unittest.TestCase):
         self.assertTrue(single_key_drop_adjacency(source,expected))
         self.assertFalse(single_key_drop_is_duplicate(source,expected))
         result=correct(source)
-        self.assertEqual(result['corrected'],expected);self.assertEqual(result['odd_spans'],[])
+        assert_repaired_spelling(self, result, expected);self.assertEqual(result['odd_spans'],[])
 
 
 if __name__=='__main__':unittest.main()

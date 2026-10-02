@@ -1,8 +1,32 @@
 import unittest
 import corrector as C
-from literal_examples import protected_ranges, subtract_ranges
+from literal_examples import protected_ranges, subtract_ranges, masked_case_ranges
 
 class LiteralExampleTests(unittest.TestCase):
+
+    def test_literal_copy_and_search_objects_keep_exact_characters(self):
+        for operation in ('コピー','コピーします。','コピーしない','検索','検索する'):
+            line='「ぬるかった゛゜」を'+operation
+            self.assertEqual([line[a:b] for a,b in protected_ranges(line)],['ぬるかった゛゜'])
+        for line in ('「ぬるかった゛゜」と話す','「ぬるかった゛゜」をコピー機で印刷する'):
+            self.assertEqual(protected_ranges(line),[])
+
+    def test_written_form_labels_identify_the_same_quote_on_either_side(self):
+        from literal_examples import protected_ranges
+        for label in ('表記','綴り','文字列','文字'):
+            for text in (label+'「モーシろょん ⇒ 注」を確認します。',
+                         '「モーシろょん ⇒ 注」という'+label+'です。',
+                         '「モーシろょん ⇒ 注」は'+label+'です。'):
+                with self.subTest(text=text):
+                    lo=text.index('「')+1;hi=text.index('」')
+                    self.assertIn((lo,hi),protected_ranges(text))
+        for text in ('「モーシろょん ⇒ 注」と書きます。',
+                     '文章「モーシろょん ⇒ 注」を校正します。',
+                     '文字列を調べて「モーシろょん ⇒ 注」と書きます。',
+                     '文字列「モーシろょん ⇒ 注',
+                     '文字列「モーシろょん ⇒ 注』'):
+            self.assertEqual(protected_ranges(text),[],text)
+
     def test_explicit_input_output_spelling_examples_are_literal_data(self):
         for line in ('「あいう」は入力例です。','「あいう」が出力の例でした。',
                      '「あいう」も表記例ではありません。','入力例：「あいう」',
@@ -42,11 +66,13 @@ class LiteralExampleTests(unittest.TestCase):
         self.assertEqual(protected_ranges('事例として「保存が官僚した」を話しました。'),[])
 
     def test_quoted_keystrokes_are_text_being_reported(self):
-        for tail in ('と入力しました。','と入力したら','とタイプします。','と打った。','と打っても','と打鍵する。','とキー入力した。'):
+        for tail in ('と入力しました。','と入力したら','とタイプします。','と打った。','と打っても','と打鍵する。','とキー入力した。','を入力しました。',
+                     'をキー入力した。','をタイプする。','を打鍵したら'):
             line='「あいう」'+tail
             with self.subTest(tail=tail):
                 self.assertEqual([line[a:b] for a,b in protected_ranges(line)],['あいう'])
-        for tail in ('と書きました。','と入力仕様を比較した。','とタイプライター','という言葉'):
+        for tail in ('と書きました。','と入力仕様を比較した。','とタイプライター','という言葉','を入力欄で直します。',
+                     'を入力ミスと呼びます。','を打ち消しました。','を直します。'):
             self.assertEqual(protected_ranges('「あいう」'+tail),[])
 
     def test_partial_repair_keeps_a_reading_with_multiple_written_forms(self):
@@ -165,6 +191,47 @@ class LiteralExampleTests(unittest.TestCase):
                      '×「見本の誤字」→○「見本の正字'):
             self.assertEqual(protected_ranges(line),[],line)
 
+
+class MaskedCaseTests(unittest.TestCase):
+    def test_declared_edges_require_a_native_case_and_its_original_head_role(self):
+        for source,bound in (('がぞせうを保存します。',(4,5)),('がぞせうが届きました。',(4,5)),
+                ('未知ぷねらを保存します。',(5,6)),('がぞせうの資料を保存します。',(4,5)),
+                ('「がぞせう」を保存します。',(6,7))):
+            a=1 if source.startswith('「') else 0
+            # The explicit protected lexical atom fixes the original edge.
+            b=5 if a else bound[0]
+            with self.subTest(source=source):self.assertIn(bound,masked_case_ranges(source,[(a,b)]))
+        for source in ('がぞせうをです。','がぞせうをぷねらします。','がぞせうのです。'):
+            with self.subTest(source=source):self.assertFalse(masked_case_ranges(source,[(0,4)]))
+        # A substring protection does not split an actual known native word.
+        self.assertFalse(masked_case_ranges('本を保存します。',[(0,2)]))
+
+    def test_mask_boundary_is_not_a_deletion_reason_and_other_edits_survive(self):
+        from decisions import DecisionStore
+        source='がぞせうを保存したます。';d=DecisionStore();d.protect('がぞせう')
+        def fake_engine(line,**kwargs):
+            return dict(corrected=line.replace('を','').replace('たます','てます'),original_spans=[],details=[],odd_spans=[(4,5),(8,10)],odd_reasons=[(4,5,'masked initial case')],unsure_spans=[])
+        r=C._with_literal_examples(fake_engine)(source,decisions=d)
+        self.assertEqual(r['corrected'],'がぞせうを保存してます。')
+        self.assertEqual(r['odd_spans'],[(8,10)])
+        self.assertFalse(r['odd_reasons'])
+
+    def test_a_case_substitution_is_not_turned_into_a_protected_range(self):
+        from decisions import DecisionStore
+        source='がぞせうを保存します。';d=DecisionStore();d.protect('がぞせう')
+        def fake_engine(line,**kwargs):return dict(corrected=line.replace('を','が'),odd_spans=[],odd_reasons=[],unsure_spans=[])
+        self.assertEqual(C._with_literal_examples(fake_engine)(source,decisions=d)['corrected'],'がぞせうが保存します。')
+
+    def test_actual_initial_state_keeps_declared_word_case_and_repairs_only_bad_tail(self):
+        import app
+        from tests_analysis_async import initial
+        from decisions import DecisionStore
+        for source,word,expected in (('がぞせうを保存します。','がぞせう','がぞせうを保存します。'),
+                ('がぞせうを保存したます。','がぞせう','がぞせうを保存してます。'),
+                ('未知ぷねらを保存します。','未知ぷねら','未知ぷねらを保存します。')):
+            a=initial();d=DecisionStore();d.protect(word)
+            r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,decisions=d,context_vec=None)
+            self.assertEqual(r['corrected'],expected);self.assertFalse(r['odd_spans']);self.assertEqual(r['analysis_status'],'complete')
 
 if __name__=='__main__':unittest.main()
 

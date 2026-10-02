@@ -23,17 +23,20 @@ class KanaActionRepairTests(unittest.TestCase):
             changed=list(ts);changed[1]=('し','名詞:一般','し',4,5,True,'')
             self.assertEqual(N.native_action_note_seams('ようせんしてほせい',changed),())
 
+    # Inspect this route; native copular evidence remains independently valid.
     def test_a_seam_without_an_existing_anomaly_never_opens_repair(self):
         with patch.object(N,'native_action_note_seams',return_value=(4,)), \
              patch.object(O,'is_odd_run',return_value=[]), \
              patch.object(C,'_kana_run_is_odd_by_grammar',return_value=False):
-            self.assertEqual(R.targets_for_line('ようせんしてほせい',lambda s:[],None,None),[])
+            self.assertFalse(any(t.boundary_kind=='kana_action_note'
+                                 for t in R.targets_for_line('ようせんしてほせい',lambda s:[],None,None)))
 
     def test_the_same_whole_kana_judgment_preserves_original_context(self):
         with patch.object(N,'native_action_note_seams',return_value=(4,)), \
              patch.object(O,'is_odd_run',return_value=[]), \
              patch.object(C,'_kana_run_is_odd_by_grammar',return_value=True):
-            ts=R.targets_for_line('ようせんしてほせい',lambda s:[],None,None)
+            ts=[t for t in R.targets_for_line('ようせんしてほせい',lambda s:[],None,None)
+                if t.boundary_kind=='kana_action_note']
         self.assertEqual([(t.text,t.following,t.context,t.structural) for t in ts],
                          [('ようせん','してほせい','ようせんしてほせい',True)])
 

@@ -67,4 +67,41 @@ class ApplicationCacheTests(unittest.TestCase):
   a=self.make_app();a.line_results[0]['analysis_status']='incomplete';a._save_analysis_cache()
   self.assertFalse(Path(self.path).exists())
 
+
+ def test_text_cache_reuses_its_owners_partial_display(self):
+  a=self.make_app();a._analysis_cache[self.source]=list(a.line_results)
+  a._analysis_cache_dependencies[self.source]=analysis_async.state_key(a)
+  first=a.line_results[0];key=(first['original'],first['corrected'])
+  a._bg_parked={work.owner(a):dict(owner=work.owner(a),text=self.source,
+   dependencies=analysis_async.state_key(a),readings=(),calculations=(),
+   ctx={'prepared':True},words={},attested={},results=list(a.line_results),
+   units={key:(first['corrected'],[])},suspect_units={key+(False,):(first['original'],[])})}
+  self.assertTrue(a._use_analysis_cache(self.source,self.source.split('\n')))
+  self.assertEqual(a._analyze_todo,[1])
+  self.assertEqual(a._analyze_ctx,{'prepared':True})
+
+ def test_changed_background_dependencies_do_not_supply_display(self):
+  a=self.make_app();a._analysis_cache[self.source]=list(a.line_results)
+  a._analysis_cache_dependencies[self.source]=analysis_async.state_key(a)
+  first=a.line_results[0];key=(first['original'],first['corrected'])
+  a._bg_parked={work.owner(a):dict(owner=work.owner(a),text=self.source,
+   dependencies=('obsolete',),readings=(),calculations=(),ctx={},
+   units={key:('old display',[])},suspect_units={key+(False,):('old display',[])})}
+  self.assertTrue(a._use_analysis_cache(self.source,self.source.split('\n')))
+  self.assertEqual(a._analyze_todo,[0,1])
+
+
+ def test_current_text_must_match_parked_display(self):
+  a=self.make_app();text=self.source.split('\n')[0]+'\n別の行です。'
+  a._analysis_cache[text]=[dict(original=line,corrected=line) for line in text.split('\n')]
+  a._analysis_cache_dependencies[text]=analysis_async.state_key(a)
+  first=a.line_results[0];key=(first['original'],first['corrected'])
+  a._bg_parked={work.owner(a):dict(owner=work.owner(a),text=self.source,
+   dependencies=analysis_async.state_key(a),readings=(),calculations=(),ctx={'obsolete':True},
+   words={},attested={},units={key:(first['corrected'],[])},
+   suspect_units={key+(False,):(first['original'],[])})}
+  self.assertTrue(a._use_analysis_cache(text,text.split('\n')))
+  self.assertEqual(a._analyze_todo,[0,1])
+  self.assertEqual(a._analyze_ctx,{})
+
 if __name__=='__main__':unittest.main()

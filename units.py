@@ -1605,6 +1605,24 @@ def build_line_units(result, tokenize_fn, choice_store=None,
 
     # ユーザーの選び直しを、生テキストへの一致で先に確定する
     choice_ranges = _find_choice_ranges(text, tokens, choice_store)
+    # An original-unit choice must survive an automatic change of those
+    # visible letters. Only source-validated alternatives from this result
+    # can project; keep the existing longest-nonoverlapping range rule.
+    if result.get('contextual_choices'):
+        from candidates import contextual_choice_ranges
+        projected=contextual_choice_ranges(result,choice_store)
+        if projected:
+            combined=sorted(projected+choice_ranges,key=lambda c:(-(c[1]-c[0]),c[0]))
+            choice_ranges=[]
+            for item in combined:
+                if not any(item[0]<e and s<item[1] for s,e,*_ in choice_ranges):
+                    choice_ranges.append(item)
+            choice_ranges.sort(key=lambda c:c[0])
+    # An explicitly requested arithmetic result has a fixed half-width form.
+    calculation_spans=[span for span,detail in zip(fixed_spans,details) if detail[2]=='計算']
+    if calculation_spans:
+        choice_ranges=[item for item in choice_ranges if not any(
+            item[0]<end and start<item[1] for start,end in calculation_spans)]
 
     units = []
     out = []

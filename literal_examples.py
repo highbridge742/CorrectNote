@@ -7,7 +7,7 @@
 import re
 from functools import lru_cache
 
-KNOWLEDGE_VERSION = '2026-09-15c'
+KNOWLEDGE_VERSION = '2026-10-03a'
 
 _ERROR_NOUN = r'(?:誤入力|誤変換|誤字|誤記|誤植|入力ミス|タイプミス|ミスタイプ|打ち間違い)'
 # The label names the quoted spelling as data, even when the example is
@@ -37,10 +37,15 @@ _EXPRESSION_ASSERTION_AFTER = re.compile(
     r'(?:成立(?:している|していない|しない)|(?:不自然|自然)(?:な(?:表現|文|文章|言い方|語形))?(?:でした|だった|でしょう|です|だ)|(?:正しい|おかしい)(?:です|でしょう)?)'
     r'(?=$|[\s、。，．:：;；!?！？がとのねよかけ])')
 
-# 入力した文字列そのものを報告する引用も、表記が記述の対象になる。
+# 入力・表記した文字列そのものを報告する引用も、表記が記述の対象になる。
 # 裸の引用や「と書いた」全般には広げない（通常の文章の校正と区別）。
-_TYPED_AFTER = re.compile(r'\s*と\s*(?:(?:キー入力|入力|タイプ|打鍵)(?:し|する|すれ|せず|せよ)|'
-                          r'打(?:った|って|ち|つ|て|とう))')
+# 48-AKY: both the quotative と and the object を can report exact
+# input text. The bare 打つ alternative remains quotative: を打ち消す
+# describes a different action, not a keystroke report.
+_TYPED_AFTER = re.compile(r'\s*(?:(?:と|を)\s*(?:キー入力|入力|タイプ|打鍵)'
+                          r'(?:し|する|すれ|せず|せよ)|と\s*表記(?:し|する|すれ|せず|せよ)|と\s*打(?:った|って|ち|つ|て|とう))')
+# Search and copy operations refer to the exact quoted character sequence.
+_SEARCH_QUERY_AFTER = re.compile(r'\s*を\s*(?:検索|コピー)(?:し|する|すれ|せず|せよ|(?=$|[\s、。，．!?！？]))')
 # 48-ACU: a reported inscription describes the literal written text.
 # This does not cover the generic proofreading frame '...to kaita'.
 _INSCRIPTION_AFTER = re.compile(r'\s*と\s*書いて(?:あります|ありました|あった|ある)(?=$|[\s、。，．!?！？とがのねよ])')
@@ -48,10 +53,15 @@ _PAIRS = {'「':'」','『':'』','“':'”','‘':'’','"':'"'}
 _CLOSE = frozenset(_PAIRS.values())
 
 # SP-MENTION / GPT-6 / 2026-09-13: the written form is being named or described.
-_SPELLING_AFTER = re.compile(r'\s*(?:という|といった)\s*(?:表記|綴り|文字列|文字)(?=$|[\s、。，．:：;；!?！？がはをにでとの])')
+# 48-AOX / GPT-6 Astra: an immediately preceding written-form label
+# identifies the quoted spelling itself, as does the existing following label.
+# Ordinary speech/writing and an unrelated label elsewhere remain correctable.
+_SPELLING_LABEL = r'(?:表記|綴り|文字列|文字)'
+_SPELLING_BEFORE = re.compile(_SPELLING_LABEL+r'\s*$')
+_SPELLING_AFTER = re.compile(r'\s*(?:という|といった)\s*'+_SPELLING_LABEL+r'(?=$|[\s、。，．:：;；!?！？がはをにでとの])')
 _NAMING_BEFORE = re.compile(r'(?:商品名|作品名|人名|名前|名称|表記|綴り)(?:は|が|[:：])\s*$')
 _NAMING_AFTER = re.compile(r'\s*(?:は|が)(?:(?:登場人物|商品|作品)の)?(?:名前|名称|名)(?:です|だ|である|$)')
-_DESCRIBED_AFTER = re.compile(r'\s*(?:は|が)(?:くだけた|小書きの|特殊な)?(?:表記|綴り)(?:です|だ|である|$)')
+_DESCRIBED_AFTER = re.compile(r'\s*(?:は|が)(?:くだけた|小書きの|特殊な)?'+_SPELLING_LABEL+r'(?:です|だ|である|$)')
 _BARE_NAME = re.compile(r'([^\s、。！？!?「」『』()（）]+?)(?=という(?:名前|名称|名)(?:の|を|は|が|です|$))')
 _REWRITE_PAIR = re.compile(r'「([^「」]+)」を「([^「」]+)」に(?:直|補正|変換|書き換え)')
 _JUDGED_REWRITE_PAIR = re.compile(
@@ -102,7 +112,7 @@ def _unquoted_word_ranges(line,quoted):
             if first<last and token.pos=='助詞':break
             # Do not freeze only the last noun of a compound or one auxiliary
             # from a compound predicate. The native whole word must be present.
-            if first and tokens[first-1].end==token.start:
+            if first and tokens[first-1].end==token.start and tokens[first-1].pos!='記号':
                 prior=tokens[first-1]
                 # An unknown preceding piece does not establish a word
                 # boundary. Nor is a bound verb after a noun a free word.
@@ -146,7 +156,7 @@ def _unquoted_form_ranges(line, quoted):
                 or line[token.start:token.end] != token.surface
                 or overlaps(token.start, token.end, quoted)):
             continue
-        if index and tokens[index-1].end == token.start:
+        if index and tokens[index-1].end == token.start and tokens[index-1].pos != '記号':
             prior=tokens[index-1]
             if (not prior.has_reading or prior.pos in ('動詞','形容詞','助動詞')
                     or (prior.pos in ('名詞','接頭詞') and (token.pos=='助動詞'
@@ -270,8 +280,10 @@ def protected_ranges(line):
             if not line[start+1:pos].strip():continue
             if (_AFTER.match(line,pos+1) or _CLASSIFIED_AFTER.match(line,pos+1) or _TYPED_AFTER.match(line,pos+1) or
                     _EXPRESSION_ASSERTION_AFTER.match(line,pos+1) or _INSCRIPTION_AFTER.match(line,pos+1) or
+                    _SEARCH_QUERY_AFTER.match(line,pos+1) or
                     (_FORM_AFTER.match(line,pos+1) and _native_inflected_form(line[start+1:pos])) or
-                    _SPELLING_AFTER.match(line,pos+1) or _NAMING_AFTER.match(line,pos+1) or
+                    _SPELLING_AFTER.match(line,pos+1) or _SPELLING_BEFORE.search(line[:start]) or
+                    _NAMING_AFTER.match(line,pos+1) or
                     _DESCRIBED_AFTER.match(line,pos+1) or _NAMING_BEFORE.search(line[:start]) or
                     (_WORD_AFTER.match(line,pos+1) and _native_mentioned_word(line[start+1:pos])) or
                     _BEFORE.search(line[max(0,start-64):start]) or
@@ -300,6 +312,97 @@ def protected_ranges(line):
         if merged and a<=merged[-1][1]:merged[-1]=(merged[-1][0],max(b,merged[-1][1]))
         else:merged.append((a,b))
     return merged
+
+
+def masked_case_ranges(line,ranges):
+    """Original grammatical cases still bound to a shielded lexical atom.
+
+    Masking its letters removes content, not its boundary. An actual native
+    case at that exact edge is not a newly sentence-initial particle. This
+    supplies no noun meaning, reading or candidate for the protected text.
+    """
+    if not ranges:return []
+    from morphology import tokenize,dictionary_inflections
+    parts=tokenize(line);edges={b for a,b in ranges}
+    for a,b in ranges:
+        if a and b<len(line) and _PAIRS.get(line[a-1])==line[b]:edges.add(b+1)
+    from copy import copy
+    result=[];cases=[]
+    for edge in sorted(edges):
+        # A declared lexical edge can split an unread token, not an actual
+        # known word. Reparse unchanged source letters at that exact edge.
+        if any(p.has_reading and p.start<edge<p.end for p in parts):continue
+        suffix=tokenize(line[edge:])
+        if suffix and suffix[0].start==0:
+            t=copy(suffix[0]);t.start=edge;t.end=edge+suffix[0].end;cases.append(t)
+    for t in cases:
+        if (t.start not in edges or not t.has_reading or t.pos!='助詞'
+                or not t.pos_sub.startswith(('格助詞','係助詞','連体化','並立助詞'))):continue
+        if not any(pos.startswith('助詞,'+t.pos_sub.replace(':',',')+',') and rd==t.reading
+                   for pos,form,base,rd in dictionary_inflections(t.surface) or ()):continue
+        # The following native head supports the case, not the entire
+        # predicate. Its own anomalous auxiliary remains independently bad.
+        from contextual_repair import _source_clause_bounds
+        from reading_segments import native_surface_nominal_heads
+        from semantic_roles import native_verb_roles,predicate_roles
+        _,end=_source_clause_bounds(line,t.start,t.end)
+        tail=line[t.end:end]
+        following=tokenize(tail)
+        valid=False
+        if t.pos_sub in ('連体化','並立助詞'):
+            edge=next((part.start for part in following if part.pos=='助詞'),len(tail))
+            valid=bool(native_surface_nominal_heads(tail[:edge]))
+        elif following and following[0].start==0 and following[0].has_reading:
+            head=following[0]
+            exact=any(pos.startswith(head.pos+','+head.pos_sub.replace(':',',')+',')
+                and (form==head.infl_form or head.pos=='名詞' and not head.infl_form
+                     and form=='*' and base==head.surface) and rd==head.reading
+                for pos,form,base,rd in dictionary_inflections(head.surface) or ())
+            role_cases=('が','を') if t.surface in ('は','も') else (t.surface,)
+            if exact and head.pos=='動詞' and head.pos_sub=='自立':
+                valid=any(native_verb_roles(head.surface,head.infl_form,head.reading,
+                    subject=case=='が',case=None if case in ('を','が') else case,
+                    tail=tail[len(head.surface):],before=t.surface) for case in role_cases)
+            elif exact and head.pos=='名詞' and head.pos_sub=='サ変接続':
+                from semantic_roles import SUBJECT_VERB_ROLES
+                valid=any(SUBJECT_VERB_ROLES.get(head.surface) if case=='が'
+                    else predicate_roles(head.surface,case=None if case=='を' else case)
+                    for case in role_cases)
+        if valid:result.append((t.start,t.end))
+    return result
+
+
+def proved_masked_word_ranges(line,ranges):
+    """A partly protected, positively proved native word keeps its own edge.
+
+    An entire clause proof never expands a mask across other source words.
+    Native word membership alone is not proof of its grammatical connection.
+    """
+    from morphology import tokenize
+    words=[(t.start,t.end) for t in tokenize(line) if t.has_reading
+           and t.pos in ('名詞','動詞','形容詞','副詞','連体詞','感動詞')
+           and any(t.start<=a<b<=t.end and (a,b)!=(t.start,t.end) for a,b in ranges)]
+    if not words:return ()
+    from reading_segments import native_context_ranges
+    proved=set(native_context_ranges(line))
+    return tuple(word for word in words if word in proved)
+
+
+def masked_word_spelling_range(line,ranges,start,end,face):
+    """Blank protection does not create a lexical boundary inside a word.
+
+    This only withholds same-reading spelling at the original masked edge.
+    A real key repair or a separate source word retains its own validation.
+    """
+    if not 0<=start<end<=len(line) or overlaps(start,end,ranges):return None
+    edges={start for a,b in ranges if b==start}|{end for a,b in ranges if a==end}
+    if not edges or line[start:end]==face:return None
+    from morphology import tokenize,native_spelling_only
+    if not native_spelling_only(line[start:end],face):return None
+    for word in tokenize(line):
+        if any(word.start<edge<word.end for edge in edges):
+            return word.start,word.end
+    return None
 
 
 def overlaps(a,b,ranges):

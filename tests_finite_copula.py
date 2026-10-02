@@ -8,6 +8,36 @@ import contextual_repair as R
 
 @unittest.skipUnless(M.dictionary_inflections('読む'), 'requires native dictionary')
 class FiniteCopulaTests(unittest.TestCase):
+    def test_broken_past_attachment_does_not_prove_a_completed_ending(self):
+        import corrector as C
+        tok=C.make_tokenizer(None)
+        for broken,fixed in (('検討しらた','検討したら'),
+                             ('運びましらた','運びましたら')):
+            self.assertTrue(R._preserves_completed_auxiliary_end(tok(broken),tok(fixed)))
+        for source,candidate in (('検討した','検討して'),('運びました','運びまして')):
+            self.assertFalse(R._preserves_completed_auxiliary_end(tok(source),tok(candidate)))
+        for source in ('検討した','運びました'):
+            self.assertTrue(R._preserves_completed_auxiliary_end(tok(source),tok(source)))
+
+    def test_final_particles_do_not_supply_a_modifiers_nominal_host(self):
+        import reading_segments as S
+        self.assertTrue(S._native_non_nominal_modifier_tail('か'))
+        self.assertFalse(S._native_non_nominal_modifier_tail('ぽねです'))
+        for source,prefix in (('かんたんなぽねです','かんたんな'),
+                              ('おおきなぽねです','おおきな')):
+            self.assertIn((0,len(prefix)),S.native_adnominal_modifier_ranges(source))
+
+    def test_finite_past_is_not_a_second_nominal_copula_stem(self):
+        import reading_segments as R
+        for text in ('よんだだ','読んだだ','たべただ','学生だだ'):
+            self.assertFalse(O.changed_auxiliary_chain_allowed(text,0,len(text)),text)
+        for text in ('よんだ','よんだなら','よんだら','がくせいだったなら'):
+            self.assertTrue(O.changed_auxiliary_chain_allowed(text,0,len(text)),text)
+        self.assertFalse(R.completed_native_verb_reading('よんだだ',True,False))
+        self.assertFalse(R.completed_native_reading_link('ほんをよんだだなら',allow_unclassified=True))
+        self.assertTrue(R.completed_native_reading_link('ほんをよんだなら',allow_unclassified=True))
+        self.assertTrue(O.changed_auxiliary_chain_allowed('資料を確認。「読んだだ」',0,2))
+
     def test_completed_auxiliary_cannot_become_a_copular_stem(self):
         for text in ('読みますです', '読みますだ', '読みまいです',
                      '美しいですです', 'かいてはけさしますです'):

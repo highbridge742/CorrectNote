@@ -22,8 +22,19 @@ class UnattachedMarkTests(unittest.TestCase):
         for line,positions in (('ン゛像を保存',(1,)),('科゜像を保存',(1,)),
                                ('文字゛列を選ぶ',(2,)),('し゛るしを読む',()),
                                ('は゜んを読む',()),('か\u3099ぞうを読む',()),
-                               ('こ゜を読む',())):
+                               ('こ゜を読む',(1,))):
             self.assertEqual(U.unattached_positions(line),positions,line)
+
+    def test_wrong_mark_kind_is_reported_by_the_same_composition_routine(self):
+        from morphology import normalize_marks
+        for text,expected,positions in (('ソ゜','ゾ',[1]),('ソ\u309a','ゾ',[1]),('ソ\uff9f','ゾ',[1]),
+                                         ('は゜','ぱ',[]),('こ゛','ご',[]),('か\u3099','が',[])):
+            typed=[];dropped=[]
+            self.assertEqual(normalize_marks(text,dropped=dropped,miskeyed=typed),expected)
+            self.assertEqual(typed,positions);self.assertEqual(dropped,[])
+        self.assertEqual(U.unattached_positions('可ソ゜得てメモします'),(2,))
+        for source in ('ソ゜は半濁点を付けた形です。','入力例「可ソ゜得」を確認します。','は゜んを食べます。'):
+            self.assertEqual(U.unattached_positions(source),(),source)
 
     def test_numeric_marks_separators_and_explicit_notation_are_not_words(self):
         for line in ('37゜の角度','北緯35゜です','@ ⇒ ゛','[ ⇒ ゜','゛説明',
@@ -47,9 +58,13 @@ class UnattachedMarkTests(unittest.TestCase):
         parts=[token('もじ','もじ','名詞:一般',0),token('゛','゛','記号:一般',2),
                token('つ','つ','名詞:一般',3),token('を','を','助詞:格助詞',4),
                token('選ぶ','えらぶ','動詞:自立',5)]
-        with patch('oddness.is_odd_run',return_value=[('じ','゛',1,3)]):
+        # This synthetic token test isolates native source marks from live IME evidence.
+        with patch('oddness.is_odd_run',return_value=[('じ','゛',1,3)]), patch('ime_language.JapaneseIME') as api:
+            api.return_value.__enter__.return_value.available=False
             rows=R.targets_for_line(text,lambda _:parts,None,None)
-        self.assertEqual([r.text for r in rows],['もじ゛つ'])
+        self.assertEqual({(r.start,r.end,r.following,r.anomalies) for r in rows},
+                         {(0,4,'を選ぶ',(('じ','゛',1,3),))})
+        self.assertTrue(any(r.boundary_kind=='lexical' for r in rows))
 
     def test_original_mark_segment_reaches_the_input_reading(self):
         text='ン゛像'
@@ -58,7 +73,8 @@ class UnattachedMarkTests(unittest.TestCase):
         target=R.RepairTarget(text,0,3,0,3,(('ン','゛',0,2),),True,'')
         with patch('kanji_guess.ime_readings_for',return_value=[]), \
              patch('inflected_lexicon.dictionary_readings',return_value=()), \
-             patch('kanji_guess.reading_combos_with_evidence',return_value=[]):
+             patch('kanji_guess.reading_combos_with_evidence',return_value=[]), patch('ime_language.JapaneseIME') as api:
+            api.return_value.__enter__.return_value.available=False
             rows=R.reading_evidence(target,lambda _:parts,None)
         self.assertEqual(rows[0].text,'ん゛ぞう')
         self.assertEqual(rows[0].segments[1],(1,2,'゛','literal_mark_key'))

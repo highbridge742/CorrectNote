@@ -29,23 +29,37 @@ def block_edge(lines, row, direction):
     return row
 
 
-_AFTER_PUNCTUATION = frozenset('、。，．,.！？!?')
-_BEFORE_BRACKETS = frozenset('「」『』（）()［］[]｛｝{}【】〔〕〈〉《》＜＞<>｢｣')
+_AFTER_PUNCTUATION = frozenset('、。，．,.！？!?…‥')
+_BRACKETS = dict(zip('「『（(［[｛{【〔〈《＜<｢', '」』）)］]｝}】〕〉》＞>｣'))
+_CLOSING_BRACKETS = frozenset(_BRACKETS.values())
 
 
-def text_edge(text, column, direction):
+def text_edge(text, column, direction, tokens=()):
     """Return the next strict boundary within one logical line.
 
-    Punctuation belongs to its preceding segment; brackets begin a segment.
+    Punctuation runs and closing brackets belong to the preceding segment.
     A contiguous whitespace run has two edges, regardless of its length.
     """
     column = max(0, min(column, len(text)))
     boundaries = {0, len(text)}
+    for token in tokens:
+        if token[1].split(':')[0] in ('接続詞', '助詞'):
+            end = token[4]
+            # Keep following punctuation with the word; its run ends below.
+            if end == len(text) or text[end] not in _AFTER_PUNCTUATION:
+                boundaries.add(end)
     for i, char in enumerate(text):
-        if char in _AFTER_PUNCTUATION:
+        if char in _AFTER_PUNCTUATION and (
+                i + 1 == len(text) or text[i + 1] not in _AFTER_PUNCTUATION):
             boundaries.add(i + 1)
-        if char in _BEFORE_BRACKETS:
-            boundaries.add(i)
+        if char in _CLOSING_BRACKETS:
+            boundaries.add(i + 1)
+        if char in _BRACKETS:
+            end = i + 1
+            while end < len(text) and text[end].isspace():
+                end += 1
+            if end == len(text) or text[end] != _BRACKETS[char]:
+                boundaries.add(i)
         if char.isspace():
             if i == 0 or not text[i - 1].isspace():
                 boundaries.add(i)

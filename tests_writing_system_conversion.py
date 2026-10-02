@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """A result writing system is distinct from a borrowed item's return owner."""
+from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
 import semantic_roles as S
@@ -40,7 +41,7 @@ class WritingSystemConversionTests(unittest.TestCase):
                      '漢字をひらがなに返還します。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text.replace('返還','変換'))
+            assert_repaired_spelling(self, result, text.replace('返還','変換'))
             self.assertEqual(result.get('odd_spans'),[])
         for text in ('資料を本人に返還します。','ひらがなを漢字に変換します。',
                      '「ひらがなを漢字に返還します」という誤記です。'):

@@ -13,6 +13,23 @@ class ShortcutCaseTests(unittest.TestCase):
         for prefix in ('Ctrl+S','Alt+Tab','Ctrl+Shift+F12','Win+R','Command+Space'):
             self.assertEqual(self.spans(prefix),[(len(prefix),len(prefix)+1)])
 
+    def test_key_relation_precedes_japanese_candidate_lookup(self):
+        from halfwidth import correct_halfwidth,looks_like_halfwidth_input
+        def unexpected(*args,**kwargs):
+            self.fail('a complete keyboard chord entered Japanese candidate lookup')
+        for chord in ('Alt+F5','alt+f5','Alt + F5','Ctrl+Shift+F12','(Alt+F5)',
+                      'Win+R','Command+Space','Ctrl+F24'):
+            with self.subTest(chord=chord):
+                self.assertFalse(looks_like_halfwidth_input(chord))
+                self.assertIsNone(correct_halfwidth(chord,None,unexpected))
+        for keys in ('md@i(4l)h','c4w@r,','i(4l)hoy'):
+            self.assertTrue(looks_like_halfwidth_input(keys),keys)
+
+    def test_key_names_do_not_match_arbitrary_prefixes(self):
+        from halfwidth import keyboard_chord_ranges
+        for text in ('MyAlt+F5','Alt+F50','Alt+F5extra','Alt+UnknownKey','a+b'):
+            self.assertEqual(keyboard_chord_ranges(text),(),text)
+
     def test_nonshortcut_identifiers_are_not_repaired(self):
         for prefix in ('a+b','商品A','MyCtrl+S','Ctrl+UnknownKey','Alt+Tab '):
             self.assertEqual(self.spans(prefix),[])

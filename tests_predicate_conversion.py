@@ -33,7 +33,7 @@ class PredicateConversionTests(unittest.TestCase):
                 'し':(('動詞,自立,*,*','連用形','する','し'),),
                 'ます':(('助動詞,*,*,*','基本形','ます','ます'),),
             }.get(surface,())
-        parts=[M.Token('選択','名詞','選択','せんたく',0,2,True,'サ変接続'),
+        parts=[M.Token('選択','名詞','選択','せんたく',0,2,True,head_pos.split(',')[1]),
                M.Token('し','動詞','する','し',2,3,True,'自立','連用形'),
                M.Token('ます','助動詞','ます','ます',3,5,True,'','基本形' if finite else '連用形')]
         if text.endswith('し'):
@@ -118,6 +118,21 @@ class PredicateConversionTests(unittest.TestCase):
         with patch.object(M,'dictionary_inflections',return_value=None):
             self.assertTrue(O.preserves_bound_verb('し直し',1,'肢直し',1,lambda _:parts))
 
+    @unittest.skipUnless(M.HAS_JANOME, "Requires real native tokenization")
+    def test_retained_native_te_link_requires_a_predicate_after_narrow_or_wide_edits(self):
+        def native(text):
+            return [(t.surface,t.pos+':'+t.pos_sub,t.reading,t.start,t.end,t.has_reading,t.infl_form) for t in M.tokenize(text)]
+        source='必要な人数を可ゾ得てメモします'
+        invalid='必要な人数を画像てメモします';valid='必要な人数を数えてメモします'
+        for old_end,new_end in ((9,8),(len(source),len(invalid))):
+            self.assertFalse(O.preserves_bound_verb(source,old_end,invalid,new_end,native))
+        self.assertTrue(O.preserves_bound_verb(source,9,valid,8,native))
+        self.assertTrue(O.preserves_bound_verb(source,len(source),valid,len(valid),native))
+        for old,new,edge,newedge in (('得て驚きます','高くて驚きます',1,2),('読んで落ち着きます','綺麗で落ち着きます',2,2)):
+            self.assertTrue(O.preserves_bound_verb(old,edge,new,newedge,native))
+        # Another example field does not establish a local connective.
+        self.assertTrue(O.preserves_bound_verb('可ゾ得\tてメモします',3,'画像\tてメモします',2,native))
+
     def test_common_te_completion_obeys_the_same_native_euphony_as_candidates(self):
         parts=tokens([('さい','動詞:自立','さい','連用タ接続'),
                       ('で','助詞:接続助詞','で'),('いか','動詞:非自立','いか','未然形')])
@@ -148,7 +163,8 @@ class PredicateConversionTests(unittest.TestCase):
                         M.Token(case,'助詞',case,case,2,3,True,
                                 '連体化' if case=='の' else '格助詞:一般')]
             return []
-        with patch.object(R,'completed_sahen_reading',side_effect=lambda s,**kwargs:s=='ほぞんします'), \
+        with patch.object(R,'_seed_nominal_readings',return_value={}), patch.object(R,'_classified_nominal_readings',return_value={}), \
+             patch.object(R,'completed_sahen_reading',side_effect=lambda s,**kwargs:s=='ほぞんします'), \
              patch.object(C,'table_surfaces_for_reading',side_effect=lambda s,limit:['画像'] if s=='がぞう' else []), \
              patch.object(M,'dictionary_inflections',side_effect=entries), \
              patch.object(M,'tokenize',side_effect=tokenize):
@@ -244,3 +260,20 @@ class PredicateConversionTests(unittest.TestCase):
             self.assertFalse(R.native_nominal_reading_context(text,0,len(text),lambda _:parts))
             completion.assert_not_called()
 
+
+    def test_open_source_projects_only_last_native_inflection(self):
+        def parts(last,first_pos='サ変接続'):
+            return [M.Token('入力','名詞','入力','にゅうりょく',0,2,True,first_pos),
+                    M.Token('し','動詞','する','し',2,3,True,'自立','連用形'),
+                    M.Token(last,'助動詞','ます',last,3,3+len(last),True,'','連用形' if last=='まし' else '基本形')]
+        entries={'入力':(('名詞,サ変接続,*,*','*','入力','にゅうりょく'),),
+                 'まし':(('助動詞,*,*,*','連用形','ます','まし'),),
+                 'ます':(('助動詞,*,*,*','基本形','ます','ます'),)}
+        for preserved in (True,False):
+            R._native_open_predicate.cache_clear()
+            with patch.object(M,'tokenize',side_effect=lambda text:parts('まし') if text=='入力しまし'
+                    else parts('ます','サ変接続' if preserved else '一般')), \
+                 patch.object(M,'dictionary_inflections',side_effect=lambda word:entries.get(word,())), \
+                 patch.object(CR,'_allows_grammatical_tail',return_value=True), \
+                 patch.object(CR,'_productive_predicate',side_effect=lambda text,*a,**kw:text=='入力します'):
+                self.assertEqual(R._native_open_predicate('入力しまし','入力'),preserved)

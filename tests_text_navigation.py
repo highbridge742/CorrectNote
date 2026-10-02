@@ -10,7 +10,7 @@ class BlockNavigationTests(unittest.TestCase):
     def test_horizontal_edges_keep_punctuation_and_space_run_sides(self):
         from text_navigation import text_edge
         text = '最初、続き。次！本当？(括弧)「引用」 終わり\t\t　次'
-        pieces = ['最初、', '続き。', '次！', '本当？', '(括弧', ')', '「引用', '」',
+        pieces = ['最初、', '続き。', '次！', '本当？', '(括弧)', '「引用」',
                   ' ', '終わり', '\t\t　', '次']
         expected = [0]
         for part in pieces:expected.append(expected[-1]+len(part))
@@ -110,6 +110,29 @@ class NavigationTkTests(unittest.TestCase):
             self.assertFalse(w.tag_ranges('sel'))
             self.assertEqual(w.index('insert'),'1.0')
             self.assertEqual(w.get('1.0','end-1c'),before)
+
+    def test_particle_keys_and_selection_in_all_text_panes(self):
+        from vocabulary import VocabularyStore
+        from tests_tk_keys import deliver_key
+        self.a.store=VocabularyStore()
+        self.a._quick_text=tk.Text(self.root)
+        for w in (self.a.editor,self.a.result_view,self.a._quick_text):
+            w.delete('1.0','end');w.insert('1.0','😀私は、次へ！？進む。')
+            self.a._bind_block_navigation(w);w.mark_set('insert','1.0')
+            if w is self.a.result_view:w.configure(state='disabled')
+            original=w.get('1.0','end-1c')
+            for prefix in ('😀私は、','😀私は、次へ！？',original):
+                deliver_key(w,'<Control-Right>','Right',39,state=4)
+                self.assertEqual(w.get('1.0','insert'),prefix)
+            for prefix in ('😀私は、次へ！？','😀私は、',''):
+                deliver_key(w,'<Control-Left>','Left',37,state=4)
+                self.assertEqual(w.get('1.0','insert'),prefix)
+            for prefix in ('😀私は、','😀私は、次へ！？'):
+                deliver_key(w,'<Control-Shift-Right>','Right',39,state=5)
+                self.assertEqual(w.get('sel.first','sel.last'),prefix)
+            deliver_key(w,'<Control-Shift-Left>','Left',37,state=5)
+            self.assertEqual(w.get('sel.first','sel.last'),'😀私は、')
+            self.assertEqual(w.get('1.0','end-1c'),original)
 
     def test_bookmarks_use_the_focused_pane_and_wrap(self):
         self.a.editor.mark_set('insert','1.0');w=self.a.result_view;w.mark_set('insert','5.0')

@@ -17,6 +17,21 @@ class CookingRoleTests(unittest.TestCase):
         self.assertIn('ingredient',S.native_verb_roles('に','連用形','に',tail='ます'))
         self.assertNotIn('ingredient',S.native_verb_roles('似','連用形','に',tail='ます'))
 
+    def test_raw_vegetables_and_feed_keep_their_own_roles(self):
+        for word in ('トマト','胡瓜','きゅうり','ナス','南瓜','かぼちゃ','ほうれん草',
+                     'ブロッコリー','レタス','葱','ねぎ'):
+            self.assertTrue(S.support(word,'切る'),word)
+            self.assertTrue(S.support(word,'洗う'),word)
+            self.assertTrue(S.support(word,'食べる'),word)
+        self.assertTrue(S.support('飼料','食べる'))
+        self.assertFalse(S.support('飼料','洗う'))
+        self.assertTrue(S.support('史料','読む'))
+        self.assertFalse(S.support('史料','食べる'))
+        self.assertFalse(S.support('飼料','読む'))
+        self.assertFalse(S.support('資料','食べる'))
+        for word in ('植物','花','苗','鉛筆'):
+            self.assertNotIn('food',S.nominal_roles(word),word)
+
     def test_natural_kana_keeps_text_and_has_no_purple(self):
         import app
         from tests_analysis_async import initial
@@ -31,7 +46,12 @@ class CookingRoleTests(unittest.TestCase):
 
     def test_completed_clause_needs_the_actual_case_and_complete_inflection(self):
         self.assertTrue(R.completed_native_reading_clause('やさいをにます',require_object_fit=True))
-        for text in ('やさいをに','やさいをにるます','ぷねらをにます','しりょうをにます'):
+        # 48-ALB: kana しりょう also means feed, which can be boiled.
+        # The old negative assumed 資料; written meanings stay separate.
+        self.assertTrue(R.completed_native_reading_clause('しりょうをにます',require_object_fit=True))
+        self.assertFalse(S.support('資料','煮る'))
+        self.assertFalse(S.support('史料','煮る'))
+        for text in ('やさいをに','やさいをにるます','ぷねらをにます'):
             self.assertFalse(R.completed_native_reading_clause(text,require_object_fit=True),text)
 
     def test_vessels_have_the_shared_destination_role(self):
@@ -57,5 +77,22 @@ class CookingRoleTests(unittest.TestCase):
             self.assertFalse(R.intact_native_reading(text),text)
 
 
+
+    def test_shellfish_meanings_do_not_spread_to_shells_or_depictions(self):
+        for noun in ('アサリ','ハマグリ','シジミ','ホタテ','カキ','サザエ','アワビ','マテガイ'):
+            for verb in ('食べる','煮る','焼く','洗う'):
+                self.assertTrue(S.support(noun,verb),(noun,verb))
+        for noun in ('貝殻','貝塚','写真','図鑑','薬袋','間違い'):
+            self.assertFalse(S.support(noun,'食べる'),noun)
+        for noun in ('紙','布','写真','手'):
+            self.assertTrue(S.support(noun,'焼く'),noun)
+        self.assertFalse(S.support('間違い','焼く'))
+        self.assertIn('food',S.native_verb_roles('やき','連用形','やき',tail='ます'))
+        for text in ('まてがいをたべます','あさりをにます','はまぐりをやきます',
+                     'かきをむします','まてがいをやきます'):
+            self.assertTrue(R.completed_native_reading_clause(text,require_object_fit=True),text)
+        for text in ('まてがいをたべま','まてがいをやくます','まちがいをたべます',
+                     'まてがいをしゅうせいします'):
+            self.assertFalse(R.completed_native_reading_clause(text,require_object_fit=True),text)
 
 if __name__=='__main__':unittest.main()

@@ -13,10 +13,11 @@ class IndependentObjectClauseTests(unittest.TestCase):
 
     def test_next_object_requires_native_grammar_not_role_coverage(self):
         for text in ('仕様を直します。','予定を決めます。','文章を読みます。',
-                     '古い仕様を直します。','次の計画を決めます。','会議の資料を保存します。'):
+                     '古い仕様を直します。','次の計画を決めます。','会議の資料を保存します。',
+                     '仕様を直す人です。'):
             with self.subTest(text=text):self.assertTrue(S._independent_accusative_clause(text))
         for text in ('仕様を直し','仕様をしらゆほします。','仕様に戻ります。',
-                     '死んだ人を見ます。','仕様を直す人です。','資料を読んで寝ます。',
+                     '死んだ人を見ます。','資料を読んで寝ます。',
                      '仕様を直すと言います。','「仕様を直します」',
                      '仕様を直しますです。','仕様を直させます。','仕様を直されます。'):
             with self.subTest(text=text):self.assertFalse(S._independent_accusative_clause(text))
@@ -36,13 +37,30 @@ class IndependentObjectClauseTests(unittest.TestCase):
     def test_shared_or_open_object_attachment_stays_open(self):
         for text in ('子供を死んだ人の家に連れていきます。',
                      '子供を泣きながら抱きます。','子供を死ぬまで見守ります。',
-                     '意見を繁栄して','意見を繁栄して、','意見を繁栄して仕様を直し',
+                     '意見を繁栄して、','意見を繁栄して仕様を直し',
                      '意見を繁栄して書いた人に見せます。',
                      '地域を繁栄させて生活を変えます。',
                      '地域が繁栄して生活を変えます。',
                      '意見を繁栄すると仕様を変えます。'):
             with self.subTest(text=text):
                 self.assertEqual(S.subject_only_predicate_spans(text,self.tokens(text)),[])
+
+    def test_sentence_final_te_has_the_shared_request_boundary(self):
+        # 48-ASC closes a final request; a comma still leaves the link open.
+        text='意見を繁栄して'
+        self.assertEqual(S.subject_only_predicate_spans(text,self.tokens(text)),
+                         [('意見','繁栄',3,5)])
+
+    def test_temporal_te_kara_keeps_the_next_explicit_object_boundary(self):
+        for text in ('意見を繁栄してから仕様を直します。',
+                     '要望を繁栄してから、古い仕様を直します。'):
+            self.assertTrue(S.subject_only_predicate_spans(text,self.tokens(text)))
+        for text in ('意見を繁栄してから','意見を繁栄してから仕様を直し',
+                     '意見を繁栄してから書いた人に見せます。',
+                     '地域を繁栄させてから生活を変えます。',
+                     '意見を繁栄するから仕様を変えます。',
+                     '意見を繁栄してから\t仕様を直します。'):
+            self.assertEqual(S.subject_only_predicate_spans(text,self.tokens(text)),[],text)
 
     def test_application_corrects_connected_homophones_and_keeps_normals(self):
         import app
@@ -51,6 +69,7 @@ class IndependentObjectClauseTests(unittest.TestCase):
         for text,expected in (
                 ('意見を繁栄して仕様を直します。','意見を反映して仕様を直します。'),
                 ('日程を長生して予定を決めます。','日程を調整して予定を決めます。'),
+                ('意見を繁栄してから仕様を直します。','意見を反映してから仕様を直します。'),
                 ('意見を反映して仕様を直します。','意見を反映して仕様を直します。'),
                 ('地域を繁栄させて生活を変えます。','地域を繁栄させて生活を変えます。'),
                 ('「意見を繁栄して仕様を直します」という誤記です。','「意見を繁栄して仕様を直します」という誤記です。')):

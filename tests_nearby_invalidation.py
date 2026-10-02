@@ -56,7 +56,15 @@ class NearbyInvalidationTests(unittest.TestCase):
     def test_whole_document_context_change_discards_distant_results_too(self):
         self._exercise_actual_context({'old':1}, {'new':1}, list(range(10)))
 
-    def _exercise_actual_context(self,old_context,new_context,expected):
+    def test_attested_unit_change_is_independent_of_correction_context(self):
+        self._exercise_actual_context({}, {}, [2,3,4,5,6,7],
+                                      proof=(2,(('うえん',True),)))
+
+    def test_unread_global_entry_does_not_invalidate_a_proved_distant_row(self):
+        self._exercise_actual_context({'old':1}, {'new':1}, list(range(1,10)),
+                                      proof=(0,()))
+
+    def _exercise_actual_context(self,old_context,new_context,expected,proof=None):
         tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
         methods=[n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name=='_analyze']
         remap=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='remap_pending_lines')
@@ -68,6 +76,9 @@ class NearbyInvalidationTests(unittest.TestCase):
         old=['line'+str(i) for i in range(10)]
         current=old[:];current[5]='changed'
         original=[dict(original=line,corrected='cached:'+line) for line in old]
+        if proof is not None:
+            from analysis_context import Reads
+            original[proof[0]]['_context_evidence']=Reads(old_context).evidence(proof[1])
         captured=[]
         def visible(todo):captured.extend(todo);raise Ready()
         h=SimpleNamespace(_view_changing=lambda:False,_cancel_analysis_job=lambda:None,
@@ -77,11 +88,11 @@ class NearbyInvalidationTests(unittest.TestCase):
             _shift_bookmarks=lambda *a:None,_trace_analysis=lambda *a:None,
             _blank_result=lambda line:dict(original=line,corrected=line,pending=True),
             _visible_first=visible)
-        with patch.object(analysis_async,'context',return_value={'context':new_context}):
+        with patch.object(analysis_async,'context',return_value={'context':new_context,'words':{},'attested':{}}):
             with self.assertRaises(Ready):scope['_analyze'](h)
         self.assertEqual(captured,expected)
         if old_context==new_context:
-            self.assertIs(h.line_results[2],original[2])
+            if 2 not in expected:self.assertIs(h.line_results[2],original[2])
             self.assertIs(h.line_results[8],original[8])
         self.assertTrue(all(h.line_results[i]['pending'] for i in captured))
 

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Short causatives and the distinct interruption suffix share native evidence."""
+from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
 import oddness as O
@@ -48,7 +49,7 @@ class ShortCausativeTests(unittest.TestCase):
         self.assertFalse(single_key_drop_is_duplicate(source,expected))
         result=app.correct_line(source,a.store,dict_index=a.dict_index,
             decisions=a.decisions,context_vec=None,input_method='kana')
-        self.assertEqual(result['corrected'],expected);self.assertEqual(result['odd_spans'],[])
+        assert_repaired_spelling(self, result, expected);self.assertEqual(result['odd_spans'],[])
 
 
 if __name__=='__main__':unittest.main()

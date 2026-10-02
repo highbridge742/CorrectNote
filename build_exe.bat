@@ -14,30 +14,36 @@ rem ============================================================
 
 cd /d "%~dp0"
 
-rem --- find Python launcher (py or python) ---
-set PY=py
-where py >nul 2>nul
-if errorlevel 1 set PY=python
-where %PY% >nul 2>nul
+rem --- use this workspace's Python 3.9 unless explicitly overridden ---
+set "PY=%CORRECTNOTE_PYTHON%"
+if not defined PY (
+    if exist "%LOCALAPPDATA%\Programs\Python\Python39\python.exe" (
+        set "PY=%LOCALAPPDATA%\Programs\Python\Python39\python.exe"
+    ) else (
+        set "PY=python"
+    )
+)
+"%PY%" -X utf8 -c "import sys; assert sys.version_info >= (3, 9)"
 if errorlevel 1 (
-    echo Python が見つかりません。Python をインストールしてください。
-    pause
+    echo Python 3.9 or newer was not found. Set CORRECTNOTE_PYTHON to python.exe.
+    if not defined CORRECTNOTE_NO_PAUSE pause
     exit /b 1
 )
 
 if not exist "bundle_manifest.py" (
     echo bundle_manifest.py がこのフォルダにありません。
     echo exe に何を入れるかの名簿なので、これが無いとビルドできません。
-    pause
+    if not defined CORRECTNOTE_NO_PAUSE pause
     exit /b 1
 )
 
 echo [1/4] 必要なパッケージを確認しています...
-%PY% -m pip install --upgrade pyinstaller janome
+"%PY%" -X utf8 -c "import PyInstaller, janome"
 if errorlevel 1 (
     echo.
-    echo pip の実行に失敗しました。上のエラーを確認してください。
-    pause
+    echo PyInstaller or janome is missing from this Python environment.
+    echo Install them into "%PY%" and run build_exe.bat again.
+    if not defined CORRECTNOTE_NO_PAUSE pause
     exit /b 1
 )
 
@@ -46,11 +52,11 @@ if exist "build\bundle_report.txt" del /q "build\bundle_report.txt"
 
 echo.
 echo [2/4] exe をビルドしています（数分かかります）...
-%PY% -m PyInstaller correctnote.spec --noconfirm
+"%PY%" -X utf8 -m PyInstaller correctnote.spec --noconfirm --clean
 if errorlevel 1 (
     echo.
     echo ビルドに失敗しました。上のエラーを確認してください。
-    pause
+    if not defined CORRECTNOTE_NO_PAUSE pause
     exit /b 1
 )
 
@@ -61,7 +67,7 @@ if not exist "build\bundle_report.txt" (
     echo !! 同梱物の報告 build\bundle_report.txt が作られませんでした。
     echo !! correctnote.spec が bundle_manifest.py を読めていない可能性が
     echo !! あります。上のビルドの出力を確認してください。
-    pause
+    if not defined CORRECTNOTE_NO_PAUSE pause
     exit /b 1
 )
 type "build\bundle_report.txt"
@@ -79,7 +85,16 @@ if not errorlevel 1 (
     echo.
     echo dist\CorrectNote.exe は出来ています（そのままでも動きます）。
     echo.
-    pause
+    if not defined CORRECTNOTE_NO_PAUSE pause
+    exit /b 1
+)
+
+echo.
+echo [4/4] exe 内の版と補正エンジンを確かめています...
+"%PY%" -X utf8 "verify_built_exe.py" "dist\CorrectNote.exe"
+if errorlevel 1 (
+    echo The EXE did not match the current source. Build failed verification.
+    if not defined CORRECTNOTE_NO_PAUSE pause
     exit /b 1
 )
 
@@ -96,4 +111,4 @@ echo   始まります（初回は辞書の取り込みに時間がかかります）。
 echo   いまの語彙・メモのまま試すときは、exe をそのデータの在る
 echo   フォルダへ写してから動かしてください。
 echo.
-pause
+if not defined CORRECTNOTE_NO_PAUSE pause

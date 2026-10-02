@@ -11,11 +11,51 @@ import reading_segments as R
 
 
 class LexicalUsageTests(unittest.TestCase):
+    def test_public_cache_survives_git_line_endings_but_rejects_changed_content(self):
+        import tempfile
+        from pathlib import Path
+        from types import SimpleNamespace
+        import public_nominal_cache as P
+        root=Path(P.__file__).parent
+        files={name: (root/name).read_bytes() for name in
+               list(P.RESOURCE_SHA256)+[name+'.py' for name in P.CODE_SHA256]+
+               ['nominal_public_indices.json.gz']}
+        try:
+            with tempfile.TemporaryDirectory() as folder:
+                copied=Path(folder)
+                with patch.object(P,'__file__',str(copied/'public_nominal_cache.py')), \
+                     patch.object(P.sys,'frozen',False,create=True), \
+                     patch.object(P.importlib.util,'find_spec',side_effect=lambda name:
+                                  SimpleNamespace(origin=str(copied/(name+'.py')))):
+                    for newline in (b'\n',b'\r\n'):
+                        for name,raw in files.items():
+                            if Path(name).suffix in ('.py','.json'):
+                                raw=raw.replace(b'\r\n',b'\n').replace(b'\r',b'\n').replace(b'\n',newline)
+                            (copied/name).write_bytes(raw)
+                        P.load.cache_clear()
+                        self.assertTrue(P.available(),repr(newline))
+                    code=copied/(next(iter(P.CODE_SHA256))+'.py')
+                    code.write_bytes(code.read_bytes()+b'\n# changed source\n')
+                    P.load.cache_clear()
+                    self.assertFalse(P.available())
+                    binary=copied/'sample.gz'
+                    binary.write_bytes(b'a\r\nb')
+                    before=P._digest(binary)
+                    binary.write_bytes(b'a\nb')
+                    self.assertNotEqual(before,P._digest(binary))
+        finally:
+            P.load.cache_clear()
+
     def tearDown(self):
         import literal_examples as L
         L.named_identifier_parts.cache_clear()
         L.native_reading_gloss_ranges.cache_clear()
-        R._native_nominal_reading_faces.cache_clear()
+        # Dictionary mocks may now reach the shared adverb/counter indexes
+        # through relative-clause proof. Clear their dependent reading caches
+        # at the mock boundary, as tests_predicate_conversion already does.
+        for value in vars(R).values():
+            clear=getattr(value,'cache_clear',None)
+            if clear:clear()
         K._explicit_reading_faces.cache_clear()
         K.reading_is_explicitly_restricted.cache_clear()
 
@@ -82,6 +122,16 @@ class LexicalUsageTests(unittest.TestCase):
         self.assertIsNone(K.known_usage_tier('未分類の試験用語'))
         self.assertFalse(K.is_restricted('未分類の試験用語'))
         self.assertEqual(C._kango_tier_of('委員会'),1)
+
+    def test_literal_candidate_usage_shares_positive_reading_roster(self):
+        with patch.object(K,'_explicit_reading_faces',return_value={'よみ':{'日常','専門'},'みち':{'専門'}}), \
+             patch.object(K,'usage_tier_for_reading',side_effect=lambda word,reading:1 if word=='日常' else 3):
+            self.assertEqual(K.known_reading_usage_tier('よみ'),1)
+            self.assertIsNone(K.known_reading_usage_tier('みち'))
+            self.assertIsNone(K.known_reading_usage_tier('未知'))
+        self.assertEqual(K.known_usage_tier('付会'),3)
+        self.assertEqual(K.known_usage_tier('監察'),2)
+        self.assertIsNone(K.known_usage_tier('未評価の候補'))
 
     def test_existing_semantic_nouns_supply_ordinary_evidence_without_a_second_roster(self):
         from semantic_roles import NOUN_ROLES
@@ -255,7 +305,8 @@ class LexicalUsageTests(unittest.TestCase):
         usage={'按針':3,'宣旨':3,'戦時':2}
         readings={'按針':'あんじん','宣旨':'せんじ','戦時':'せんじ'}
         self.tearDown()
-        with patch.object(K,'_TABLE',{'戦時':2}),patch.object(K,'_USAGE',usage), \
+        with patch('public_nominal_cache.load',return_value=None), \
+             patch.object(K,'_TABLE',{'戦時':2}),patch.object(K,'_USAGE',usage), \
              patch.object(M,'dictionary_inflections',side_effect=lambda word:
                  (('名詞,一般,*,*','*',word,readings[word]),) if word in readings else ()), \
              patch.object(C,'table_surfaces_for_reading',return_value=[]):

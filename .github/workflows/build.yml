@@ -56,7 +56,10 @@ jobs:
       - name: exe をビルド
         run: python -m PyInstaller correctnote.spec --noconfirm
 
-      - name: 動作確認（画面は無いので、補正エンジンだけ動かす）
+      - name: EXEと公開ソース・同梱物を照合
+        run: python verify_built_exe.py dist/CorrectNote.exe
+
+      - name: 実辞書とWindows画面の動作確認
         run: python ci_smoke_test.py
 
       - name: ビルド結果をアップロード

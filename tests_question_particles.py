@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Closed polite questions: original grammar, physical slips and UI ranges."""
+from tests_spelling_reference import assert_repaired_spelling
 import unittest
 from unittest.mock import patch
 import morphology
@@ -21,7 +22,7 @@ class QuestionParticleTests(unittest.TestCase):
             for tail in ('間','冠','かん'):
                 with self.subTest(prefix=prefix,tail=tail):
                     result=self.correct(prefix+tail+'？')
-                    self.assertEqual(result['corrected'],prefix+'か？')
+                    assert_repaired_spelling(self, result, prefix+'か？')
                     self.assertFalse(result['odd_spans'])
                     again=self.correct(result['corrected'])
                     self.assertEqual(again['corrected'],result['corrected'])
@@ -35,7 +36,7 @@ class QuestionParticleTests(unittest.TestCase):
                     with self.subTest(prefix=prefix,tail=tail,ending=ending):
                         text=prefix+tail+ending
                         result=self.correct(text)
-                        self.assertEqual(result['corrected'],prefix+'か'+ending)
+                        assert_repaired_spelling(self, result, prefix+'か'+ending)
                         self.assertFalse(result['odd_spans'])
                         self.assertTrue(all(0<=f['start']<f['end']<=f['context_end']<=len(text)
                                             for f in closed_question_frames(text)))

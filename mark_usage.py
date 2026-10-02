@@ -7,12 +7,13 @@ This identifies uses of the original glyphs, without correction candidates.
 import re
 from functools import lru_cache
 
-KNOWLEDGE_VERSION = '2026-09-13a'
-_MARKS = '\u3099\u309a\u309b\u309c'
+KNOWLEDGE_VERSION = '2026-09-28a'
+from morphology import DAKUTEN_MARKS, HANDAKUTEN_MARKS
+_MARKS = ''.join(DAKUTEN_MARKS + HANDAKUTEN_MARKS)
 _VOICE_BASES = frozenset('叫ぶ 喚く 唸る 呻く 泣く 吠える 鳴く 怒鳴る 呟く うなる うめく つぶやく'.split())
 _VOICE = re.compile(r'(?<![ぁ-ゖァ-ヶー' + _MARKS + r'])([ぁ-ゖァ-ヶー' + _MARKS + r']{2,12}?)と')
 _VOWEL_VOICE = re.compile(r'[あいうえおんぁぃぅぇぉっアイウエオンァィゥェォッー' + _MARKS + r']{2,12}')
-_NAMED_SYMBOL = re.compile(r'(?:濁点|半濁点|記号|文字|印)(?:は|が|[:：])\s*([' + _MARKS + r'])')
+_NAMED_SYMBOL = re.compile(r'(?:濁点|半濁点|記号|文字|印)(?:は|が|[:：]|の(?=\s*[' + _MARKS + r']+(?=$|[をがはもにでへとの、。！？!?「」『』])))\s*([' + _MARKS + r']+)')
 _FORM_DESCRIPTION = re.compile(r'(?<![ぁ-ゖァ-ヶ一-鿿])([ぁ-ゖァ-ヶ][' + _MARKS + r'])(?=は(?:濁点|半濁点)を付けた形)')
 
 
@@ -89,16 +90,16 @@ def unattached_positions(line):
     def japanese(char):
         return 'ぁ'<=char<='ゖ' or 'ァ'<=char<='ヶ' or '一'<=char<='鿿' or char=='ー'
     out=[]
-    for i,char in enumerate(line):
-        if (char not in _MARKS or not i or i+1>=len(line)
-                or not japanese(line[i-1]) or not japanese(line[i+1])
-                or overlaps(i,i+1,protected)):
+    for match in re.finditer('['+re.escape(_MARKS)+']+',line):
+        a,b=match.span()
+        if (not a or b>=len(line) or not japanese(line[a-1]) or not japanese(line[b])
+                or overlaps(a,b,protected)):
             continue
-        dropped=[]
-        merged=normalize_marks(line[i-1:i+1],dropped=dropped)
-        if not dropped and len(merged)==1:
+        dropped=[];miskeyed=[]
+        merged=normalize_marks(line[a-1:b],dropped=dropped,miskeyed=miskeyed)
+        if not dropped and not miskeyed and len(merged)==1:
             continue
-        out.append(i)
+        out.extend(range(a,b))
     return tuple(out)
 
 
@@ -156,7 +157,13 @@ def normalization_seam_is_complete(text, seam, tokenize):
             continue
         link=_modern_euphonic_link(right[0],right[1],right[6])
         if seam==right[4] and not (right[0] in ('て','で') and right[1].startswith('助詞:接続助詞')):
-            continue
+            # An exact native past also finishes before an unchanged noun
+            # (食べたあと/書いた本), or at the end of the field.
+            following=parts[index+2] if index+2<len(parts) else None
+            if not (right[0] in ('た','だ') and right[1].startswith('助動詞')
+                    and right[6]=='基本形' and (right[4]==len(text) or following
+                    and following[3]==seam and following[5] and following[1].startswith('名詞'))):
+                continue
         if link is not None and _modern_te_allowed(left[0],left[2],link) is True:
             return True
     # 48-ABB: an actual adverb + adverbial particle is complete at
@@ -199,10 +206,10 @@ def normalization_seam_is_complete(text, seam, tokenize):
     # tail using the same grammar and native forms as generated repairs.
     # A following content word cannot be consumed as an auxiliary.
     for head in parts:
-        if not (head[3] in starts and head[5] and head[1].startswith('動詞:自立')):
+        if not (head[3] in starts and head[5] and head[1].startswith(('動詞:自立','形容詞:自立'))):
             continue
         forms=[row for row in dictionary_inflections(head[0]) or ()
-               if row[0].startswith('動詞,自立,') and row[3]==head[2]]
+               if row[0].startswith(('動詞,自立,','形容詞,自立,')) and row[3]==head[2]]
         for b in sorted(ends):
             if head[4]>b:continue
             terminal=next((i for i,t in enumerate(parts) if t[4]==b),None)
@@ -239,6 +246,86 @@ def incomplete_mark_deletion(source, changed, tokenize):
         changed,position-n,tokenize) for n,position in enumerate(dropped))
 
 
+def _redundant_clusters_complete(source,normalized,positions,tokenize,store,dictionary,decisions):
+    """A cluster wholly dropped by native composition still needs a complete seam."""
+    from morphology import normalize_marks
+    from literal_examples import protected_ranges,overlaps
+    protected=tuple(protected_ranges(source))+intentional_ranges(source)
+    groups=[]
+    for i in positions:
+        if groups and groups[-1][1]==i:groups[-1]=(groups[-1][0],i+1)
+        else:groups.append((i,i+1))
+    if not groups or any(b-a<2 for a,b in groups):return False
+    import corrector as C
+    delta=0
+    for a,b in groups:
+        if not a or overlaps(a,b,protected):return False
+        dropped=[]
+        composed=normalize_marks(source[a-1:b],dropped=dropped)
+        if not normalization_seam_is_complete(normalized,a-delta,tokenize):return False
+        if composed!=source[a-1:a]:
+            # Attaching the cluster can corrupt an already complete native
+            # predicate. A valid composed seam keeps its ordinary precedence.
+            composed_text=normalized[:a-delta-1]+composed+normalized[a-delta:]
+            if len(composed)!=1 or normalization_seam_is_complete(composed_text,a-delta,tokenize):return False
+        elif dropped!=list(range(1,b-a+1)):return False
+        proposal=(a,b,'','かな入力')
+        accepted,reason=C._check_replacement(source,proposal,store,tokenize,dictionary,decisions)
+        if accepted!=proposal:return False
+        delta+=b-a
+    return True
+
+
+def proved_cluster_normalization(source,tokenize,store,dictionary,decisions=None):
+    """A composed mark cluster must complete the same native source seam."""
+    from morphology import normalize_marks
+    from literal_examples import protected_ranges,overlaps
+    groups=list(re.finditer('['+re.escape(_MARKS)+']{2,}',source))
+    if not groups or tokenize is None:return None
+    protected=tuple(protected_ranges(source))+intentional_ranges(source)
+    if any(overlaps(*m.span(),protected) for m in groups):return None
+    dropped=[];normalized=normalize_marks(source,dropped=dropped)
+    normalized,dropped=prefer_grammatical_mark_normalization(
+        source,normalized,dropped,tokenize,store,dictionary,decisions)
+    if normalized==source:return None
+    import corrector as C
+    from oddness import structural_anomaly_in_range
+    edits=C._diff_spans(source,normalized)
+    # Every changed codepoint must belong to this host + cluster. A lone
+    # distant mark is a separate physical operation, not borrowed evidence.
+    if not edits or any(not any(m.start()-1<=a<b<=m.end() for m in groups)
+                        for a,b,c,d in edits):return None
+    for a,b,c,d in edits:
+        proposal=(a,b,normalized[c:d],'かな入力')
+        accepted,reason=C._check_replacement(source,proposal,store,tokenize,dictionary,decisions)
+        if accepted!=proposal:return None
+        if not normalization_seam_is_complete(normalized,d,tokenize):return None
+        if structural_anomaly_in_range(normalized,max(0,c-1),min(len(normalized),d+1),
+                                       tokenize,store,dictionary):return None
+    return normalized,tuple((a,b,normalized[c:d]) for a,b,c,d in edits)
+
+
+def prefer_grammatical_mark_normalization(source,normalized,dropped,tokenize,store,dictionary,decisions):
+    """Keep native predicate inflection when a cluster's voicing would break it."""
+    from morphology import normalize_marks
+    groups=list(re.finditer('['+re.escape(_MARKS)+']{2,}',source))
+    if not groups:return normalized,dropped
+    removed=set()
+    for match in groups:
+        a,b=match.span()
+        if not a or normalize_marks(source[a-1:b])==source[a-1:a]:continue
+        positions=sorted(removed|set(range(a,b)))
+        bare=''.join(c for i,c in enumerate(source) if i not in positions)
+        if _redundant_clusters_complete(source,bare,positions,tokenize,store,dictionary,decisions):
+            removed.update(range(a,b))
+    if not removed:return normalized,dropped
+    kept=[i for i in range(len(source)) if i not in removed]
+    bare=''.join(source[i] for i in kept)
+    remaining=[]
+    result=normalize_marks(bare,dropped=remaining)
+    return result,sorted(removed|{kept[i] for i in remaining})
+
+
 def normalized_intrusions(source, normalized, dropped, tokenize, store=None,
                           dictionary=None, decisions=None):
     """48-ZO: deleting an unattached mark is itself a one-key repair.
@@ -251,9 +338,11 @@ def normalized_intrusions(source, normalized, dropped, tokenize, store=None,
     if not dropped or tokenize is None:
         return False
     positions=sorted(set(dropped))
-    if not set(positions)<=set(unattached_positions(source)):
-        return False
     if normalized!=''.join(c for i,c in enumerate(source) if i not in positions):
+        return False
+    if _redundant_clusters_complete(source,normalized,positions,tokenize,store,dictionary,decisions):
+        return True
+    if not set(positions)<=set(unattached_positions(source)):
         return False
     import corrector as C
     from contextual_repair import key_repairs
@@ -265,7 +354,7 @@ def normalized_intrusions(source, normalized, dropped, tokenize, store=None,
         left,right=adjacent_readings(source,original,position,position+1)
         if not left or not right:
             return False
-        mark='゛' if source[position] in ('゛','\u3099') else '゜'
+        mark='゛' if source[position] in DAKUTEN_MARKS else '゜'
         segment=left[-1]+mark+right[0]
         if not any(row.operation=='adjacent_intrusion' and row.reading==left[-1]+right[0]
                    for row in key_repairs(segment)):
@@ -285,3 +374,44 @@ def normalized_intrusions(source, normalized, dropped, tokenize, store=None,
                                         tokenize,store,dictionary):
             return False
     return True
+
+
+def transposed_mark_readings(source,start):
+    """Possible one-kana results of swapping this unattached mark with its neighbor."""
+    if start not in unattached_positions(source) or start+1>=len(source):return ()
+    from morphology import dictionary_inflections,katakana_to_hiragana
+    from contextual_repair import key_repairs
+    right=source[start+1]
+    readings=[right] if 'ぁ'<=right<='ゖ' or 'ァ'<=right<='ヶ' else [
+        rd for pos,form,base,rd in dictionary_inflections(right) or () if len(rd)==1]
+    mark='゛' if source[start] in DAKUTEN_MARKS else '゜'
+    return tuple(dict.fromkeys(repair.reading for rd in readings
+        for repair in key_repairs(mark+katakana_to_hiragana(rd))
+        if repair.operation=='transposition' and repair.position==0
+        and len(repair.reading)==1 and 'ぁ'<=repair.reading<='ゖ'))
+
+
+def transposed_mark_connection(source,start,end,surface):
+    """A misplaced voiced mark may cross the next key, retaining its native host."""
+    if end!=start+2 or surface not in transposed_mark_readings(source,start):return False
+    from morphology import tokenize,dictionary_inflections
+    from contextual_repair import _modern_te_allowed
+    changed=source[:start]+surface+source[end:]
+    parts=tokenize(changed);left=[t for t in parts if t.end==start and t.has_reading]
+    for host in left:
+        if any(pos.startswith('動詞,') and _modern_te_allowed(host.surface,rd,surface) is True
+               for pos,form,base,rd in dictionary_inflections(host.surface) or ()):
+            return True
+    from reading_segments import native_nominal_phrase_faces,_native_written_nominal_faces,native_nominal_case_boundary
+    # Consider the original lexical boundaries, never the answer column.
+    source_parts=tokenize(source[:start])
+    starts={0}|{t.start for t in source_parts if t.has_reading}
+    for begin in sorted(starts):
+        head=source[begin:start]
+        if not head or len(head)>18:continue
+        kana=all('ぁ'<=c<='ゖ' or c=='ー' for c in head)
+        faces=native_nominal_phrase_faces(head) if kana else _native_written_nominal_faces(head)
+        for face in faces:
+            proof=native_nominal_case_boundary(face+surface,tokenize(face+surface),len(face),surface,(face,))
+            if proof is not None:return True
+    return False

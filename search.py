@@ -161,19 +161,24 @@ def _replacement_value(match, replacement, regex):
         raise SearchError(f'置換文字列が正しくありません:\n{error}')
 
 
+def replacement_edits(text, pattern, replacement, regex=False):
+    """Expand every original match before any editor mutation can occur."""
+    return tuple((match.start(),match.end(),_replacement_value(match,replacement,regex))
+                 for match in _matches(text,pattern))
+
+
+def apply_replacements(text, edits):
+    pieces=[];previous=0
+    for start,end,replacement in edits:
+        pieces.extend((text[previous:start],replacement));previous=end
+    pieces.append(text[previous:])
+    return ''.join(pieces)
+
+
 def replace_all(text, pattern, replacement, regex=False):
     """Replace matches from the original text and fixed content bounds."""
-    pieces = []
-    previous = count = 0
-    for match in _matches(text, pattern):
-        pieces.append(text[previous:match.start()])
-        pieces.append(_replacement_value(match, replacement, regex))
-        previous = match.end()
-        count += 1
-    if not count:
-        return text, 0
-    pieces.append(text[previous:])
-    return ''.join(pieces), count
+    edits=replacement_edits(text,pattern,replacement,regex)
+    return apply_replacements(text,edits),len(edits)
 
 
 def count_matches(text, pattern):

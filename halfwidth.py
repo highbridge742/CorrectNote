@@ -179,6 +179,22 @@ def _in_katakana_table(word):
 _JOIN_SYMBOLS = set('=-./')
 
 
+def keyboard_chord_ranges(text):
+    """Known modifier/key relationships, independent of Japanese vocabulary."""
+    import re
+    pattern=(r'(?<![A-Za-z0-9_])'
+        r'(?:(?:Ctrl|Control|Alt|Shift|Win|Cmd|Command|Option|Meta)[ ]*\+[ ]*)+'
+        r'(?:F(?:[1-9]|1[0-9]|2[0-4])|Tab|Enter|Return|Esc|Escape|Space|Delete|Backspace|Home|End|PageUp|PageDown|Up|Down|Left|Right|[A-Za-z0-9])'
+        r'(?![A-Za-z0-9_])')
+    return tuple(m.span() for m in re.finditer(pattern,text,re.I))
+
+
+def _is_keyboard_chord(text):
+    # Wrapping punctuation does not alter the named key combination.
+    return any(not (text[:a]+text[b:]).strip(' \t()[]{}<>「」『』【】.,:;!?*`\'"')
+               for a,b in keyboard_chord_ranges(text))
+
+
 def _side_of_join(run):
     """
     記号の片側が「語」または「数」として立っているか。
@@ -234,6 +250,8 @@ def looks_like_halfwidth_input(text, min_len=4):
     その判定は語彙を参照する必要があるので correct_halfwidth() で行う。
     """
     if not text or len(text) < min_len:
+        return False
+    if _is_keyboard_chord(text):
         return False
 
     # 48-VR: 記号を添えた既知の英単語も、意図した英字列。

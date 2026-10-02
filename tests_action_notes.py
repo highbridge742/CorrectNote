@@ -9,6 +9,68 @@ import semantic_roles as S
 
 
 class ActionNoteTests(unittest.TestCase):
+    @unittest.skipUnless(M.HAS_JANOME,'native comparative meaning')
+    def test_blocked_comparative_action_keeps_source_and_unresolved_mark(self):
+        import app
+        from tests_analysis_async import initial
+        a=initial();revision=a.store.revision()
+        a.decisions.reject('用船','優先')
+        result=app.correct_line('用船して補正',a.store,input_method='kana',
+            dict_index=a.dict_index,decisions=a.decisions)
+        self.assertEqual(result['corrected'],'用船して補正')
+        self.assertEqual(result['odd_spans'],[(0,2)])
+        self.assertEqual(result['analysis_status'],'complete')
+        self.assertEqual(a.store.revision(),revision)
+
+    @unittest.skipUnless(M.HAS_JANOME,'native phrase selection')
+    def test_bare_specialist_action_retains_whole_phrase_choice(self):
+        import app
+        from tests_analysis_async import initial
+        a=initial();revision=a.store.revision()
+        a.choices._readings['ようせんしてほせい']='用船して補正'
+        cases=(('用船して補正','用船して補正'),
+               ('\t\tようせんしてほせい⇒\t\t','\t\t用船して補正⇒\t\t'))
+        for source,expected in cases:
+            with self.subTest(source=source):
+                result=app.correct_line(source,a.store,input_method='kana',
+                    dict_index=a.dict_index,decisions=a.decisions)
+                self.assertEqual(result['corrected'],expected)
+                self.assertFalse(result['odd_spans'])
+        self.assertEqual(a.store.revision(),revision)
+
+    @unittest.skipUnless(M.HAS_JANOME,'native action and physical-key evidence')
+    def test_reviewed_bare_specialist_action_compares_with_control_reading(self):
+        import app
+        from tests_analysis_async import initial
+        a=initial()
+        cases=(
+            ('用船して補正','優先して補正'),
+            ('ようせんしてほせい','優先して補正'),
+            ('ゆうせんしてほせい','優先して補正'),
+            ('\t\tようせんしてほせい⇒\t\t','\t\t優先して補正⇒\t\t'),
+            ('船を用船して補正','船を用船して補正'),
+            ('用船して出港','用船して出港'),
+            ('用船契約を確認','用船契約を確認'),
+            ('用船','用船'),
+            ('用船して補正します','用船して補正します'),
+            ('「用船して補正」という誤入力です。','「用船して補正」という誤入力です。'),
+            ('用船して\t補正','用船して\t補正'))
+        revision=a.store.revision()
+        for source,expected in cases:
+            with self.subTest(source=source):
+                result=app.correct_line(source,a.store,input_method='kana',
+                    dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+                self.assertEqual(result['corrected'],expected)
+                self.assertFalse(result['odd_spans'])
+        self.assertEqual(a.store.revision(),revision)
+        # A fixture representing an explicit last spelling changes only this
+        # in-memory initial store; no personal choice file is loaded or saved.
+        a.choices._readings['ようせん']='用船'
+        result=app.correct_line('用船して補正',a.store,input_method='kana',
+            dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+        self.assertEqual(result['corrected'],'用船して補正')
+        self.assertFalse(result['odd_spans'])
+
     def tearDown(self):
         for f in (K._explicit_reading_faces,R._native_nominal_reading_faces,
                   R.native_bare_action_faces,R.native_nominal_phrase_faces,R._native_action_note_heads,
@@ -22,7 +84,8 @@ class ActionNoteTests(unittest.TestCase):
                      '追加':(('名詞,サ変接続,*,*','*','追加','ついか'),)}
             return entries.get(word,())
         K._explicit_reading_faces.cache_clear()
-        with patch.object(K,'_load',return_value={}), \
+        with patch('public_nominal_cache.load',return_value=None), \
+             patch.object(K,'_load',return_value={}), \
              patch.object(K,'_TABLE',{'既存':1,'未分類':3}), \
              patch.object(K,'_USAGE',{'追加':2,'辞書不在':1}), \
              patch.object(K,'_READING_USAGE',{}), \
@@ -95,6 +158,107 @@ class ActionNoteTests(unittest.TestCase):
              patch.object(R,'native_bare_action_faces',return_value=('保存',)):
             self.assertFalse(R.native_action_note_introduction('そしてほぞん'))
         R.native_action_note_introduction.cache_clear()
+
+
+    def test_native_conjunction_outside_the_modifier_list_keeps_its_action_note(self):
+        if not M.HAS_JANOME:self.skipTest('requires native Janome dictionary')
+        import app
+        from tests_analysis_async import initial
+        state=initial()
+        for source,expected in (('こうしてほぞん','こうして保存'),
+                                ('そうしてほぞん','そうして保存')):
+            with self.subTest(source=source):
+                result=app.correct_line(source,state.store,input_method='kana',
+                    dict_index=state.dict_index,decisions=state.decisions,context_vec=None)
+                self.assertEqual(result['corrected'],expected)
+                self.assertEqual(result['odd_spans'],[])
+    def test_conjunction_does_not_supply_an_unknown_or_unfinished_action(self):
+        if not M.HAS_JANOME:self.skipTest('requires native Janome dictionary')
+        for source in ('そうしてぷねら','こうしてほぞんし','ぷねらほぞん'):
+            with self.subTest(source=source):
+                self.assertFalse(R.native_action_note_introduction(source))
+                self.assertFalse(R.completed_native_action_note(source,require_link=False))
+
+    def test_attested_modifier_note_finishes_its_whole_action_word(self):
+        if not M.HAS_JANOME:self.skipTest('requires native Janome dictionary')
+        import app
+        from tests_analysis_async import initial
+        state=initial()
+        for source,expected in (('しかしほぞん','しかし保存'),
+                                ('またほぞん','また保存'),('まずほぞん','まず保存'),
+                                ('それからほぞん','それから保存')):
+            with self.subTest(source=source):
+                result=app.correct_line(source,state.store,input_method='kana',
+                    dict_index=state.dict_index,decisions=state.decisions,context_vec=None)
+                self.assertEqual(result['corrected'],expected)
+                self.assertEqual(result['odd_spans'],[])
+    def test_note_spelling_keeps_kana_choice_and_unresolved_source(self):
+        if not M.HAS_JANOME:self.skipTest('requires native Janome dictionary')
+        import app
+        from tests_analysis_async import initial
+        state=initial()
+        def line(source):
+            return app.correct_line(source,state.store,input_method='kana',
+                dict_index=state.dict_index,decisions=state.decisions,context_vec=None)
+        with patch('last_choice.surface_for_reading',side_effect=lambda rd:rd if rd=='ほぞん' else None):
+            self.assertEqual(line('まずほぞん')['corrected'],'まずほぞん')
+        for source in ('文字列「まずほぞん」','またほぞんし'):
+            self.assertEqual(line(source)['corrected'],source)
+        source='しかしぷねら';result=line(source)
+        self.assertEqual(result['corrected'],source);self.assertTrue(result['odd_spans'])
+
+    def test_source_grammar_can_list_unrelated_actions_without_licensing_candidates(self):
+        if not M.HAS_JANOME:self.skipTest('requires native Janome dictionary')
+        for text in ('とうろくしてさんぽ','そうじしてべんきょう','かくにんしてにゅうよく'):
+            with self.subTest(text=text):
+                self.assertTrue(R.completed_native_action_note(text,require_link=False))
+                self.assertFalse(R.completed_native_action_note(text))
+                self.assertIn((0,len(text)),R.native_context_ranges(text))
+        for text in ('とうろくしさんぽ','とうろくしたさんぽ','とうろくしてさんぽしたます',
+                     'とうろくしてしらゆほ','りんごをにゅうりょくしてさんぽ',
+                     'がぞうにほぞんしてさんぽ'):
+            self.assertFalse(R.completed_native_action_note(text,require_link=False),text)
+
+    def test_original_unrelated_tasks_keep_their_actions_without_anomaly(self):
+        if not M.HAS_JANOME:self.skipTest('requires native Janome dictionary')
+        import app
+        from tests_analysis_async import initial
+        a=initial();revision=a.store.revision()
+        for text,expected in (('とうろくしてさんぽ','登録して散歩'),
+                              ('そうじしてべんきょう','掃除して勉強')):
+            result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions)
+            self.assertEqual(result['corrected'],expected)
+            self.assertFalse(result['odd_spans'])
+        self.assertEqual(a.store.revision(),revision)
+
+
+    def test_classified_compound_action_reuses_native_suffix_and_suru(self):
+        if not M.HAS_JANOME:self.skipTest('requires native Janome dictionary')
+        from contextual_repair import _allows_grammatical_tail,_productive_predicate
+        self.assertEqual(M.native_sahen_compound_reading('暗号化'),'あんごうか')
+        self.assertEqual(M.dictionary_inflections('暗号化'),())
+        self.assertIn('暗号化',R.native_bare_action_faces('あんごうか'))
+        self.assertTrue(S.classified_nominal_action('暗号化','あんごうか'))
+        self.assertFalse(S.classified_nominal_action('暗号化','あんごか'))
+        for tail in ('して','します','しました','しません','すれば'):
+            self.assertTrue(_allows_grammatical_tail((),tail,'あんごうか','暗号化'),tail)
+            self.assertTrue(_productive_predicate('暗号化'+tail,'暗号化'),tail)
+        for tail in ('ました','しますした','されば'):
+            self.assertFalse(_productive_predicate('暗号化'+tail,'暗号化'),tail)
+        self.assertFalse(M.native_sahen_compound_reading('資料化'))
+        self.assertFalse(M.native_sahen_compound_reading('プネラ化'))
+        self.assertTrue(R.completed_native_action_note('あんごうかしてほぞん'))
+
+    def test_unchanged_compound_action_reaches_original_application_guard(self):
+        if not M.HAS_JANOME:self.skipTest('requires native Janome dictionary')
+        import app
+        from tests_analysis_async import initial
+        a=initial();revision=a.store.revision()
+        for text in ('あんごうかしてほぞん','あんごうかします','暗号化して保存'):
+            result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions)
+            self.assertEqual(result['corrected'],text)
+            self.assertFalse(result['odd_spans'],text)
+        self.assertEqual(a.store.revision(),revision)
 
 
 if __name__=='__main__':unittest.main()

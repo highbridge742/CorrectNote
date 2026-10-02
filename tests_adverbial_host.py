@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
 import reading_segments as R
@@ -17,6 +18,24 @@ class AdverbialHostTests(unittest.TestCase):
                 self.assertIn(face,R._native_adverbial_faces(reading))
         self.assertFalse(R.completed_native_reading_clause('ほんをまつつかいます',
             require_nominal=True,require_object_fit=True))
+
+    def test_degree_modifier_does_not_certify_an_arbitrary_nominal_clause(self):
+        import app
+        from tests_analysis_async import initial
+        a=initial();a.context_vec=None
+        for face,reading in S.DEPENDENT_DEGREE_READINGS:
+            self.assertNotIn(face,R._native_adverbial_faces(reading))
+        malformed='ごくごじてんをよみます。'
+        self.assertFalse(R.intact_native_reading(malformed))
+        result=app.correct_line(malformed,a.store,dict_index=a.dict_index,
+            context_vec=None,decisions=a.decisions,input_method='kana')
+        self.assertTrue(result['odd_spans'])
+        for text in ('ごくちいさいはこをつかいます。','ごくまれにほんをよみます。',
+                     'ごくわずかなみずをのみます。','ごくふつうのはなしです。'):
+            result=app.correct_line(text,a.store,dict_index=a.dict_index,
+                context_vec=None,decisions=a.decisions,input_method='kana')
+            self.assertEqual(result['corrected'],text)
+            self.assertFalse(result['odd_spans'],text)
 
     def test_native_whole_word_can_span_a_short_functional_prefix(self):
         for text,cut in (('ねんまつかいます',4),('げつまつかいます',4),
@@ -39,7 +58,7 @@ class AdverbialHostTests(unittest.TestCase):
             with self.subTest(text=text):
                 result=app.correct_line(text,a.store,dict_index=a.dict_index,
                     decisions=a.decisions,context_vec=None,input_method='kana')
-                self.assertEqual(result['corrected'],expected)
+                assert_repaired_spelling(self, result, expected)
                 self.assertEqual(result['odd_spans'],[])
 
 

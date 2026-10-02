@@ -31,6 +31,12 @@ class SuruParadigmTests(unittest.TestCase):
         self.assertFalse(C._native_manner_predicate('よむようにすります','よむ'))
         self.assertTrue(C._native_manner_predicate('よむようにします','よむ'))
 
+    def test_bare_sahen_head_cannot_borrow_a_bound_verb_or_connector(self):
+        for tail in ('れています','れて','れば','きました','てました','すました','れました'):
+            with self.subTest(tail=tail):self.assertFalse(C._productive_predicate('確認'+tail,'確認'))
+        for tail in ('されて','すれば','しました','です','だ','しない','せず','できる'):
+            with self.subTest(tail=tail):self.assertTrue(C._productive_predicate('確認'+tail,'確認'))
+
     def test_godan_rubbing_and_printing_are_still_native_verbs(self):
         for text in ('すります','すりました','刷りました','擦りました'):
             with self.subTest(text=text):self.assertTrue(C._productive_predicate(text,M.tokenize(text)[0].surface))

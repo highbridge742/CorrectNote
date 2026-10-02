@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """An actual action prefix participates in the full candidate grammar."""
+from tests_spelling_reference import assert_repaired_spelling
 import unittest
 from dataclasses import replace
 import morphology as M
@@ -47,15 +48,16 @@ class ActionAttachmentTests(unittest.TestCase):
         from tests_analysis_async import initial
         a=initial()
         for source,expected in (
-                ('しゃしんをえらんでほぞんくします。','しゃしんをえらんでほぞんします。'),
-                ('ほぞんくします。','ほぞんします。'),
-                ('かくにんくします。','かくにんします。')):
+                ('しゃしんをえらんでほぞんくします。','しゃしんをえらんで保存します。'),
+                ('ほぞんくします。','保存します。'),
+                ('かくにんくします。','確認します。'),
+                ('しゃしんをえらんでほぞんします。','しゃしんをえらんでほぞんします。')):
             result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],expected)
+            assert_repaired_spelling(self, result, expected)
             self.assertEqual(result.get('odd_spans'),[])
         for source in ('ほぞんもします。','ほぞんはします。','かくにんします。',
-                       'しゃしんをえらんでほぞんします。','保存先を開きます。',
+                       '保存先を開きます。',
                        'ごまをすります。','入力にします。','保存や検索をします。'):
             result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)

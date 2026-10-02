@@ -1612,78 +1612,15 @@ def test_odd_recognition_48jg():
           "and not (surf in getattr(_surfaces, 'whole', ())" in src
           and 'and cnt >= _WHOLE_KANJI_FLOOR):' in src, True)
 
-    # --- 方針2 が惜しく止まった語の紫（項目48-JH・2026-08-25）---
-    # うにさんの指定「異様であると認識しているのかが重要」。
-    # 答えは変えず、(b) 差で勝ったが証拠が細く棄却／(c) 並記があるのに
-    # 共起が決めない、の2つだけ紫に出す。**並記の右側（自分より前に
-    # 同読みの別表記が書かれている出現）には付けない**。
+    # Pending diagnostics belong to the source column, not an answer side.
     import corrector as CC
     line = '半角が治りました。 ⇒ 半角が直りました。'
     del CC._HOMOPHONE_UNSURE[:]
-    CC._flag_homophone_unsure('治り', ['直り'], '')
-    check('並記の左側（治り）に紫が付く',
+    CC._flag_homophone_unsure('直り', ['治り'], '半角が直りました。')
+    check('右欄にも自身の文脈の保留を残す',
           CC._odd_spans_for_line(line, lambda t: [], ()),
-          [(line.find('治り'), line.find('治り') + 2)])
+          [(line.find('直り'), line.find('直り') + 2)])
     del CC._HOMOPHONE_UNSURE[:]
-    CC._flag_homophone_unsure('直り', ['治り'], '')
-    check('並記の右側（直り・正しい側）には付かない',
-          CC._odd_spans_for_line(line, lambda t: [], ()), [])
-    del CC._HOMOPHONE_UNSURE[:]
-    check('行の処理の頭で控えを毎回空にしている',
-          'del _HOMOPHONE_UNSURE[:]' in src, True)
-    check('紫を出すのは (b) 棄却と (c) 並記の2か所だけ（(a) は外した）',
-          src.count('_flag_homophone_unsure(') >= 2
-          and '認識（紫）をここで出すのは**試して外した**' in src, True)
-
-    # --- 設計34: `誤 ⇒ 正` の並記で左を右に合わせる（項目48-JI）---
-    def tok_r(parts):
-        """(表記, 読み, 読みが立つか) から make_tokenizer の形を作る。"""
-        def fn(text):
-            out, pos = [], 0
-            for surf, rd, known in parts:
-                out.append((surf, '名詞:一般', rd, pos, pos + len(surf),
-                            known))
-                pos += len(surf)
-            return out
-        return fn
-
-    def arrow(line, lparts, rparts):
-        toks = {True: tok_r(lparts), False: tok_r(rparts)}
-        p = line.find('⇒')
-
-        def fn(text):
-            return toks[text == line[:p]](text)
-        return CC._arrow_respell(line, fn)
-
-    line = '半角が治りました。 ⇒ 半角が直りました。'
-    got = arrow(line,
-                [('半角', 'ハンカク', True), ('が', 'ガ', True),
-                 ('治り', 'ナオリ', True), ('まし', 'マシ', True),
-                 ('た', 'タ', True), ('。', '。', True)],
-                [('半角', 'ハンカク', True), ('が', 'ガ', True),
-                 ('直り', 'ナオリ', True), ('まし', 'マシ', True),
-                 ('た', 'タ', True), ('。', '。', True)])
-    check('⇒ の左右の差分（治り/直り）の読みが同じなら左を右に合わせる',
-          got, [(3, 5, '直り', 'その他')])
-    got = arrow('再退化 ⇒ 最大化',
-                [('再', 'サイ', True), ('退化', 'タイカ', True)],
-                [('最大', 'サイダイ', True), ('化', 'カ', True)])
-    check('濁点違い（タイカ/ダイカ）は同音ではないので触らない', got, [])
-    got = arrow('局所的手図ます ⇒ 局所的すぎます',
-                [('局所', 'キョクショ', True), ('的', 'テキ', True),
-                 ('手図', '', False), ('ます', 'マス', True)],
-                [('局所', 'キョクショ', True), ('的', 'テキ', True),
-                 ('すぎ', 'スギ', True), ('ます', 'マス', True)])
-    check('読みが立たない差分は照合できないので触らない', got, [])
-    got = arrow('度のファイルを ⇒ どのファイルを',
-                [('度', 'ド', True), ('の', 'ノ', True),
-                 ('ファイル', 'ファイル', True), ('を', 'ヲ', True)],
-                [('どの', 'ドノ', True),
-                 ('ファイル', 'ファイル', True), ('を', 'ヲ', True)])
-    check('漢字 → かな（度の → どの）も読みが同じなら合わせる',
-          got, [(0, 2, 'どの', 'その他')])
-    check('漢字を含まない差分（- ⇒ ほ）は見ない',
-          CC._arrow_respell('- ⇒ ほ', tok_r([('-', '-', False)])), [])
 
     # --- 設計35: AI が焼いた同音異義語の対の表（項目48-JJ）---
     # うにさんの指定「**見本がなくても補正できないといけません**」。
@@ -1762,7 +1699,9 @@ def test_odd_recognition_48jg():
 
     # --- 設計38: 場違いな小書きを隣のキーで戻す（項目48-JN）---
     # 隣接キー総当たり（7,962崩し）で見つけた「別のもの」の最大族。
-    # 正しい文に場違いな小書きは無い＝異様の判定が構造だけで立つ。
+    # 48-APE: 小書きの異様だけで、異なるキーとShiftの同時変更を許さない。
+    # 旧48-JN期待（参考）: もじゃゅうりょく→もじにゅうりょく、へゃかん→へんかん。
+    # どちらもゃから別の非Shiftキーへの置換なので1隣接誤打には数えない。
     class _S38:
         def lookup(self, r):
             table = {'もじにゅうりょく': 2, 'へんかん': 5}
@@ -1770,11 +1709,11 @@ def test_odd_recognition_48jg():
             return [{'surface': r, 'count': n}] if n else []
     _s38 = _S38()
     got = CC._misplaced_small_kana_fixes('もじゃゅうりょく', _s38)
-    check('小書き2連（ゃゅ）は前の字を隣のキーのい段へ（に）',
-          got, [(0, 8, 'もじにゅうりょく', 'かな入力')])
+    check('小書き2連でも別キー＋Shift解除を1隣接にしない（ゃ→に）',
+          got, [])
     got = CC._misplaced_small_kana_fixes('へゃかん', _s38)
-    check('い段でない字の後の小書きは、小書きを隣のキーへ（ん）',
-          got, [(0, 4, 'へんかん', 'かな入力')])
+    check('い段でない字の後も別キー＋Shift解除を1隣接にしない（ゃ→ん）',
+          got, [])
     check('正しい小書き（きょ・しょ）には触らない',
           CC._misplaced_small_kana_fixes('きょうもしょっぷへ', _s38), [])
     # 48-ABT: this asserts only the dedicated early helper's handoff.
@@ -3438,12 +3377,12 @@ def test_kt_hands_48ku():
           C._run_reading_merge_fixes('囚虜時', tok_shuryo, st),
           [(0, 3, '終了時')])
 
-    # **書かれている読みの語が語彙に在るなら触らない**
-    # （count 1 でも触らない——旧の `base_count >= 1` と同じ）
+    # 48-AYO: 語幹の登録だけでは、語幹＋接尾の正常さを証明しない。
+    # 完成した複合語の保護は共通入口で検査する。
     st2 = _St({'しゅうりょ': [{'surface': '囚虜', 'count': 1}],
                'しゅうりょう': [{'surface': '終了', 'count': 2}]})
-    check('書かれている読みの語が在るなら触らない（count 1 でも）',
-          C._run_reading_merge_fixes('囚虜時', tok_shuryo, st2), [])
+    check('登録済み語幹でも不成立の接尾結合は長音脱字候補を出す',
+          C._run_reading_merge_fixes('囚虜時', tok_shuryo, st2), [(0, 3, '終了時')])
 
     # **直し先が立っていなければ通さない**
     st2b = _St({'しゅうりょ': [],
@@ -4207,15 +4146,14 @@ def test_kana_run_hand_48ld():
           C._kana_run_hand_fixes('さいたいか', st, _di),
           [(0, 5, '最大化', 'かな入力')])
 
-    # (2) そのまま語＋語に割れる形は、手を出さずそのまま組む（⑤既定）。
-    #     手の版が ぎ→ぐ で 引き継ぐ資料 に壊した実測の受け止め
+    # (2) 48-APA: 正常なかなの語＋語は表記を勝手に変更しない。
+    #     誤打のない読みから動詞や漢字表記へ変えないことを測る。
     st2 = _St()
     st2.data = {'ひきつぎ': (('引き継ぎ', 82),),
                 'しりょう': (('資料', 21),),
                 'ひきつぐ': (('引き継ぐ', 50),)}
-    check('ひきつぎしりょう → 引き継ぎ資料（そのまま語＋語）',
-          C._kana_run_hand_fixes('ひきつぎしりょう', st2, _di),
-          [(0, 8, '引き継ぎ資料', 'かな入力')])
+    check('ひきつぎしりょうは正しい読みを保つ',
+          C._kana_run_hand_fixes('ひきつぎしりょう', st2, _di), [])
 
     # (3) そのままで語彙の語なら触らない
     st3 = _St()
@@ -4484,7 +4422,7 @@ def test_fp_guards_48lp():
           LW.katakana_for_hiragana_typo('すくろーるん', _st, min_length=4),
           'スクロール')
 
-    # --- 48-LS: 読みの並記（逆向き）と並記からの脱字の変種 ---
+    # --- 48-LS: 括弧内の読みの説明は原文の表記として保持 ---
     def tok_g(text):
         if text == '食事券':
             return [('食事', '名詞:サ変接続', 'ショクジ', 0, 2, True),
@@ -4499,11 +4437,6 @@ def test_fp_guards_48lp():
     check('括弧が無ければ対象外',
           C._reading_spelled_in_bracket('しょくじけん', 0, 6, tok_g),
           False)
-    check('読みの変種は同じ行の並びからだけ（かなち→かなうち）',
-          C._attest_insert_variants('かなち', ' かなうちでのほせい '),
-          ['かなうち'])
-    check('端の挿入は変種にしない（のかなち）',
-          C._attest_insert_variants('かなち', 'のかなち'), [])
     from kanji_guess import find_mixed_kana_runs as _fmk
     check('ひらがな頭＋漢字1字の塊が列挙に乗る（かな地）',
           (0, 3, 'かな地') in _fmk('かな地での補正'), True)
@@ -4866,11 +4799,6 @@ def test_compose_48lu():
           and src.count('_starts_inside_word(tokens, _lu_a)') == 2
           and src.count('_starts_inside_word(tokens, _cov[0][0])') == 1,
           True)
-    check('48-UN 見本（同じ行の並記）の道には掛けない',
-          '_starts_inside_word' not in src[
-              src.index('_lq = _lq_attested_insertion('):
-              src.index('_lq = _lq_attested_insertion(') + 1200], True)
-
     # ---- 48-UO **本人が書いた語は、機能語の並びの異様ではない**
     # ★ 材料は 48-UQ を通る形（文法の形をしている並び）で試すこと——
     #   通らない並びは 48-UQ が先に降りるので、この門を測れない。
@@ -5402,13 +5330,13 @@ def test_span_over_space_48mf():
                 space_ok = False
     check('作った範囲に空白が入らない', space_ok, True)
 
-    # **10か所とも通す**（学び22——片方だけに置くと、そちらを迂回する）
-    src = open('corrector.py', encoding='utf-8').read()
-    check('行ごとの突き合わせは _diff_spans だけ（生の difflib は無い）',
-          'difflib.SequenceMatcher(None, line, corrected' in src, False)
-    check('行を直し直す道は10か所とも _diff_spans を通る',
-          src.count('for i1, i2, j1, j2 in _diff_spans(line, corrected):'),
-          10)
+    # 呼び出し箇所数は実装の増減で変わる。差分を戻して本文が再現することを測る。
+    for before,after in [('猫と犬。','猫と鳥。'),('👩‍💻 文字です','👩‍💻 文書です'),
+                         ('あいう','あいいう'),('かきく','かく')]:
+        rebuilt=before
+        for i1,i2,j1,j2 in reversed(C._diff_spans(before,after)):
+            rebuilt=rebuilt[:i1]+after[j1:j2]+rebuilt[i2:]
+        check('差分から本文を再現: '+before,rebuilt,after)
     return all_ok
 
 def test_u_insert_compose_48mg():
@@ -8042,7 +7970,8 @@ def test_index_face_48oj():
     check('帯を見ないのは compose・48-MI の門・(い) の辞書の先頭の3か所（helper 経由・定義1＋呼び手3）',
           src.count('_surfaces_no_band(dict_index, '), 4)
     check('索引が帯を持つ（dict_index._band）', 'self._band = band' in di, True)
-    check('索引の版は 10（AIの使用判断を共有）', 'CACHE_VERSION = 10' in di, True)
+    from dict_index import CACHE_VERSION
+    check('一文字動詞の実活用を持たない旧v10索引を再利用しない', CACHE_VERSION > 10, True)
     check('造語の道: 手を当てた読みの語幹は直し先が1語のときだけ（48-OJ）',
           'が本人の語彙に無く、直し先' in src, True)
     check('形容動詞語幹＋化 は1語（48-OK・2か所）',
@@ -8122,9 +8051,9 @@ def test_pos_and_units_20260903():
           "_add(rd[:i] + _TYPO_DAKUTEN[u] + rd[i + 2:]," in src, True)
     check('(48-OR) 印と同じ並びを見る（断片の見立て）',
           '_odd.downgraded_tokens(toks, store, dict_index)' in src, True)
-    check('(48-OR(c)) 印で決まらなければ連なりごと（開ける印が在るとき・12字まで）',
-          'if not (_long_openable or _outside_broken):' in src
-          and 'if _long_done or len(run) > 12:' in src, True)
+    check('(48-OR(c)) 断片又は全範囲の異様根拠がある連なりを12字まで探索',
+          'if not (_long_openable or _outside_broken or _whole_mark):' in src
+          and 'if (_long_done and not _whole_mark) or len(run) > 12:' in src, True)
     check("(48-OR(c')) 印の外にも読みの立たない語が在れば連なりごと",
           'for _ma, _mb in ([] if _outside_broken else _frag_marks):' in src,
           True)

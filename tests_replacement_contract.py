@@ -36,7 +36,10 @@ class ReplacementContractTests(unittest.TestCase):
         self.assertEqual(reason, 'accepted')
 
     def test_new_repetition_is_rejected(self):
-        self.assertEqual(self.check('かがみ', 'かかみ'), (None, 'new_repetition'))
+        # Native grammar can independently reject this same bad output.
+        # Isolate repetition here; native auxiliary contracts have own tests.
+        with patch('oddness.changed_auxiliary_chain_allowed',return_value=True):
+            self.assertEqual(self.check('かがみ', 'かかみ'), (None, 'new_repetition'))
 
     def test_particle_insertion_is_not_a_repetition(self):
         self.assertEqual(C._check_replacement('静か歩く',(2,2,'に','かな入力'),None,None),

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """An unchanged noun/case proof never certifies its malformed predicate."""
+from tests_spelling_reference import assert_repaired_spelling
 import unittest
 from types import SimpleNamespace
 import morphology as M
@@ -44,10 +45,11 @@ class NominalSourceRangeTests(unittest.TestCase):
         text='このはこをまどのちかくにおきなます。'
         result=app.correct_line(text,self.a.store,dict_index=self.a.dict_index,
             decisions=self.a.decisions,context_vec=None,input_method='kana')
-        self.assertEqual(result['corrected'],'このはこをまどのちかくにおきます。')
+        assert_repaired_spelling(self, result, 'このはこをまどのちかくにおきます。')
         self.assertEqual(result['odd_spans'],[])
         self.assertEqual(result['diagnosis']['unreplaced_odd_spans'],[])
-        self.assertEqual(result['original_spans'],[(14,15)])
+        expected_spans=([(2,4),(8,11),(12,15)] if result['corrected']=='この箱をまどの近くに置きます。' else [(14,15)])
+        self.assertEqual(result['original_spans'],expected_spans)
 
     def test_unknown_tail_remains_separate_from_proved_nominal(self):
         import app

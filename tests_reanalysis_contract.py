@@ -61,3 +61,35 @@ class ReanalysisContractTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ReanalysisDisplayTests(unittest.TestCase):
+    def test_checked_word_keeps_nonempty_transposition_pair(self):
+        source='前abc後';changed='前acb後'
+        self.assertEqual(C._display_spans_for_reanalysis(source,changed,[(1,4,'acb','かな入力')]),[(1,4,1,4)])
+
+    def test_inner_change_and_unproved_scope_do_not_borrow_display_proof(self):
+        source='前abc後'
+        self.assertEqual(C._display_spans_for_reanalysis(source,'前acb後',[]),list(C._diff_spans(source,'前acb後')))
+        self.assertEqual(C._display_spans_for_reanalysis(source,'前acd後',[(1,4,'acb','かな入力')]),list(C._diff_spans(source,'前acd後')))
+
+    def test_prior_length_change_maps_same_checked_word(self):
+        source='AAabcZ';changed='BacbZ'
+        rows=C._display_spans_for_reanalysis(source,changed,[(0,2,'B','表記補正'),(2,5,'acb','かな入力')])
+        self.assertIn((2,5,1,4),rows)
+        self.assertEqual(''.join(changed[c:d] if a!=b else changed[c:d] for a,b,c,d in rows),'Bacb')
+
+    def test_written_source_feedback_keeps_actual_candidate_word(self):
+        import app,units
+        from tests_analysis_async import initial
+        from decisions import DecisionStore
+        for source in ('資料を保存したない','「資料」という語。資料を保存したない'):
+            with self.subTest(source=source):
+                a=initial();r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+                self.assertTrue(r['corrected'].endswith('保存したいな'))
+                self.assertIn(('保存したない','保存したいな','かな入力'),[tuple(x) for x in r['details']])
+                _,shown=units.build_line_units(r,C.make_tokenizer(a.store))
+                self.assertTrue(any(u.get('detail') and u['detail'][0]=='保存したない' for u in shown))
+                d=DecisionStore();d.reject('保存したない','保存したいな')
+                held=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,decisions=d,context_vec=None)
+                self.assertEqual(held['corrected'],source)

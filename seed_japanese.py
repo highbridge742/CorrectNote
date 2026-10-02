@@ -78,7 +78,6 @@
 無ければ「意見なし」を返し、これまでどおりの判断になります。
 """
 
-import gzip
 import os
 
 _WIDE = None        # 触らない側（固有名詞も入る）
@@ -96,16 +95,8 @@ def _load():
     here = os.path.dirname(os.path.abspath(__file__))
     for path in (os.path.join(here, FILENAME), FILENAME):
         try:
-            with gzip.open(path, 'rt', encoding='utf-8') as f:
-                wide, narrow = set(), set()
-                for raw in f:
-                    s = raw.rstrip('\n')
-                    if not s:
-                        continue
-                    if s[0] == '*':
-                        s = s[1:]
-                        narrow.add(s)
-                    wide.add(s)
+            from word_table import read_word_sets
+            wide, narrow = read_word_sets(path)
             if wide:
                 _WIDE, _NARROW = wide, narrow
                 return _WIDE

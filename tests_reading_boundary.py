@@ -201,4 +201,21 @@ class IntrudedStrokeTests(unittest.TestCase):
     def test_identical_repeat_is_not_intrusion(self):
         self.assertNotIn('がぞう',C._typo_repairs_intruded('がぞぞう'))
 
+    @unittest.skipUnless(M.dictionary_inflections('まで'),'requires native dictionary')
+    def test_lexical_core_cannot_borrow_a_partial_native_functional_word(self):
+        import reading_segments as R
+        for text,start,end in (('あすたまで',0,4),('本から',0,2),('かきます',0,3)):
+            self.assertFalse(R.native_lexical_core_boundary_allowed(text,start,end),(text,start,end))
+        for text,start,end in (('あすたまで',0,3),('あすたまで',0,5),('あたま',0,3),
+                               ('本から',0,1),('かきます',2,4)):
+            self.assertTrue(R.native_lexical_core_boundary_allowed(text,start,end),(text,start,end))
+        self.assertTrue(R.native_lexical_core_edit_allowed('かきます',3,4,'した'))
+        from tests_analysis_async import initial
+        a=initial();tokenize=C.make_tokenizer(a.store)
+        source='あすたまでにおわらせます。'
+        candidate,reason=C._check_replacement(source,(0,4,'あたま','かな入力'),
+            a.store,tokenize,a.dict_index,a.decisions)
+        self.assertIsNone(candidate)
+        self.assertEqual(reason,'lexical_core_crosses_functional_word')
+
 if __name__=='__main__':unittest.main()

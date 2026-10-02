@@ -13,6 +13,10 @@ class EditingTkTests(unittest.TestCase):
         self.a=app.CorrectNoteApp.__new__(app.CorrectNoteApp)
         self.a.root=self.root
         self.a.editor=tk.Text(self.root,undo=True)
+        # App startup installs this same proxy, including the legacy Tk
+        # UTF-16 undo fix. A raw Text would test a different editing path.
+        from analysis_work import observe_text
+        observe_text(self.a.editor)
         self.a.result_view=tk.Text(self.root,undo=False)
         self.a.settings={'layout':'split','dark_mode':False}
         self.a._autofix_reset=Mock();self.a._reset_typed_marks=Mock()
@@ -67,6 +71,7 @@ class EditingTkTests(unittest.TestCase):
         deliver_key(w, '<KeyRelease-Shift_L>', 'Shift_L', 16, state=1, event_type=3)
         self.assertIsNone(w._line_selection)
         self.assertIsNone(a._on_extend_line_selection(types.SimpleNamespace(widget=w), 1))
+        w.tag_remove('sel', '1.0', 'end')
         w.mark_set('insert', '3.0')
         deliver_key(w, '<Shift-space>', 'space', 32, state=1)
         self.assertFalse(w.tag_ranges('sel'))
@@ -77,12 +82,93 @@ class EditingTkTests(unittest.TestCase):
         self.assertIsNone(a._on_extend_line_selection(types.SimpleNamespace(widget=w), -1))
         self.assertIsNone(w._line_selection)
 
+    def test_shift_space_expands_existing_multiline_selection_in_both_directions(self):
+        from tests_tk_keys import deliver_key
+        a = self.a; a.status = Mock()
+        for w in (a.editor, a.result_view):
+            w.insert('1.0', '先頭行\n前😀長い行\n中の行\n末尾の行\n次の行')
+            a._install_line_selection_keys(w)
+            if w is a.result_view: w.config(state='disabled')
+            for upward in (False, True):
+                w.tag_remove('sel', '1.0', 'end')
+                w.tag_add('sel', '2.0+2c', '4.2')
+                w.mark_set('insert', '2.0+2c' if upward else '4.2')
+                deliver_key(w, '<Shift-space>', 'space', 32, state=1)
+                self.assertEqual(w.get('sel.first','sel.last'), '前😀長い行\n中の行\n末尾の行')
+                self.assertEqual(w.index('insert'), w.index('2.0' if upward else '4.end'))
+                # Keep the active side when extending or shrinking the range.
+                step = -1 if upward else 1
+                a._on_extend_line_selection(types.SimpleNamespace(widget=w), step)
+                expected = ('1.0','4.end') if upward else ('2.0','5.end')
+                self.assertEqual(tuple(str(i) for i in w.tag_ranges('sel')),tuple(w.index(i) for i in expected))
+                a._on_extend_line_selection(types.SimpleNamespace(widget=w), -step)
+                self.assertEqual(w.get('sel.first','sel.last'), '前😀長い行\n中の行\n末尾の行')
+
+    def test_shift_space_selection_ending_at_next_line_start_excludes_that_line(self):
+        a=self.a; a.status=Mock();w=a.editor
+        w.insert('1.0','最初\n途中\n末尾')
+        w.tag_add('sel','1.1','3.0');w.mark_set('insert','3.0')
+        a._on_select_line_text(types.SimpleNamespace(widget=w))
+        self.assertEqual(w.get('sel.first','sel.last'),'最初\n途中')
+        self.assertEqual(w.index('insert'),w.index('2.end'))
+
     def test_search_replacement_is_one_undo_and_redo(self):
         w=self.a.editor;before='最初の文😀\n次の文\n'
         w.insert('1.0',before);w.edit_reset()
         self.a._replace_editor_text('最初の文😀\n置換した文\n')
         w.event_generate('<<Undo>>');self.assertEqual(self.text(),before)
         w.event_generate('<<Redo>>');self.assertEqual(self.text(),'最初の文😀\n置換した文\n')
+    def _tracked_search_fixture(self):
+        import analysis_work_app as work
+        from session import SessionStore,new_tab
+        a=self.a;w=a.editor
+        lines=['同じ内容の行です。']*20
+        lines[1]='対象😀';lines[7]='確認';lines[9]='対象😀'
+        source='\n'.join(lines);w.insert('1.0',source);w.edit_reset()
+        a.session=SessionStore();a.session.tabs=[new_tab(text=source)]
+        a.bookmarks={3,8,15};a.editor_gutter=Mock();a.result_gutter=Mock()
+        a._schedule_session_save=Mock();a._prepare_pick_calculation_edit=None
+        a.editor_source_text=lambda:w.get('1.0','end-1c')
+        work.select_document(a,source);work.install(a)
+        at=source.index('確認');self.assertTrue(a._input_document.remember(at,at+2,'確認','かくにん'))
+        self._open_find_fixture(True)
+        return source
+
+    def test_search_changes_only_matches_and_preserves_middle_bookmark_and_ime_reading(self):
+        before=self._tracked_search_fixture();a=self.a;w=a.editor
+        a._find_query.set('対象');a._find_replacement.set('置換\n後')
+        a._do_replace_all();expected=before.replace('対象','置換\n後')
+        self.assertEqual(self.text(),expected);self.assertEqual(a.bookmarks,{4,9,17})
+        occurrences=a._input_document.occurrences
+        self.assertEqual(len(occurrences),1)
+        self.assertEqual((occurrences[0].start,occurrences[0].surface,occurrences[0].reading),
+                         (expected.index('確認'),'確認','かくにん'))
+        a._autofix_reset.assert_not_called();a._reset_typed_marks.assert_not_called()
+        self.assertEqual(a._typed_shadow,expected.split('\n'))
+        w.edit_undo();self.assertEqual(self.text(),before);self.assertEqual(a.bookmarks,{3,8,15})
+        w.edit_redo();self.assertEqual(self.text(),expected);self.assertEqual(a.bookmarks,{4,9,17})
+
+    def test_single_and_empty_regex_replacements_preserve_other_rows(self):
+        before=self._tracked_search_fixture();a=self.a
+        a._find_query.set('対象');a._find_replacement.set('変更')
+        at=before.rindex('対象');a._select_span((at,at+2));a._do_replace()
+        expected=before[:at]+'変更'+before[at+2:]
+        self.assertEqual(self.text(),expected);self.assertEqual(a.bookmarks,{3,8,15})
+        self.assertEqual(a._input_document.occurrences[0].surface,'確認')
+        generation=a._input_document.generation
+        a._find_query.set('変更');a._find_replacement.set('変更');a._do_replace_all()
+        self.assertEqual(a._input_document.generation,generation)
+        a._find_regex.set(True);a._find_query.set('(?=確認)');a._find_replacement.set('追加\n')
+        a._do_replace_all()  # Existing search deliberately skips empty matches.
+        self.assertEqual(self.text(),expected);self.assertEqual(a.bookmarks,{3,8,15})
+        a._find_query.set('(変更)');a._find_replacement.set('追加\n\\1')
+        a._do_replace_all();expected=expected.replace('変更','追加\n変更')
+        self.assertEqual(self.text(),expected);self.assertEqual(a.bookmarks,{3,8,16})
+        self.assertEqual(a._input_document.occurrences[0].start,expected.index('確認'))
+        a._find_query.set('(同じ)');a._find_replacement.set('\\2')
+        a._do_replace_all();self.assertEqual(self.text(),expected)
+        self.assertIn('正しくありません',a._find_status.cget('text'))
+
     def test_paste_undo_keeps_preceding_typed_text(self):
         w=self.a.editor;w.insert('1.0','先に打った文');w.mark_set('insert','end-1c')
         w.event_generate('<<Paste>>');self.assertEqual(self.text(),'先に打った文貼り付けた文')
@@ -478,6 +564,7 @@ class CrossTabQuoteTests(unittest.TestCase):
         a._update_header_visibility = Mock(); a._on_change = Mock()
         a._schedule_session_save = Mock()
         a._on_quick_change = Mock()
+        a._analyze = Mock()
         a.editor_source_text = lambda: a.editor.get('1.0', 'end-1c')
         def load(initial=False):
             # Real Tk delete/insert reproduces the disappearing target marks.
@@ -493,6 +580,237 @@ class CrossTabQuoteTests(unittest.TestCase):
         self.root.destroy()
         from tests_tk_keys import release_tk_fixture
         release_tk_fixture(self, 'a', 'root')
+
+    def test_quote_calculator_decimal_parser(self):
+        from quote_calculator import calculate
+        for expression, expected in (
+                ('1+2*3','7'), ('（１２＋３）×２','30'), ('0.1+0.2','0.3'),
+                ('10/4','2.5'), ('1-3','-2'), ('-.5*2','-1'),
+                ('12÷3+２','6'), ('-0.00','0'), ('４２','42'), ('1-(2-3)','2'),
+                ('　１．５ ＋ ２　','3.5'), ('８−３','5')):
+            with self.subTest(expression=expression):self.assertEqual(calculate(expression),expected)
+        for expression in ('', '1+', '1/0', '2**8', '1=2', '__import__("os")',
+                           '1 2', '1\n+2', '（1+2', '1e5', 'x+2', '2²', '2³+1', '①+②', '½+1'):
+            with self.subTest(expression=expression):self.assertIsNone(calculate(expression))
+
+    def _type_quote_expression(self, widget, expression):
+        # Invoke the real Text class binding, including selection replacement.
+        from tests_tk_keys import deliver_key
+        widget.bind('<KeyPress>', self.a._on_pick_mode_keypress)
+        for char in expression:
+            deliver_key(widget, '<KeyPress>', char, 0, char=char)
+
+    def _enter_quote_expression(self, widget, key='Return'):
+        with patch('ime_watch.composition_active',return_value=False):
+            return self.a._on_pick_mode_keypress(types.SimpleNamespace(
+                widget=widget, keysym=key, char='\r', state=0))
+
+    def _calculated_text(self, quick=False):
+        from quote_calculator import apply_to_result
+        a=self.a
+        doc=a._quick_calculation_document if quick else a._input_document
+        return apply_to_result(dict(original=doc.text,corrected=doc.text),doc.calculations)['corrected']
+
+    def test_quote_append_recalculates_the_existing_source_expression(self):
+        import analysis_work_app as work
+        a=self.a;w=a.editor
+        work.select_document(a,a.editor_source_text());work.install(a)
+        w.mark_set('insert','1.0+2c')
+        a._on_editor_ctrl_c();self._type_quote_expression(w,'1-2')
+        self._enter_quote_expression(w)
+        self.assertEqual(self._calculated_text(),'前😀-1置換対象後')
+        for suffix,answer in (('+3','2'),('*4','11'),('/2','5')):
+            a._on_editor_ctrl_c();self._type_quote_expression(w,suffix)
+            self._enter_quote_expression(w)
+            self.assertIsNone(a._pick_mode)
+            self.assertEqual(self._calculated_text(),'前😀'+answer+'置換対象後')
+            self.assertEqual(len(a._input_document.calculations),1)
+        self.assertEqual(a._input_document.calculations[0].surface,'1-2+3*4/2')
+
+    def test_quote_append_does_not_join_an_unconfirmed_or_separated_prefix(self):
+        import analysis_work_app as work
+        a=self.a;w=a.editor
+        w.replace('1.0','end-1c','1-2 ')
+        work.select_document(a,a.editor_source_text());work.install(a)
+        w.mark_set('insert','end-1c')
+        a._on_editor_ctrl_c();self._type_quote_expression(w,'+3')
+        self._enter_quote_expression(w)
+        self.assertEqual(self._calculated_text(),'1-2 3')
+        w.insert('insert','　')
+        a._on_editor_ctrl_c();self._type_quote_expression(w,'+4')
+        self._enter_quote_expression(w)
+        self.assertEqual(self._calculated_text(),'1-2 3　4')
+
+    def test_copy_quote_keeps_source_and_undo_invalidates_calculation(self):
+        a=self.a;w=a.editor
+        import analysis_work_app as work
+        work.select_document(a,a.editor_source_text());work.install(a)
+        w.mark_set('insert','1.0+2c');w.edit_reset()
+        self.assertEqual(a._on_editor_ctrl_c(),'break')
+        self._type_quote_expression(w,'12+3*4')
+        before=w.get('1.0','end-1c')
+        self.assertEqual(self._enter_quote_expression(w),'break')
+        self.assertEqual(w.get('1.0','end-1c'),before)
+        self.assertEqual(self._calculated_text(),'前😀24置換対象後')
+        self.assertIsNone(a._pick_mode)
+        self.assertNotIn(a._PICK_CALC_END,w.mark_names())
+        w.edit_undo();self.assertEqual(w.get('1.0','end-1c'),'前😀置換対象後')
+        self.assertFalse(a._input_document.calculations)
+        w.edit_redo();self.assertEqual(w.get('1.0','end-1c'),before)
+        self.assertFalse(a._input_document.calculations)
+
+    def test_button_quote_replaces_original_selection_with_halfwidth_result(self):
+        a=self.a;w=a.editor
+        w.tag_add('sel','1.0+2c','1.0+6c');w.mark_set('insert','1.0+6c')
+        a.toggle_pick_mode(calculate=True)
+        self._type_quote_expression(w,'１２÷４')
+        self._enter_quote_expression(w,'KP_Enter')
+        self.assertEqual(w.get('1.0','end-1c'),'前😀１２÷４後')
+        self.assertEqual(self._calculated_text(),'前😀3後')
+        self.assertIsNone(a._pick_mode)
+
+    def test_quick_copy_quote_calculates_without_changing_editor(self):
+        a=self.a;w=a._quick_text=tk.Text(self.root,undo=True)
+        w.insert('1.0','前後');w.mark_set('insert','1.1')
+        self.assertEqual(a._on_quick_ctrl_c(),'break')
+        self._type_quote_expression(w,'(2+3)*4')
+        self._enter_quote_expression(w)
+        self.assertEqual(w.get('1.0','end-1c'),'前(2+3)*4後')
+        self.assertEqual(self._calculated_text(quick=True),'前20後')
+        self.assertEqual(a.editor.get('1.0','end-1c'),'前😀置換対象後')
+        self.assertIsNone(a._pick_mode);a._on_quick_change.assert_called_once()
+
+    def test_equals_and_f1_quote_calculate_explicit_arithmetic(self):
+        import analysis_work_app as work
+        a=self.a;w=a.editor
+        for via_equals in (True,False):
+            w.replace('1.0','end-1c','前後');w.mark_set('insert','1.1')
+            work.select_document(a,a.editor_source_text());work.install(a)
+            if via_equals:a._on_equal_key(types.SimpleNamespace(widget=w,char='=',keysym='equal',state=0))
+            else:a.toggle_pick_mode()
+            self._type_quote_expression(w,'1+2');self._enter_quote_expression(w)
+            self.assertIsNone(a._pick_mode);self.assertEqual(self._calculated_text(),'前3後')
+
+    def test_calculation_invalid_expression_and_ime_enter_keep_text_and_mode(self):
+        a=self.a;w=a.editor;w.mark_set('insert','1.end')
+        a._on_editor_ctrl_c();self._type_quote_expression(w,'12/')
+        before=w.get('1.0','end-1c');self._enter_quote_expression(w)
+        self.assertEqual(w.get('1.0','end-1c'),before);self.assertEqual(a._pick_mode,'f1')
+        self._type_quote_expression(w,'3')
+        event=types.SimpleNamespace(widget=w,keysym='Return',char='\r',state=0)
+        with patch('ime_watch.composition_active',return_value=True):
+            self.assertIsNone(a._on_pick_mode_keypress(event))
+        self.assertTrue(w.get('1.0','end-1c').endswith('12/3'))
+        self._enter_quote_expression(w)
+        self.assertTrue(w.get('1.0','end-1c').endswith('12/3'))
+        self.assertTrue(self._calculated_text().endswith('4'));self.assertIsNone(a._pick_mode)
+
+    def test_unsupported_power_keeps_the_original_and_quote_mode(self):
+        a=self.a;w=a.editor;w.mark_set('insert','1.end')
+        a._on_editor_ctrl_c();self._type_quote_expression(w,'2²')
+        before=w.get('1.0','end-1c');self._enter_quote_expression(w)
+        self.assertEqual(w.get('1.0','end-1c'),before)
+        self.assertEqual(a._pick_mode,'f1')
+        self.assertFalse(getattr(getattr(a,'_input_document',None),'calculations',()))
+
+    def test_quote_marks_preserve_both_edges_of_a_changed_number(self):
+        a=self.a;w=a.editor;before='前😀40後';after='前😀四十後'
+        w.replace('1.0','end-1c',before);w.mark_set('insert','1.0+2c')
+        a._on_editor_ctrl_c();w.mark_set(a._PICK_CALC_END,'1.0+4c')
+        mapped=a._pick_marks_after_row_change(w,1,before,after)
+        w.replace('1.0','1.end',after)
+        for mark,index in mapped.items():w.mark_set(mark,index)
+        self.assertEqual(w.get(a._PICK_MARK,a._PICK_CALC_END),'四十')
+        a.editor_source_text=lambda:before
+        a._capture_pick_origin_marks(before)
+        self.assertEqual(a._pick_tab_marks[a._PICK_MARK],(1,2))
+        self.assertEqual(a._pick_tab_marks[a._PICK_CALC_END],(1,4))
+        w.mark_set(a._PICK_MARK,'1.0');w.mark_set(a._PICK_CALC_END,'1.0')
+        a._restore_pick_origin_marks()
+        self.assertEqual(w.get(a._PICK_MARK,a._PICK_CALC_END),'四十')
+
+    def test_calculation_range_survives_tab_return_and_excludes_other_tab(self):
+        a=self.a;w=a.editor;w.mark_set('insert','1.0+2c')
+        a._on_editor_ctrl_c();self._type_quote_expression(w,'5+6')
+        a._switch_tab(1);self._type_quote_expression(w,'1+2')
+        other=w.get('1.0','end-1c');self._enter_quote_expression(w)
+        self.assertEqual(w.get('1.0','end-1c'),other);self.assertEqual(a._pick_mode,'f1')
+        a._switch_tab(0);w.mark_set('insert',a._PICK_CALC_END)
+        self._enter_quote_expression(w)
+        self.assertEqual(w.get('1.0','end-1c'),'前😀5+6置換対象後')
+        self.assertEqual(self._calculated_text(),'前😀11置換対象後')
+
+    def test_calculation_mode_still_quotes_selected_text(self):
+        a=self.a;w=a.editor;w.mark_set('insert','1.0+2c')
+        a._on_editor_ctrl_c();a._switch_tab(1)
+        w.tag_add('sel','1.0','1.end');self._enter_quote_expression(w)
+        self.assertEqual(w.get('1.0','end-1c'),'前😀引用する語置換対象後')
+        self.assertIsNone(a._pick_mode)
+
+    def test_calculation_document_moves_current_ranges_without_creating_readings(self):
+        from analysis_work import Document
+        doc=Document('test','前12+3後')
+        self.assertTrue(doc.remember_calculation(1,5,'12+3','15'))
+        self.assertFalse(doc.occurrences)
+        doc.update('追加\n前12+3後')
+        values=doc.row_calculations(1,'前12+3後')
+        self.assertEqual((values[0].start,values[0].end,values[0].result),(1,5,'15'))
+        self.assertFalse(doc.row_readings(1,'前12+3後'))
+        doc.update('追加\n前12+4後')
+        self.assertFalse(doc.calculations)
+        self.assertFalse(doc.remember_calculation(4,8,'12+4','999'))
+
+    def test_calculation_result_keeps_unrelated_corrections_and_anomaly_ranges(self):
+        from analysis_work import Calculation
+        from quote_calculator import apply_to_result
+        result=dict(original='誤12+3悪',corrected='正しい12+3悪',
+            details=[('誤','正しい','test')],original_spans=[(0,1)],spans=[(0,3)],
+            odd_spans=[(1,5),(5,6)],unsure_spans=[(5,6)],odd_reasons=[(1,5,'numeric'),(5,6,'remaining')])
+        got=apply_to_result(result,[Calculation(1,5,'12+3','15')])
+        self.assertEqual(got['original'],'誤12+3悪')
+        self.assertEqual(got['corrected'],'正しい15悪')
+        self.assertEqual(got['original_spans'],[(0,1),(1,5)])
+        self.assertEqual(got['spans'],[(0,3),(3,5)])
+        self.assertEqual(got['odd_spans'],[(5,6)])
+        self.assertEqual(got['odd_reasons'],[(5,6,'remaining')])
+        self.assertEqual(result['corrected'],'正しい12+3悪')
+
+    def test_calculation_keeps_external_anomaly_and_refreshes_diagnosis(self):
+        from analysis_work import Calculation
+        from quote_calculator import apply_to_result
+        source='前12+3後'
+        result=dict(original=source,corrected=source,odd_spans=[(0,6)],
+            odd_reasons=[(0,6,'remaining')],diagnosis={'stale':True})
+        got=apply_to_result(result,[Calculation(1,5,'12+3','15')],
+            tokenize_fn=lambda text:[])
+        self.assertEqual(got['corrected'],'前15後')
+        self.assertEqual(got['odd_spans'],[(0,1),(5,6)])
+        self.assertEqual(got['odd_reasons'],[(0,1,'remaining'),(5,6,'remaining')])
+        self.assertEqual(got['diagnosis']['unreplaced_odd_spans'],[[0,1],[5,6]])
+        self.assertEqual(got['diagnosis']['language_state'],'anomaly_unrepaired')
+        self.assertNotIn('stale',got['diagnosis'])
+
+    def test_calculation_obeys_correction_stop_without_confusing_purple_suppression(self):
+        from analysis_work import Calculation
+        from quote_calculator import apply_to_result
+        from decisions import DecisionStore
+        result=dict(original='12+3',corrected='12+3')
+        entries=[Calculation(0,4,'12+3','15')];decisions=DecisionStore()
+        decisions.leave_odd_alone('12+3')
+        self.assertEqual(apply_to_result(result,entries,decisions)['corrected'],'15')
+        decisions.reject('12+3','15')
+        self.assertEqual(apply_to_result(result,entries,decisions)['corrected'],'12+3')
+
+    def test_calculated_number_stays_halfwidth_without_changing_other_choice(self):
+        from analysis_work import Calculation
+        from quote_calculator import apply_to_result
+        from units import build_line_units
+        result=apply_to_result(dict(original='12+3と15',corrected='12+3と15'),
+            [Calculation(0,4,'12+3','15')])
+        choices=Mock();choices.originals.return_value=['15'];choices.lookup.return_value='十五'
+        text,units=build_line_units(result,lambda text:[],choices)
+        self.assertEqual(text,'15と十五')
+        self.assertTrue(any(u.get('detail')==('12+3','15','計算') for u in units))
 
     def test_pick_other_tab_replaces_original_selection_and_returns(self):
         a = self.a; w = a.editor
@@ -537,6 +855,23 @@ class CrossTabQuoteTests(unittest.TestCase):
         self.assertEqual(w.get('1.0', 'end-1c'), '前😀置換対象後')
         w.edit_redo()
         self.assertEqual(w.get('1.0', 'end-1c'), '前😀引用😀後')
+
+    def test_closing_quick_input_cancels_only_its_own_quote_mode(self):
+        a=self.a
+        for target in ('quick','editor'):
+            with self.subTest(target=target):
+                q=a._quick_text=tk.Text(self.root,undo=True)
+                a._quick_win=types.SimpleNamespace(destroy=q.destroy)
+                a._quick_after_id=None
+                a._start_pick_mode(False,target=target,calculate=True)
+                a._close_quick_capture()
+                self.assertIsNone(a._quick_text)
+                self.assertIsNone(a._quick_after_id)
+                if target=='quick':self.assertIsNone(a._pick_mode)
+                else:
+                    self.assertEqual(a._pick_mode,'f1')
+                    self.assertEqual(a._pick_target,'editor')
+                    a._end_pick_mode()
 
     def test_closed_quick_target_does_not_insert_into_main_editor(self):
         a = self.a
@@ -680,3 +1015,97 @@ class CrossTabQuoteTests(unittest.TestCase):
         a._end_pick_mode()
         self.assertEqual(a.editor.cget('cursor'),'xterm')
         self.assertEqual(a.result_view.cget('cursor'),'arrow')
+
+
+class QuickSentEnterTests(EditingTkTests):
+    def _bind_sent_keys(self):
+        from tests_tk_keys import deliver_key
+        a=self.a;w=a.editor;a._sz_note_key=Mock();a._pick_mode=None
+        w.insert('1.0','送信した文字');a._mark_quick_sent('1.0',6)
+        w.bind('<KeyPress>',a._on_editor_typed);w.bind('<KeyRelease>',a._on_editor_typed)
+        w.bind('<Return>',a._on_editor_typed);w.bind('<KeyRelease-Return>',a._on_editor_typed)
+        return deliver_key,w
+    def test_plain_enter_keeps_color_and_selection_enter_resets_both_colors(self):
+        deliver,w=self._bind_sent_keys();a=self.a
+        w.mark_set('insert','1.end')
+        with patch('ime_watch.composition_active',return_value=False):
+            deliver(w,'<Return>','Return',13,char='\r')
+            deliver(w,'<KeyRelease-Return>','Return',13,char='\r',event_type=3)
+            self.assertTrue(w.tag_ranges('quick_sent_a'));self.assertEqual(self.text(),'送信した文字\n')
+            a._mark_quick_sent('1.2',2);self.assertTrue(w.tag_ranges('quick_sent_b'))
+            w.tag_add('sel','1.1','1.3');w.mark_set('insert','1.3')
+            deliver(w,'<Return>','Return',13,char='\r')
+        self.assertEqual(self.text(),'送\nた文字\n')
+        self.assertFalse(w.tag_ranges('quick_sent_a'));self.assertFalse(w.tag_ranges('quick_sent_b'))
+    def test_release_quote_and_ime_enter_do_not_clear_existing_color(self):
+        deliver,w=self._bind_sent_keys();a=self.a
+        w.tag_add('sel','1.0','1.2')
+        with patch('ime_watch.composition_active',return_value=False):
+            deliver(w,'<KeyRelease-Return>','Return',13,char='\r',event_type=3)
+            self.assertTrue(w.tag_ranges('quick_sent_a'))
+            a._pick_mode='f1';a._on_editor_typed(types.SimpleNamespace(widget=w,char='\r',state=0,type='2'))
+            self.assertTrue(w.tag_ranges('quick_sent_a'));a._pick_mode=None
+        with patch('ime_watch.composition_active',return_value=True):
+            a._on_editor_typed(types.SimpleNamespace(widget=w,char='\r',state=0,type='2'))
+        self.assertTrue(w.tag_ranges('quick_sent_a'))
+
+    def test_selection_outside_insertion_point_does_not_clear_color(self):
+        deliver,w=self._bind_sent_keys()
+        w.tag_add('sel','1.1','1.3');w.mark_set('insert','1.end')
+        with patch('ime_watch.composition_active',return_value=False):
+            deliver(w,'<Return>','Return',13,char='\r')
+        self.assertEqual(self.text(),'送信した文字\n')
+        self.assertTrue(w.tag_ranges('quick_sent_a'))
+
+
+
+class QuoteEnterCommandTests(CrossTabQuoteTests):
+    def _command_source(self,text='引用先\n第二😀行\n第三行'):
+        import analysis_work_app as work
+        a=self.a;w=a.editor
+        if a._pick_mode:a._end_pick_mode(keep_equals=True)
+        w.replace('1.0','end-1c',text);w.tag_remove('sel','1.0','end');w.mark_set('insert','1.end')
+        work.select_document(a,a.editor_source_text());work.install(a)
+        return w
+    def test_integer_and_fullwidth_integer_quote_the_line_and_remove_the_command(self):
+        for token,value in (('2','第二😀行'),('２','第二😀行'),('03','第三行')):
+            with self.subTest(token=token):
+                w=self._command_source();self.a.toggle_pick_mode()
+                self._type_quote_expression(w,token);self._enter_quote_expression(w)
+                self.assertEqual(w.get('1.0','end-1c'),'引用先'+value+'\n第二😀行\n第三行')
+                self.assertIsNone(self.a._pick_mode);self.assertFalse(self.a._input_document.calculations)
+    def test_self_line_excludes_typed_token_and_blank_line_removes_only_the_command(self):
+        for source,token,expected in (('引用先\n第二行','1','引用先引用先\n第二行'),
+                                     ('引用先\n\n第三行','2','引用先\n\n第三行')):
+            w=self._command_source(source);self.a.toggle_pick_mode()
+            self._type_quote_expression(w,token);self._enter_quote_expression(w)
+            self.assertEqual(w.get('1.0','end-1c'),expected);self.assertIsNone(self.a._pick_mode)
+    def test_invalid_line_and_incomplete_arithmetic_keep_text_and_mode(self):
+        for token in ('0','9999','1+','3.5'):
+            w=self._command_source();self.a.toggle_pick_mode();self._type_quote_expression(w,token)
+            before=w.get('1.0','end-1c');self._enter_quote_expression(w)
+            self.assertEqual(w.get('1.0','end-1c'),before);self.assertIsNotNone(self.a._pick_mode)
+            self.assertFalse(self.a._input_document.calculations)
+    def test_f1_insert_equals_and_button_share_arithmetic(self):
+        a=self.a
+        for entry in ('f1','insert','equals','button'):
+            with self.subTest(entry=entry):
+                w=self._command_source();a.settings={'insert_quote_enabled':True}
+                if entry=='equals':a._on_equal_key(types.SimpleNamespace(widget=w,char='=',keysym='equal',state=0))
+                elif entry=='insert':a._on_insert_quote(types.SimpleNamespace(widget=w,char='',keysym='Insert',state=0))
+                else:a.toggle_pick_mode(calculate=True) if entry=='button' else a.toggle_pick_mode()
+                self._type_quote_expression(w,'１２＋３×２');self._enter_quote_expression(w)
+                self.assertIsNone(a._pick_mode)
+                self.assertEqual(self._calculated_text(),'引用先18\n第二😀行\n第三行')
+                self.assertNotIn('=',a.editor_source_text())
+    def test_quick_input_row_reference_uses_main_editor_and_replaces_the_typed_digits(self):
+        a=self.a;self._command_source();a._quick_text=tk.Text(self.root,undo=True)
+        q=a._quick_text;q.insert('1.0','簡易');q.mark_set('insert','1.end')
+        a._start_pick_mode(False,target='quick');self._type_quote_expression(q,'2');self._enter_quote_expression(q)
+        self.assertEqual(q.get('1.0','end-1c'),'簡易第二😀行');self.assertIsNone(a._pick_mode)
+        self.assertEqual(a.editor.get('1.0','end-1c'),'引用先\n第二😀行\n第三行')
+    def test_equals_row_reference_removes_trigger_and_does_not_calculate(self):
+        a=self.a;w=self._command_source();a._on_equal_key(types.SimpleNamespace(widget=w,char='=',keysym='equal',state=0))
+        self._type_quote_expression(w,'2');self._enter_quote_expression(w)
+        self.assertEqual(w.get('1.0','end-1c'),'引用先第二😀行\n第二😀行\n第三行')
+        self.assertIsNone(a._pick_mode);self.assertFalse(a._input_document.calculations)

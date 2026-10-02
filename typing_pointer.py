@@ -44,13 +44,14 @@ class TypingPointer:
     def hide(self, typing_widget=None):
         if self.saved or not self.can_hide():
             return
-        widgets = list(self.panes()) + [typing_widget]
+        widgets = [w for w in self.panes() if w is not None]
         try:
             pointer = self.root.winfo_containing(*self.root.winfo_pointerxy())
-            if pointer is not None:
-                widgets.append(pointer)
         except tk.TclError:
-            pass
+            return
+        # Hiding is limited to text panes under the pointer, never the root/menu.
+        if pointer not in widgets:
+            return
         for widget in widgets:
             if widget is None or widget in self.saved:
                 continue
