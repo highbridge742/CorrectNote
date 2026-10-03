@@ -5808,15 +5808,7 @@ class CorrectNoteApp:
         # （メモ欄の `_apply_unified_autofix` と同じ）
         live = {r: rec for rec, r in
                 self._autofix_live_records(w=text_widget)}
-        calculation_rows=()
-        if (getattr(self,'_pick_mode',None) and getattr(self,'_pick_calculate',False)
-                and getattr(self,'_pick_target','editor')=='quick'):
-            try:
-                if text_widget.compare(self._PICK_MARK,'<',self._PICK_CALC_END):
-                    first=int(text_widget.index(self._PICK_MARK).split('.')[0])
-                    last=int(text_widget.index(self._PICK_CALC_END).split('.')[0])
-                    calculation_rows=range(first,last+1)
-            except tk.TclError:pass
+        calculation_rows=self._pick_calculation_rows(text_widget)
         applied = []
         for i, line in enumerate(lines):
             # Keep the entered formula intact until confirmation or cancellation.
@@ -12689,9 +12681,11 @@ class CorrectNoteApp:
             cursor_col = 0
         live = {row: rec for (rec, row) in self._autofix_live_records()}
         n_records = len(live)
+        calculation_rows=self._pick_calculation_rows(self.editor)
         applied = []
         for (i, result) in enumerate(self.line_results):
             row = i + 1
+            if row in calculation_rows:continue
             if result.get('pending'):
                 continue
             original = result.get('original') or ''
@@ -12845,17 +12839,25 @@ class CorrectNoteApp:
             if displayed == rec['applied']:
                 # Display units may contain unchanged letters around a small
                 # correction. Restore that whole unit from the retained source.
-                import difflib
                 source = rec['original']
-                edits = difflib.SequenceMatcher(None, displayed, source,
-                                               autojunk=False).get_opcodes()
-                safe = all(tag == 'equal' or not any(a < edge < b
-                           for edge in (start, end)) for tag,a,b,_,_ in edits)
-                if safe:
-                    lo = map_column(displayed, source, start, edge='start')
-                    hi = map_column(displayed, source, end, edge='end')
-                    if source[lo:hi]:
-                        before = source[lo:hi]
+                results = getattr(self, '_quick_results' if wid is getattr(self, '_quick_text', None)
+                                  else 'line_results', ())
+                result = (results[row-1] or {}) if 0 < row <= len(results) else {}
+                proven = (ui_projection.original_range(result, start, end)
+                          if result.get('original') == source and result.get('corrected') == displayed else None)
+                if proven is not None:
+                    before = source[proven[0]:proven[1]]
+                else:
+                    import difflib
+                    edits = difflib.SequenceMatcher(None, displayed, source,
+                                                   autojunk=False).get_opcodes()
+                    safe = all(tag == 'equal' or not any(a < edge < b
+                               for edge in (start, end)) for tag,a,b,_,_ in edits)
+                    if safe:
+                        lo = map_column(displayed, source, start, edge='start')
+                        hi = map_column(displayed, source, end, edge='end')
+                        if source[lo:hi]:
+                            before = source[lo:hi]
         try:
             with undo_group(wid):
                 wid.delete(f'{row}.0+{start}c', f'{row}.0+{end}c')
@@ -16397,6 +16399,7 @@ class CorrectNoteApp:
             語を拾えた場合は、_pick_insert が既に「=」を消してから
             呼ぶため、ここでは常に True（＝もう何もしない）を渡す。
         """
+        resume_editor=bool(self._pick_calculation_rows(self.editor))
         resume_quick=bool(self._pick_mode and getattr(self,'_pick_calculate',False)
                           and getattr(self,'_pick_target','editor')=='quick')
         was_equals = (self._pick_mode == 'equals')
@@ -16512,7 +16515,25 @@ class CorrectNoteApp:
             pass
         if resume_quick and getattr(self,'_quick_text',None) is not None:
             self._on_quick_change()
+        if (resume_editor and not self._foreground_analysis_pending()
+                and input_work.token(self)==getattr(self,'_analyze_work',None)
+                and analysis_async.state_key(self)==getattr(self,'_analyze_dependencies',None)):
+            self._apply_unified_autofix()
         return 'break'
+
+    def _pick_calculation_rows(self, widget):
+        """Defer automatic display changes only in the live formula's own pane."""
+        if not getattr(self,'_pick_mode',None) or not getattr(self,'_pick_calculate',False):return ()
+        quick=getattr(self,'_pick_target','editor')=='quick'
+        if widget is not (getattr(self,'_quick_text',None) if quick else self.editor):return ()
+        if not quick and self.session.current() is not getattr(self,'_pick_origin_tab',None):return ()
+        try:
+            if widget.compare(self._PICK_MARK,'<',self._PICK_CALC_END):
+                first=int(widget.index(self._PICK_MARK).split('.')[0])
+                last=int(widget.index(self._PICK_CALC_END).split('.')[0])
+                return range(first,last+1)
+        except tk.TclError:pass
+        return ()
 
     def _prepare_pick_calculation_edit(self, widget, args):
         """Restore a displayed result before any arithmetic append is inserted."""

@@ -19,6 +19,11 @@ class EditingTkTests(unittest.TestCase):
         observe_text(self.a.editor)
         self.a.result_view=tk.Text(self.root,undo=False)
         self.a.settings={'layout':'split','dark_mode':False}
+        # Search-return and candidate menus use the same empty stores as startup.
+        from session import SessionStore
+        from last_choice import LastChoiceStore
+        self.a.session=SessionStore();self.a.session.reset_fresh()
+        self.a.choices=LastChoiceStore()
         self.a._autofix_reset=Mock();self.a._reset_typed_marks=Mock()
         self.a._pad_blank_lines=Mock();self.a._mark_dirty=Mock();self.a._analyze=Mock()
         # Keep the user's system clipboard untouched: replace only this Tcl
@@ -269,6 +274,43 @@ class EditingTkTests(unittest.TestCase):
         a._protect_word.assert_called_once_with('寒ぃ')
 
 
+
+    def test_undo_uses_recorded_ranges_when_formula_and_answer_share_digits(self):
+        from analysis_work import observe_text
+        a=self.a;a._quick_text=tk.Text(self.root,undo=True);observe_text(a._quick_text)
+        a._on_change=Mock();a._analyze_quick=Mock();a._invalidate_analysis_cache=Mock()
+        a.status=Mock();a.decisions=Mock()
+        result=dict(original='前😀12+3*4｜33+4後',corrected='前😀24｜37後',
+                    original_spans=[(2,8),(9,13)],spans=[(2,4),(5,7)],
+                    details=[('12+3*4','24','計算'),('33+4','37','計算')])
+        a.line_results=[result];a._quick_results=[result]
+        for w in (a.editor,a._quick_text):
+            for index,expected in ((0,'前😀12+3*4｜37後'),(1,'前😀24｜33+4後')):
+                with self.subTest(pane=str(w),index=index):
+                    w.delete('1.0','end');w.insert('1.0',result['corrected'])
+                    spans=[(2,4,'fixed','12+3*4'),(5,7,'fixed','33+4')]
+                    rec=dict(original=result['original'],applied=result['corrected'],spans=spans)
+                    a._autofix_record_for_row=Mock(return_value=rec)
+                    a.decisions.reset_mock()
+                    a._undo_autofix(1,spans[index],w=w)
+                    self.assertEqual(w.get('1.0','end-1c'),expected)
+                    self.assertEqual(rec['original'],result['original'])
+                    before,after,kind=result['details'][index]
+                    a.decisions.reject.assert_called_once_with(before,after)
+
+    def test_original_unit_range_keeps_prefix_and_rejects_stale_or_partial_edits(self):
+        from ui_projection import original_range
+        result=dict(original='寒ぃが暑ぃ。',corrected='寒いが暑い。',
+                    original_spans=[(1,2),(4,5)],spans=[(1,2),(4,5)],
+                    details=[('ぃ','い','かな入力'),('ぃ','い','かな入力')])
+        self.assertEqual(original_range(result,0,2),(0,2))
+        self.assertEqual(original_range(result,3,5),(3,5))
+        self.assertEqual(original_range(result,0,5),(0,5))
+        self.assertIsNone(original_range(dict(result,corrected='寒いと暑い。'),0,2))
+        self.assertIsNone(original_range(dict(result,original_spans=[(0,1),(4,5)]),0,2))
+        replacement=dict(original='旧文',corrected='新しい案',original_spans=[(0,2)],
+                         spans=[(0,4)],details=[('旧文','新しい案','かな入力')])
+        self.assertIsNone(original_range(replacement,1,4))
 
     def _open_find_fixture(self, replace=False):
         self.a.settings.update(find_match_case=False, find_whole_word=False,

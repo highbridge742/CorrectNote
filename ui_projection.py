@@ -180,6 +180,35 @@ def corrections(result, source=True):
             cursor = end
 
 
+def original_range(result, start, end):
+    """Map a whole displayed unit using the recorded edits, not equal letters."""
+    original=result.get('original','');shown=result.get('corrected','')
+    if not 0<=start<end<=len(shown):return None
+    source_spans=result.get('original_spans') or ()
+    shown_spans=result.get('spans') or ()
+    details=result.get('details') or ()
+    if not details or len(source_spans)!=len(details) or len(shown_spans)!=len(details):return None
+    original_at=shown_at=0;segments=[]
+    for (lo,hi),(first,last),detail in zip(source_spans,shown_spans,details):
+        if not (original_at<=lo<hi<=len(original) and shown_at<=first<last<=len(shown)
+                and original[original_at:lo]==shown[shown_at:first]
+                and original[lo:hi]==detail[0] and shown[first:last]==detail[1]):return None
+        segments.extend(((shown_at,first,original_at,lo,False),(first,last,lo,hi,True)))
+        original_at,shown_at=hi,last
+    if original[original_at:]!=shown[shown_at:]:return None
+    segments.append((shown_at,len(shown),original_at,len(original),False))
+    edges=[]
+    for edge in (start,end):
+        for first,last,lo,hi,changed in segments:
+            if first<=edge<=last:
+                if edge==first:edges.append(lo)
+                elif edge==last:edges.append(hi)
+                elif changed:return None
+                else:edges.append(lo+edge-first)
+                break
+    return tuple(edges) if len(edges)==2 and edges[0]<edges[1] else None
+
+
 def _key(index):
     return tuple(map(int, str(index).split('.')))
 
