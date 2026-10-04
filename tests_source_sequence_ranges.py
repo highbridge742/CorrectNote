@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """A source sequence keeps the same proof inside original clause boundaries."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 import morphology as M
 import reading_segments as R
@@ -56,7 +57,7 @@ class SourceSequenceRangeTests(unittest.TestCase):
         text='かいてはけしなます。'
         result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
             context_vec=None,decisions=a.decisions)
-        self.assertEqual(result['corrected'],'かいては消します。')
+        assert_reviewed_source_spelling(self,result['corrected'],'かいては消します。')
         self.assertEqual(result.get('odd_spans'),[])
 
 
@@ -83,7 +84,7 @@ class SourceSequenceRangeTests(unittest.TestCase):
             self.assertIn((0,first),R.native_context_ranges(text),text)
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertFalse(result.get('odd_spans'),text)
         text='にゅうりょくちゅうなので、ぷねらをよみまうす。'
         first=text.index('、')

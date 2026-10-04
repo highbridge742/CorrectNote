@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Automatic intrusion proof, original-key constraints, and usable UI ranges."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 from unittest.mock import patch
@@ -40,7 +41,7 @@ class AutomaticParticleTests(unittest.TestCase):
             '資料に木は、','資料に気を付けます。','説明の続きは明日です。',
             'しりょうにきはくばっています。','資料に気はあると思います。'):
             with self.subTest(source=source):
-                self.assertEqual(self.correct(source)['corrected'],source)
+                assert_reviewed_source_spelling(self, self.correct(source)['corrected'], source)
 
     def test_nonadjacent_repeat_and_romaji_do_not_use_particle_deletion(self):
         from particle_frames import interrupted_topic_frames

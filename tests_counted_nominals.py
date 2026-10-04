@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from tests_spelling_reference import assert_reviewed_result_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
@@ -104,14 +105,14 @@ class CountedNominalTests(unittest.TestCase):
             ('さんさつめをよみます。','さんさつめをよみます。'),
             ('ほんをにさつにわけます。','ほんをにさつにわけます。'),
             ('ふたりめにてがみをわたします。','ふたりめにてがみをわたします。'),
-            ('さんさつめをよみんす。','さんさつめを読みます。'),
+            ('さんさつめをよみまぇ。',('さんさつめを読みます。','さんさつめをよみます。')),
             ('にだいめをつやいます。','にだいめを使います。'),
             ('二枚目は俳優です。','二枚目は俳優です。'),
             ('一つ目の妖怪です。','一つ目の妖怪です。')):
             with self.subTest(text=text):
                 result=app.correct_line(text,a.store,dict_index=a.dict_index,
                     decisions=a.decisions,context_vec=None,input_method='kana')
-                assert_repaired_spelling(self, result, expected)
+                assert_reviewed_result_spelling(self, result, expected)
                 self.assertEqual(result['odd_spans'],[])
 
 

@@ -102,7 +102,7 @@ def finish(line,result,store,tokenize,dictionary,decisions=None):
                                    else t.reading if t.has_reading else '' for t in parts)
                     if actual!=reading:continue
                     from familiar_spelling import prefers_kana
-                    if face!=remembered and prefers_kana(face,reading):continue
+                    if face!=remembered and prefers_kana(face,reading,before,following):continue
                     if source_argument and (not source_roles & nominal_roles(face)
                             or not candidate_nominal_spelling_evidence(before,face,following)):continue
                     head=_surface_score_head(face,following=source_after,before=source_before)
@@ -149,7 +149,7 @@ def finish(line,result,store,tokenize,dictionary,decisions=None):
             edits=engine._diff_spans(line[start:end],chosen)
             kana=[]
             for part in pieces:
-                if not (part.has_reading and prefers_kana(part.surface,part.reading)
+                if not (part.has_reading and prefers_kana(part.surface,part.reading,line[:start]+chosen[:part.start],chosen[part.end:]+line[end:])
                         and any(part.start<j2 and j1<part.end for i1,i2,j1,j2 in edits)):
                     continue
                 suffix=_functional_tail(pieces,part.end)
@@ -181,3 +181,52 @@ def finish(line,result,store,tokenize,dictionary,decisions=None):
     engine._trace('補正後の表記',repr(result.get('corrected'))+' → '+repr(corrected))
     return dict(result,corrected=corrected,changed=corrected!=line,details=details,
                 original_spans=source_spans,spans=spans)
+
+
+def _mapped_frame(source,corrected,start,end,engine):
+    diffs=list(engine._diff_spans(source,corrected))
+    inside=[row for row in diffs if row[0]<end and start<row[1]
+            or row[0]==row[1] and start<row[0]<end]
+    if not inside or any(not start<=a<=b<=end for a,b,c,d in inside):return None
+    lo=start+sum((d-c)-(b-a) for a,b,c,d in diffs if b<=start)
+    hi=end+sum((d-c)-(b-a) for a,b,c,d in diffs if b<=end)
+    return lo,hi,corrected[lo:hi]
+
+
+def display_frames(source,corrected,targets,diagnostics,engine,tokenize):
+    """A proved grammatical frame survives another route selecting the same edit."""
+    frames=[]
+    from reading_segments import _native_request_tail
+    for target,diagnostic in zip(targets,diagnostics):
+        kind=target.boundary_kind
+        if kind not in ('kana_request','kana_copula','particle_intrusion','question_particle','kana_predicate'):continue
+        mapped=_mapped_frame(source,corrected,target.start,target.end,engine)
+        if mapped is None:continue
+        lo,hi,face=mapped
+        if not any(c['surface']==face for c in diagnostic.get('candidates',())):continue
+        if kind=='kana_predicate' and not _native_request_tail(list(tokenize(face))):continue
+        frames.append((target.start,target.end,face))
+    return tuple(dict.fromkeys(frames))
+
+
+def restore_display_frames(source,result,engine):
+    frames=result.pop('_grammatical_display_frames',())
+    if not frames:return result
+    corrected=result.get('corrected',source)
+    if corrected==source:return result
+    from morphology import native_spelling_only
+    grouped=[]
+    for a,b,approved in sorted(frames,key=lambda row:(row[1]-row[0],row[0])):
+        if any(a<y and x<b for x,y,c,d in grouped):continue
+        mapped=_mapped_frame(source,corrected,a,b,engine)
+        if mapped is None:continue
+        c,d,face=mapped
+        if not face or not (face==approved or native_spelling_only(approved,face)):continue
+        grouped.append((a,b,c,d))
+    if not grouped:return result
+    diffs=[row for row in engine._diff_spans(source,corrected)
+           if not any(a<=row[0]<=row[1]<=b for a,b,c,d in grouped)]
+    diffs=sorted(diffs+grouped)
+    return dict(result,original_spans=[(a,b) for a,b,c,d in diffs],
+        spans=[(c,d) for a,b,c,d in diffs],
+        details=[(source[a:b],corrected[c:d],'かな入力') for a,b,c,d in diffs])

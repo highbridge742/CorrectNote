@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Ordinary avoidance uses the exact native verb and its own object roles."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 import morphology as M
 import reading_segments as R
@@ -37,7 +38,7 @@ class AvoidanceRoleTests(unittest.TestCase):
             with self.subTest(text=text):
                 result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                self.assertEqual(result['corrected'],text)
+                assert_reviewed_source_spelling(self, result['corrected'], text)
                 self.assertEqual(result.get('odd_spans'),[])
 
 

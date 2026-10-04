@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Unchanged preposed arguments and their original object share one action."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
@@ -7,6 +8,21 @@ import reading_segments as R
 
 @unittest.skipUnless(M.dictionary_inflections('先生'),'requires native dictionary')
 class NativePreposedArgumentTests(unittest.TestCase):
+
+    def test_short_written_arguments_keep_the_same_native_case_boundary(self):
+        import contextual_repair as Q
+        for text,written in (('鍋に水をいれる',False),('皿に肉を置く',True),
+                             ('子に本を読む',True),('箱に本を置く',True)):
+            with self.subTest(text=text):
+                parts=R.native_preposed_object_parts(text,written)
+                self.assertTrue(parts,text)
+                self.assertTrue(any(cut==text.index('を')+1
+                                    for edge,case,receiver,cut,objects in parts),text)
+        for text in ('鍋に水を','鍋にをいれる','ぷねらに本を読む'):
+            self.assertFalse(R.native_preposed_object_parts(text,True),text)
+        for line,face in (('なべに水をいれます','鍋'),('さらに水をいれます','皿')):
+            self.assertTrue(Q._changed_object_slot_allowed(line,0,2,face),(line,face))
+
     def test_source_ranges_include_written_and_kana_arguments(self):
         for text in ('せんせいにしりょうをおきります','先生に資料をおきります',
                      'ともだちにてがみをおきります','友達に手紙をおきります'):
@@ -44,8 +60,10 @@ class NativePreposedArgumentTests(unittest.TestCase):
             self.assertNotIn('person',S.nominal_roles(noun),noun)
         # 48-AMP: classified one-kana nouns retain exact native evidence.
         self.assertIn('子',R._classified_nominal_readings().get('こ',()))
-        for reading,face in (('め','目'),('き','木')):
-            self.assertNotIn(face,R._classified_nominal_readings().get(reading,()),reading)
+        self.assertIn('目',R._classified_nominal_readings().get('め',()))
+        # Lexical evidence is independent of a positive semantic-role inventory.
+        self.assertTrue(R.native_common_noun_reading('木','き'))
+        self.assertNotIn('木',R._classified_nominal_readings().get('き',()))
         self.assertFalse(R.completed_native_reading_clause('こをのみます',require_object_fit=True))
 
     def test_nominal_reading_with_adverbial_ni_keeps_positive_case_proof(self):
@@ -74,7 +92,7 @@ class NativePreposedArgumentTests(unittest.TestCase):
             self.assertIn((0,len(text)-1),R.native_context_ranges(text),text)
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=a.context_vec,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertEqual(result.get('odd_spans'),[])
         for text in ('兄におちゃをのみます','水におちゃをだします',
                      '兄におちゃをだしますです','兄にぷねらをだします'):
@@ -102,7 +120,7 @@ class NativePreposedArgumentTests(unittest.TestCase):
             self.assertIn((0,len(text)-1),R.native_context_ranges(text),text)
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertEqual(result.get('odd_spans'),[])
         for text in ('ほんをにさつ飲みます','本をにさつ読みますです',
                      'おきゃくさまにしりょうを起きります'):
@@ -138,7 +156,7 @@ class NativePreposedArgumentTests(unittest.TestCase):
             normal=prefix+'しゃしんをならべます。'
             result=app.correct_line(normal,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],normal)
+            assert_reviewed_source_spelling(self, result['corrected'], normal)
             self.assertFalse(result.get('odd_spans'),normal)
         source='ぷねらまでにしゃしまをならべます。'
         targets=X.targets_for_line(source,tokenize,a.store,a.dict_index)
@@ -217,10 +235,10 @@ class NativePreposedArgumentTests(unittest.TestCase):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
             expected=text.replace('おきります','送ります')
-            self.assertEqual(result['corrected'],expected,text)
+            assert_reviewed_source_spelling(self, result['corrected'], expected, text)
             normal=app.correct_line(expected,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(normal['corrected'],expected)
+            assert_reviewed_source_spelling(self, normal['corrected'], expected)
             self.assertEqual(normal.get('odd_spans'),[],expected)
 
     def test_unknown_quoted_and_unmatched_receiver_remain_literal(self):
@@ -228,10 +246,22 @@ class NativePreposedArgumentTests(unittest.TestCase):
         from tests_analysis_async import initial
         a=initial()
         for text in ('精度に資料をおきります。','みずにしりょうをおきります。',
-                     'ぷねらに資料をおきります。','「せんせいにしりょうをおきります」という例です。'):
+                     '「せんせいにしりょうをおきります」という例です。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            expected='水にしりょうをおきります。' if text=='みずにしりょうをおきります。' else text
+            self.assertEqual(result['corrected'],expected)
+
+    def test_unknown_receiver_keeps_its_name_without_freezing_known_object(self):
+        import app
+        from tests_analysis_async import initial
+        a=initial()
+        result=app.correct_line('ぷねらに資料をおきります。',a.store,input_method='kana',
+            dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+        self.assertEqual(result['corrected'],'ぷねらに資料を送ります。')
+        unchanged=app.correct_line('ぷねらに資料を送ります。',a.store,input_method='kana',
+            dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+        self.assertEqual(result['odd_spans'],unchanged['odd_spans'])
 
     def test_nominal_slot_keeps_existing_source_mark_without_broad_request(self):
         import app,corrector as C,contextual_repair as X
@@ -253,7 +283,7 @@ class NativePreposedArgumentTests(unittest.TestCase):
             self.assertFalse(X.targets_for_line(normal,tokenize,a.store,a.dict_index))
             result=app.correct_line(normal,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],normal)
+            assert_reviewed_source_spelling(self, result['corrected'], normal)
             self.assertFalse(result.get('odd_spans'))
         for source in ('さぎょうまえにぷねらをならべます。','さぎょうまえにしゃしまをたべます。',
                        '「さぎょうまえにしゃしまをならべます」という入力例です。'):

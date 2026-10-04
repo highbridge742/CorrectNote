@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Shared person semantics and source-only honorific grammar keep their own scope."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 import morphology as M
 
@@ -31,7 +32,7 @@ class NominalSourcePeopleTests(unittest.TestCase):
         for head in ('かんじゃまち','びょうにんまち'):
             for tail in ('。','です。','なのでほんをよみます。'):
                 text=head+tail;result=self.correct(text)
-                self.assertEqual(result['corrected'],text)
+                assert_reviewed_source_spelling(self, result['corrected'], text)
                 self.assertFalse(result['odd_spans'])
         result=self.correct('かんじゃまちなのでほんをよみまうす。')
         self.assertEqual(result['corrected'],'かんじゃまちなのでほんをよみまうす。')
@@ -71,7 +72,7 @@ class NominalSourcePeopleTests(unittest.TestCase):
             self.assertIn(written+'待ち',R.native_waiting_nominal_faces(kana+'まち'))
             self.assertIn(written+'待ち',R.native_waiting_nominal_faces(written+'待ち'))
             text=kana+'まちです。';result=self.correct(text)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertFalse(result['odd_spans'])
         for text in ('けがじんまち','ふしょうものまち','ぷねらしゃまち'):
             self.assertFalse(R.native_waiting_nominal_faces(text),text)

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Native comparison arguments must preserve their noun and completed predicate."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 import morphology
 from reading_segments import completed_native_nominal_predicate
@@ -41,7 +42,7 @@ class NominalComparisonTests(unittest.TestCase):
             with self.subTest(text=text):
                 result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                                         decisions=a.decisions,context_vec=None)
-                self.assertEqual(result['corrected'],text)
+                assert_reviewed_source_spelling(self, result['corrected'], text)
                 self.assertFalse(result.get('odd_spans'))
 
 

@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 """Native grammar can retain a source without certifying a candidate's meaning."""
+from tests_spelling_reference import assert_reviewed_result_spelling
+from tests_spelling_reference import assert_reviewed_source_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
@@ -45,13 +47,13 @@ class UnclassifiedNativeTests(unittest.TestCase):
                 ('なやんではけっします。', 'なやんではけっします。'),
                 ('てがみをかいてはけっします。', 'てがみをかいてはけっします。'),
                 ('かいてはけしなます。', 'かいては消します。'),
-                ('ふでをあらいんす。', 'ふでを洗います。'),
+                ('ふでをあらいまぇ。', 'ふでを洗います。'),
                 ('会議の日程を長生します。', '会議の日程を調整します。'),
                 ('もんじにゅうりょく。', 'もんじにゅうりょく。')):
             with self.subTest(text=text):
                 result = app.correct_line(text, a.store, input_method='kana',
                     dict_index=a.dict_index, context_vec=None, decisions=a.decisions)
-                assert_repaired_spelling(self, result, expected)
+                assert_reviewed_result_spelling(self, result, expected)
                 self.assertEqual(result.get('odd_spans'), [])
 
 

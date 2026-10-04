@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from tests_spelling_reference import assert_reviewed_result_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
@@ -8,6 +9,19 @@ import semantic_roles as S
 
 @unittest.skipUnless(M.dictionary_inflections('年末'),'requires native dictionary')
 class AdverbialHostTests(unittest.TestCase):
+    def test_original_continuative_owns_an_inner_adverb_before_broken_tail(self):
+        from morphology import preserves_native_adverbial_word
+        from pos_grammar import unexplained_shifted_predicate_tails
+        for source,changed in (('ふでをあらいまぇ。','ふでを洗います。'),
+                               ('かおをぬぐいまぇ。','かおを拭います。')):
+            with self.subTest(source=source):
+                self.assertTrue(unexplained_shifted_predicate_tails(source))
+                self.assertTrue(preserves_native_adverbial_word(source,changed))
+        for source,changed in (('いまぇ','います'),
+                               ('今は洗います。','居間は洗います。')):
+            with self.subTest(source=source):
+                self.assertFalse(preserves_native_adverbial_word(source,changed))
+
     def test_bound_readings_do_not_supply_free_adverbs(self):
         for face,reading in S.DEPENDENT_TEMPORAL_READINGS:
             with self.subTest(face=face,reading=reading):
@@ -58,7 +72,7 @@ class AdverbialHostTests(unittest.TestCase):
             with self.subTest(text=text):
                 result=app.correct_line(text,a.store,dict_index=a.dict_index,
                     decisions=a.decisions,context_vec=None,input_method='kana')
-                assert_repaired_spelling(self, result, expected)
+                assert_reviewed_result_spelling(self, result, expected)
                 self.assertEqual(result['odd_spans'],[])
 
 

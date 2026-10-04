@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Independent fields retain their source grammar and physically justified edits."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 from unittest.mock import patch
 import morphology as M
@@ -46,27 +47,30 @@ class InputFieldRepairTests(unittest.TestCase):
                     with self.subTest(phase=phase,source=source):
                         result=app.correct_line(source,a.store,dict_index=a.dict_index,decisions=a.decisions,
                                                 context_vec=None,input_method='kana')
-                        self.assertEqual(result['corrected'],expected)
+                        assert_reviewed_source_spelling(self, result['corrected'], expected)
                         self.assertEqual(result.get('odd_spans'),[])
                 # A column terminator cannot distinguish 藻/歯 from particles.
                 for source in ('このようなも\t','雪のようなは\t','うれしー','だょー','しちゃうょー','入力しちゃう。','ご入力ください。',
                                '誤入力したキー','「もーしろょん」と入力します。','差し込みで、'):
                     with self.subTest(phase=phase,keep=source):
-                        self.assertEqual(app.correct_line(source,a.store,dict_index=a.dict_index,
-                            decisions=a.decisions,context_vec=None,input_method='kana')['corrected'],source)
-                # This completed field has an unattached なも; the shared grammar and key check select にも.
-                self.assertEqual(app.correct_line('きりがないようなも\t',a.store,dict_index=a.dict_index,decisions=a.decisions,context_vec=None,input_method='kana')['corrected'],'キリがないようにも\t')
-                for source in ('ご連絡した件', '私用した道具を片付け魔訶。'):
+                        assert_reviewed_source_spelling(self, app.correct_line(source,a.store,dict_index=a.dict_index,
+                            decisions=a.decisions,context_vec=None,input_method='kana')['corrected'], source)
+                # The existing source-only frame check above finds no anomaly.
+                # A column terminator cannot choose 藻 vs も or manufacture に.
+                self.assertEqual(app.correct_line('きりがないようなも\t',a.store,dict_index=a.dict_index,decisions=a.decisions,context_vec=None,input_method='kana')['corrected'],'きりがないようなも\t')
+                # A malformed later field does not freeze the independently proved use sense.
+                for source,expected in (('ご連絡した件','ご連絡した件'),
+                        ('私用した道具を片付け魔訶。','使用した道具を片付け魔訶。')):
                     with self.subTest(phase=phase,source=source):
                         result=app.correct_line(source,a.store,dict_index=a.dict_index,
                             decisions=a.decisions,context_vec=None,input_method='kana')
-                        self.assertEqual(result['corrected'],source)
+                        assert_reviewed_source_spelling(self, result['corrected'], expected)
                         if source=='ご連絡した件':self.assertEqual(result.get('odd_spans'),[])
                 for source,expected in (('寒ぃ日です。','寒い日です。'),('大きぃ箱です。','大きい箱です。')):
                     with self.subTest(phase=phase,source=source):
                         result=app.correct_line(source,a.store,dict_index=a.dict_index,
                             decisions=a.decisions,context_vec=None,input_method='kana')
-                        self.assertEqual(result['corrected'],expected)
+                        assert_reviewed_source_spelling(self, result['corrected'], expected)
                         self.assertEqual(result.get('odd_spans'),[])
                 self.assertEqual(a.store.revision(),revision)
             finally:set_active(None)

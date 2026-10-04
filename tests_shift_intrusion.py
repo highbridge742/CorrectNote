@@ -4,6 +4,19 @@ import unittest
 from unittest.mock import patch
 import kana_layout as K,contextual_repair as Q,corrector as C
 class SourceShiftIntrusionTests(unittest.TestCase):
+    def test_user_physical_neighbours_and_input_method_are_distinct(self):
+        for kana,keys in (('ん',set('おやかな く'.replace(' ',''))),('く',set('んきまこみ'))):
+            bases={key[2] for key in K._JIS_KEYS}
+            self.assertEqual({x for x in bases if x!=kana and K._base_distance(kana,x)<=1.0},keys)
+        self.assertEqual({x for x in C._QWERTY_POS if C._qwerty_adjacent('y',x)},set('67tuh'))
+        self.assertEqual({x for x in C._QWERTY_POS if C._qwerty_adjacent('h',x)},set('ygjbn'))
+        for a,b in (('ん','え'),('ん','ま'),('ん','き'),('く','な'),('れ','ろ')):
+            self.assertGreater(K.kana_key_distance(a,b),1.05)
+            self.assertGreater(K.kana_key_distance(b,a),1.05)
+        self.assertFalse(K.single_key_drop_adjacency('しろれいたな','しろいたな'))
+        self.assertFalse(C.adjacent_slip('ご','ほ','kana'))
+        self.assertTrue(C.adjacent_slip('ご','ほ','romaji'))
+
     def test_source_small_kana_supplies_its_real_modifier(self):
         for before,after in (('もーしろょん','もーしょん'),('もーしょろん','もーしょん'),('りつゅう','りゅう'),('りろゅう','りゅう')):
             with self.subTest(before=before):

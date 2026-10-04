@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Identical base spelling does not mean identical native conjugation."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 import morphology as M
 import reading_segments as R
@@ -41,6 +42,16 @@ class SuruParadigmTests(unittest.TestCase):
         for text in ('すります','すりました','刷りました','擦りました'):
             with self.subTest(text=text):self.assertTrue(C._productive_predicate(text,M.tokenize(text)[0].surface))
 
+    def test_te_auxiliary_needs_its_actual_attachment_and_origin(self):
+        import semantic_roles as S
+        for surface in ('保存してたれない','保存してでない'):
+            self.assertFalse(C._productive_predicate(surface,'保存'),surface)
+        for surface in ('保存しておけない','保存してみせます','保存していただきます',
+                        '保存してくださいます','保存していない','保存してた'):
+            self.assertTrue(C._productive_predicate(surface,'保存'),surface)
+        self.assertNotIn('process',S.native_verb_roles('すれ','連用形','すれ',tail='ました'))
+        self.assertIn('text',S.native_verb_roles('読め','連用形','よめ',tail='ます'))
+
     def test_application_does_not_use_the_godan_homograph_as_suru(self):
         import app
         from tests_analysis_async import initial
@@ -48,7 +59,7 @@ class SuruParadigmTests(unittest.TestCase):
         text='さぎょうをありました。'
         result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
             context_vec=None,decisions=a.decisions)
-        self.assertEqual(result['corrected'],text)
+        assert_reviewed_source_spelling(self, result['corrected'], text)
         self.assertTrue(result.get('odd_spans'))
         for text in ('作業をしました。','ごまをすりました。','版画を刷りました。'):
             with self.subTest(text=text):

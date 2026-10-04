@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """An instantaneous event can have a before/after phase without ongoing time."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
@@ -9,6 +10,24 @@ import semantic_roles as S
 
 @unittest.skipUnless(M.HAS_JANOME,'requires native Janome dictionary')
 class NativePhaseNominalTests(unittest.TestCase):
+    def test_original_phase_host_is_shared_across_search_scopes(self):
+        import corrector as C,contextual_repair as Q
+        from tests_analysis_async import initial
+        a=initial();tok=C.make_tokenizer(a.store)
+        for source,face in (('にゅうりょくちゃう','入力中'),
+                            ('へんしゅうちゃう','編集中'),('さぎょうまけ','作業前')):
+            for kind in ('lexical','kana_request'):
+                with self.subTest(source=source,kind=kind):
+                    target=Q.RepairTarget(source,0,len(source),0,len(source),
+                        (('品詞文法','未説明の語尾',0,len(source)),),True,'',kind)
+                    self.assertTrue(Q._native_phase_repair_evidence(target,face,tok))
+                    self.assertFalse(Q._native_phase_repair_evidence(target,'確認中',tok))
+        for source,face in (('ぷねらちゃう','編集中'),('しぼうちゃう','死亡中'),
+                            ('さぎょちゃう','作業前')):
+            target=Q.RepairTarget(source,0,len(source),0,len(source),
+                (('品詞文法','未説明の語尾',0,len(source)),),True,'','lexical')
+            self.assertFalse(Q._native_phase_repair_evidence(target,face,tok),(source,face))
+
     def test_event_phase_keeps_the_same_native_noun_and_exact_suffix(self):
         for reading,word in (('さぎょうまえ','作業前'),('さぎょうご','作業後'),
                              ('とうちゃくまえ','到着前'),('とうちゃくご','到着後'),
@@ -47,7 +66,7 @@ class NativePhaseNominalTests(unittest.TestCase):
                      'とうちゃくまちです。','へんじまちでした。','しょうにんまちなのでほんをよみます。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertFalse(result.get('odd_spans'),text)
         self.assertFalse(R.intact_native_reading('にゅうりょくまちなのでぷねらをよみます'))
 
@@ -68,7 +87,7 @@ class NativePhaseNominalTests(unittest.TestCase):
                      'かんりょうごにしりょうをほぞんします。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertFalse(result.get('odd_spans'),text)
 
 
@@ -83,7 +102,7 @@ class NativePhaseNominalTests(unittest.TestCase):
             self.assertFalse(S.nominal_roles(text)&{'food','call','text','drink'},text)
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertFalse(result.get('odd_spans'),text)
         for text in ('かきかけです','よみかけです','たべかけです'):
             self.assertTrue(R.completed_native_nominal_predicate(text),text)
@@ -106,7 +125,7 @@ class NativePhaseNominalTests(unittest.TestCase):
             self.assertFalse(any(S.nominal_roles(f)&{'person','food','object'} for f in faces),text)
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertFalse(result.get('odd_spans'),text)
         for text in ('ぷねらまち','りんごまち','つくえまち'):
             self.assertFalse(R.native_waiting_nominal_faces(text),text)
@@ -120,7 +139,7 @@ class NativePhaseNominalTests(unittest.TestCase):
                      'ほぞんしたらばばねをかいます。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertFalse(result.get('odd_spans'),text)
         for text in ('くりっぷぼーどをたべます','ばねをたべます'):
             self.assertFalse(R.completed_native_reading_clause(text,require_object_fit=True),text)
@@ -133,7 +152,7 @@ class NativePhaseNominalTests(unittest.TestCase):
                      '看護師待ちなので本を読みます。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertFalse(result.get('odd_spans'),text)
         source='看護師待ちなのでぷねらをよみるます。'
         spans=R.native_context_ranges(source)
@@ -205,7 +224,7 @@ class NativePhaseNominalTests(unittest.TestCase):
                        'とうちゃくまちだからほんをたべまうす。'):
             result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],source)
+            assert_reviewed_source_spelling(self, result['corrected'], source)
             # Historical auxiliary style is not the semantic anomaly.
             self.assertFalse(R.intact_native_reading(source),source)
         source='にゅうりょくまちなのでもんじにゅうりょくをします。'

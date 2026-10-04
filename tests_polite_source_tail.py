@@ -69,4 +69,15 @@ class PoliteSourceTailTests(unittest.TestCase):
     def test_unrelated_words_can_change(self):
         self.assertTrue(R.preserves_native_polite_auxiliary('説明をかくにんします','説明を確認します'))
 
+
+    def test_original_object_boundary_recovers_swallowed_polite_tail(self):
+        import morphology as M
+        if not M.HAS_JANOME:self.skipTest('requires native object boundary')
+        for source in ('しりょうだけをよむます。','このほんだけをよむます。'):
+            with self.subTest(source=source):
+                self.assertTrue(R.native_polite_auxiliary_chains(source))
+                self.assertFalse(R.preserves_native_polite_auxiliary(source,source.replace('ます','まい')))
+        self.assertFalse(R.native_polite_auxiliary_chains('ぷねらをますます'))
+        self.assertTrue(R.preserves_native_polite_auxiliary('しりょうだけをよむます。','資料だけを読めます。'))
+
 if __name__=='__main__':unittest.main()

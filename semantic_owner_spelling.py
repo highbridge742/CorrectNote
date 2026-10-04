@@ -45,6 +45,21 @@ def _owners(reading,case):
     return tuple(dict.fromkeys(out))
 
 
+
+def _owner_boundary(source,start,case,owner):
+    """An owner is a whole source nominal, never a suffix of an unknown run."""
+    from morphology import tokenize
+    from reading_segments import native_predicate_link_boundaries,native_surface_nominal_heads
+    parts=tokenize(source)
+    origins={0}|{p.end for p in parts if p.has_reading and p.pos=='助詞'
+        and p.pos_sub.startswith('格助詞') and p.end<=start}
+    beginnings=set(origins)
+    beginnings.update(edge for origin in origins
+        for edge in native_predicate_link_boundaries(source,origin) if edge<=start)
+    return any(owner in native_surface_nominal_heads(source[begin:case])
+        for begin in beginnings if begin<=start)
+
+
 def frames(source):
     if not any(c in source for c in ('の','を','に')):return ()
     from morphology import tokenize
@@ -62,6 +77,7 @@ def frames(source):
             from semantic_roles import candidate_origin_return_evidence
             source_origin=candidate_origin_return_evidence(raw,source[case:])
             for owner in _owners(raw,link):
+                if not _owner_boundary(source,start,case,owner):continue
                 if source_origin and not candidate_origin_return_evidence(owner,source[case:]):
                     continue
                 projected=source[:start]+owner+source[case:]
@@ -96,9 +112,10 @@ def placement_continuation(source,start,finish,verbs):
         nouns=set();noun_starts=[]
         for edge in boundaries:
             face=before[edge:]
-            if face in words:nouns.add(face);noun_starts.append(start+edge)
+            if face in words and _owner_boundary(source,start+edge,case,face):nouns.add(face);noun_starts.append(start+edge)
             if face and all('ぁ'<=c<='ゖ' or c=='ー' for c in face):
-                known=_owner_readings('に').get(face,())
+                known=tuple(owner for owner in _owner_readings('に').get(face,())
+                    if _owner_boundary(source,start+edge,case,owner))
                 if known:nouns.update(known);noun_starts.append(start+edge)
         if not nouns:continue
         tail=tokenize(source[case+1:finish])

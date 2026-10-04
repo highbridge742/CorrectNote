@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Focus particles retain the original request and its argument reading."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 import morphology as M
 import contextual_repair as C
@@ -72,7 +73,7 @@ class FocusedRequestContextTests(unittest.TestCase):
             with self.subTest(text=text):
                 r=app.correct_line(text,a.store,dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions,input_method='kana')
-                self.assertEqual(r['corrected'],expected)
+                assert_reviewed_source_spelling(self,r['corrected'],expected)
                 self.assertEqual(r['odd_spans'],[])
 
 

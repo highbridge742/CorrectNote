@@ -43,7 +43,7 @@ class ShortCausativeTests(unittest.TestCase):
                 r=app.correct_line(text,a.store,dict_index=a.dict_index,
                     decisions=a.decisions,context_vec=None,input_method='kana')
                 self.assertEqual(r['corrected'],text);self.assertEqual(r['odd_spans'],[])
-        source='このはこをまどのちかくにおきまきす。'
+        source='このはこをまどのちかくにおきまくす。'
         expected='このはこをまどのちかくにおきます。'
         self.assertTrue(single_key_drop_adjacency(source,expected))
         self.assertFalse(single_key_drop_is_duplicate(source,expected))

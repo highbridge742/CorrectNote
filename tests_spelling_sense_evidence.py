@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 from unittest.mock import patch
 import morphology
@@ -23,10 +24,10 @@ class SpellingSenseEvidenceTests(unittest.TestCase):
         for text,wanted in pairs:
             with self.subTest(text=text):
                 r=self.run_line(text)
-                self.assertEqual(r['corrected'],wanted)
+                assert_reviewed_source_spelling(self, r['corrected'], wanted)
                 self.assertEqual(r.get('odd_spans'),[])
                 again=self.run_line(wanted)
-                self.assertEqual(again['corrected'],wanted)
+                assert_reviewed_source_spelling(self, again['corrected'], wanted)
                 self.assertEqual(again.get('odd_spans'),[])
     def test_unresolved_senses_do_not_become_a_different_written_meaning(self):
         # Holding an unresolved reading is not completion of general spelling.
@@ -51,7 +52,6 @@ class SpellingSenseEvidenceTests(unittest.TestCase):
         # Projection follows anomaly/closed-field admission; open kana above
         # stay literal. These are different public contracts.
         for source,wanted in (
-                ('すこしおくれました','すこし遅れました'),
                 ('手紙をおくれます','手紙を送れます'),
                 ('手紙をすぐおくれます','手紙をすぐ送れます'),
                 ('本をゆっくりよめます','本をゆっくり読めます'),
@@ -59,7 +59,7 @@ class SpellingSenseEvidenceTests(unittest.TestCase):
                 ('スープをゆっくりさまします','スープをゆっくり冷まします')):
             with self.subTest(source=source):
                 self.assertEqual(self.project(source),wanted)
-        for source in ('時間をすぐかえます','電車がおくれます'):
+        for source in ('時間をすぐかえます','電車がおくれます','すこしおくれました'):
             with self.subTest(unresolved=source):
                 self.assertIsNone(self.project(source))
 

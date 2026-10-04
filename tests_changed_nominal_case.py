@@ -46,6 +46,16 @@ class ChangedNominalCaseTests(unittest.TestCase):
         self.assertIsNone(accepted)
         self.assertEqual(reason,'unproven_changed_object_predicate')
 
+    def test_candidate_cannot_invent_a_noun_from_its_final_particle(self):
+        import app
+        from tests_analysis_async import initial
+        a=initial()
+        source='あとで良けれをおくります。'
+        r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                           context_vec=None,decisions=a.decisions)
+        self.assertEqual(r['corrected'],source)
+        self.assertTrue(r.get('odd_spans'))
+
     def test_application_keeps_the_unresolved_source_and_purple(self):
         import app
         from tests_analysis_async import initial

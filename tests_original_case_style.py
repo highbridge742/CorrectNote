@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from tests_spelling_reference import assert_reviewed_result_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
@@ -33,14 +34,14 @@ class OriginalCaseStyleTests(unittest.TestCase):
         from tests_analysis_async import initial
         a=initial();a.context_vec=None
         for text,expected in (
-            ('まどをしめてからほんをよみんす。','まどをしめてからほんを読みます。'),
+            ('まどをしめてからほんをよみまぇ。','まどをしめてからほんを読みます。'),
             ('まどをしめてからほんをよみまもす。','まどをしめてからほんを読みます。'),
             ('てがみをかいてから゛んをよみます。','てがみをかいてから本をよみます。'),
             ('こどもにほんをよんでもらいます。','こどもにほんをよんでもらいます。')):
             with self.subTest(text=text):
                 r=app.correct_line(text,a.store,dict_index=a.dict_index,
                     decisions=a.decisions,context_vec=None,input_method='kana')
-                assert_repaired_spelling(self, r, expected);self.assertEqual(r['odd_spans'],[])
+                assert_reviewed_result_spelling(self, r, expected);self.assertEqual(r['odd_spans'],[])
 
 if __name__=='__main__':unittest.main()
 

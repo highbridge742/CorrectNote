@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """A physical device can be arranged or stored, not borrowed as food or text."""
+from tests_spelling_reference import assert_reviewed_result_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
@@ -20,13 +21,13 @@ class DeviceArrangementTests(unittest.TestCase):
         import app
         from tests_analysis_async import initial
         a=initial()
-        for source,expected in (('んかいをにだいならべます。','機械をにだいならべます。'),
+        for source,expected in (('くかいをにだいならべます。','機械をにだいならべます。'),
                                  ('きかいをにだいならべます。','きかいをにだいならべます。'),
                                  ('きかいをほかんします。','きかいをほかんします。')):
             with self.subTest(source=source):
                 result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                assert_repaired_spelling(self, result, expected)
+                assert_reviewed_result_spelling(self, result, expected)
                 self.assertEqual(result.get('odd_spans'),[])
 
 

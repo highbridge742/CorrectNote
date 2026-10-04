@@ -11,6 +11,12 @@ class ReleaseRoleTests(unittest.TestCase):
         return [(t.surface,t.pos+':'+t.pos_sub,t.reading,t.start,t.end,t.has_reading,t.infl_form)
                 for t in M.tokenize(text)]
 
+    def test_adnominal_action_with_copula_closes_its_original_object(self):
+        # The existing terminal-predicate proof closes N + native copula;
+        # an outer case/predicate still leaves this object scope open.
+        text='人質を開放する人です。'
+        self.assertTrue(S.conflicting_object_predicates(text,self.tokens(text)))
+
     def test_negative_evidence_uses_written_action_and_actual_person(self):
         for noun in ('人質','捕虜','囚人','奴隷','人','子供'):
             text=noun+'を開放します。'
@@ -23,7 +29,7 @@ class ReleaseRoleTests(unittest.TestCase):
         for text in ('教室を開放します。','扉を開放します。','校庭を開放します。',
                      '心を開放します。','メモリを開放します。','しらゆほを開放します。',
                      '人質に部屋を開放します。','人質を開放させます。',
-                     '人質を開放すると記録します。','人質を開放する人です。',
+                     '人質を開放すると記録します。','人質を開放する人に伝えます。',
                      '人質が開放します。'):
             with self.subTest(text=text):
                 self.assertEqual(S.conflicting_object_predicates(text,self.tokens(text)),[])

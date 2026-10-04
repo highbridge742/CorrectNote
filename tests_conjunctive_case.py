@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Candidate edits must explain the case following an unchanged te form."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 import morphology as M
 import oddness as O
@@ -80,7 +81,7 @@ class ConjunctiveCaseTests(unittest.TestCase):
         self.assertEqual(reason,'native_conjunctive_case')
         result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
             context_vec=None,decisions=a.decisions)
-        self.assertIn(result['corrected'],('機械をにだいならべます。','機械をにだい並べます。'))
+        assert_reviewed_source_spelling(self,result['corrected'],('機械をにだいならべます。','機械をにだい並べます。'))
         self.assertEqual(result.get('odd_spans'),[])
 
 

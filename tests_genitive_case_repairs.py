@@ -12,19 +12,19 @@ import kana_layout as K
 @unittest.skipUnless(M.dictionary_inflections('会議'),'requires native dictionary')
 class GenitiveCaseRepairTests(unittest.TestCase):
     def test_source_case_slot_uses_unchanged_later_object_and_action(self):
-        text='あしたのかえぎでしりょうをくばります'
+        text='あしたのかうぎでしりょうをくばります'
         self.assertEqual(R.native_genitive_argument_slots(text),((0,4,7,len(text)),))
         self.assertFalse(R.native_genitive_object_slots(text))
         # An unknown following object cannot prove the event's で slot.
         # A wider unproved noun before を remains only a lexical target;
         # it does not certify a で boundary inside either unknown reading.
         self.assertFalse(any(case==7 for begin,head,case,finish in
-            R.native_genitive_argument_slots('あしたのかえぎでしるょうをくばります')))
-        self.assertFalse(R.native_genitive_argument_slots('ぷねらのかえぎでしりょうをくばります'))
+            R.native_genitive_argument_slots('あしたのかうぎでしるょうをくばります')))
+        self.assertFalse(R.native_genitive_argument_slots('ぷねらのかうぎでしりょうをくばります'))
         # 48-ALB: しりょう can mean 飼料. The earlier negative assumed
         # 資料 without a written spelling; use unambiguous 書類 instead.
-        self.assertTrue(R.native_genitive_argument_slots('あしたのかえぎでしりょうをたべます'))
-        self.assertFalse(R.native_genitive_argument_slots('あしたのかえぎでしょるいをたべます'))
+        self.assertTrue(R.native_genitive_argument_slots('あしたのかうぎでしりょうをたべます'))
+        self.assertFalse(R.native_genitive_argument_slots('あしたのかうぎでしょるいをたべます'))
 
     def test_swallowed_case_needs_the_unchanged_complete_object_clause(self):
         text='へやのいこにほんをいれます'
@@ -37,18 +37,18 @@ class GenitiveCaseRepairTests(unittest.TestCase):
         self.assertFalse(CR._changed_genitive_object_allowed(text,3,5,'猫'))
 
     def test_candidate_must_fit_the_original_case_not_just_exist(self):
-        text='あしたのかえぎでしりょうをくばります'
+        text='あしたのかうぎでしりょうをくばります'
         for good in ('かいぎ','会議'):
             self.assertTrue(CR._changed_genitive_object_allowed(text,4,7,good),good)
         for bad in ('懐疑','かえ','楓'):
             self.assertFalse(CR._changed_genitive_object_allowed(text,4,7,bad),bad)
-        self.assertFalse(CR._changed_genitive_object_allowed(text,0,len(text),text.replace('かえぎ','懐疑')))
+        self.assertFalse(CR._changed_genitive_object_allowed(text,0,len(text),text.replace('かうぎ','懐疑')))
 
     def test_existing_anomaly_and_shared_application_repair(self):
         import app
         from tests_analysis_async import initial
-        a=initial();source='あしたのかえぎでしりょうをくばります。'
-        self.assertEqual(K.kana_key_distance('え','い'),1.0)
+        a=initial();source='あしたのかうぎでしりょうをくばります。'
+        self.assertEqual(K.kana_key_distance('う','い'),1.0)
         result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
             context_vec=None,decisions=a.decisions)
         assert_repaired_spelling(self, result, ('あしたのかいぎでしりょうをくばります。',
@@ -62,8 +62,8 @@ class GenitiveCaseRepairTests(unittest.TestCase):
         # Initial-state 199 already selects these native same-reading
         # spellings. Preserve the grammatical source, not one IME surface.
         observed_spellings={
-            'へやのはこにほんをいれます。':('へやのはこに本をいれます。',),
-            'あしたのかいぎでしりょうをくばります。':('明日の会議でしりょうをくばります。',),
+            'へやのはこにほんをいれます。':('へやのはこに本をいれます。','へやのはこに本を入れます。','部屋の箱に本を入れます。'),
+            'あしたのかいぎでしりょうをくばります。':('明日の会議でしりょうをくばります。','明日の会議で資料を配ります。'),
             'あしたの会議で資料を配ります。':('明日の会議で資料を配ります。',),
         }
         for text in ('へやのはこにほんをいれます。','あしたのかいぎでしりょうをくばります。',

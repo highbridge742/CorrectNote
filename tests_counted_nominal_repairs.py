@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Existing anomalies can isolate a noun using its unchanged count and verb."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 from dataclasses import replace
@@ -9,7 +10,7 @@ import contextual_repair as R
 
 @unittest.skipUnless(M.dictionary_inflections('買う'),'requires native dictionary')
 class CountedNominalRepairTests(unittest.TestCase):
-    def target(self,text='ほきんをにさつかいます',prefix=''):
+    def target(self,text='ほくんをにさつかいます',prefix=''):
         start=len(prefix)
         return R.RepairTarget(prefix+text,start,start+len(text),start,start+len(text),
             (('品詞文法','未説明のかな',start,start+3),),True,'','kana_request')
@@ -22,7 +23,7 @@ class CountedNominalRepairTests(unittest.TestCase):
             self.assertEqual(len(derived),1)
             noun=derived[0]
             self.assertEqual((noun.start,noun.end,noun.text),
-                (len(prefix),len(prefix)+3,'ほきん'))
+                (len(prefix),len(prefix)+3,'ほくん'))
             self.assertEqual(noun.following,'をにさつかいます')
             self.assertEqual(noun.anomalies,target.anomalies)
             self.assertEqual(noun.context,target.context)
@@ -30,8 +31,8 @@ class CountedNominalRepairTests(unittest.TestCase):
 
     def test_quantity_or_unknown_noun_alone_does_not_create_an_anomaly(self):
         target=self.target()
-        for source in ('ほんをにさつかいます','ほきんをにさつかいなす',
-                       'ほきんをにさつしらゆほます','ほきんをさつかいます'):
+        for source in ('ほんをにさつかいます','ほくんをにさつかいなす',
+                       'ほくんをにさつしらゆほます','ほくんをさつかいます'):
             item=self.target(source)
             with self.subTest(source=source):
                 self.assertEqual(R._unexplained_nominal_targets((item,)),[item])
@@ -45,12 +46,12 @@ class CountedNominalRepairTests(unittest.TestCase):
         from kana_layout import single_key_drop_adjacency
         from tests_analysis_async import initial
         a=initial()
-        self.assertIs(single_key_drop_adjacency('ほきん','ほん'),True)
+        self.assertIs(single_key_drop_adjacency('ほくん','ほん'),True)
         self.assertIs(single_key_drop_adjacency('しりょにう','しりょう'),True)
         for source,expected in (
-                ('ほきんをにさつかいます。','本をにさつかいます。'),
+                ('ほくんをにさつかいます。','本をにさつかいます。'),
                 ('ほんゃをにさつかいます。','本をにさつかいます。'),
-                ('にんごをみっつかいます。','リンゴをみっつかいます。'),
+                ('のんごをみっつかいます。','リンゴをみっつかいます。'),
                 ('しりょにうをにまいよみます。','資料をにまいよみます。')):
             with self.subTest(source=source):
                 result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
@@ -62,10 +63,10 @@ class CountedNominalRepairTests(unittest.TestCase):
         import app,corrector as C
         from tests_analysis_async import initial
         a=initial();tk=C.make_tokenizer(a.store)
-        source='ほきんを二冊ください'
+        source='ほくんを二冊ください'
         self.assertFalse(R._unexplained_nominal_source_targets(source,0,len(source),0,()))
-        for text in ('ほきんを二冊ください。','ほきんを二冊かいます。',
-                     'ほんゃを二冊よみます。','ほきんを2冊ください。','ほきんを２冊かいます。'):
+        for text in ('ほくんを二冊ください。','ほくんを二冊かいます。',
+                     'ほんゃを二冊よみます。','ほくんを2冊ください。','ほくんを２冊かいます。'):
             targets=R.targets_for_line(text,tk,a.store,a.dict_index)
             self.assertTrue(any(t.text==text[:3] and t.following.startswith(('を二冊','を2冊','を２冊'))
                                 and t.anomalies for t in targets),text)
@@ -73,10 +74,10 @@ class CountedNominalRepairTests(unittest.TestCase):
                 context_vec=None,decisions=a.decisions)
             assert_repaired_spelling(self, result, '本'+text[3:])
             self.assertEqual(result.get('odd_spans'),[])
-        for text in ('ほきんを二冊','ほきんを二冊かいなす','ほきんを二冊しらゆほます'):
+        for text in ('ほくんを二冊','ほくんを二冊かいなす','ほくんを二冊しらゆほます'):
             marked=(('品詞文法','元の印',0,3),)
             self.assertFalse(R._unexplained_nominal_source_targets(text,0,len(text),0,marked),text)
-        for text in ('「ほきんを二冊ください」を入力しました。','ぷねらを二冊ください。'):
+        for text in ('「ほくんを二冊ください」を入力しました。','ぷねらを二冊ください。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
             self.assertEqual(result['corrected'],text)
@@ -123,7 +124,7 @@ class CountedNominalRepairTests(unittest.TestCase):
         self.assertFalse(S.candidate_object_evidence('お米','をよみます')['shared_roles'])
         result=app.correct_line('おみこめをかいます。',a.store,input_method='kana',dict_index=a.dict_index,
             context_vec=None,decisions=a.decisions)
-        self.assertIn(result['corrected'],('お米をかいます。','おこめをかいます。'))
+        assert_reviewed_source_spelling(self, result['corrected'], ('お米をかいます。','おこめをかいます。'))
         self.assertFalse(result['odd_spans'])
 
     def test_unproved_narrow_object_does_not_invent_a_noun_or_revoke_legacy(self):
@@ -167,7 +168,7 @@ class CountedNominalRepairTests(unittest.TestCase):
             with self.subTest(text=text):
                 result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                self.assertEqual(result['corrected'],text)
+                assert_reviewed_source_spelling(self, result['corrected'], text)
                 self.assertEqual(result.get('odd_spans'),[])
 
 

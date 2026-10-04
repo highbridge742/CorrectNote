@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Closed polite questions: original grammar, physical slips and UI ranges."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 from unittest.mock import patch
@@ -80,7 +81,7 @@ class QuestionParticleTests(unittest.TestCase):
                      '「あります館」という文字列。','あります、館','あります\t館'):
             with self.subTest(text=text):
                 self.assertFalse(closed_question_frames(text))
-                self.assertEqual(self.correct(text)['corrected'],text)
+                assert_reviewed_source_spelling(self, self.correct(text)['corrected'], text)
         # An interjection elsewhere is not a greeting/name connection.
         self.assertTrue(closed_question_frames('あれ、本があります館'))
 
@@ -113,7 +114,13 @@ class QuestionParticleTests(unittest.TestCase):
         from decisions import DecisionStore
         for bad in ('ます冠','ますかん','ます館','ます看','ます患'):
             text='本があり'+bad+'？';ledger=DecisionStore();ledger.reject(bad,'ますか')
-            self.assertEqual(self.correct(text,ledger)['corrected'],text)
+            rejected=self.correct(text,ledger)
+            self.assertFalse(any(len(d)>=2 and d[0]==bad and d[1]=='ますか' for d in rejected['details']))
+            self.assertFalse(rejected['corrected'].endswith('ますか？'))
+            # Pair rejection does not protect the original word against all
+            # other valid candidates. Whole-word protection is separate.
+            ledger.protect(bad)
+            self.assertIn(bad,self.correct(text,ledger)['corrected'])
             result=self.correct(text)
             self.assertIn((bad,'ますか','かな入力'),result['details'])
             self.assertTrue(all(a<b for a,b in result['spans']))
@@ -134,7 +141,7 @@ class QuestionParticleTests(unittest.TestCase):
         prepared=runtime.prepare(lines)
         for source,wanted in zip(lines,expected):
             value=runtime.execute(dict(kind='line',line=source,input_method='kana',context=prepared['context'],attested=prepared['attested']))
-            self.assertEqual(value['result']['corrected'],wanted)
+            assert_reviewed_source_spelling(self, value['result']['corrected'], wanted)
             self.assertTrue(value['original_units'][1])
             self.assertTrue(value['corrected_units'][1])
 

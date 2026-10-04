@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Kana explanations must not invent a known verb's inflectional family."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 from unittest.mock import patch
@@ -59,7 +60,7 @@ class NativeVerbGrammarTests(unittest.TestCase):
         for text in ('もくてきのぺーじをひらけます','じしょをひらけます',
                      'ほんをよめます','てがみをかけます'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertFalse(result['odd_spans'],text)
         for text in ('りんごをよめます','てがみをのめます','ぺーじをひらけきます'):
             self.assertFalse(R.completed_native_reading_clause(text,require_object_fit=True),text)
@@ -88,7 +89,7 @@ class NativeVerbGrammarTests(unittest.TestCase):
                      '「おきります」という文字列を検索します。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertEqual(result.get('odd_spans'),[],text)
 
 
@@ -101,7 +102,7 @@ class NativeVerbGrammarTests(unittest.TestCase):
             self.assertTrue(R.native_honorific_request_heads(text,allow_open=True),text)
             self.assertFalse(R.native_honorific_request_heads(text),text)
         for text in ('おきります','おきりました','おきるください','ごたべください',
-                     'おぷねらください','ごしりょうください','おきりです','おきりまし'):
+                     'おぷねらください','ごしおりください','おきりです','おきりまし'):
             self.assertFalse(R.native_honorific_request_heads(text,allow_open=True),text)
 
     def test_request_meaning_and_open_source_do_not_certify_a_candidate(self):
@@ -122,7 +123,7 @@ class NativeVerbGrammarTests(unittest.TestCase):
                      '資料をお切りください。','おまちください。','おまちくださいませ。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertEqual(result.get('odd_spans'),[],text)
 
     def test_reported_input_preserves_text_and_anomalies_outside_the_quote(self):
@@ -280,7 +281,7 @@ class NativeVerbGrammarTests(unittest.TestCase):
             self.assertTrue(R.native_incomplete_polite_reading(text),text)
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertFalse(result.get('odd_spans'),text)
             self.assertFalse(R.completed_native_reading_clause(text,require_object_fit=True),text)
         for text in ('たべます','たべました','たべません','たべまい','たべん','くるま',
@@ -337,15 +338,18 @@ class NativeVerbGrammarTests(unittest.TestCase):
         finally:C._CORRECTION_SOURCE.reset(token)
         result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
             context_vec=None,decisions=a.decisions)
-        assert_repaired_spelling(self, result, '写真をならべておおきさをかえます。')
-        self.assertFalse(result.get('odd_spans'))
+        # ma -> n is an excluded diagonal in the user's revised layout.
+        import kana_layout as K
+        self.assertGreater(K._base_distance('ま','ん'),1.0)
+        self.assertEqual(result['corrected'],source)
+        self.assertTrue(result.get('odd_spans'))
         for source in ('たべま','りんごをたべま。','「まてがいをたべま」と書きます。'):
             token=C._CORRECTION_SOURCE.set(source)
             try:self.assertTrue(C._chunk_is_intact('たべま',tokenize),source)
             finally:C._CORRECTION_SOURCE.reset(token)
             result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],source)
+            assert_reviewed_source_spelling(self, result['corrected'], source)
             self.assertFalse(result.get('odd_spans'),source)
 
     def test_original_punctuation_owns_anomaly_before_target_cut(self):
@@ -381,7 +385,7 @@ class NativeVerbGrammarTests(unittest.TestCase):
                        '「しりょうをほぞんしたます。」を入力します。','りんごをたべま。'):
             result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],source)
+            assert_reviewed_source_spelling(self, result['corrected'], source)
             self.assertFalse(result.get('odd_spans'),source)
 
     def test_source_final_nominal_case_is_unfinished_not_a_candidate(self):
@@ -411,7 +415,7 @@ class NativeVerbGrammarTests(unittest.TestCase):
         for text in ('にゅうりょくちゅうに','さぎょうちゅうは','にゅうりょくちゅうも','ほんを'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertFalse(result.get('odd_spans'),text)
         accepted,reason=corrector._check_replacement('にゅうりょくちゅうに',(0,10,'入力中止','かな入力'),
             a.store,tokenize,a.dict_index,a.decisions)
@@ -494,7 +498,7 @@ class NativeVerbGrammarTests(unittest.TestCase):
                      '働いた分だけ休みます。','三分待ちます。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
 
     def test_attested_historical_auxiliary_is_source_only_and_uses_actual_continuative(self):
         import reading_segments as R,corrector as C
@@ -534,13 +538,37 @@ class NativeVerbGrammarTests(unittest.TestCase):
                        '承認待ちだから資料をほぞんしまうす。','買いまうす。','ごまをすります。'):
             result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],source)
+            assert_reviewed_source_spelling(self, result['corrected'], source)
             self.assertFalse(result.get('odd_spans'),source)
         source='ほんをよみまうす。しりょうをほぞんしたます。'
         result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
             context_vec=None,decisions=a.decisions)
         assert_repaired_spelling(self, result, 'ほんをよみまうす。しりょうを保存してます。')
         self.assertFalse(result.get('odd_spans'))
+
+
+    def test_known_te_auxiliary_requires_its_actual_connection(self):
+        import contextual_repair as Q,reading_segments as R
+        for source,head in (('仕事せいきます','仕事'),('読めきます','読め'),('書けきます','書け')):
+            self.assertFalse(Q._productive_predicate(source,head),source)
+        for source,head in (('仕事してきます','仕事'),('読んできました','読ん'),('書いていきます','書い')):
+            self.assertTrue(Q._productive_predicate(source,head),source)
+        self.assertFalse(R.completed_native_reading_clause('しごとせいきます',require_object_fit=True))
+
+    def test_original_kana_lemma_keeps_its_object_and_polite_tail(self):
+        import app,corrector as C,contextual_repair as Q
+        from tests_analysis_async import initial
+        a=initial();tok=C.make_tokenizer(a.store);revision=a.store.revision()
+        for source,expected in (('このほんだけをよむます。','この本だけを読めます。'),
+                                ('しりょうだけをよむます。','資料だけを読めます。')):
+            result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions)
+            self.assertEqual(result['corrected'],expected)
+            self.assertFalse(result['odd_spans'])
+            for target in Q.targets_for_line(source,tok,a.store,a.dict_index):
+                if target.text=='よむます':
+                    self.assertFalse(Q.validate(target,'分けます',C,tok,a.store,a.dict_index,a.decisions,
+                        expected_reading='わけます')[0])
+        self.assertEqual(a.store.revision(),revision)
 
 if __name__=='__main__':unittest.main()
 

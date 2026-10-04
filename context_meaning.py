@@ -137,8 +137,8 @@ def _reading_frames(source,frame,protected,role_for_end=None):
 def anomalous_frames(source):
     from semantic_roles import nominal_roles
     return tuple(f for f in contexts(source)
-                 if (f.get('reading_spelling') or (f['kind']=='counted_object' or bool(set(f.get('conflict_roles',(f.get('conflict_role',_CONFLICT[f['kind']]),))) & _meaning_roles(f)))
-                 and _expected_role(f) not in _meaning_roles(f))
+                 if (f.get('reading_spelling') or f['kind']=='counted_object' or bool(set(f.get('conflict_roles',(f.get('conflict_role',_CONFLICT[f['kind']]),))) & _meaning_roles(f)))
+                 and _expected_role(f) not in _meaning_roles(f)
                  # Country + line is ambiguous, not intrinsically malformed.
                  # Prefer quantity only with an attested same-reading quantity.
                  and (f['kind'] not in ('geometric_count','deliberative_arrival','counted_object','photographic_action') or bool(candidates(f))))
@@ -268,6 +268,9 @@ def _meaning_roles(frame,surface=None):
     face=frame['surface'] if surface is None else surface
     if frame.get('owner_spelling'):
         owner=frame['owner_spelling'];prefix=owner['prefix']
+        # The original owner was already proved by its exact native reading.
+        # Only a replacement must supply the coordinated written prefix.
+        if surface is None:return _meaning_roles(owner['core'])
         return _meaning_roles(owner['core'],face[len(prefix):]) if face.startswith(prefix) else frozenset()
     if frame['kind']=='familiar_nominal':
         from familiar_nominal import roles
@@ -282,6 +285,12 @@ def _meaning_roles(frame,surface=None):
     from semantic_roles import ACTION_MEANINGS
     lemmas={base for pos,form,base,rd in dictionary_inflections(face) or ()
             if pos.startswith('動詞,') and form==frame['inflection']}
+    if face and all('ぁ'<=c<='ゖ' for c in face):
+        # A native inflected reading already carries its possible action
+        # meanings. Its kanji spelling is not a new structural repair.
+        from semantic_roles import _native_lexeme_forms
+        lemmas.update(lemma for words in ACTION_MEANINGS.values() for lemma in words
+                      if _native_lexeme_forms(lemma,frame['inflection'],face))
     return frozenset(role for role,words in ACTION_MEANINGS.items() if words & lemmas)
 
 
@@ -305,11 +314,17 @@ def _action_candidates(frame):
         if (role in _meaning_roles(frame,face) and any(pos.startswith('動詞,')
             and form==frame['inflection'] and rd==frame['reading']
             for pos,form,base,rd in dictionary_inflections(face) or ())):out.append(face)
-    if not out:
-        from semantic_roles import ACTION_MEANINGS,_native_lexeme_forms
-        out.extend(face for word in ACTION_MEANINGS[role]
-                   for face in _native_lexeme_forms(word,frame['inflection'],frame['reading']))
+    # An unchanged kana result is not a completed spelling search. Reuse
+    # every independently attested inflection for this same action meaning.
+    from semantic_roles import ACTION_MEANINGS,_native_lexeme_forms
+    out.extend(face for word in ACTION_MEANINGS[role]
+               for face in _native_lexeme_forms(word,frame['inflection'],frame['reading']))
     result=tuple(dict.fromkeys(out))
+    # A literal kana form can share this lemma and meaning with its written
+    # inflection. It is an unfinished spelling, not a competing lexical sense.
+    # Retain all distinct written forms; their ambiguity is still compared.
+    written=tuple(face for face in result if any('一'<=c<='鿿' or 'ァ'<=c<='ヺ' for c in face))
+    if written:result=written
     if cache is not None:cache[key]=result
     return result
 
@@ -677,6 +692,21 @@ def _placement_contexts(source):
         begin=max([0]+[i+1 for i,ch in enumerate(source[:case]) if ch in 'を。！？!?\t\r\n⇒→'])
         placement=placement_continuation(source,begin,min(len(source),case+16),('置く',))
         if not placement or placement['case']!=case:continue
+        # A native compound case can locate an event (school-ni-oite).
+        # Place membership alone does not prove an object was placed there.
+        # A support/container or an explicit original object supplies the
+        # missing relation; the spelling candidate itself supplies neither.
+        whole=tokenize(source)
+        compound=next((t for t in whole if t.start==case and t.has_reading
+                       and t.pos=='助詞' and t.pos_sub=='格助詞:連語'),None)
+        if compound:
+            from semantic_roles import nominal_roles,object_before
+            physical={'support_surface','container','writing_surface','object'}
+            supported=any(physical & nominal_roles(noun) for noun in placement['nouns'])
+            def original_tokens(value):
+                return [(t.surface,t.pos+(':'+t.pos_sub if t.pos_sub else ''),t.reading,
+                         t.start,t.end,t.has_reading,t.infl_form) for t in tokenize(value)]
+            if not supported and not object_before(source,case+1,original_tokens):continue
         # The destination already proves this case boundary. Parsing におき
         # together must not swallow the case into a different best-path word.
         parts=list(tokenize(c))

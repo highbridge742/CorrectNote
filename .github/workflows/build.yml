@@ -24,6 +24,9 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: CIの停止・報告処理を確認
+        run: python -m unittest -v tests_ci_runner
+
       - name: モックテストを実行
         run: python tests_mock.py
 
@@ -53,14 +56,14 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pyinstaller janome
 
+      - name: 実辞書とWindows画面の動作確認（最初の不一致で停止）
+        run: python -u ci_smoke_test.py --failfast
+
       - name: exe をビルド
         run: python -m PyInstaller correctnote.spec --noconfirm
 
       - name: EXEと公開ソース・同梱物を照合
         run: python verify_built_exe.py dist/CorrectNote.exe
-
-      - name: 実辞書とWindows画面の動作確認
-        run: python ci_smoke_test.py
 
       - name: ビルド結果をアップロード
         uses: actions/upload-artifact@v4

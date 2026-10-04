@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from tests_spelling_reference import assert_reviewed_result_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 from dataclasses import replace
@@ -114,7 +115,7 @@ class NativeLegacyCoverageTests(unittest.TestCase):
             ('あぐせすもにたに行きます。','アクセスモニタに行きます。'),
             ('アクセスモニタに行きます。','アクセスモニタに行きます。'),
             ('アクセスも確認します。','アクセスも確認します。'),
-            ('まどをしめてからほんをよみんす。','まどをしめてからほんを読みます。'),
+            ('まどをしめてからほんをよみまぇ。','まどをしめてからほんを読みます。'),
             ('おくます。','置きます。')):
             with self.subTest(text=text):
                 r=app.correct_line(text,a.store,dict_index=a.dict_index,
@@ -144,7 +145,7 @@ class NativeLegacyCoverageTests(unittest.TestCase):
             with self.subTest(source=source):
                 result=app.correct_line(source,a.store,dict_index=a.dict_index,
                     decisions=a.decisions,context_vec=None,input_method='kana')
-                assert_repaired_spelling(self, result, wanted)
+                assert_reviewed_result_spelling(self, result, wanted)
                 self.assertEqual(result['odd_spans'],[])
         # Protecting a complete transposition never permits its deletion half.
         source='べんらがを確認しました。';tk=corrector.make_tokenizer(a.store)

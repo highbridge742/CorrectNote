@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Normal kana cooking shares the same native food/action proof."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 import morphology as M
 import semantic_roles as S
@@ -16,6 +17,12 @@ class CookingRoleTests(unittest.TestCase):
             self.assertFalse(S.support(noun,verb),(noun,verb))
         self.assertIn('ingredient',S.native_verb_roles('に','連用形','に',tail='ます'))
         self.assertNotIn('ingredient',S.native_verb_roles('似','連用形','に',tail='ます'))
+
+    def test_giving_and_cooking_are_distinct_supported_meanings(self):
+        self.assertTrue(S.support('魚','揚げる'))
+        self.assertTrue(S.support('魚','あげる'))
+        self.assertTrue(S.case_action_support('友人','に','あげる'))
+        self.assertFalse(S.case_action_support('友人','に','揚げる'))
 
     def test_raw_vegetables_and_feed_keep_their_own_roles(self):
         for word in ('トマト','胡瓜','きゅうり','ナス','南瓜','かぼちゃ','ほうれん草',
@@ -41,7 +48,7 @@ class CookingRoleTests(unittest.TestCase):
                      'さかなをあげます。','野菜を煮ます。','資料を読みます。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertEqual(result.get('odd_spans'),[],text)
 
     def test_completed_clause_needs_the_actual_case_and_complete_inflection(self):
@@ -71,7 +78,7 @@ class CookingRoleTests(unittest.TestCase):
                      'なべにさかなをいれます。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=a.context_vec,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertEqual(result.get('odd_spans'),[],text)
         for text in ('なべにみずをいれますです','ぷねらにみずをいれます'):
             self.assertFalse(R.intact_native_reading(text),text)
@@ -94,5 +101,20 @@ class CookingRoleTests(unittest.TestCase):
         for text in ('まてがいをたべま','まてがいをやくます','まちがいをたべます',
                      'まてがいをしゅうせいします'):
             self.assertFalse(R.completed_native_reading_clause(text,require_object_fit=True),text)
+
+
+    def test_simultaneous_first_action_keeps_its_original_object(self):
+        import morphology as M,semantic_roles as S
+        def rows(text):
+            parts=[(t.surface,t.pos+':'+t.pos_sub,t.reading,t.start,t.end,t.has_reading,t.infl_form)
+                   for t in M.tokenize(text)]
+            return S.conflicting_object_predicates(text,parts)
+        for text in ('ほんをにつつよみます。','本を煮つつ読みます。'):
+            self.assertTrue(rows(text),text)
+        for text in ('野菜を煮つつ食べます。','資料を読みつつ煮ます。',
+                     '文章を読みながら書きます。','ぷねらを煮つつ食べます。'):
+            self.assertFalse(rows(text),text)
+        self.assertTrue(S.changed_object_conflict_allowed('ほんをにつつよみます。','ほんをにさつよみます。'))
+        self.assertFalse(S.changed_object_conflict_allowed('ほんをにつつよみます。','ほんを煮つつよみます。'))
 
 if __name__=='__main__':unittest.main()

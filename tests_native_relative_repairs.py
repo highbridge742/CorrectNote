@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Keep the actual source relative clause and the role of its nominal head."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
@@ -54,15 +55,15 @@ class NativeRelativeRepairTests(unittest.TestCase):
                      'としょかんでかりた本をかえします。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self,result['corrected'],text)
             self.assertEqual(result.get('odd_spans'),[],text)
 
 
     def test_original_relative_slot_reuses_the_shared_action(self):
-        text='としょかんでかりたほきんをかえします'
+        text='としょかんでかりたほなんをかえします'
         self.assertIn((0,9,12,18,('かりた',('で',))),R.native_modified_argument_slots(text))
-        for text in ('ぷねらでかりたほきんをかえします',
-                     'としょかんでかりますほきんをかえします'):
+        for text in ('ぷねらでかりたほなんをかえします',
+                     'としょかんでかりますほなんをかえします'):
             self.assertFalse(R.native_modified_argument_slots(text),text)
 
     def test_same_nominal_context_proves_literal_and_written_heads(self):
@@ -72,7 +73,7 @@ class NativeRelativeRepairTests(unittest.TestCase):
                 for begin,head,case,finish,faces in R.native_modified_nominal_contexts(text)))
         for text in ('としょかんでかりた平和をかえします',
                      'しりょうをよんだ本をかえします',
-                     'としょかんでかりたほきんをかえします'):
+                     'としょかんでかりたほなんをかえします'):
             self.assertFalse(R.native_modified_nominal_contexts(text),text)
 
     def test_relative_target_does_not_invent_an_anomaly(self):
@@ -81,22 +82,22 @@ class NativeRelativeRepairTests(unittest.TestCase):
         import contextual_repair as CR
         from tests_analysis_async import initial
         a=initial();tokenize=C.make_tokenizer(a.store)
-        text='としょかんでかりたほきんをかえします'
+        text='としょかんでかりたほなんをかえします'
         targets=CR._unexplained_kana_request_targets(text,0,len(text),tokenize,a.store,a.dict_index)
-        self.assertIn('ほきん',[t.text for t in targets if t.boundary_kind=='lexical'])
+        self.assertIn('ほなん',[t.text for t in targets if t.boundary_kind=='lexical'])
         with patch('pos_grammar.odd_kana_spans',return_value=[]):
             self.assertFalse(CR._unexplained_kana_request_targets(
                 text,0,len(text),tokenize,a.store,a.dict_index))
 
     def test_changed_noun_must_fit_both_original_predicates(self):
         import contextual_repair as CR
-        text='としょかんでかりたほきんをかえします'
+        text='としょかんでかりたほなんをかえします'
         for face in ('ほん','本'):
             self.assertTrue(CR._changed_genitive_object_allowed(text,9,12,face),face)
         self.assertFalse(CR._changed_genitive_object_allowed(text,9,12,'平和'))
         self.assertFalse(CR._changed_genitive_object_allowed(
             text,0,len(text),'みせでかったほんをかえします'))
-        occupied='しりょうをよんだほきんをかえします';start=occupied.index('ほきん')
+        occupied='しりょうをよんだほなんをかえします';start=occupied.index('ほなん')
         self.assertFalse(CR._changed_genitive_object_allowed(occupied,start,start+3,'本'))
 
     def test_relative_head_repair_and_physical_counterexamples(self):
@@ -104,21 +105,21 @@ class NativeRelativeRepairTests(unittest.TestCase):
         import kana_layout as K
         from tests_analysis_async import initial
         a=initial()
-        self.assertTrue(K.single_key_drop_adjacency('ほきん','ほん'))
+        self.assertTrue(K.single_key_drop_adjacency('ほなん','ほん'))
         self.assertFalse(K.single_key_drop_adjacency('ほこん','ほん'))
-        text='としょかんでかりたほきんをかえします。'
+        text='としょかんでかりたほなんをかえします。'
         result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
             context_vec=None,decisions=a.decisions)
         reading=''.join(t.surface if all('ぁ'<=c<='ゖ' or c=='ー' for c in t.surface)
                         else t.reading if t.has_reading else t.surface for t in M.tokenize(result['corrected']))
-        self.assertEqual(reading,text.replace('ほきん','ほん'))
+        self.assertEqual(reading,text.replace('ほなん','ほん'))
         self.assertEqual(result.get('odd_spans'),[])
         for text in ('としょかんでかりたほんんをかえします。',
                      'としょかんでかりたほこんをかえします。',
-                     '「としょかんでかりたほきんをかえします」という誤入力例です。'):
+                     '「としょかんでかりたほなんをかえします」という誤入力例です。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self,result['corrected'],text)
 
 
 
@@ -140,34 +141,34 @@ class NativeRelativeRepairTests(unittest.TestCase):
         a=initial()
         for prefix in ('きのうとしょかんでかりた','ともだちからかりた',
                        'きのうともだちからかりた','えきまえのみせでかった'):
-            for head in ('ほん','本','ほきん'):
+            for head in ('ほん','本','ほなん'):
                 text=prefix+head+'をかえします。'
                 result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
                 output=result['corrected']
-                if head=='ほきん':
+                if head=='ほなん':
                     reading=''.join(t.surface if all('ぁ'<=c<='ゖ' or c=='ー' for c in t.surface)
                                     else t.reading if t.has_reading else t.surface for t in M.tokenize(output))
                     self.assertEqual(reading,prefix+'ほんをかえします。',text)
-                else:self.assertEqual(output,text)
+                else:assert_reviewed_source_spelling(self, output, text)
                 self.assertEqual(result.get('odd_spans'),[],text)
         for text in ('きのうとしょかんでかりたほんんをかえします。',
                      'ともだちからかりたほこんをかえします。',
-                     '「ともだちからかりたほきんをかえします」という誤入力例です。'):
+                     '「ともだちからかりたほなんをかえします」という誤入力例です。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self,result['corrected'],text)
 
 
     def test_genitive_suffix_is_a_separate_known_head(self):
-        self.assertEqual(R.native_genitive_nominal_splits('ほきんのぺーじ',True),
+        self.assertEqual(R.native_genitive_nominal_splits('ほなんのぺーじ',True),
                          ((3,(),('ページ','頁')),))
-        self.assertFalse(R.native_genitive_nominal_splits('ほきんのぺーじ'))
-        for text in ('きもの','あけぼの','ほきんのぷねら','ほきんのこぎり'):
+        self.assertFalse(R.native_genitive_nominal_splits('ほなんのぺーじ'))
+        for text in ('きもの','あけぼの','ほなんのぷねら','ほなんのこぎり'):
             self.assertFalse(R.native_genitive_nominal_splits(text,True),text)
         for noun in ('ほんのぺーじ','本のぺーじ'):
             self.assertTrue(R.native_relative_nominal_faces(noun,'かりた',('で',)),noun)
-        for noun in ('へいわのぺーじ','平和のぺーじ','ほきんのぺーじ'):
+        for noun in ('へいわのぺーじ','平和のぺーじ','ほなんのぺーじ'):
             self.assertFalse(R.native_relative_nominal_faces(noun,'かりた',('で',)),noun)
 
     def test_genitive_target_reuses_only_the_original_noun_anomaly(self):
@@ -176,26 +177,26 @@ class NativeRelativeRepairTests(unittest.TestCase):
         import corrector as C
         from tests_analysis_async import initial
         a=initial();tokenize=C.make_tokenizer(a.store)
-        text='としょかんでかりたほきんのぺーじをよみます'
+        text='としょかんでかりたほなんのぺーじをよみます'
         targets=CR._unexplained_kana_request_targets(text,0,len(text),tokenize,a.store,a.dict_index)
         lexical=[t for t in targets if t.boundary_kind=='lexical']
-        self.assertEqual([t.text for t in lexical],['ほきん'])
+        self.assertEqual([t.text for t in lexical],['ほなん'])
         self.assertEqual(lexical[0].following,'のぺーじをよみます')
         with patch('pos_grammar.odd_kana_spans',return_value=[]):
             self.assertFalse(CR._unexplained_kana_request_targets(text,0,len(text),tokenize,a.store,a.dict_index))
 
     def test_common_final_retains_the_known_genitive_suffix(self):
         import contextual_repair as CR
-        text='としょかんでかりたほきんのぺーじをよみます'
+        text='としょかんでかりたほなんのぺーじをよみます'
         for noun in ('本','ほん'):
             self.assertTrue(CR._changed_genitive_object_allowed(text,9,12,noun),noun)
-            self.assertTrue(CR._changed_genitive_object_allowed(text,0,len(text),text.replace('ほきん',noun)),noun)
-        for changed in (text.replace('ほきん','へいわ'),
-                        text.replace('ほきんのぺーじ','ほんのもくじ'),
-                        text.replace('ほきんのぺーじ','ほん'),
-                        text.replace('としょかんでかりたほきん','みせでかったほん')):
+            self.assertTrue(CR._changed_genitive_object_allowed(text,0,len(text),text.replace('ほなん',noun)),noun)
+        for changed in (text.replace('ほなん','へいわ'),
+                        text.replace('ほなんのぺーじ','ほんのもくじ'),
+                        text.replace('ほなんのぺーじ','ほん'),
+                        text.replace('としょかんでかりたほなん','みせでかったほん')):
             self.assertFalse(CR._changed_genitive_object_allowed(text,0,len(text),changed),changed)
-        occupied='しりょうをよんだほきんのぺーじをよみます';start=occupied.index('ほきん')
+        occupied='しりょうをよんだほなんのぺーじをよみます';start=occupied.index('ほなん')
         self.assertFalse(CR._changed_genitive_object_allowed(occupied,start,start+3,'本'))
 
     def test_repaired_genitive_is_stable_when_analyzed_again(self):
@@ -205,10 +206,10 @@ class NativeRelativeRepairTests(unittest.TestCase):
         for prefix,tail in (('としょかんでかりた','よみます'),
                             ('きのうかりた','ひらきます'),
                             ('ともだちからかりた','よみます')):
-            text=prefix+'ほきんのぺーじを'+tail+'。'
+            text=prefix+'ほなんのぺーじを'+tail+'。'
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            assert_repaired_spelling(self, result, text.replace('ほきん','本'))
+            assert_repaired_spelling(self, result, text.replace('ほなん','本'))
             self.assertEqual(result.get('odd_spans'),[],text)
             again=app.correct_line(result['corrected'],a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
@@ -219,12 +220,15 @@ class NativeRelativeRepairTests(unittest.TestCase):
         import app
         from tests_analysis_async import initial
         a=initial()
-        for noun in ('ほこん','ほんん'):
+        # A nonadjacent deletion cannot invent hon. Another physical edit
+        # may yield a written report that fits both borrowing and pages.
+        for noun,wanted,purple in (('ほこん','報告',False),('ほんん','ほんん',True)):
             text='ともだちからかりた'+noun+'のぺーじをよみます。'
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
-            self.assertTrue(result.get('odd_spans'),text)
+            self.assertEqual(result['corrected'],text.replace(noun,wanted))
+            self.assertEqual(bool(result.get('odd_spans')),purple,text)
+            self.assertNotIn('本のぺーじ',result['corrected'])
 
     def test_original_proof_does_not_cover_an_unexplained_tail(self):
         import pos_grammar as P
@@ -244,7 +248,7 @@ class NativeRelativeRepairTests(unittest.TestCase):
         text='しりょうをかくにんしたひとがいます。'
         result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
             context_vec=None,decisions=a.decisions)
-        self.assertEqual(result['corrected'],text)
+        assert_reviewed_source_spelling(self, result['corrected'], text)
         self.assertEqual(result.get('odd_spans'),[])
         self.assertNotIn('い',corrector.BASIC_VERB_FORMS)
         self.assertFalse(R.completed_native_reading_clause('ほらい',require_object_fit=True))
@@ -264,12 +268,12 @@ class NativeRelativeRepairTests(unittest.TestCase):
         self.assertFalse(any(begin==6 for begin,cut,faces in R.native_object_predicate_contexts(source)))
         result=app.correct_line(source+'。',a.store,input_method='kana',dict_index=a.dict_index,
             context_vec=None,decisions=a.decisions)
-        self.assertEqual(result['corrected'],'ほぞんしたがぞうを確認してます。')
+        assert_reviewed_source_spelling(self, result['corrected'], 'ほぞんしたがぞうを確認してます。')
         self.assertFalse(result.get('odd_spans'))
         for text in ('ほぞんしたがぞうをかくにんしました。','ほぞんしたほんをよみます。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertFalse(result.get('odd_spans'))
 
     def test_occupied_object_retains_canonical_suru_event_for_relative_time(self):
@@ -310,7 +314,7 @@ class NativeRelativeRepairTests(unittest.TestCase):
                 self.assertIn('日',R.native_nominal_phrase_faces(source))
                 result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                self.assertEqual(result['corrected'],source)
+                assert_reviewed_source_spelling(self, result['corrected'], source)
                 self.assertFalse(result.get('odd_spans'),source)
         for source in ('ぷねらしたひ','しりょうをほぞんしてひ','しりょうをほぞんしますひ',
                        'しりょうをほぞんしたを','しりょうをほぞんしたに','かんじゃをほぞんしたひ'):
@@ -327,7 +331,7 @@ class NativeRelativeRepairTests(unittest.TestCase):
                 self.assertTrue(R.native_adnominal_reading_parts(source,True),source)
                 result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                self.assertEqual(result['corrected'],source)
+                assert_reviewed_source_spelling(self, result['corrected'], source)
                 self.assertFalse(result.get('odd_spans'),source)
         self.assertIn('を',R.native_relative_action('きのうほんをよんだ')[1])
         for source in ('ぷねらみたえ','ほんよんだひ','きのうみてえ','きのうみますえ',
@@ -344,7 +348,7 @@ class NativeRelativeRepairTests(unittest.TestCase):
                 self.assertTrue(R.native_modified_nominal_contexts(source),source)
                 result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                self.assertEqual(result['corrected'],source)
+                assert_reviewed_source_spelling(self, result['corrected'], source)
                 self.assertFalse(result.get('odd_spans'),source)
         self.assertIn('絵',R.native_nominal_phrase_faces('みたえ'))
         for source in ('みますえをほぞんします','みてえをほぞんします',

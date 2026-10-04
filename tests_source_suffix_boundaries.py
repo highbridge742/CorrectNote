@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from tests_spelling_reference import assert_reviewed_source_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
@@ -20,18 +21,18 @@ class SourceSuffixBoundaryTests(unittest.TestCase):
             ('病気を人に宇佐します。','病気を人に移します。',False),
             ('メモの内容を別のファイルに宇佐し',
              'メモの内容を別のファイルに宇佐し',True),
-            ('宇佐します。','宇佐します。',True),
+            ('宇佐します。','操作します。',False),
             ('それを宇佐します。','それを宇佐します。',True),
             ('絵を紙に写してから宇佐します。',
-             '絵を紙に写してから宇佐します。',True),
+             '絵を紙に写してから操作します。',False),
             ('メモの内容を別のファイルに保存します。',
              'メモの内容を別のファイルに保存します。',False),
             ('文書をメールに添付します。','文書をメールに添付します。',False),
             ('資料を出すしました。','資料を出すしました。',True),
             ('税を課すしました。','税を課すしました。',True),
-            ('本を貸すしました。','本を貸すしました。',True),
+            ('本を貸すしました。','本を貸しました。',False),
             ('読んだ本を友人に課すしました。',
-             '読んだ本を友人に課すしました。',True),
+             '読んだ本を友人に貸しました。',False),
             ('資料を出しました。','資料を出しました。',False),
             ('税を課しました。','税を課しました。',False),
             ('本を貸しました。','本を貸しました。',False),
@@ -88,13 +89,13 @@ class SourceSuffixBoundaryTests(unittest.TestCase):
 
     def test_native_auxiliary_fragments_do_not_preempt_whole_word_repair(self):
         rows=(('すげるつぉを確認しました。','すけるつぉを確認しました。',False),
-              ('へんつゅう','編集',False),
+              ('へんそゅう','編集',False),
               ('ゆしつゅがありました。','輸出がありました。',False),
               ('くわかたむしに行きます。','くわがたむしに行きます。',False),
-              ('まこつなを確認しました。','こまつなを確認しました。',False),
+              ('まこつなを確認しました。','小松菜を確認しました。',False),
               ('うこほうに行きます。','うこほうに行きます。',True),
               ('これはしんつせです。','これはしんつせです。',True),
-              ('もじらつ','文字列',False),
+              ('もじりつ','文字列',False),
               ('ゆしつがありました。','輸出がありました。',False))
         from janome_import import import_from_janome
         for phase in ('seed','fresh'):
@@ -104,12 +105,35 @@ class SourceSuffixBoundaryTests(unittest.TestCase):
                 with self.subTest(phase=phase,text=text):
                     # These rare words require the initial native-dictionary import.
                     # Do not borrow a previous test's mutable store or count seed gaps as successes.
-                    if phase=='seed' and text in ('すげるつぉを確認しました。','まこつなを確認しました。'):
+                    if phase=='seed' and text=='すげるつぉを確認しました。':
                         expected=text;purple=True
                     r=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                                        context_vec=None,decisions=a.decisions)
                     assert_repaired_spelling(self, r, expected)
                     self.assertEqual(bool(r.get('odd_spans')),purple)
+
+    def test_revised_adjacency_does_not_restore_excluded_old_targets(self):
+        from kana_layout import kana_key_distance,single_key_drop_adjacency
+        from janome_import import import_from_janome
+        for left,right in (('つ','し'),('ら','れ'),('す','し')):
+            self.assertGreater(kana_key_distance(left,right),1.0)
+        for left,right in (('そ','し'),('り','れ')):
+            self.assertEqual(kana_key_distance(left,right),1.0)
+        self.assertFalse(single_key_drop_adjacency('だすしました','だしました'))
+        # The old edit targets require keys excluded by the user's new policy.
+        # A different candidate still needs its own physical and lexical proof;
+        # do not assert that an ambiguous misspelling must mean 編集.
+        a=initial()
+        for phase in ('seed','fresh'):
+            if phase=='fresh':import_from_janome(a.store)
+            for source,excluded in (('へんつゅう','編集'),('もじらつ','文字列')):
+                with self.subTest(phase=phase,source=source):
+                    r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                        context_vec=None,decisions=a.decisions)
+                    self.assertNotEqual(r['corrected'],excluded)
+                    self.assertEqual(r.get('analysis_status'),'complete')
+                    if source=='もじらつ':
+                        self.assertEqual(r['corrected'],source);self.assertTrue(r.get('odd_spans'))
 
     def test_native_mixed_noun_proof_does_not_take_an_unknown_suffix(self):
         for text in ('モーシょんの確認','モーシょんです','モーシょんでした'):
@@ -132,7 +156,7 @@ class SourceSuffixBoundaryTests(unittest.TestCase):
                 with self.subTest(phase=phase,text=text):
                     r=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                         context_vec=a.context_vec if phase=='fresh' else None,decisions=a.decisions)
-                    self.assertEqual(r['corrected'],expected);self.assertEqual(r.get('odd_spans'),[])
+                    assert_reviewed_source_spelling(self, r['corrected'], expected);self.assertEqual(r.get('odd_spans'),[])
             for text in ('つたえむたことで','プネろょんです。'):
                 with self.subTest(phase=phase,text=text):
                     r=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,

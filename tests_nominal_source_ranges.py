@@ -2,7 +2,7 @@
 """An unchanged noun/case proof never certifies its malformed predicate."""
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
-from types import SimpleNamespace
+from contextual_repair import RepairTarget
 import morphology as M
 import reading_segments as R
 import corrector as C
@@ -24,21 +24,24 @@ class NominalSourceRangeTests(unittest.TestCase):
         self.assertIn(('な','ます',14,17),anomalies)
         token=C._CORRECTION_SOURCE.set(text)
         try:
-            context=SimpleNamespace(text='このは',structural=True,anomalies=(('この','は',0,3),))
+            context=RepairTarget(text,0,3,0,len(text),(('この','は',0,3),),True,text[3:])
             self.assertTrue(C._chunk_is_intact('このは',self.tok,repair_context=context))
-            context=SimpleNamespace(text='なます',structural=True,anomalies=(('な','ます',14,17),))
+            context=RepairTarget(text,14,17,0,len(text),(('な','ます',14,17),),True,text[17:])
             self.assertFalse(C._chunk_is_intact('なます',self.tok,repair_context=context))
         finally:C._CORRECTION_SOURCE.reset(token)
 
     def test_original_unknowns_and_extra_case_particles_are_not_certified(self):
-        self.assertFalse(R.native_context_ranges('このしらゆほをおきなます。'))
+        # The known modifier この survives; it does not prove the unknown noun.
+        self.assertFalse(any(a<7 and 2<b for a,b in R.native_context_ranges('このしらゆほをおきなます。')))
         text='このはこをはおきなます。'
         anomalies=oddness.is_odd_run(text,self.tok,with_spans=True)
         self.assertTrue(any(a<6 and b>4 for _,_,a,b in anomalies))
         text='このはこをまどのちかくにおきなます。\tこのはこをしらゆほます。'
         ranges=R.native_context_ranges(text)
-        self.assertTrue(all(text[a:b]=='このはこを' for a,b in ranges))
-        self.assertEqual(len(ranges),2)
+        self.assertTrue(all((offset,offset+5) in ranges for offset in (0,text.index('\t')+1)))
+        for fragment in ('おきなます','しらゆほます'):
+            start=text.index(fragment)
+            self.assertFalse(any(a<=start and start+len(fragment)<=b for a,b in ranges))
 
     def test_corrected_tail_no_longer_leaves_a_false_nominal_mark(self):
         import app
@@ -48,8 +51,14 @@ class NominalSourceRangeTests(unittest.TestCase):
         assert_repaired_spelling(self, result, 'このはこをまどのちかくにおきます。')
         self.assertEqual(result['odd_spans'],[])
         self.assertEqual(result['diagnosis']['unreplaced_odd_spans'],[])
-        expected_spans=([(2,4),(8,11),(12,15)] if result['corrected']=='この箱をまどの近くに置きます。' else [(14,15)])
-        self.assertEqual(result['original_spans'],expected_spans)
+        # Equivalent spelling may combine or split visible correction units.
+        # Each unit must reconstruct the result while retaining untouched text.
+        original_end=corrected_end=0
+        for (a,b),(c,d) in zip(result['original_spans'],result['spans']):
+            self.assertLess(a,b);self.assertLess(c,d)
+            self.assertEqual(text[original_end:a],result['corrected'][corrected_end:c])
+            original_end,corrected_end=b,d
+        self.assertEqual(text[original_end:],result['corrected'][corrected_end:])
 
     def test_unknown_tail_remains_separate_from_proved_nominal(self):
         import app

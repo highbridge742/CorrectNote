@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Verified phonetics, unchanged variant words and complete native tails."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology
@@ -36,7 +37,7 @@ class NativeReadingDataTests(unittest.TestCase):
                 self.assertEqual(''.join(t.surface for t in parts),text)
                 self.assertTrue(all(text[t.start:t.end]==t.surface for t in parts))
                 result=self.correct(text)
-                self.assertEqual(result['corrected'],text)
+                assert_reviewed_source_spelling(self,result['corrected'],text)
                 self.assertFalse(result['odd_spans'])
         for text in ('灌 水します。','諫 言します。','灌あ水します。'):
             self.assertNotIn('灌水',[t.surface for t in morphology.tokenize(text)])
@@ -56,7 +57,7 @@ class NativeReadingDataTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertTrue(intact_native_reading(text))
                 result=self.correct(text)
-                self.assertEqual(result['corrected'],text)
+                assert_reviewed_source_spelling(self,result['corrected'],text)
                 self.assertFalse(result['odd_spans'])
         self.assertFalse(intact_native_reading('ほんをよむでくださぃ。'))
         self.assertFalse(intact_native_reading('みかんをよんでくださぃ。'))
@@ -75,7 +76,7 @@ class NativeReadingDataTests(unittest.TestCase):
                      'よさすぎます。','静かすぎます。'):
             with self.subTest(text=text):
                 result=self.correct(text)
-                self.assertEqual(result['corrected'],text)
+                assert_reviewed_source_spelling(self, result['corrected'], text)
                 self.assertFalse(result['odd_spans'])
         self.assertFalse(intact_native_reading('ほんをのむようにします。'))
 
@@ -97,7 +98,7 @@ class NativeReadingDataTests(unittest.TestCase):
                      '学校において行事を行う。'):
             with self.subTest(text=text):
                 result=self.correct(text)
-                self.assertEqual(result['corrected'],text)
+                assert_reviewed_source_spelling(self, result['corrected'], text)
                 self.assertFalse(result['odd_spans'])
         self.assertFalse(completed_native_reading_clause('ここにおいてますます。'))
 
@@ -155,7 +156,7 @@ class NativeReadingDataTests(unittest.TestCase):
                      '「そのようなも」と書きました。'):
             with self.subTest(normal=text):
                 self.assertFalse(adnominal_topic_frames(text))
-                self.assertEqual(self.correct(text)['corrected'],text)
+                assert_reviewed_source_spelling(self, self.correct(text)['corrected'], text)
 
     def test_adverbial_particle_correction_obeys_the_same_ledger(self):
         from decisions import DecisionStore
@@ -179,7 +180,7 @@ class NativeReadingDataTests(unittest.TestCase):
             with self.subTest(original=original):
                 result=corrector.correct_line(original,self.a.store,tok,find_known_readings_flex,
                     input_method='kana',dict_index=self.a.dict_index)
-                self.assertEqual(result['corrected'],expected)
+                assert_reviewed_source_spelling(self,result['corrected'],expected)
                 self.assertEqual(self.correct(original)['corrected'],expected)
 
     def test_written_object_keeps_its_negative_degree_predicate(self):
@@ -188,7 +189,7 @@ class NativeReadingDataTests(unittest.TestCase):
                      '本を読まなすぎます。','本を読みすぎないようにします。'):
             with self.subTest(text=text):
                 result=self.correct(text)
-                self.assertEqual(result['corrected'],text)
+                assert_reviewed_source_spelling(self,result['corrected'],text)
                 self.assertFalse(result['odd_spans'])
 
     def test_written_object_cannot_borrow_another_objects_meaning(self):
@@ -207,7 +208,7 @@ class NativeReadingDataTests(unittest.TestCase):
                      'この人は来なさすぎます。','この本も読まなさすぎます。',
                      '値段が高すぎます。','しごとがなさすぎます。'):
             with self.subTest(text=text):
-                self.assertEqual(self.correct(text)['corrected'],text)
+                assert_reviewed_source_spelling(self, self.correct(text)['corrected'], text)
                 self.assertFalse(self.correct(text)['odd_spans'])
         for text in ('本が飲みすぎます。','仕事がないすぎます。','仕事がなさすぎ'):
             with self.subTest(text=text):
@@ -219,7 +220,7 @@ class NativeReadingDataTests(unittest.TestCase):
                      '「水が足りなさすぎます」と書きました。','人が来なさすぎます。明日は調整します。'):
             with self.subTest(text=text):
                 result=self.correct(text)
-                self.assertEqual(result['corrected'],text)
+                assert_reviewed_source_spelling(self,result['corrected'],text)
                 self.assertFalse(result['odd_spans'])
         for text in ('仕事がないすぎます。','本が飲みすぎます。','キーを売つ。'):
             self.assertFalse(native_degree_context_ranges(text))
@@ -235,7 +236,7 @@ class NativeReadingDataTests(unittest.TestCase):
             for text in (head+'。','例えば、'+head+'。'):
                 with self.subTest(text=text):
                     result=self.correct(text)
-                    self.assertEqual(result['corrected'],text)
+                    assert_reviewed_source_spelling(self, result['corrected'], text)
                     self.assertFalse(result['odd_spans'])
         from contextual_repair import _native_negative_degree_predicate
         self.assertFalse(_native_negative_degree_predicate('読むなさ過ぎます','読む'))

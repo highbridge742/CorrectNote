@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from tests_spelling_reference import assert_reviewed_source_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
@@ -70,7 +71,7 @@ class ProlongedClauseTests(unittest.TestCase):
             with self.subTest(text=text):
                 r=app.correct_line(text,a.store,dict_index=a.dict_index,
                     decisions=a.decisions,context_vec=None,input_method='kana')
-                self.assertEqual(r['corrected'],text);self.assertEqual(r['odd_spans'],[])
+                assert_reviewed_source_spelling(self, r['corrected'], text);self.assertEqual(r['odd_spans'],[])
         for bad in ('このはこをまどのちかくにおきまぅす。',
                     'このはこをまどのちかくにおきまぃす。'):
             r=app.correct_line(bad,a.store,dict_index=a.dict_index,

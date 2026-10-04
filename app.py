@@ -9235,7 +9235,7 @@ class CorrectNoteApp:
     #   - F2・右クリックで選び直したところ
     # 印が付かないのは:
     #   - 読み込んだ本文（起動・タブ切り替え・ファイルを開く）
-    #   - **貼り付け**（打った文字ではない。引用を勝手に直さない）
+    # 貼り付けも編集した範囲へ含める。起動・タブ移動で読む本文は対象外。
     TYPED_TAG = 'typed'
 
     # --- 「打った」印の付け方 ---------------------------------------
@@ -9349,20 +9349,8 @@ class CorrectNoteApp:
         """
         if end <= start:
             return True
-        try:
-            ranges = self.editor.tag_ranges(self.TYPED_TAG)
-        except Exception:
-            return False
         want = start
-        for i in range(0, len(ranges), 2):
-            try:
-                a = _python_text_position(self.editor, ranges[i])
-                b = _python_text_position(self.editor, ranges[i + 1])
-            except Exception:
-                continue
-            if int(a[0]) != row or int(b[0]) != row:
-                continue
-            s, e = int(a[1]), int(b[1])
+        for s, e in self._typed_ranges_of_row(row):
             if s <= want < e:
                 want = e
                 if want >= end:
@@ -9407,8 +9395,11 @@ class CorrectNoteApp:
             try:
                 a = _python_text_position(self.editor, ranges[i])
                 b = _python_text_position(self.editor, ranges[i + 1])
-                if int(a[0]) == row == int(b[0]):
-                    out.append((int(a[1]), int(b[1])))
+                if int(a[0]) <= row <= int(b[0]):
+                    start = int(a[1]) if int(a[0]) == row else 0
+                    end = (int(b[1]) if int(b[0]) == row else
+                           _python_text_position(self.editor, f'{row}.end')[1])
+                    if start < end:out.append((start, end))
             except Exception:
                 continue
         return out
@@ -9718,17 +9709,8 @@ class CorrectNoteApp:
         except Exception:
             pass
 
-        # 貼り付けは「打った文字」ではないので印を付けない
-        # ＝勝手に直さない（引用をそのまま残せる）。
-        # `<<Paste>>` は type='35'（VirtualEvent）。
-        # **この束縛は貼り付けの前に走る**（Tk は widget → class の
-        # 順に呼ぶ）ので、貼り終わってから影を合わせる。
-        # 影を合わせておけば、次の解析で差が出ず、印も付かない。
-        if str(getattr(event, 'type', '')) == '35':
-            try:
-                self.root.after_idle(self._sync_typed_shadow)
-            except Exception:
-                pass
+        # Paste changes are detected by the same pre-analysis shadow diff
+        # as typed/IME input. Do not consume that diff before marking it.
 
         # 本文が変わったりカーソルが動いたら、F2 で選んでいた語の
         # 記憶は捨てる（括弧ボタンが古い場所を括らないように）。

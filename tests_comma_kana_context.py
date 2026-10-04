@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Keep full-source judgments when independent kana frames surround commas."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
@@ -20,13 +21,13 @@ class CommaKanaContextTests(unittest.TestCase):
         import pos_grammar as P
         from tests_analysis_async import initial
         a=initial();tok=C.make_tokenizer(a.store)
-        text='としょかんでかりたほきんをかえして、やさいをこまかくきすります'
+        text='としょかんでかりたほなんをかえして、やさいをこまかくきくります'
         native=O.is_odd_run(text,tok,with_spans=True,store=a.store,
                             dict_index=a.dict_index,complete_line=True)
         grammar=P.odd_kana_spans(text,a.dict_index,a.store)
         self.assertTrue(grammar)
         targets=CR._comma_native_kana_targets(text,0,len(text),tok,a.store,a.dict_index,native,grammar)
-        self.assertEqual({t.text for t in targets},{'ほきん','こまかくきすります'})
+        self.assertEqual({t.text for t in targets},{'ほなん','こまかくきくります'})
         for target in targets:
             self.assertEqual(target.source,text)
             self.assertTrue(target.anomalies)
@@ -36,25 +37,25 @@ class CommaKanaContextTests(unittest.TestCase):
         self.assertIsNone(CR._SEPARATOR.search('、'))
 
     def test_wide_final_validation_cannot_borrow_another_clause(self):
-        text='としょかんでかりたほきんをかえして、やさいをこまかくきります'
-        start=text.index('ほきん')
+        text='としょかんでかりたほなんをかえして、やさいをこまかくきります'
+        start=text.index('ほなん')
         self.assertTrue(R.native_modified_argument_slots(text))
         self.assertTrue(CR._changed_genitive_object_allowed(text,start,start+3,'ほん'))
         self.assertFalse(CR._changed_genitive_object_allowed(text,start,start+3,'平和'))
-        self.assertFalse(CR._changed_genitive_object_allowed(text,0,len(text),text.replace('ほきん','平和')))
+        self.assertFalse(CR._changed_genitive_object_allowed(text,0,len(text),text.replace('ほなん','平和')))
         self.assertFalse(CR._changed_genitive_object_allowed(text,0,len(text),
-            text.replace('としょかんでかりたほきん','みせでかったほん')))
+            text.replace('としょかんでかりたほなん','みせでかったほん')))
 
     def test_multiple_slips_and_punctuation_offsets(self):
         import app
         from tests_analysis_async import initial
         a=initial()
         for text,expected in (
-            ('としょかんでかりたほきんをかえして、やさいをこまかくきすります。',
+            ('としょかんでかりたほなんをかえして、やさいをこまかくきくります。',
              'としょかんでかりたほんをかえして、やさいをこまかくきります。'),
-            ('としょかんでかりたほきんをかえしてから、しりょうをめーるでおきります。',
+            ('としょかんでかりたほなんをかえしてから、しりょうをめーるでおきります。',
              'としょかんでかりたほんをかえしてから、しりょうをめーるでおくります。'),
-            ('😀、やさいをこまかくきすります。','😀、やさいをこまかくきります。'),
+            ('😀、やさいをこまかくきくります。','😀、やさいをこまかくきります。'),
         ):
             for comma in ('、',','):
                 original=text.replace('、',comma)
@@ -70,10 +71,10 @@ class CommaKanaContextTests(unittest.TestCase):
         for text in ('としょかんでかりたほんをかえして、やさいをこまかくきります。',
                      'しりょうを、めーるでおくります。','やさいを、こまかくきります。',
                      '資料を、返還します。','この制度は、必要です。',
-                     '「としょかんでかりたほきんをかえして、やさいをこまかくきすります」という誤入力例です。'):
+                     '「としょかんでかりたほなんをかえして、やさいをこまかくきくります」という誤入力例です。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertEqual(result.get('odd_spans'),[],text)
 
     def test_physical_and_user_stops_survive_a_second_repair(self):
@@ -83,15 +84,15 @@ class CommaKanaContextTests(unittest.TestCase):
         a=initial()
         for noun in ('ほんん','ほこん'):
             prefix='としょかんでかりた'+noun+'をかえして、'
-            text=prefix+'やさいをこまかくきすります。'
+            text=prefix+'やさいをこまかくきくります。'
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
             assert_repaired_spelling(self, result, prefix+'やさいをこまかくきります。')
-        ledger=DecisionStore();ledger.protect('ほきん')
-        text='としょかんでかりたほきんをかえして、やさいをこまかくきすります。'
+        ledger=DecisionStore();ledger.protect('ほなん')
+        text='としょかんでかりたほなんをかえして、やさいをこまかくきくります。'
         result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
             context_vec=None,decisions=ledger)
-        assert_repaired_spelling(self, result, text.replace('きすります','きります'))
+        assert_repaired_spelling(self, result, text.replace('きくります','きります'))
 
 
 if __name__=='__main__':unittest.main()

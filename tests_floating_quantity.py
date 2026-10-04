@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 import morphology as M
 import reading_segments as R
@@ -41,7 +42,7 @@ class FloatingQuantityTests(unittest.TestCase):
             with self.subTest(text=text):
                 r=app.correct_line(text,a.store,dict_index=a.dict_index,
                     decisions=a.decisions,context_vec=None,input_method='kana')
-                self.assertEqual(r['corrected'],text);self.assertEqual(r['odd_spans'],[])
+                assert_reviewed_source_spelling(self, r['corrected'], text);self.assertEqual(r['odd_spans'],[])
         text='ほんをにさつしらゆほます。'
         r=app.correct_line(text,a.store,dict_index=a.dict_index,
             decisions=a.decisions,context_vec=None,input_method='kana')
@@ -72,7 +73,7 @@ class OrdinaryQuantityMeaningTests(unittest.TestCase):
             with self.subTest(text=text):
                 r=app.correct_line(text,a.store,dict_index=a.dict_index,
                     decisions=a.decisions,context_vec=None,input_method='kana')
-                self.assertEqual(r['corrected'],text);self.assertEqual(r['odd_spans'],[])
+                assert_reviewed_source_spelling(self, r['corrected'], text);self.assertEqual(r['odd_spans'],[])
 
 if __name__=='__main__':unittest.main()
 

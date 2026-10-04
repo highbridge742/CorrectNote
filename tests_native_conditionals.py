@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 """Unchanged conditional clauses share native inflection and nominal proof."""
+from tests_spelling_reference import assert_reviewed_result_spelling
+from tests_spelling_reference import assert_reviewed_source_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
@@ -93,7 +95,7 @@ class NativeConditionalTests(unittest.TestCase):
             with self.subTest(text=text):
                 result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                self.assertEqual(result['corrected'],text)
+                assert_reviewed_source_spelling(self, result['corrected'], text)
                 self.assertFalse(result.get('odd_spans'),text)
 
 
@@ -151,7 +153,7 @@ class NativeConditionalTests(unittest.TestCase):
                      'しりょうをほぞんしたら','しりょうをほぞんするなら'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertFalse(result.get('odd_spans'),text)
 
     def test_proved_finite_action_and_adverb_clause_survive_unknown_native_parse(self):
@@ -173,12 +175,12 @@ class NativeConditionalTests(unittest.TestCase):
         from tests_analysis_async import initial
         a=initial()
         for text,expected in (
-                ('おなじもじをさづけてにゅうせょくします。','おなじもじをつづけてにゅうりょくします。'),
+                ('おなじもじをさづけてにゅうのょくします。','おなじもじをつづけてにゅうりょくします。'),
                 ('おなじもじをつさづけてにゅうありょくします。','おなじもじをつづけてにゅうりょくします。'),
                 ('ぶんしょうをほぞんしましたがまだとちゅうです。','ぶんしょうをほぞんしましたがまだとちゅうです。')):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            assert_repaired_spelling(self, result, expected)
+            assert_reviewed_result_spelling(self, result, expected)
             self.assertFalse(result.get('odd_spans'),text)
 
     def test_linked_unfinished_predicate_is_source_only(self):
@@ -200,7 +202,7 @@ class NativeConditionalTests(unittest.TestCase):
                 self.assertFalse(R.preserves_native_incomplete_source(text,text+'ます'))
                 result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                self.assertEqual(result['corrected'],text)
+                assert_reviewed_source_spelling(self, result['corrected'], text)
                 self.assertFalse(result.get('odd_spans'))
 
     def test_open_link_does_not_certify_unknown_or_malformed_clauses(self):

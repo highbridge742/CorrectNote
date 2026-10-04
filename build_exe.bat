@@ -31,13 +31,13 @@ if errorlevel 1 (
 )
 
 if not exist "bundle_manifest.py" (
-    echo bundle_manifest.py がこのフォルダにありません。
-    echo exe に何を入れるかの名簿なので、これが無いとビルドできません。
+    echo bundle_manifest.py was not found in this folder.
+    echo The bundle manifest is required to build the executable.
     if not defined CORRECTNOTE_NO_PAUSE pause
     exit /b 1
 )
 
-echo [1/4] 必要なパッケージを確認しています...
+echo [1/4] Checking required packages...
 "%PY%" -X utf8 -c "import PyInstaller, janome"
 if errorlevel 1 (
     echo.
@@ -47,26 +47,26 @@ if errorlevel 1 (
     exit /b 1
 )
 
-rem 前のビルドの報告を消しておく（残っていると古い結果を読んでしまう）
+rem Remove the prior bundle report so an old result cannot be mistaken for this build.
 if exist "build\bundle_report.txt" del /q "build\bundle_report.txt"
 
 echo.
-echo [2/4] exe をビルドしています（数分かかります）...
+echo [2/4] Building the executable...
 "%PY%" -X utf8 -m PyInstaller correctnote.spec --noconfirm --clean
 if errorlevel 1 (
     echo.
-    echo ビルドに失敗しました。上のエラーを確認してください。
+    echo Build failed. See the error above.
     if not defined CORRECTNOTE_NO_PAUSE pause
     exit /b 1
 )
 
 echo.
-echo [3/4] 何が exe に入ったかを確かめています...
+echo [3/4] Checking bundled files...
 echo.
 if not exist "build\bundle_report.txt" (
-    echo !! 同梱物の報告 build\bundle_report.txt が作られませんでした。
-    echo !! correctnote.spec が bundle_manifest.py を読めていない可能性が
-    echo !! あります。上のビルドの出力を確認してください。
+    echo !! build\bundle_report.txt was not created.
+    echo !! Check whether correctnote.spec loaded bundle_manifest.py.
+    echo !! See the build output above.
     if not defined CORRECTNOTE_NO_PAUSE pause
     exit /b 1
 )
@@ -76,21 +76,21 @@ findstr /b /c:"RESULT=NG" "build\bundle_report.txt" >nul
 if not errorlevel 1 (
     echo.
     echo ============================================================
-    echo !! exe に入らなかったものがあります（上の [NG] の行）。
-    echo !! どれも「無ければ黙って効かない」造りなので、exe は動きますが、
-    echo !! その機能だけが静かに効きません。
-    echo !! 足りないファイルをこのフォルダに置いて、もう一度ビルドして
-    echo !! ください。
+    echo !! Some required files were not bundled. See the [NG] lines above.
+    echo !! The executable may start with features missing.
+    echo !! This is not a complete distribution.
+    echo !! Restore the missing files in this folder, then build again.
+    echo.
     echo ============================================================
     echo.
-    echo dist\CorrectNote.exe は出来ています（そのままでも動きます）。
+    echo dist\CorrectNote.exe exists but failed the bundle check.
     echo.
     if not defined CORRECTNOTE_NO_PAUSE pause
     exit /b 1
 )
 
 echo.
-echo [4/4] exe 内の版と補正エンジンを確かめています...
+echo [4/4] Verifying the executable against current source and data...
 "%PY%" -X utf8 "verify_built_exe.py" "dist\CorrectNote.exe"
 if errorlevel 1 (
     echo The EXE did not match the current source. Build failed verification.
@@ -99,16 +99,16 @@ if errorlevel 1 (
 )
 
 echo.
-echo [4/4] 完了しました。
+echo [4/4] Complete.
 echo   dist\CorrectNote.exe
-echo が出来ています。Python の無いPCへコピーして使えます。
+echo The executable can run on a PC without Python.
 echo.
-echo 【どのフォルダで動かすか】
-echo   exe は「置いたフォルダ」を見ます。語彙・メモ・設定は
-echo   その隣に作られます（vocabulary.json / session.json など）。
-echo   dist の中でそのまま動かすと、語彙もメモも空の「初期状態」から
-echo   始まります（初回は辞書の取り込みに時間がかかります）。
-echo   いまの語彙・メモのまま試すときは、exe をそのデータの在る
-echo   フォルダへ写してから動かしてください。
+echo Data folder:
+echo   The executable uses the folder where it is placed.
+echo   Vocabulary, notes and settings are stored beside it.
+echo   Running it inside dist starts with empty local data.
+echo   The first dictionary import may take some time.
+echo   To use existing data, place the executable in that data folder
+echo   before starting it.
 echo.
 if not defined CORRECTNOTE_NO_PAUSE pause

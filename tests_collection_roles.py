@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Literal gathering and resolving disorder keep their separate meanings."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 import morphology as M
 import semantic_roles as S
@@ -10,6 +11,12 @@ class CollectionRoleTests(unittest.TestCase):
     def tokens(self,text):
         return [(t.surface,t.pos+(':'+t.pos_sub if t.pos_sub else ''),t.reading,
                  t.start,t.end,t.has_reading,t.infl_form) for t in M.tokenize(text)]
+
+    def test_adnominal_action_with_copula_closes_its_original_object(self):
+        # The existing terminal-predicate proof closes N + native copula;
+        # an outer case/predicate still leaves this object scope open.
+        text='混乱を収集する人です。'
+        self.assertTrue(S.conflicting_object_predicates(text,self.tokens(text)))
 
     def test_actual_disorder_argument_conflicts_with_literal_gathering(self):
         for noun in ('混乱','騒動','紛糾','混迷'):
@@ -27,7 +34,7 @@ class CollectionRoleTests(unittest.TestCase):
         for text in ('混乱の記録を収集します。','混乱に関する情報を収集します。',
                      '資料を収拾します。','問題を収集します。','しらゆほを収集します。',
                      '混乱を収集させます。','混乱を収集すると書きました。',
-                     '混乱を収集する人です。'):
+                     '混乱を収集する人に伝えます。'):
             with self.subTest(text=text):
                 self.assertEqual(S.conflicting_object_predicates(text,self.tokens(text)),[])
 
@@ -47,7 +54,7 @@ class CollectionRoleTests(unittest.TestCase):
             with self.subTest(source=source):
                 result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                self.assertEqual(result['corrected'],expected)
+                assert_reviewed_source_spelling(self, result['corrected'], expected)
                 self.assertEqual(result.get('odd_spans'),[])
 
     def test_original_rejection_ledger_remains_authoritative(self):

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Native numeral/counter identity and conventional allomorphs preserve kana."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
@@ -43,7 +44,7 @@ class CounterReadingTests(unittest.TestCase):
             with self.subTest(text=text):
                 r=app.correct_line(text,a.store,dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions,input_method='kana')
-                self.assertEqual(r['corrected'],text);self.assertEqual(r['odd_spans'],[])
+                assert_reviewed_source_spelling(self, r['corrected'], text);self.assertEqual(r['odd_spans'],[])
 
     def test_proved_quantity_noun_is_not_an_unrelated_auxiliary_chain(self):
         import oddness as O

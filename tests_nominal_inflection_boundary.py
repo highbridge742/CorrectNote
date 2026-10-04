@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from tests_spelling_reference import assert_reviewed_result_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
@@ -39,6 +40,6 @@ class NominalInflectionBoundaryTests(unittest.TestCase):
                 with self.subTest(phase=phase,text=text):
                     r=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                         context_vec=a.context_vec if phase=='fresh' else None,decisions=a.decisions)
-                    assert_repaired_spelling(self, r, expected)
+                    assert_reviewed_result_spelling(self, r, expected)
                     self.assertEqual(r.get('odd_spans'),[])
 if __name__=='__main__':unittest.main()

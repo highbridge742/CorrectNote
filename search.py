@@ -47,9 +47,12 @@ def build_pattern(query, regex=False, match_case=False, whole_word=False):
     if not query:
         raise SearchError('検索する文字列を入力してください。')
 
-    body = query if regex else re.escape(query)
+    # A bare alternation has no operands and yields only ignored empty hits.
+    # Let the single pipe be searched as a character; A|B remains a regex.
+    literal_pipe = query == '|'
+    body = query if regex and not literal_pipe else re.escape(query)
 
-    if whole_word:
+    if whole_word and not literal_pipe:
         # 日本語には単語の区切りが無いので \b は当てにならないが、
         # 英数字を含む語では期待どおりに働く。
         body = r'(?<!\w)' + body + r'(?!\w)'

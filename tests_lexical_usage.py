@@ -315,4 +315,19 @@ class LexicalUsageTests(unittest.TestCase):
             self.assertFalse(K.reading_is_explicitly_restricted('未知の読み'))
 
 
+
+    @unittest.skipUnless(M.HAS_JANOME,'native dictionary')
+    def test_kana_predicate_does_not_borrow_nominal_familiarity(self):
+        from contextual_repair import _candidate_usage_tier
+        with patch.object(K,'known_reading_usage_tier',return_value=1) as nominal, \
+             patch.object(K,'candidate_usage_tier',return_value=None):
+            for surface,head,tail in (('うてます','うて',''),('うちます','うち',''),
+                    ('うて','うて','ます'),('はきました','はき','')):
+                with self.subTest(surface=surface):
+                    self.assertIsNone(_candidate_usage_tier(surface,head,tail))
+            nominal.assert_not_called()
+            self.assertEqual(_candidate_usage_tier('よみ','よみ','を確認'),1)
+            nominal.assert_called_once_with('よみ')
+
+
 if __name__=='__main__':unittest.main()

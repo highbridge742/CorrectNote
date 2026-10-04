@@ -2226,7 +2226,7 @@ _KANA_TO_ROMAJI = {
     'ぅ': 'u', 'ぇ': 'e', 'ぉ': 'o', 'っ': 't', 'ー': '-',
 }
 
-_QWERTY_ROWS = ('qwertyuiop', 'asdfghjkl', 'zxcvbnm')
+_QWERTY_ROWS = ('1234567890-^¥', 'qwertyuiop@[', 'asdfghjkl;:]', 'zxcvbnm,./\\')
 
 # キーの位置は**一度だけ作る**（項目48-BO）。
 # 以前は `_qwerty_adjacent` の中で毎回26件の表を作り直していた。
@@ -2237,13 +2237,14 @@ _QWERTY_POS = {ch: (row_i, col_i)
                for row_i, row in enumerate(_QWERTY_ROWS)
                for col_i, ch in enumerate(row)}
 
-# 隣り合うかどうかも一度だけ数えておく（26×26＝676通り）。
-# 上の表を引いて引き算するより、組で引いたほうが速い。
+# Share physical directions with kana, after resolving the input method
+# to its own keys. Cache pairs once rather than comparing positions per edit.
+from kana_layout import physical_keys_adjacent
 _QWERTY_NEAR = frozenset(
     (a, b)
     for a, pa in _QWERTY_POS.items()
     for b, pb in _QWERTY_POS.items()
-    if a != b and abs(pa[0] - pb[0]) <= 1 and abs(pa[1] - pb[1]) <= 1)
+    if physical_keys_adjacent(pa, pb))
 
 
 def _qwerty_adjacent(a, b):
@@ -2986,6 +2987,11 @@ def _followed_by_shout_mark(line, end):
     return end < len(line) and line[end] in _SHOUT_MARKS
 
 
+def _colloquial_adjective_ending(run):
+    return bool(len(run)>=3 and run[-1]=='え'
+                and run[-2] in 'えけせてねへめれげぜでべぺ')
+
+
 def _is_expressive_kana_run(run):
     """
     伸ばし言葉・擬音の形をした、かなの連続か。
@@ -3022,8 +3028,7 @@ def _is_expressive_kana_run(run):
         return True
     # え段＋え の終わり（おもしれえ・すげえ）。おもしろい を
     # くだけて書いたよくあるセリフで、意図した表記（2026-08-08）。
-    if (len(run) >= 3 and run[-1] == 'え'
-            and run[-2] in 'えけせてねへめれげぜでべぺ'):
+    if _colloquial_adjective_ending(run):
         return True
     n = len(run)
     if n >= 4 and n % 2 == 0 and run[:n // 2] == run[n // 2:]:
@@ -4532,8 +4537,12 @@ def _chunk_is_intact(chunk, tokenize_fn, after_kanji=False,
             and (getattr(repair_context,'semantic_conflict',False)
                 or any(mark[0]=='意味接続' for mark in repair_context.anomalies))):
         return False
-    from particle_frames import converted_connective_nominal_frames
+    from particle_frames import converted_connective_nominal_frames,unlinked_past_predicate_frames
     if converted_connective_nominal_frames(chunk):return False
+    if (repair_context is not None and repair_context.text==chunk and repair_context.structural
+            and any(repair_context.start<=frame['start']<frame['end']<=repair_context.end
+                    for frame in unlinked_past_predicate_frames(repair_context.source))):
+        return False
     from pos_grammar import closed_subject_topic_spans
     source_var=globals().get('_CORRECTION_SOURCE')
     source=source_var.get() if source_var is not None else None
@@ -22245,7 +22254,12 @@ def _with_correction_source(fn):
                 from kana_spelling import finish as finish_spelling
                 result=finish_spelling(line,result,argument('store',0),argument('tokenize_fn',1),
                                        argument('dict_index',8),argument('decisions',5))
-            else:result.pop('_repair_surfaces',None)
+                from repaired_spelling import restore_display_frames
+                import sys
+                result=restore_display_frames(line,result,sys.modules[__name__])
+            else:
+                result.pop('_repair_surfaces',None)
+                result.pop('_grammatical_display_frames',None)
             return result
         except (_CorrectionCycle, _CorrectionLimit) as exc:
             if not root:
@@ -22851,11 +22865,17 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
     from morphology import native_spelling_only
     if spelling and not native_spelling_only(original,new_surface):
         return None,'spelling_reading_changed'
+    if spelling or native_spelling_only(original,new_surface):
+        from ime_spelling import _reinterprets_function_attachment
+        if _reinterprets_function_attachment(line,start,end,new_surface):
+            return None,'original_function_attachment'
     if spelling:
         from semantic_roles import preserves_nominal_spelling_argument
         if not preserves_nominal_spelling_argument(line,start,end,new_surface):
             return None,'original_nominal_argument_meaning'
-    from morphology import spelling_edit_allowed
+    from morphology import spelling_edit_allowed,preserves_native_adverbial_word
+    if not preserves_native_adverbial_word(line,line[:start]+new_surface+line[end:]):
+        return None,'original_adverbial_word'
     if spelling_edit_allowed(line,start,end,new_surface) is False:
         return None, 'original_spelling_scope'
     if new_surface == original:
@@ -22916,6 +22936,9 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
     from reading_segments import preserves_native_incomplete_source
     if not spelling and not preserves_native_incomplete_source(line,line[:start]+new_surface+line[end:]):
         return None,'incomplete_original_source'
+    from reading_segments import preserves_native_negative_auxiliary
+    if not preserves_native_negative_auxiliary(line,line[:start]+new_surface+line[end:]):
+        return None,'native_negative_auxiliary'
     from reading_segments import preserves_native_polite_auxiliary
     if not preserves_native_polite_auxiliary(line,line[:start]+new_surface+line[end:]):
         return None,'native_polite_auxiliary'
@@ -22928,6 +22951,9 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
     from reading_segments import preserves_native_predicate_modifier
     if not preserves_native_predicate_modifier(line,line[:start]+new_surface+line[end:]):
         return None,'completed_predicate_modifier'
+    from reading_segments import preserves_native_waiting_source
+    if not preserves_native_waiting_source(line,line[:start]+new_surface+line[end:]):
+        return None,'original_waiting_nominal'
     from reading_segments import preserves_native_nominal_verb_prefix
     if not preserves_native_nominal_verb_prefix(line,line[:start]+new_surface+line[end:]):
         return None,'native_nominal_verb_prefix'
@@ -26745,6 +26771,10 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
             _nx = next((t for t in tokens if t[3] >= _j36 and t[0]), None)
             if _nx is None or not (_nx[1] or '').startswith('名詞'):
                 continue
+            # An attested genitive meaning belongs to the original nouns.
+            # A possible adnominal homophone alone cannot erase that relation.
+            from semantic_roles import genitive_nominal_support
+            if _tail36=='の' and genitive_nominal_support(_sf,_nx[0]):continue
             _merged = _rd + _tail36
             try:
                 _mt = [t for t in tokenize_fn(_merged) if t[0]]

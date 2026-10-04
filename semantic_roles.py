@@ -23,7 +23,7 @@ Unknown or unmatched categories provide no evidence. Metaphor, metonymy and omit
 arguments remain possible. This is a small, versioned classification of ordinary
 words and grammatical roles; it is not intended to describe all Japanese semantics.
 """
-KNOWLEDGE_VERSION = '2026-10-01w'
+KNOWLEDGE_VERSION = '2026-10-04b'
 ROLE_ASSIGNMENT_ACTIONS = ('指名','任命','選任','選出','推薦')
 TRANSLATION_ACTIONS=frozenset('翻訳 和訳 英訳 直訳 意訳 訳す'.split())
 
@@ -55,7 +55,7 @@ DEPENDENT_RHETORICAL_READINGS=frozenset((('あに','あに'),('豈','あに')))
 # relative to its nominal/clausal host, not an unconditional bare adverb.
 # JF B1-2 grammar: https://md.jpf.go.jp/userfiles/file/2018/Lengua%20Japonesa/Gramatica/B1-2-JP.pdf
 # The standalone noun, counted 分 and whole 半分/十分 remain independent.
-DEPENDENT_DEGREE_READINGS=frozenset((('ごく','ごく'),('極','ごく'),('極く','ごく'),('分','ぶん')))
+DEPENDENT_DEGREE_READINGS=frozenset((('ごく','ごく'),('極','ごく'),('極く','ごく'),('分','ぶん'),('位','くらい')))
 
 
 def adverbial_reading_needs_host(face,reading):
@@ -185,6 +185,9 @@ ACTION_MEANINGS.update(MEASUREMENT_ACTIONS)
 ACTION_MEANINGS.update({'homecoming':frozenset(('帰る',)),
     'restored_state':frozenset(('返る',)),'natural_cycle':frozenset(('還る',))})
 NOUN_GROUPS={
+ # Daijisen/Nikkoku 移す, illness transmission: https://kotobank.jp/word/移す-440805
+ # Keep this separate from healable injuries and other non-transmissible conditions.
+ 'transmissible_illness':'病気 風邪'.split(),
  # 48-AYM / GPT-6 Astra, 2026-10-01: ordinary relational noun senses.
  # Shared source/candidate compounds; no mistyped-word/answer pairs.
  'operation_mode':'モード 方式 形式'.split(),
@@ -239,7 +242,13 @@ NOUN_GROUPS={
  # 48-APE / GPT-6 Astra / 2026-09-24: spoken content is information.
  # Daijisen: https://kotobank.jp/word/話-603466 .
  'quantity':'人数'.split(),
- 'information':'ウェブ 話 合格 不合格 当選 落選 採用 不採用 感想 見解 批評 論評 レビュー 意見 要望 提案 考え 方針 評価 判断 知識 経験 見識 日付 やり方 理由 原因 結果 意味 意図 事情 状況 状態 条件 仕様 設定 決定 手順 方法 概要 詳細 情報 内容 データ 記録 履歴 数値 値 住所 名前 氏名 番号 日時 時刻 時間 日程 予定 計画 事実'.split(),
+ # JIS X 0006 06.02.01/04: input/output also denote data, not just
+ # processing. Reuse that information sense across ordinary predicates.
+ # https://ny.ics.keio.ac.jp/ipsjts1/2nd-ver/htm/x0006.htm
+ # GPT-6 / 2026-10-04: facts and their true circumstances are information
+ # which can be known, explained or understood, not physical objects/food.
+ # This lexical classification is independent of a spelling or key repair.
+ 'information':'真実 真相 実情 実態 入力 出力 ウェブ 話 合格 不合格 当選 落選 採用 不採用 感想 見解 批評 論評 レビュー 意見 要望 提案 考え 方針 評価 判断 知識 経験 見識 日付 やり方 理由 原因 結果 意味 意図 事情 状況 状態 条件 仕様 設定 決定 手順 方法 概要 詳細 情報 内容 データ 記録 履歴 数値 値 住所 名前 氏名 番号 日時 時刻 時間 日程 予定 計画 事実'.split(),
  # Native writing systems are text arguments for input, reading and editing.
  # GPT-6 Astra: ordinary role classification; no intended correction pairs.
  # Explanations, reports and instructions can denote written content.
@@ -253,7 +262,7 @@ NOUN_GROUPS={
  # Ricoh explains their paper/text content; JF teaches コピーを取る.
  # https://www.kouken.ricoh/science_caravan/QandA/science/qanda1_3.html
  # https://www.erin.jpf.go.jp/jp/lesson/04/let-us-see/
- 'text':'コピー 規約 規則 規定 約款 条例 契約 規程 要領 マニュアル ファイル メモ 通知 通達 告知 言葉 表現 説明 解説 報告 案内 指示 回答 解答 文章 文 文字 文字列 単語 語句 書類 資料 書面 文書 見出し 注釈 目次 段落 本 書 書籍 絵本 童話 物語 小説 詩 詩集 図鑑 史料 新聞 雑誌 冊子 原稿 記事 報告書 説明書 手紙 メール 図 表 画像 写真 図面 ページ 頁 仮名 かな カナ 平仮名 ひらがな 片仮名 カタカナ 漢字 ローマ字 英字 数字 記号 点字'.split(),
+ 'text':'読み キー コピー 規約 規則 規定 約款 条例 契約 規程 要領 マニュアル ファイル メモ 通知 通達 告知 言葉 表現 説明 解説 報告 案内 指示 回答 解答 文章 文 文字 文字列 単語 語句 書類 資料 書面 文書 見出し 注釈 目次 段落 本 書 書籍 絵本 童話 物語 小説 詩 詩集 図鑑 史料 新聞 雑誌 冊子 原稿 記事 報告書 説明書 手紙 メール 図 表 画像 写真 図面 ページ 頁 仮名 かな カナ 平仮名 ひらがな 片仮名 カタカナ 漢字 ローマ字 英字 数字 記号 点字'.split(),
  # 48-AJP / Astra: character systems can be conversion results, not
  # the owner/location to which a borrowed item is returned.
  'writing_system':'仮名 かな カナ 平仮名 ひらがな 片仮名 カタカナ 漢字 ローマ字 英字 数字 点字'.split(),
@@ -313,10 +322,18 @@ NOUN_GROUPS={
  # 48-AKE / GPT-6 Astra / 2026-09-16: vessels receive their contents.
  # The same destination role preserves source readings; no typo pairs.
  # 48-AMI: the sourced ordinary 薬袋 sense is a physical container.
+ # NINJAL basic verb bank 開ける 2-2/2-3 and verb handbook 閉める 7-9.
+ # Physical access and business premises, not every tangible object.
+ 'physical_opening':'窓 扉 ドア 戸 門 雨戸 襖 障子 シャッター カーテン 幕 蓋 ふた 栓'.split(),
+ 'sealable_container':'缶 缶詰 瓶 ビン 箱 ダンボール箱 袋 封筒'.split(),
+ 'business_premises':'店 店舗 商店 事務所 窓口 会社 工場 診療所 病院 図書館 教室 レストラン'.split(),
  'container':'薬袋 鍋 フライパン 皿 お皿 茶碗 コップ カップ 瓶 壺 ボウル 封筒 包み 箱 袋 容器 倉庫 棚 引き出し 物置 冷蔵庫 冷凍庫 保管庫 保存先 フォルダ ディレクトリ ドライブ ディスク メモリ データベース'.split(),
  # 48-AMH / GPT-6 Astra / 2026-09-20: attested ordinary physical
  # materials can qualify a container. Writing surfaces, screen contents
  # and abstract representations are not materials as a whole category.
+ # Clothing and ordinary wearing are positive senses, shared by source
+ # reading and candidate validation. This does not label other actions wrong.
+ 'clothing':'服 衣服 洋服 和服 着物 上着 シャツ ブラウス コート セーター 制服 礼服'.split(),
  'material':PHYSICAL_MATERIALS,
  # GPT-6 Astra / 2026-09-24: ingredients and water sources qualify hot
  # water; an abstract hierarchy can be represented as a tree. Positive
@@ -343,7 +360,7 @@ NOUN_GROUPS={
  # https://kotobank.jp/word/%E7%97%85%E4%BA%BA-613493
  # A named task/office makes its holder a natural selection argument.
  'role_candidate':'担当者 回答者 質問者 候補者 代表 代表者 代理人 後任 進行役 司会者 責任者'.split(),
- 'person':'患者 病人 怪我人 負傷者 私 わたし わたくし 僕 ぼく 俺 おれ 自分 自身 我々 われわれ あなた 君 きみ 彼 彼女 父 母 兄 姉 弟 妹 祖父 祖母 夫 妻 両親 親 子 きょうだい 兄弟 姉妹 兄妹 姉弟 お客様 お客さま 御客様 人質 捕虜 囚人 奴隷 受刑者 友達 友だち 官僚 議員 医師 看護師 警官 教員 教師 講師 教授 職人 人 人物 本人 他人 大人 巨人 人員 社員 部員 学生 先生 友人 家族 客 子供 子ども 利用者 作者 担当者 選手'.split(),
+ 'person':'者 患者 病人 怪我人 負傷者 私 わたし わたくし 僕 ぼく 俺 おれ 自分 自身 我々 われわれ あなた 君 きみ 彼 彼女 父 母 兄 姉 弟 妹 祖父 祖母 夫 妻 両親 親 子 きょうだい 兄弟 姉妹 兄妹 姉弟 お客様 お客さま 御客様 人質 捕虜 囚人 奴隷 受刑者 友達 友だち 官僚 議員 医師 看護師 警官 教員 教師 講師 教授 職人 人 人物 本人 他人 大人 巨人 人員 社員 部員 学生 先生 友人 家族 客 子供 子ども 利用者 作者 担当者 選手'.split(),
  # Ordinary physical cleaning, including the body and tableware.
  # 48-ALD / GPT-6 Astra / 2026-09-20: acting on one's own is an
  # adverbial manner. Other people do not inherit this de construction.
@@ -407,6 +424,9 @@ NOUN_GROUPS={
  'disorder':DISORDER_NOUNS,
  # Ordinary continuation of an activity or text, independent of any misspelling.
  'continuation':'続き'.split(),
+ # GPT-6 / 2026-10-04: an ordinary part or remainder relates to its
+ # whole object, amount, text or activity. Lexical senses, not repair pairs.
+ 'partitive':'残り 一部 部分 残部'.split(),
  'device':'電話 キーボード マウス カメラ マイク モニター 機械 装置 機器 パソコン 端末 サーバー サーバ プリンター 印刷機 エンジン システム ソフト ソフトウェア アプリ'.split(),
 }
 
@@ -468,7 +488,10 @@ PREDICATE_GROUPS=(
  # includes a displayed image and a writing surface, independent of
  # reading its contents. This does not make those surfaces edible.
  # https://www.kanjipedia.jp/kotoba/0001902300 (senses 1-2)
- ('information text object person device place event shape attribute presentation writing_surface','見る'),
+ # Schedule contents can also be inspected (IPAL miru #03; calendar
+ # information in Microsoft Outlook's official user guide). Share the
+ # existing schedule category, without making it edible or a physical tool.
+ ('information text object person device place event shape attribute presentation writing_surface schedule','見る'),
  # Ordinary visual presentation and a gaze toward an object or place.
  ('information text sound object person shape presentation body_part','見せる'),
  ('place object person shape presentation','見上げる 見下ろす'),
@@ -485,9 +508,14 @@ PREDICATE_GROUPS=(
  ('disorder','収拾 鎮める 収める'),
  ('information text object person device place','見つける'),
  ('information text process event person','覚える 学ぶ 思い出す'),
- ('information text reference','引く'),
+ # NINJAL IPAL hiku #09: drawing a line is a distinct ordinary sense.
+ ('information text reference geometric_line','引く'),
  # Ordinary investigation, trials and temperature changes; no typo pairs.
  ('information text reference object person device place','調べる 確かめる 探す'),
+ # IPAL しらべる #02: investigate an abstract matter, including an event
+ # or an action/process. A process is not thereby a physical reading object.
+ # https://www2.ninjal.ac.jp/dictionaries/IPALBV/pdf_dir/しらべる.pdf
+ ('process event','調べる'),
  # Physical inspection can establish an organ's nominal reading as well.
  ('body_part object device food ingredient information attribute','検査'),
  ('body_part','調べる 確かめる'),
@@ -542,7 +570,7 @@ PREDICATE_GROUPS=(
  # or storage container. This positive content sense does not classify
  # every physical/figurative use of 移す or borrow 写す/映す meanings.
  # Daijisen 移す: https://kotobank.jp/word/移す-440805 (contents transfer).
- ('information text','移す'),
+ ('information text transmissible_illness','移す'),
  ('information text object food','保存'),
  # GPT-6 Astra / 2026-09-21: an existing depiction (picture, drawing,
  # photograph or recording) can be retained or acquired/transferred as a
@@ -556,6 +584,9 @@ PREDICATE_GROUPS=(
  ('information text issue','照会'),
  ('place','哨戒 巡回 巡察'),
  ('information text','説明 解説 記述 表示 記録 報告 通知 伝達 提示 理解 把握 確認 検証 比較'),
+ # Cognition concerns information or mental content, across original
+ # objects and every native inflection; this is no source/answer mapping.
+ ('information mental_content','知る 悟る 察知 認識'),
  ('mental_content','察す 察する 汲む 汲み取る 推し量る 理解 把握 尊重'),
  ('event process','説明 解説 記述 報告 通知 伝達 提示 案内'),
  ('information text event process','知らせる 伝える'),
@@ -564,7 +595,10 @@ PREDICATE_GROUPS=(
  ('text information writing_system',' '.join(sorted(TRANSLATION_ACTIONS))),
  # GPT-6 Astra: verification includes identity, presence and condition of
  # people and concrete things. This is not a license for unrelated actions.
- ('person object place device','確認 検証'),
+ # Verification can concern any attested referent, including nouns whose
+ # narrower food/device/etc. meaning has not been classified. This does
+ # not give those nouns an invented physical or edible sense.
+ ('referent person object place device','確認 検証'),
  # Appointments can be confirmed without being physical things.
  ('schedule','確認 確かめる'),
  ('person','募集 採用 雇用 招待 招聘 招へい 救助'),
@@ -595,13 +629,20 @@ PREDICATE_GROUPS=(
  # The intransitive persistence sense does not create an accusative frame.
  # Meanings: Shogakukan Daijisen, https://kotobank.jp/word/持つ-645807 .
  # Actual reading/inflection remains attested by the native dictionary.
- ('object device text reference writing_surface material container food drink medicine money expense information attribute event process schedule place person body_part','持つ'),
+ # The controlled on-screen marker can also be brought to a position.
+ # Microsoft accessibility guide uses ポインタを持っていく:
+ # https://www.microsoft.com/ja-jp/enable/guides/dexterity
+ ('object device text reference writing_surface material container food drink medicine money expense information attribute event process schedule place person body_part screen_marker','持つ'),
  # Displayed things, adorned places, language and marked events. Do not
  # restrict 飾る to photos or declare unmatched/metaphorical objects wrong.
  # Meanings: Shogakukan Daijisen, https://kotobank.jp/word/飾る-461831 .
  ('object text depiction place presentation body_part food event','飾る'),
- ('object text money','貸す 借りる'),
- ('object text money food','渡す 返す 戻す 預ける'),
+ ('object text money','貸す'),
+ # NINJAL IPAL kariru #01/#02 includes rooms, places and venues.
+ ('object text money reservable_place','借りる'),
+ # NINJAL Verb Handbook あげる: transfer of an owned item to a recipient.
+ # https://www2.ninjal.ac.jp/verbhandbook/headwords/あげる.html
+ ('object text money food','渡す 返す 戻す 預ける あげる 上げる'),
  ('object device text food','運ぶ 片付ける 仕舞う しまう 買う 売る'),
  # Bringing tangible things or recorded contents inside is transitive.
  ('object information text depiction','取り込む'),
@@ -636,10 +677,12 @@ PREDICATE_GROUPS=(
  # NINJAL verb handbook, 掛ける sense 7: expend duration, cost or effort.
  # A measured duration is not an arbitrary clock time or deadline.
  ('call burden measured_duration expense','掛ける'),
- # GPT-6 Astra: physical openings (windows, doors, boxes), not text content.
- ('object','開ける 閉める'),
+ # https://www2.ninjal.ac.jp/verbhandbook/headwords/締める・閉める・絞める.html
+ # https://www2.ninjal.ac.jp/basicverbbank/single_headwords/あける-空ける・開ける.html
+ ('physical_opening sealable_container business_premises','開ける 閉める'),
  # Movement also applies to visual items, such as tabs and windows.
- ('object device person presentation visual_region','動かす 移動'),
+ ('object device person presentation visual_region screen_marker','動かす 移動'),
+ ('screen_marker','移す'),
  ('text information','読む 書く 書き直す'),
  # 48-AMB / Astra / 2026-09-20: repairing text, equipment or a defect.
  ('text information object device attribute','直す'),
@@ -666,6 +709,7 @@ PREDICATE_GROUPS=(
  ('object food text device information','作る'),
  ('object ingredient body_part','洗う'),
  ('medicine','服用'),
+ ('clothing','着る 着用'),
 )
 
 PREDICATE_GROUPS+=tuple((group,' '.join(MEASUREMENT_ACTIONS[role]))
@@ -692,8 +736,10 @@ CASE_PREDICATE_GROUPS=(
  # 48-APW: へ gives the direction; a validated 戻す candidate supplies the return action.
  # https://www.kyozai.jpf.go.jp/kyozai/material/BTS00055/ja/render.do
  ('へ','container','戻す'),
- ('に','text container','移す'),
- ('へ','text container','移す'),
+ ('に','screen_location','動かす 移動 移す'),
+ ('へ','screen_location','動かす 移動 移す'),
+ ('に','text container person','移す'),
+ ('へ','text container person','移す'),
  # GPT-6 Astra / 2026-09-21: arranging items has a spatial destination,
  # shared with placing them; the unchanged accusative still owns the item.
  ('に','container place writing_surface support_surface','置く 並べる 重ねる'),
@@ -701,6 +747,8 @@ CASE_PREDICATE_GROUPS=(
  ('へ','place process event','行く 来る 向かう 出かける 出掛ける'),
  # A drawn shape is the means of enclosing an item on a page.
  ('で','shape','囲う 囲む'),
+ # The device is the input instrument, distinct from the text being entered.
+ ('で','input_control','打つ 入力'),
  ('で','reference','調べる 探す 引く 確かめる 確認 比べる 較べる 学ぶ 覚える 選ぶ 見つける 思い出す'),
  # A meeting or event can supply the setting for communication and
  # distribution, independently of their explicit accusative object.
@@ -719,7 +767,7 @@ CASE_PREDICATE_GROUPS=(
  ('に','place','登る 上る'),
  ('に','person','見せる'),
  # The supplied item and recipient are independent arguments of the same verb.
- ('に','person','出す'),
+ ('に','person','出す あげる 上げる'),
  ('へ','person','出す'),
  # A visual surface is also a target of projection/reflection, not just navigation.
  ('に','presentation','映る 映す 写る 投影 投写'),
@@ -727,7 +775,7 @@ CASE_PREDICATE_GROUPS=(
  # with に as with へ. This is recipient evidence, not content or channel.
  # A person can receive a loan; this is not the object lent or the
  # lending location. Exact native lemma/tail evidence remains required.
- ('に','person','読む 聞く 尋ねる 問う 話す 伝える 教える 渡す 返す 届ける 送る 会う 頼む 相談 質問 報告 説明 通知 貸す 連絡 送信 転送'),
+ ('に','person','読む 聞く 尋ねる 問う 話す 伝える 教える 渡す 返す 届ける 送る 会う 頼む 相談 質問 報告 説明 通知 貸す 連絡 送信 転送 紹介'),
  ('へ','person','伝える 渡す 返す 届ける 送る 連絡 報告 通知 送信 転送'),
 )
 CASE_PREDICATE_GROUPS+=tuple((ACTION_CASES[role],group,' '.join(MEASUREMENT_ACTIONS[role]))
@@ -800,6 +848,12 @@ def _native_storage_compound_role(surface):
 def nominal_roles(surface):
     """Known senses plus a native adjective's productive attribute noun."""
     roles=frozenset(NOUN_ROLES.get(surface,()))
+    from general_words import attested_noun
+    attested=attested_noun(surface)
+    if attested:
+        categories=set(attested[3])
+        if 'product' in categories:roles=roles | {'object'}
+        if 'beverage' in categories:roles=roles | {'drink'}
     if 'role_candidate' in roles:roles=roles | {'person'}
     # Adhesives and flexible materials are also handled physical objects.
     # Reuse the classified sense instead of repeating each noun in a roster.
@@ -889,6 +943,24 @@ def _argument_prefix(context,start,tokenize):
     return parts,edge
 
 
+
+@lru_cache(maxsize=2048)
+def following_shared_object(text,start,end):
+    """A following conjunct supplies a possible omitted object for spelling.
+
+    Both actions still need their own positive object meaning. This only
+    ranks a same-reading verb, never declares the source erroneous.
+    """
+    from reading_segments import native_predicate_link_boundaries,native_object_predicate_contexts,native_object_predicate_proof
+    if text[end:end+1] not in ('て','で'):return ''
+    edge=end+1
+    if edge not in native_predicate_link_boundaries(text,start):return ''
+    following=text[edge:]
+    frames=[(cut,faces) for begin,cut,faces in native_object_predicate_contexts(following,True)
+        if begin==0 and len(faces)==1 and native_object_predicate_proof(following,cut,faces)]
+    return frames[0][1][0] if len(frames)==1 else ''
+
+
 def object_before(context, start, tokenize):
     """Keep a native head; reconstruct an exact kana chain only if missing."""
     noun=_token_object_before(context,start,tokenize)
@@ -942,6 +1014,20 @@ def _native_argument_phrase_start(parts,noun_index):
     return j
 
 
+
+def _case_noun_index(parts,index):
+    """Native focus particles keep the same noun and explicit case."""
+    from morphology import dictionary_inflections
+    edge=parts[index][3];index-=1
+    while index>=0 and parts[index][1].startswith('助詞:副助詞'):
+        token=parts[index]
+        if not (token[4]==edge and token[5] and any(
+                pos.startswith('助詞,副助詞,') and rd==token[2]
+                for pos,form,base,rd in dictionary_inflections(token[0]) or ())):return -1
+        edge=token[3];index-=1
+    return index if index>=0 and parts[index][4]==edge else -1
+
+
 def _token_object_before(context, start, tokenize):
     """Use an explicit を head across contiguous simple dative/location arguments."""
     parts,edge=_argument_prefix(context,start,tokenize)
@@ -949,22 +1035,24 @@ def _token_object_before(context, start, tokenize):
     i=len(parts)-1
     for _ in range(3):
         if i<1:return ''
-        particle=parts[i];noun=parts[i-1]
+        particle=parts[i];noun_index=_case_noun_index(parts,i)
+        if noun_index<0:return ''
+        noun=parts[noun_index]
         if (not particle[1].startswith('助詞:格助詞') or particle[4]!=edge
-                or noun[4]!=particle[3] or not noun[5] or not noun[1].startswith('名詞')):
+                or not noun[5] or not noun[1].startswith('名詞')):
             return ''
         if particle[0]=='を':
-            if '接尾' in noun[1] and i>=2:
+            if '接尾' in noun[1] and noun_index>=1:
                 from reading_segments import nominalized_adjective_context
-                head=parts[i-2]
+                head=parts[noun_index-1]
                 if nominalized_adjective_context(context,head[3],noun[4],lambda _:parts):
                     return context[head[3]:noun[4]]
-            whole=_classified_argument_head(context,parts,i-1)
+            whole=_classified_argument_head(context,parts,noun_index)
             if whole:return whole[0]
-            return '' if '固有名詞' in noun[1] or '接尾' in noun[1] else noun[0]
+            return '' if ('固有名詞' in noun[1] and not nominal_roles(noun[0])) or '接尾' in noun[1] else noun[0]
         if particle[0] not in ('に','で','へ'):return ''
         # 別の述語や助詞を越えない。受け手・場所を表す既知の名詞句だけ。
-        j=_native_argument_phrase_start(parts,i-1)
+        j=_native_argument_phrase_start(parts,noun_index)
         edge=parts[j][3];i=j-1
     return ''
 
@@ -986,23 +1074,27 @@ def _token_case_argument_before(context,start,tokenize,through_object=False):
     """One explicit native common noun plus its actual non-accusative case."""
     parts,edge=_argument_prefix(context,start,tokenize)
     if through_object and len(parts)>=2:
-        noun,particle=parts[-2:]
+        particle=parts[-1];noun_index=_case_noun_index(parts,len(parts)-1)
+        if noun_index<0:return None
+        noun=parts[noun_index]
         if (particle[4]==edge and particle[0]=='を' and particle[5]
-                and particle[1].startswith('助詞:格助詞') and noun[4]==particle[3]
+                and particle[1].startswith('助詞:格助詞')
                 and noun[5] and noun[1].startswith('名詞')
                 and not any(kind in noun[1] for kind in ('固有名詞','接尾','非自立'))):
-            whole=_classified_argument_head(context,parts,len(parts)-2)
-            begin=whole[1] if whole else len(parts)-2
+            whole=_classified_argument_head(context,parts,noun_index)
+            begin=whole[1] if whole else noun_index
             edge=parts[begin][3];parts=parts[:begin]
     if len(parts)<2:return None
-    noun,particle=parts[-2:]
+    particle=parts[-1];noun_index=_case_noun_index(parts,len(parts)-1)
+    if noun_index<0:return None
+    noun=parts[noun_index]
     if (particle[4]!=edge or particle[0] not in CASE_VERB_ROLES
-            or not particle[1].startswith('助詞:格助詞') or noun[4]!=particle[3]
+            or not particle[1].startswith('助詞:格助詞')
             or not noun[5] or not noun[1].startswith('名詞')
             or '固有名詞' in noun[1] or '接尾' in noun[1]):return None
-    whole=_classified_argument_head(context,parts,len(parts)-2)
+    whole=_classified_argument_head(context,parts,noun_index)
     if whole:return whole[0],particle[0]
-    if len(parts)>2 and parts[-3][4]==noun[3] and parts[-3][1].startswith(('名詞','接頭詞')):
+    if noun_index>0 and parts[noun_index-1][4]==noun[3] and parts[noun_index-1][1].startswith(('名詞','接頭詞')):
         return None
     return noun[0],particle[0]
 
@@ -1158,10 +1250,10 @@ def native_te_auxiliary_forms(surface,form,reading):
     IPAdic tags さしあげる as independent even after te/de. The same
     documented benefactive inventory supplies grammar and argument roles.
     """
-    from morphology import dictionary_inflections
+    from morphology import dictionary_inflections,TE_AUXILIARY_BASES
     benefactive=frozenset().union(*_BENEFACTIVE_CASES.values())
     return tuple(row for row in dictionary_inflections(surface) or ()
-        if row[1]==form and row[3]==reading and (
+        if row[1]==form and row[3]==reading and row[2] in TE_AUXILIARY_BASES and (
             row[0].startswith('動詞,非自立,')
             or row[0].startswith('動詞,自立,') and row[2] in benefactive))
 
@@ -1196,17 +1288,28 @@ def native_benefactive_case_roles(surface,form,reading,tail,case,before=''):
 @lru_cache(maxsize=4096)
 def native_verb_lexemes(surface,form,reading):
     """Exact inflection/reading senses; literal kana retains attested spellings."""
-    from morphology import dictionary_inflections
+    from morphology import dictionary_inflections,native_suru_form
     lexemes=set()
     kana=surface==reading and all('ぁ'<=c<='ゖ' for c in surface)
     for pos,inflection,base,rd in dictionary_inflections(surface) or ():
         if not pos.startswith('動詞,自立,') or inflection!=form or rd!=reading:continue
-        lexemes.add(base)
+        # The functional suru meaning belongs to the native sahen paradigm.
+        # Its identically spelled godan homograph cannot inherit process roles;
+        # actual rubbing/printing lexemes remain available below.
+        functional=(base!='する' or native_suru_form(surface,form,reading,False))
+        if functional:lexemes.add(base)
         if kana:
             for p,f,b,lemma_reading in dictionary_inflections(base) or ():
                 if p.startswith('動詞,自立,') and f=='基本形' and b==base:
-                    lexemes.update(_native_verb_reading_lexemes().get(lemma_reading,()))
+                    lexemes.update(word for word in _native_verb_reading_lexemes().get(lemma_reading,())
+                                   if word!='する' or functional)
     return frozenset(lexemes)
+
+
+# The written homographs have different lexical readings. Object roles for
+# opening a book belong to hiraku; physically opening a door belongs to akeru.
+# Native potential hirakeru inherits hiraku only through its attested origin.
+_OBJECT_ROLE_READINGS={'開く':('ひらく',),'開ける':('あける',)}
 
 
 @lru_cache(maxsize=8192)
@@ -1224,6 +1327,8 @@ def native_verb_roles(surface, form, reading, subject=False, case=None, tail=Non
     for lexeme in lexemes:
         known=roster.get(lexeme,())
         if not known:continue
+        lemma_readings=_OBJECT_ROLE_READINGS.get(lexeme) if not subject else None
+        if lemma_readings and not any(_native_lexeme_forms(rd,form,reading) for rd in lemma_readings):continue
         if tail is not None:
             from contextual_repair import _allows_grammatical_tail,_productive_predicate
             forms=_native_lexeme_forms(lexeme,form,reading) if kana else (surface,)
@@ -1232,7 +1337,11 @@ def native_verb_roles(surface, form, reading, subject=False, case=None, tail=Non
                         or allow_open_tail and _native_open_predicate(face+tail,face,before))
                        and _productive_predicate(face+tail,face,before=before) for face in forms):continue
         roles.update(known)
-    if lexemes:
+    if lexemes and not roles:
+        # A lexical verb's own explicit meaning takes precedence over a
+        # formally possible potential derivation. Native ichidan/godan
+        # pairs also include lexical transitive/intransitive counterparts;
+        # their spelling relation alone cannot add another argument sense.
         # Potential forms retain the same action's argument meaning. Validate
         # the actual potential tail before consulting its native godan origin;
         # a homophone's incompatible conjugation cannot lend its role.
@@ -1246,6 +1355,10 @@ def native_verb_roles(surface, form, reading, subject=False, case=None, tail=Non
                     and _productive_predicate(surface+tail,surface,before=before)):
                 potential=()
         for origin,origin_reading in potential:
+            # Potential derivation above proves a godan origin. The bare
+            # homograph suru must not regain the functional sahen sense
+            # through a second lookup which has discarded that paradigm.
+            if origin=='する':continue
             roles.update(native_verb_roles(origin,'基本形',origin_reading,subject=subject,case=case))
     if not roles and lexemes:
         # A native compound V+phase keeps its first verb's argument roles.
@@ -1293,6 +1406,18 @@ def nominal_role_matches(surface, accepted):
     """Positive roles only if every member fits the same action and case."""
     accepted=frozenset(accepted)
     if not accepted:return frozenset()
+    if 'referent' in accepted:
+        from morphology import dictionary_inflections
+        from kango_tier import usage_tier_for_reading
+        # Positive everyday-use evidence is required for this broad sense.
+        # Lexical existence alone cannot turn an unjudged plant/name into
+        # an automatic answer to an unknown source word.
+        # A real independent noun supplies the referent. Unknown strings,
+        # auxiliaries and mere pieces of a word provide no such evidence.
+        if any(pos.startswith('名詞,') and base==surface and usage_tier_for_reading(surface,rd) in (1,2)
+                and not any(kind in pos.split(',') for kind in ('非自立','接尾'))
+                for pos,form,base,rd in dictionary_inflections(surface) or ()):
+            return frozenset(('referent',))
     groups=coordinated_nominal_role_groups(surface) or (nominal_roles(surface),)
     matches=tuple(group & accepted for group in groups)
     return frozenset().union(*matches) if all(matches) else frozenset()
@@ -1330,7 +1455,7 @@ def candidate_object_evidence(surface, following, before=""):
     boundaries keep a later or quoted verb from becoming the noun's evidence;
     written kanji never borrow roles from a different homophone spelling.
     """
-    if not following.startswith(('を',)+tuple(CASE_VERB_ROLES)):return None
+    if not following:return None
     from morphology import tokenize
     end=len(before)+len(surface)
     parts=list(tokenize(before+surface+following))
@@ -1341,8 +1466,15 @@ def candidate_object_evidence(surface, following, before=""):
             or not all(t.has_reading for t in left)
             or not (left[-1].pos=='名詞' or native_coordinated_nominal_parts(surface))
             or len(right)<2):return None
-    case,head=right[:2]
-    if (case.start!=end or case.surface not in ('を',)+tuple(CASE_VERB_ROLES) or not case.has_reading
+    native=[(t.surface,t.pos+(':'+t.pos_sub if t.pos_sub else ''),t.reading,
+             t.start,t.end,t.has_reading,t.infl_form) for t in parts]
+    case_index=next((i for i,t in enumerate(parts) if t.start>=end
+        and not (t.pos=='助詞' and t.pos_sub.startswith('副助詞'))),len(parts))
+    if case_index+1>=len(parts):return None
+    noun_index=_case_noun_index(native,case_index)
+    if noun_index<0 or parts[noun_index].end!=end:return None
+    case,head=parts[case_index:case_index+2]
+    if (case.surface not in ('を',)+tuple(CASE_VERB_ROLES) or not case.has_reading
             or case.pos!='助詞' or not case.pos_sub.startswith('格助詞')
             or head.start!=case.end or not head.has_reading):return None
     if all('ぁ'<=c<='ゖ' or c=='ー' for c in surface):
@@ -1354,14 +1486,17 @@ def candidate_object_evidence(surface, following, before=""):
         from reading_segments import _native_written_nominal_faces
         faces=_native_written_nominal_faces(surface) or (surface,)
     full=before+surface+following
-    native=[(t.surface,t.pos+(':'+t.pos_sub if t.pos_sub else ''),t.reading,
-             t.start,t.end,t.has_reading,t.infl_form) for t in parts]
     evidence=[]
-    for head in right[1:]:
+    for head in parts[case_index+1:]:
         if not head.has_reading:break
         # The same argument reader already permits an unchanged native
         # manner modifier; do not let it sever this noun from its action.
-        if head.start!=case.end and _argument_prefix(full,head.start,lambda _:native)[1]!=case.end:continue
+        if head.start!=case.end and _argument_prefix(full,head.start,lambda _:native)[1]!=case.end:
+            # A following native object is another argument of the same
+            # action, not a clause boundary. Reuse the original case reader
+            # instead of losing the repaired destination/instrument's roles.
+            argument=case_argument_before(full,head.start,lambda _:native,through_object=True)
+            if case.surface=='を' or argument!=(parts[noun_index].surface,case.surface):continue
         suffix=full[head.end:]
         evidence.extend(candidate_evidence(face,head.surface,suffix,before=full[:head.start],
                             case=None if case.surface=='を' else case.surface) for face in faces)
@@ -1381,14 +1516,19 @@ def candidate_nominal_spelling_evidence(before,surface,following):
     full=before+surface+following;start=len(before);end=start+len(surface)
     parts=tokenize(full)
     beginnings=sorted({start}|{t.start for t in parts if t.start<start})
-    for case in parts:
+    native=[(t.surface,t.pos+(':'+t.pos_sub if t.pos_sub else ''),t.reading,
+             t.start,t.end,t.has_reading,t.infl_form) for t in parts]
+    for case_index,case in enumerate(parts):
         if (case.start<end or not case.has_reading or case.pos!='助詞'
                 or not case.pos_sub.startswith('格助詞')
                 or case.surface not in ('を',)+tuple(CASE_VERB_ROLES)):continue
+        noun_index=_case_noun_index(native,case_index)
+        if noun_index<0:continue
+        noun_end=parts[noun_index].end
         for begin in beginnings:
-            nominal=full[begin:case.start]
-            if not (begin==start and case.start==end or native_coordinated_nominal_parts(nominal)):continue
-            proof=candidate_object_evidence(nominal,full[case.start:],full[:begin])
+            nominal=full[begin:noun_end]
+            if not (begin==start and noun_end==end or native_coordinated_nominal_parts(nominal)):continue
+            proof=candidate_object_evidence(nominal,full[noun_end:],full[:begin])
             if proof and proof['shared_roles']:
                 groups=coordinated_nominal_role_groups(nominal)
                 # Related members add positive contextual support between
@@ -1462,7 +1602,7 @@ def changed_nominal_object_allowed(original, changed):
             if (i==0 or i+1>=len(parts) or case.surface!='を' or not case.has_reading
                     or case.pos!='助詞' or not case.pos_sub.startswith('格助詞')):continue
             head=parts[i-1]
-            if head.end!=case.start or head.pos!='名詞' or not head.has_reading:continue
+            if head.end!=case.start:continue
             begin=i-1
             while begin>0 and parts[begin-1].end==parts[begin].start and parts[begin-1].pos in ('名詞','接頭詞'):
                 begin-=1
@@ -1554,13 +1694,24 @@ def candidate_evidence(object_word, surface, following, before="", case=None):
     """Expose the source and roles used for ranking, including no-fit results."""
     from morphology import tokenize
     parts=[p for p in tokenize(before+surface+following) if p.start>=len(before)]
-    if (len(parts)>1 and parts[0].start==len(before) and parts[0].pos=='形容詞'
-            and parts[0].end<len(before)+len(surface) and parts[1].pos=='動詞'
+    offset=len(before)
+    if not parts or parts[0].start!=offset:
+        # The caller supplied this original replacement boundary. A whole
+        # sentence's unknown parse must not swallow an independently native
+        # adjective manner and hide the following action's argument roles.
+        parts=tokenize(surface+following);offset=0
+    if (len(parts)>1 and parts[0].start==offset and parts[0].pos=='形容詞'
+            and parts[0].end<offset+len(surface) and parts[1].pos=='動詞'
             and parts[1].pos_sub=='自立'):
         from reading_segments import native_adjective_adverbial_prefix
-        cut=parts[0].end-len(before)
+        cut=parts[0].end-offset
         if native_adjective_adverbial_prefix(surface+following,cut):
-            return candidate_evidence(object_word,surface[cut:],following,before+surface[:cut],case)
+            # The object's roles still come from the original argument. When
+            # the outer parse lost this boundary, use the independently
+            # attested manner phrase only for the verb's lexical lookup;
+            # the caller retains whole-context candidate validation.
+            lexical_before=before if offset else ''
+            return candidate_evidence(object_word,surface[cut:],following,lexical_before+surface[:cut],case)
     faces=(object_word,)
     # 48-AJX: an unchanged kana accusative has the same native noun
     # readings as other cases. A best-parse kana spelling must not hide
@@ -1570,12 +1721,16 @@ def candidate_evidence(object_word, surface, following, before="", case=None):
         from reading_segments import native_nominal_phrase_faces
         faces=native_nominal_phrase_faces(object_word)
     groups=[coordinated_nominal_role_groups(face) or (nominal_roles(face),) for face in faces]
-    if not any(all(group) for group in groups):return None
+    if not any(all(group) for group in groups) and not any(
+            nominal_role_matches(face,('referent',)) for face in faces):return None
     nominal=frozenset(role for group in groups for member in group for role in member)
     def matches(roles):
         return frozenset().union(*(nominal_role_matches(face,roles) for face in faces))
     head=_action_head(surface,following[:8],before)
     predicate=predicate_roles(head,following,before,case=case) if head else frozenset()
+    if not nominal:
+        nominal=matches(predicate)
+        if not nominal:return None
     # 48-APE / GPT-6 Astra: temporal ni locates an event; it is not
     # that verb's destination/recipient. Exact nominal roles exclude relative
     # days such as ashita, and _action_head still proves a native verb/suru.
@@ -1618,7 +1773,10 @@ def genitive_nominal_support(left,right,*,nominalized_attribute=False):
     return bool(a & {'event','process'} and b & {'time','information','text'}
                 or a & {'event','process','text','information','time','relative_time'}
                    and 'continuation' in b
+                or a & {'object','food','drink','medicine','material','text','information',
+                        'time','process','event','quantity','money'} and 'partitive' in b
                 or 'information' in a and 'text' in b
+                or 'text' in a and 'information' in b
                 or a & {'object','food','drink','medicine','material'} and 'container' in b
                 or a and 'attribute' in b
                 or 'person' in a and b & {'object','device','text'}
@@ -1814,11 +1972,11 @@ def proved_action_case_support(noun,particle,action,context=''):
     """
     if (support(noun,action) if particle=='を' else case_action_support(noun,particle,action)):
         return True
-    if not action or not all('ぁ'<=c<='ゖ' for c in action):return False
+    if not action:return False
     from morphology import dictionary_inflections
     roles=set()
     for pos,form,base,rd in dictionary_inflections(action) or ():
-        if pos.startswith('動詞,自立,') and rd==action:
+        if pos.startswith('動詞,自立,'):
             if particle in ('が','は','も','しか'):
                 roles.update(native_verb_roles(action,form,rd,subject=True))
             if particle!='が':
@@ -1828,7 +1986,8 @@ def proved_action_case_support(noun,particle,action,context=''):
     # carried by receiving an action, not by the lexical verb alone.
     if context and particle in _BENEFACTIVE_CASES:
         from morphology import tokenize
-        heads=[t for t in tokenize(context) if (t.surface==action or t.reading==action) and t.has_reading
+        heads=[t for t in tokenize(context) if (t.surface==action or t.reading==action
+                or context[t.start:]==action) and t.has_reading
                and t.pos=='動詞' and t.pos_sub.startswith('自立')]
         if len(heads)==1:
             head=heads[0]
@@ -1888,7 +2047,7 @@ def candidate_support(object_word, surface, following):
 # 移動の経路、期間、他動詞の別義を持つ動詞は含めない。
 SUBJECT_ONLY_PREDICATES = frozenset(
     '絶命 死亡 死去 逝去 急逝 他界 夭折 崩御 病死 餓死 溺死 戦死 '
-    '誕生 生誕 実在 存在 死ぬ 亡くなる 生まれる 冴える さえる'.split())
+    '誕生 生誕 実在 存在 死ぬ 亡くなる 生まれる 冴える さえる ある 有る 在る あり'.split())
 
 
 @lru_cache(maxsize=4096)
@@ -1970,6 +2129,16 @@ def _terminal_predicate_tail(text, tokens, edge, last_form, independent_next=Fal
                 return False
             edge = token[4]
             last_form = token[6]
+        elif (independent_next and token[0] in ('つつ','ながら')
+                and token[1].startswith('助詞:接続助詞') and token[5]):
+            from morphology import dictionary_inflections
+            previous=next((t for t in tokens if t[4]==token[3]),None)
+            connected=bool(previous and len(previous)>=7 and previous[5]
+                and previous[1].startswith('動詞:自立') and previous[6]=='連用形'
+                and any(pos.startswith('動詞,自立,') and form=='連用形' and rd==previous[2]
+                        for pos,form,base,rd in dictionary_inflections(previous[0]) or ()))
+            from contextual_repair import _finite_written_predicate
+            return bool(connected and _finite_written_predicate(text[token[4]:].rstrip('。！？.!?')))
         elif (token[0] in ('て','で')
                 and token[1].startswith('助詞:接続助詞') and token[5]):
             from contextual_repair import _modern_te_allowed
@@ -2065,6 +2234,13 @@ def _closed_object_predicate_spans(text, tokens, predicates=None):
         elif token[1].startswith('動詞'):
             bases = {base for pos, form, base, reading in dictionary_inflections(token[0]) or ()
                      if pos.startswith('動詞,') and form == token[6] and reading == token[2]}
+            if predicates is not None and bases and not bases<=predicates and token[0]==token[2]:
+                lexemes=native_verb_lexemes(token[0],token[6],token[2])
+                negative=lexemes & predicates
+                obj=object_before(text,token[3],lambda _:tokens)
+                if negative and obj and not any(nominal_role_matches(obj,VERB_ROLES.get(word,()))
+                                                for word in lexemes-negative):
+                    bases=negative
             if bases and (predicates is None or bases <= predicates):
                 lemma = sorted(bases)[0]
         if lemma is None:continue
@@ -2106,12 +2282,17 @@ _OBJECT_CONFLICT_ROLES['さす']=frozenset(('mental_content',))
 # Preserve source/location and duration uses; they have no negative role here.
 # Kanjipedia 起きる: https://www.kanjipedia.jp/kotoba/0001225500
 _OBJECT_CONFLICT_ROLES['起きる']=frozenset(('object','text','information','device'))
+# Ordinary food preparation does not act directly on recorded textual
+# content. Unclassified physical material and quoted/metaphorical contexts
+# are not assigned a negative food category by this statement.
+_OBJECT_CONFLICT_ROLES.update({p:frozenset(('text','information','reference'))
+    for p in ('煮る','煮込む','茹でる','蒸す','蒸かす','炒める','揚げる')})
 # Translating written/spoken content is distinct from acting on its named place/person.
 _OBJECT_CONFLICT_ROLES.update({p:frozenset(('place','person','food','device')) for p in TRANSLATION_ACTIONS})
 # Content is not the traversed path of these movement senses. Literal
 # and digital places retain their own positive route interpretation.
-_PATH_MOTION_ACTIONS=frozenset('入る 出る 帰る 還る 返る 戻る 行く 来る 進む 通る 渡る 走る 歩く 泳ぐ 飛ぶ'.split())
-_NON_PATH_CONTENT_ROLES=frozenset(('text','information','photographic_media','reference'))
+_PATH_MOTION_ACTIONS=frozenset('入る 出る 帰る 還る 返る 戻る 行く 来る 進む 通る 渡る 走る 歩く 泳ぐ 飛ぶ 出かける 出掛ける 向かう'.split())
+_NON_PATH_CONTENT_ROLES=frozenset(('text','information','photographic_media','reference','object','device'))
 _ROUTE_OBJECT_ROLES=frozenset(('place','digital_destination','screen_location','time','quantity','origin'))
 _OBJECT_CONFLICT_ROLES.update({p:_NON_PATH_CONTENT_ROLES for p in _PATH_MOTION_ACTIONS})
 _OBJECT_CONFLICT_ROLES.update({p:frozenset(('representation_format',)) for p in _BORROWED_RETURN_PREDICATES})
@@ -2224,6 +2405,14 @@ def changed_object_conflict_allowed(original, changed):
                         changed[:a],case=candidate_case[1])
                     if not case_evidence or not case_evidence['shared_roles']:continue
                 fitting=True;break
+        if not fitting and changed[position-1:position]=='を':
+            # The damaged first predicate may have been an adverbial count.
+            # Its exact native quantity and the same original object must
+            # positively fit the now complete action; no later object is used.
+            from reading_segments import _native_counter_prefixes,native_object_predicate_proof,native_nominal_phrase_faces
+            tail=changed[position:];sizes=_native_counter_prefixes(tail,tokenize(tail))
+            faces=native_nominal_phrase_faces(obj) or (obj,)
+            if sizes and native_object_predicate_proof(changed,position,faces):fitting=True
         if not fitting:return False
     return True
 
@@ -2759,6 +2948,16 @@ def _motion_tail_cannot_take_object(text,object_word):
     parts=tokenize(text)
     if not parts or parts[0].start!=0:return False
     head=parts[0]
+    if head.pos!='動詞' or head.pos_sub!='自立':
+        # An explicit destination belongs to the following motion. Prove
+        # all its own cases and finite tail before closing the earlier
+        # object's scope; an unknown destination is not positive evidence.
+        from reading_segments import native_written_relative_action
+        proof=native_written_relative_action(text,allow_finite=True)
+        if not proof:return False
+        action=tokenize(proof[0]);head=action[0] if action else None
+        if head is None:return False
+        text=proof[0]
     if head.pos!='動詞' or head.pos_sub!='自立' or not head.has_reading:return False
     verbs=native_verb_lexemes(head.surface,head.infl_form,head.reading)
     if not verbs or not verbs<=_PATH_MOTION_ACTIONS:return False

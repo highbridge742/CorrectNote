@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """The candidate index and native nominal evidence may have different coverage."""
+from tests_spelling_reference import assert_reviewed_result_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
@@ -26,7 +27,7 @@ class AttestedNominalCandidateTests(unittest.TestCase):
             with self.subTest(source=source):
                 result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                assert_repaired_spelling(self, result, expected)
+                assert_reviewed_result_spelling(self, result, expected)
                 self.assertEqual(result.get('odd_spans'),[])
 
 

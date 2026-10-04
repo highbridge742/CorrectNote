@@ -74,7 +74,15 @@ class NominalFieldRepairTests(unittest.TestCase):
                 ime=MagicMock();ime.available=True;ime.convert_words.return_value=(face,words)
                 ime.__enter__.return_value=ime
                 with patch('ime_language.JapaneseIME',return_value=ime):
-                    result=project(reading,a.store,a.dict_index,a.decisions)
+                    unresolved=project(reading,a.store,a.dict_index,a.decisions)
+                    if unresolved:
+                        self.assertNotIn('辞典',unresolved[0])
+                        self.assertNotIn('事典',unresolved[0])
+                    # First IME choice alone is not a semantic preference.
+                    # An explicit user spelling choice resolves that ambiguity.
+                    with patch('last_choice.surface_for_reading',side_effect=lambda rd:
+                            '国語辞典' if rd=='こくごじてん' else None):
+                        result=project(reading,a.store,a.dict_index,a.decisions)
                 self.assertIsNotNone(result,reading)
                 self.assertEqual(result[0],face)
 

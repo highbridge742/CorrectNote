@@ -39,11 +39,21 @@ class SourceMannerTests(unittest.TestCase):
             context_vec=None,decisions=a.decisions)
         self.assertEqual(result['corrected'],text)
         self.assertTrue(result.get('odd_spans'))
-        text='たまねぎをうすくきすります。'
+        text='たまねぎをうすくきくります。'
         result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
             context_vec=None,decisions=a.decisions)
         assert_repaired_spelling(self, result, 'たまねぎをうすくきります。')
         self.assertEqual(result.get('odd_spans'),[])
+
+
+    def test_native_manner_meaning_survives_an_outer_unknown_parse(self):
+        import semantic_roles as S
+        before='たまねぎとにんじんを'
+        for action in ('こまかくきります','こまかくおくります'):
+            proof=S.candidate_evidence('にんじん',action,'',before=before)
+            self.assertTrue(proof and proof['shared_roles'],action)
+        self.assertIsNone(S.candidate_evidence('未分類語','こまかくきります','',before=before))
+        self.assertFalse((S.candidate_evidence('意味','こまかくきります','',before='意味を') or {}).get('shared_roles'))
 
 
 if __name__=='__main__':unittest.main()

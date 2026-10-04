@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """A companion takes と, independently from a food/object accusative."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 import morphology as M
 import reading_segments as R
@@ -42,7 +43,7 @@ class ComitativeActivityTests(unittest.TestCase):
                      'ともだちとごはんをたべます。','くらすのともだちとごはんをたべます。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
 
 
 if __name__=='__main__':unittest.main()

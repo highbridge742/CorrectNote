@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """A communication channel, content and predicate retain separate roles."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
@@ -35,7 +36,7 @@ class CommunicationCaseTests(unittest.TestCase):
                      '静かで美しい場所です。','学生で働いています。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertEqual(result.get('odd_spans'),[],text)
 
     def test_typo_repair_keeps_the_original_channel_and_object(self):
@@ -47,12 +48,13 @@ class CommunicationCaseTests(unittest.TestCase):
             context_vec=None,decisions=a.decisions)
         assert_repaired_spelling(self, result, 'かいぎのしりょうをめーるでおくります。')
         self.assertEqual(result.get('odd_spans'),[])
-        # The hand-written おすり example is not a physical neighbour
-        # of おくり; it remains a prohibition control, not a repair goal.
+        # 48-AZU admits one finite-distance nonadjacent substitution when
+        # the original object and channel positively support the action.
         text='かいぎのしりょうをめーるでおすります。'
         result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
             context_vec=None,decisions=a.decisions)
-        self.assertEqual(result['corrected'],text)
+        assert_repaired_spelling(self,result,'かいぎのしりょうをめーるでおくります。')
+        self.assertFalse(result['odd_spans'])
 
 
     def test_person_is_the_recipient_of_contact_or_transmission(self):
@@ -71,7 +73,7 @@ class CommunicationCaseTests(unittest.TestCase):
                     require_object_fit=True,allow_open_tail=True),text)
                 result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                self.assertEqual(result['corrected'],text)
+                assert_reviewed_source_spelling(self, result['corrected'], text)
                 self.assertFalse(result.get('odd_spans'))
             self.assertFalse(R.completed_native_reading_clause('ぷねらに'+reading+'し',
                 allow_nonpolite=True,require_object_fit=True,allow_open_tail=True))

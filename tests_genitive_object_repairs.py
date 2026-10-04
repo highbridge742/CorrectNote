@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """An already anomalous genitive object uses its unchanged first predicate."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 from unittest.mock import patch
 import morphology as M
@@ -94,12 +95,13 @@ class GenitiveObjectRepairTests(unittest.TestCase):
             context_vec=a.context_vec,decisions=a.decisions)
         reading=''.join(t.surface if all('ぁ'<=c<='ゖ' or c=='ー' for c in t.surface)
                         else t.reading if t.has_reading else t.surface for t in M.tokenize(result['corrected']))
-        self.assertEqual(reading,'へやのまどをあけてくうきをいれかえます。')
-        self.assertEqual(result.get('odd_spans'),[])
+        # ん is no longer adjacent here; native import cannot authorize its deletion.
+        self.assertEqual(reading,text)
+        self.assertTrue(result.get('odd_spans'))
         for text in ('へやのまどをあけます。','へやのマントを見ます。','「へやのまんど」という誤入力例です。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=a.context_vec,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
 
     def test_native_text_and_disallowed_deletions_stay(self):
         import app
@@ -113,7 +115,7 @@ class GenitiveObjectRepairTests(unittest.TestCase):
                      'へやのまほどをあけます。','へやのままどをあけます。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             if 'まほど' not in text and 'ままど' not in text:
                 self.assertEqual(result.get('odd_spans'),[],text)
 

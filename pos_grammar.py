@@ -248,7 +248,10 @@ _PIECES = {
     #   ていく → てく の きます・こう
     'TE': (
         ('ます', 'END'), ('ました', 'TA'), ('ません', 'END'),
-        ('ませんでした', 'END'), ('ない', 'IST'), ('なかった', 'TA'),
+        ('ませんでした', 'END'), ('な', 'IST'), ('なかった', 'TA'),
+        # The omitted i of te-iru keeps its past and connective endings.
+        # Negative -nai enters the adjective grammar at its stem -na.
+        ('た', 'TA'), ('て', 'TE'),
         ('なけれ', 'E'), ('きます', 'END'), ('こう', 'END'),
         # **ているの → てんの**（項目48-PS・2026-09-03）。
         # `し**てんの**`・`やっ**てんの**`・`食べ**てんの**` は正しい口語。
@@ -561,6 +564,24 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
     if n >= 3 and run[-1] in 'おご' and before_kanji is not False:
         ends.add(n - 1)                  # 次が漢字でないと分かれば読まない（48-TJ）
 
+    # An attested original manner adjective owns its internal syllables.
+    # A second path cannot explain a broken following verb by splitting
+    # that modifier into a copula, case particle and unrelated noun.
+    # Unknown words are not supplied with a hypothetical modifier.
+    manner_ranges=[]
+    if initial_state is None and not after_kanji and not no_words and not stems_only:
+        from morphology import tokenize,dictionary_inflections
+        native=tokenize(run)
+        for index,token in enumerate(native):
+            if not (token.has_reading and token.pos=='形容詞'
+                    and token.infl_form=='連用テ接続' and token.surface==token.reading
+                    and token.end<len(run)):continue
+            before=native[index-1] if index else None
+            if before is not None and not (before.has_reading and before.pos=='助詞'
+                    and before.pos_sub.startswith(('格助詞','係助詞'))):continue
+            if any(pos.startswith('形容詞,') and form==token.infl_form and rd==token.reading
+                   for pos,form,base,rd in dictionary_inflections(token.surface) or ()):
+                manner_ranges.append((token.start,token.end))
     seen = set()
     stack = [(0, initial_state or 'Bf')]
     if after_kanji:
@@ -632,7 +653,7 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
                         stack.append((k, 'E'))       # 一段（見る・出る）
     while stack:
         i, st = stack.pop()
-        if (i, st) in seen:
+        if (i, st) in seen or any(start<i<end for start,end in manner_ranges):
             continue
         seen.add((i, st))
         if i in ends and st in _ACCEPT:
@@ -973,7 +994,7 @@ def _completed_orphan_attachment_spans(line):
     return tuple(out)
 
 def unexplained_shifted_predicate_tails(line):
-    """Original written predicate stem plus a broken functional prefix.
+    """Original native predicate stem plus a broken functional prefix.
 
     A visible terminal small vowel cannot be a prolongation of another
     vowel, a native voice spelling, or a quoted example here. No repaired
@@ -989,8 +1010,26 @@ def unexplained_shifted_predicate_tails(line):
     for match in re.finditer(r'[^\t\r\n⇒→、,。！？!?;；]+',line):
         field=match.group().rstrip();end=match.start()+len(field)
         if not field or field[-1] not in 'ぁぃぅぇぉ':continue
-        for head in tokenize(field):
-            if not head.has_reading or not any('一'<=c<='鿿' for c in head.surface):continue
+        parts=tokenize(field)
+        from types import SimpleNamespace
+        from reading_segments import native_case_positions
+        starts={0}|{p.start for p in parts if p.pos=='動詞' and p.has_reading}|{c+1 for c in native_case_positions(field,parts)}
+        heads=list(parts)
+        # Recover an exact original continuative at a source word/case
+        # boundary even when the malformed suffix changed the best parse.
+        # No repaired spelling or candidate supplies this stem.
+        for start in sorted(starts):
+            for cut in range(start+1,min(len(field)-1,start+18)):
+                surface=field[start:cut]
+                if not all('ぁ'<=c<='ゖ' for c in surface):continue
+                if any(pos.startswith('動詞,自立,') and form=='連用形' and rd==surface
+                       for pos,form,base,rd in dictionary_inflections(surface) or ()):
+                    heads.append(SimpleNamespace(surface=surface,pos='動詞',pos_sub='自立',
+                        infl_form='連用形',reading=surface,has_reading=True,start=start,end=cut))
+        for head in heads:
+            # The exact native inflection below proves the stem in kana
+            # as well as kanji. Script choice alone cannot hide a broken tail.
+            if not head.has_reading:continue
             forms=dictionary_inflections(head.surface) or ()
             stems=[]
             if (head.pos=='動詞' and head.pos_sub=='自立' and head.infl_form=='連用形'
@@ -1021,7 +1060,13 @@ def unexplained_shifted_predicate_tails(line):
                 if any(explain_kana_run(value,no_words=True,initial_state='R',before_kanji=False)
                        for value in (tail,large)):continue
                 out.append((start,end,match.start()+cut,reading+tail))
-    return tuple(dict.fromkeys(out))
+    # A complete original predicate owns an internal continuation with
+    # the same functional tail. Keep separate predicates, never nested
+    # stems created by an alternative best-token split of that predicate.
+    unique=tuple(dict.fromkeys(out))
+    return tuple(row for row in unique if not any(
+        a<row[0] and b==row[1] and cut==row[2]
+        for a,b,cut,reading in unique))
 
 
 
@@ -1229,7 +1274,7 @@ def _terminal_polite_connective_spans(line, store):
     return tuple(out)
 
 
-def _orphaned_particle_before_sahen_action_windows(parts):
+def _orphaned_particle_before_sahen_action_windows(parts,source=None):
     """Yield original sahen noun/orphaned case/suru source windows."""
     for i in range(2,len(parts)-3):
         left,link=parts[i-2:i]
@@ -1246,8 +1291,16 @@ def _orphaned_particle_before_sahen_action_windows(parts):
             and extra[1].startswith('助詞:格助詞:連語') and prior_action and polite)
             or (extra[0]=='ん' and extra[1].startswith('助詞:格助詞')
                 and prior_object and (connective or polite))))
-        if (not head[5] or not head[1].startswith('名詞:サ変接続')
-                or not orphan or suru[0]!='し' or not suru[5]
+        # A plain noun plus interrogative か cannot be the host of
+        # this immediately attached する auxiliary chain. An interrogative
+        # pronoun (何か), a finite alternative (読むかする), and a に result
+        # complement have different original roles and do not enter here.
+        nominal_question=(prior_object and polite and head[5]
+            and head[1].startswith(('名詞:一般','名詞:サ変接続'))
+            and extra[5] and extra[0]=='か'
+            and extra[1].startswith(('助詞:副助詞','助詞:終助詞')))
+        if (not head[5] or not (head[1].startswith('名詞:サ変接続') or nominal_question)
+                or not (orphan or nominal_question) or suru[0]!='し' or not suru[5]
                 or not suru[1].startswith('動詞:自立') or suru[6]!='連用形'
                 or any(a[4]!=b[3] for a,b in
                        ((left,link),(link,head),(head,extra),
@@ -1256,10 +1309,40 @@ def _orphaned_particle_before_sahen_action_windows(parts):
         yield head,extra,aux
 
 
+    # The best whole-line parse can swallow a known object into an unknown
+    # token. Reuse the independently proved original noun/case boundary;
+    # tokenize only its unchanged predicate. No candidate supplies this cut.
+    if source and 'かし' in source:
+        from reading_segments import native_object_predicate_frames
+        from contextual_repair import _source_te_edges
+        from morphology import tokenize
+        bare=source.rstrip('。！？.!?')
+        # Only lexical case frames and literal te/de seams belong here.
+        # The higher-level completed-clause proof calls this validator too.
+        frames={(edge,edge+cut,faces) for edge in (0,)+tuple(_source_te_edges(bare))
+                for cut,faces in native_object_predicate_frames(bare[edge:])}
+        for begin,cut,faces in sorted(frames):
+            if source[cut-1:cut]!='を' or not faces:continue
+            tail=tokenize(source[cut:])
+            if len(tail)<4:continue
+            head,extra,suru,aux=tail[:4]
+            if (head.start or not all(t.has_reading for t in (head,extra,suru,aux))
+                    or head.pos!='名詞' or head.pos_sub not in ('一般','サ変接続')
+                    or extra.surface!='か' or extra.pos!='助詞'
+                    or not extra.pos_sub.startswith(('副助詞','終助詞'))
+                    or suru.surface!='し' or suru.pos!='動詞' or suru.pos_sub!='自立'
+                    or suru.infl_form!='連用形' or aux.surface!='ます' or aux.pos!='助動詞'
+                    or any(a.end!=b.start for a,b in zip(tail[:3],tail[1:4]))):continue
+            def original(t):
+                return (t.surface,t.pos+':'+t.pos_sub,t.reading,
+                        cut+t.start,cut+t.end,t.has_reading,t.infl_form)
+            yield original(head),original(extra),original(aux)
+
+
 def _single_key_between_sahen_actions_spans(line, store):
     """A stray source key after て cannot attach to the next action."""
     if 'を' not in line or (('して' not in line or 'します' not in line)
-                                 and 'んし' not in line):
+                                 and 'んし' not in line and 'かし' not in line):
         return ()
     from corrector import make_tokenizer
     from literal_examples import protected_ranges, overlaps
@@ -1295,8 +1378,8 @@ def _single_key_between_sahen_actions_spans(line, store):
                 or overlaps(head[3],nextsuru[4],protected)):
             continue
         out.append((te[3],extra[4]))
-    if 'てし' in line or 'んし' in line:
-        for head,extra,aux in _orphaned_particle_before_sahen_action_windows(parts):
+    if 'てし' in line or 'んし' in line or 'かし' in line:
+        for head,extra,aux in _orphaned_particle_before_sahen_action_windows(parts,line):
             if not overlaps(head[3],aux[4],protected):
                 out.append((extra[3],extra[4]))
     return tuple(out)

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Marked native nominal copulas retain source spelling, style and rejection scope."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 from unittest.mock import patch
@@ -24,7 +25,7 @@ class NominalCopulaTests(unittest.TestCase):
                              ('しょうにんまち','でうす','です'),
                              ('へんじまち','でうす','です'),
                              ('さぎょうまえ','でうす','です'),
-                             ('にゅうりょくまち','でしあた','でした')):
+                             ('にゅうりょくまち','でしそた','でした')):
             source=head+bad+'。';result=self.correct(source)
             assert_repaired_spelling(self, result, head+good+'。')
             self.assertFalse(result['odd_spans'])
@@ -51,7 +52,7 @@ class NominalCopulaTests(unittest.TestCase):
                        '入力待ちでおすね。','学生でおす。','にゅうりょくまちです。'):
             with patch.object(X,'resolve',wraps=X.resolve) as resolve:
                 result=self.correct(source)
-            self.assertEqual(result['corrected'],source)
+            assert_reviewed_source_spelling(self, result['corrected'], source)
             self.assertFalse(result['odd_spans'])
             self.assertFalse(any(call.args[0].boundary_kind=='kana_copula' for call in resolve.call_args_list))
         self.assertTrue(R.attested_nominal_polite_variant('にゅうりょくまちでおす'))
@@ -61,10 +62,10 @@ class NominalCopulaTests(unittest.TestCase):
         for source in ('がくせいでうす。','とうちゃくまちでうす。','ぷねらでうす。'):
             with patch.object(X,'resolve',wraps=X.resolve) as resolve:
                 result=self.correct(source)
-            self.assertEqual(result['corrected'],source)
+            assert_reviewed_source_spelling(self, result['corrected'], source)
             self.assertFalse(any(call.args[0].boundary_kind=='kana_copula' for call in resolve.call_args_list))
         source='「にゅうりょくまちでうす」と入力します。'
-        result=self.correct(source);self.assertEqual(result['corrected'],source)
+        result=self.correct(source);assert_reviewed_source_spelling(self, result['corrected'], source)
         self.assertFalse(result['odd_spans'])
         source='にゅうりょくまちでうす。'
         self.assertEqual(self.correct(source,input_method='romaji')['corrected'],source)
@@ -83,12 +84,11 @@ class NominalCopulaTests(unittest.TestCase):
             undo();self.assertEqual(calls,[('でうす','です')])
             ledger=DecisionStore();self.assertTrue(ledger.reject(*calls[0]))
             self.assertEqual(self.correct(text,decisions=ledger)['corrected'],text)
-            self.assertEqual(self.correct('しょうにんまちでしあた。',decisions=ledger)['corrected'],
-                             'しょうにんまちでした。')
+            assert_reviewed_source_spelling(self, self.correct('しょうにんまちでしそた。',decisions=ledger)['corrected'], 'しょうにんまちでした。')
         ledger=DecisionStore();ledger.protect('でうす')
         self.assertEqual(self.correct(text,decisions=ledger)['corrected'],text)
         ledger=DecisionStore();ledger.leave_odd_alone('でうす')
-        self.assertEqual(self.correct(text,decisions=ledger)['corrected'],'入力待ちです。')
+        assert_reviewed_source_spelling(self, self.correct(text,decisions=ledger)['corrected'], '入力待ちです。')
 
     def test_common_source_entry_and_final_validation_remain_connected(self):
         import contextual_repair as X,corrector as C
@@ -144,8 +144,14 @@ class NominalCopulaTests(unittest.TestCase):
             result=self.correct(text)
             self.assertEqual(result['corrected'],wanted)
             self.assertFalse(result['odd_spans'])
-        # に→ゅ changes both physical key and Shift; it is not one neighbor slip.
-        self.assertNotEqual(self.correct('しにうせい')['corrected'],'修正')
+        # This is two events at one position, never a one-key neighbor slip.
+        from contextual_repair import key_repairs,neighbor_shift_key_repairs
+        self.assertNotIn('しゅうせい',{r.reading for r in key_repairs('しにうせい')})
+        pair=next(r for r in neighbor_shift_key_repairs('しにうせい') if r.reading=='しゅうせい')
+        self.assertEqual(len(pair.steps),2)
+        result=self.correct('しにうせい')
+        self.assertEqual(result['corrected'],'修正')
+        self.assertFalse(result['odd_spans'])
         import reading_segments as R
         for text in ('かくにんだぞん','にゅうりょくまちですん','にゅうりょくまちですかん'):
             self.assertFalse(R.completed_native_nominal_predicate(text),text)

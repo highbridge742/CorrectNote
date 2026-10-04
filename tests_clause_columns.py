@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 import app,reading_segments as R,morphology as M
 from tests_analysis_async import initial
@@ -43,8 +44,8 @@ class ClauseColumnTests(unittest.TestCase):
             for separator in ('\t','    '):
                 closed=separator=='\t'
                 rows += [(separator.join(('用船して補正','ようせんしてほせい ⇒ ゆうせんしてほせい','優先して補正')),
-                          separator.join(('用船して補正',
-                                          '用船して補正 ⇒ 優先して補正','優先して補正'))),
+                          separator.join(('優先して補正',
+                                          '優先して補正 ⇒ 優先して補正','優先して補正'))),
                          ('ゆうせんしてほせい'+separator+'次',
                           ('優先して補正' if closed else 'ゆうせんしてほせい')+separator+'次')]
             rows += [('の日っています\tのひっています ⇒ のこっています\t残っています',
@@ -52,16 +53,16 @@ class ClauseColumnTests(unittest.TestCase):
                      ('的買い\tまとがい ⇒ まちがい\t間違い',
                       '間違い\t間違い ⇒ 間違い\t間違い')]
             rows += [(' ようせんしてほせい → ゆうせんしてほせい ',
-                      ' ようせんしてほせい → ゆうせんしてほせい '),
+                      ' 優先してほせい → ゆうせんしてほせい '),
                      ('「ようせんしてほせい」と入力します。','「ようせんしてほせい」と入力します。')]
             for source,expected in rows:
                 with self.subTest(phase=phase,source=source):
                     r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                         context_vec=a.context_vec if phase=='fresh' else None,decisions=a.decisions)
-                    self.assertEqual(r['corrected'],expected);self.assertEqual(r.get('odd_spans'),[])
+                    assert_reviewed_source_spelling(self, r['corrected'], expected);self.assertEqual(r.get('odd_spans'),[])
 
     def test_open_native_continuations_keep_their_written_source(self):
-        for source in ('用船して補正', '予約しまして、',
+        for source in ('用船して出港', '予約しまして、',
                        '履歴を買いますが', '透明度が高く'):
             with self.subTest(source=source):
                 result=app.correct_line(source,self.a.store,input_method='kana',

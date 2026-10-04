@@ -51,5 +51,34 @@ class NativeCandidateSeamTests(unittest.TestCase):
             self.a.dict_index), (False, 'unproven_native_continuation'))
 
 
+    def test_separate_object_does_not_require_an_earlier_meaning_label(self):
+        import app
+        for source,expected in (
+            ('数をかぞえおたら資料を保存します。','数を数えたら資料を保存します。'),
+            ('答えをおしえおたら資料を保存します。','答えを教えたら資料を保存します。'),
+            # A marked adjacent intrusion in the later noun, after an independent te-clause.
+            ('準備を済ませてほなんを読みます。','準備を済ませて本を読みます。'),
+        ):
+            with self.subTest(source=source):
+                result=app.correct_line(source,self.a.store,input_method='kana',dict_index=self.a.dict_index)
+                self.assertEqual(result['corrected'],expected)
+                self.assertEqual(result['odd_spans'],[])
+
+    def test_grammatical_edge_is_not_a_source_intactness_claim(self):
+        from reading_segments import native_object_clause_edges
+        for text in ('数を数えたら資料を保存します。','準備を済ませて学生を呼びます。'):
+            self.assertTrue(native_object_clause_edges(text),text)
+        for text in ('数を数えんたら資料を保存します。','準備を済ませで学生を呼びます。',
+                     '資料を煮て学生を呼びます。'):
+            self.assertFalse(native_object_clause_edges(text),text)
+
+    def test_kana_verb_homograph_is_not_forced_to_a_noun(self):
+        import app
+        result=app.correct_line('かいでちしきをえます。',self.a.store,
+            input_method='kana',dict_index=self.a.dict_index)
+        self.assertTrue(result['corrected'].startswith('かいで'),result)
+        self.assertEqual(result['odd_spans'],[])
+
+
 if __name__ == '__main__':
     unittest.main()

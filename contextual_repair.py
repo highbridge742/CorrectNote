@@ -368,7 +368,9 @@ def _unexplained_nominal_source_targets(line,lo,hi,start,anomalies):
     # The following noun still needs the existing anomaly and actual object
     # slot. Retain the broad interpretation, and never certify a new word
     # merely because its repaired spelling would complete the sentence.
-    starts=sorted({start}|{start+cut for cut in native_adverbial_reading_cuts(line[start:hi])})
+    from reading_segments import native_object_clause_edges
+    starts=sorted({start}|{start+cut for cut in native_adverbial_reading_cuts(line[start:hi])}
+                  |{lo+edge for edge in native_object_clause_edges(context) if lo+edge>=start})
     for cut,sizes in _original_counted_object_slots(context,include_unexplained=True):
         end=lo+cut-1
         # A plain slot attests the actual source verb and full tail. A
@@ -1447,48 +1449,32 @@ def _marked_terminal_noun_after_polite_past_targets(line,lo,hi,parts,grammar_spa
 
 
 def _marked_past_before_sahen_targets(line,lo,hi,parts,grammar_spans):
-    """Read original てた through the next native finite action."""
-    if not grammar_spans:
-        return []
-    from ime_inverse_gate import exact_context_reading
-    from literal_examples import protected_ranges, overlaps
-
-    clause=line[lo:hi]
-    protected=protected_ranges(line)
-    targets=[]
-    for i in range(len(parts)-7):
-        obj,case,verb,te,past,head,suru,aux=parts[i:i+8]
+    """Read a marked contracted past through any native finite next action."""
+    if not grammar_spans:return []
+    from morphology import dictionary_inflections
+    from literal_examples import protected_ranges,overlaps
+    clause=line[lo:hi];protected=protected_ranges(line);targets=[]
+    for i in range(len(parts)-5):
+        obj,case,verb,te,past=parts[i:i+5]
         if (not obj[5] or not obj[1].startswith('名詞')
-                or case[0]!='を' or not case[5]
-                or not case[1].startswith('助詞:格助詞')
+                or case[0]!='を' or not case[5] or not case[1].startswith('助詞:格助詞')
                 or not verb[5] or not verb[1].startswith('動詞:自立')
-                or verb[6]!='連用形'
-                or te[0]!='て' or not te[5]
-                or not te[1].startswith('動詞:非自立')
-                or past[0]!='た' or not past[5]
-                or not past[1].startswith('助動詞')
-                or not head[5] or not head[1].startswith('名詞:サ変接続')
-                or suru[0]!='し' or not suru[5]
-                or not suru[1].startswith('動詞:自立') or suru[6]!='連用形'
-                or aux[0]!='ます' or not aux[5]
-                or not aux[1].startswith('助動詞')
-                or any(a[4]!=b[3] for a,b in
-                       ((obj,case),(case,verb),(verb,te),(te,past),
-                        (past,head),(head,suru),(suru,aux)))
-                or overlaps(lo+verb[3],lo+aux[4],protected)
-                or not any(a<=te[3] and past[4]<=b for a,b in grammar_spans)):
-            continue
-        exact=exact_context_reading(clause,verb[3],past[4])
-        if not exact or exact[0]!=verb[2]+'てた':
-            continue
-        corrected=verb[2]+'て'
-        if not any(r.reading==corrected
-                   and r.operation=='adjacent_intrusion'
-                   and r.pressed=='た'
-                   for r in key_repairs(exact[0])):
-            continue
-        marks=(('品詞文法','元の過去形と次の動作の接続',
-                lo+te[3],lo+past[4]),)
+                or verb[6] not in ('連用形','連用タ接続')
+                or te[0] not in ('て','で') or not te[5] or not te[1].startswith('動詞:非自立')
+                or past[0]!='た' or not past[5] or not past[1].startswith('助動詞')
+                or any(a[4]!=b[3] for a,b in ((obj,case),(case,verb),(verb,te),(te,past)))
+                or overlaps(lo+verb[3],hi,protected)
+                or not any(a<=te[3] and past[4]<=b for a,b in grammar_spans)
+                or _modern_te_allowed(verb[0],verb[2],te[0]) is not True
+                or not _finite_written_predicate(clause[past[4]:])):continue
+        # The original written verb already has an exact native form and
+        # reading. A first-choice IME round trip is not a second prerequisite.
+        if not any(p.startswith('動詞,自立,') and f==verb[6] and rd==verb[2]
+                   for p,f,base,rd in dictionary_inflections(verb[0]) or ()):continue
+        reading=verb[2]+te[2]
+        if not any(r.reading==reading and r.operation=='adjacent_intrusion'
+                   and r.pressed==past[2] for r in key_repairs(reading+past[2])):continue
+        marks=(('品詞文法','元の過去形と次の動作の接続',lo+te[3],lo+past[4]),)
         targets.append(RepairTarget(line,lo+verb[3],lo+past[4],lo,hi,
             marks,True,line[lo+past[4]:hi],'lexical'))
     return targets
@@ -1838,9 +1824,9 @@ def _marked_single_key_between_sahen_actions_targets(line,lo,hi,parts,grammar_sp
         targets.append(RepairTarget(line,lo+head[3],lo+extra[4],lo,hi,
             marks,True,line[lo+extra[4]:hi],'source_sahen_action_bridge',
             candidate_surface=head[0]+'して',candidate_reading=corrected))
-    if 'てし' in clause or 'んし' in clause:
+    if 'てし' in clause or 'んし' in clause or 'かし' in clause:
         from pos_grammar import _orphaned_particle_before_sahen_action_windows
-        for head,extra,aux in _orphaned_particle_before_sahen_action_windows(parts):
+        for head,extra,aux in _orphaned_particle_before_sahen_action_windows(parts,clause):
             if (overlaps(lo+head[3],lo+aux[4],protected)
                     or not any(a<=extra[3] and extra[4]<=b for a,b in grammar_spans)):
                 continue
@@ -2928,9 +2914,18 @@ def _native_kana_targets(line,lo,hi,tokenize,store,dictionary,odd,grammar_spans=
     # establishes this scope when tokenization has split the head itself.
     if (odd or grammar_spans) and _is_input_reading(clause):
         from morphology import dictionary_inflections
-        from reading_segments import completed_native_reading
+        from reading_segments import completed_native_reading,native_adnominal_modifier_ranges
         if not completed_native_reading(clause):
+            modifiers=native_adnominal_modifier_ranges(clause)
             for cut,prefix,heads in _native_sahen_reading_heads(clause):
+                # A source-proved modifier owns its native copula as well
+                # as its head. A homophonic action noun cannot reopen that
+                # boundary merely because the following noun is unknown.
+                if any(begin==0 and cut<end for begin,end in modifiers):continue
+                # An independently proved longer nominal head owns its
+                # copula; its inner sahen noun cannot steal that ending.
+                if any(t.boundary_kind=='kana_copula' and lo+cut<t.start
+                       and t.end==hi for t in result):continue
                 marks=[(a,b) for a,b in grammar_spans if cut<b]
                 marks.extend((a,b) for _,_,a,b in odd if cut<b)
                 if not marks:continue
@@ -2938,6 +2933,8 @@ def _native_kana_targets(line,lo,hi,tokenize,store,dictionary,odd,grammar_spans=
                        and _productive_predicate(head+clause[cut:],head) for head in heads):continue
                 result.append(RepairTarget(line,lo,hi,lo,hi,
                     tuple(('品詞文法','原文のサ変接続',lo+a,lo+b) for a,b in dict.fromkeys(marks)),True,'','sahen_tail',prefix))
+                result.append(RepairTarget(line,lo,hi,lo,hi,
+                    tuple(('品詞文法','原文のサ変接続',lo+a,lo+b) for a,b in dict.fromkeys(marks)),True,'','lexical'))
                 break
     # 48-ALI/ANY: a marked nominal slot does not require a broad
     # request-word target. A proved source adjunct can include kana parsed
@@ -3048,6 +3045,15 @@ def _native_marked_word_prefix_targets(targets):
                if target.start<=offset+a and offset+b<=target.end]
         if not marks:continue
         first=min(a for a,b in marks)
+        previous=next((part for part in native_tokenize(context)
+            if part.end==target.start-offset and part.has_reading
+            and part.pos in ('動詞','形容詞','名詞')),None)
+        if previous and target.end-offset-previous.start<=18:
+            # A malformed original syllable can be the tail of the same
+            # IME-split word. Keep the full readable native word as a
+            # competing scope; physical and grammatical checks are shared.
+            wide=replace(target,start=offset+previous.start,boundary_kind='lexical')
+            if wide not in targets:targets.append(wide)
         edges=set(native_adverbial_reading_cuts(context))
         for part in native_tokenize(context):
             if part.end>first:break
@@ -3408,7 +3414,8 @@ def targets_for_line(line, tokenize, store, dictionary, _keep_completed=True,
         targets.extend(_marked_terminal_noun_after_polite_past_targets(
             line,lo,hi,parts,grammar_spans))
         targets.extend(_marked_past_before_sahen_targets(
-            line,lo,hi,parts,grammar_spans))
+            line,lo,hi,parts,tuple(dict.fromkeys(grammar_spans+[
+                (a,b) for kind,reason,a,b in odd if kind=='品詞文法']))))
         targets.extend(_marked_double_native_polite_tail_targets(
             line,lo,hi,parts,grammar_spans))
         targets.extend(_marked_terminal_polite_connective_targets(
@@ -3859,10 +3866,14 @@ def targets_for_line(line, tokenize, store, dictionary, _keep_completed=True,
     # A malformed next word must not consume a completed native link.
     # Keep the same original anomaly and context; only its editable range narrows.
     from reading_segments import native_completed_clause_boundaries
+    from particle_frames import unlinked_past_predicate_frames
+    broken_past=unlinked_past_predicate_frames(line)
     bounded=[]
     for target in targets:
         edges=[target.context_start+edge for edge in native_completed_clause_boundaries(target.context)
-               if target.start<target.context_start+edge<target.end]
+               if target.start<target.context_start+edge<target.end
+               and not any(frame['start']<target.context_start+edge<frame['end']
+                           for frame in broken_past)]
         if edges and target.boundary_kind in ('lexical','ime_scope') and not target.preserved_head and not target.spelling:
             target=replace(target,start=max(edges))
         if target not in bounded:bounded.append(target)
@@ -3872,6 +3883,26 @@ def targets_for_line(line, tokenize, store, dictionary, _keep_completed=True,
     targets=_native_verb_prefix_targets(targets)
     targets=_native_focused_prefix_targets(targets)
     targets=_native_marked_word_prefix_targets(targets)
+    # An actual limit case and a separately proved following object clause
+    # delimit the earlier marked nominal. Do not search both as one word.
+    from morphology import tokenize as native_tokens
+    from reading_segments import native_object_predicate_contexts,native_object_predicate_proof
+    for target in tuple(targets):
+        if not target.structural or not target.anomalies or target.spelling:continue
+        parts=native_tokens(target.context)
+        for limit,case in zip(parts,parts[1:]):
+            if (limit.surface!='まで' or limit.pos!='助詞' or not limit.has_reading
+                    or case.surface!='に' or case.pos!='助詞' or not case.has_reading
+                    or limit.end!=case.start):continue
+            cut=target.context_start+limit.start
+            if not target.start<cut<target.end:continue
+            if not any(target.start<=a<b<=cut for _,_,a,b in target.anomalies):continue
+            following=target.context[case.end:]
+            if not any(begin==0 and native_object_predicate_proof(following,edge,faces)
+                       for begin,edge,faces in native_object_predicate_contexts(following)):continue
+            narrow=replace(target,end=cut,boundary_kind='lexical',
+                following=target.source[cut:target.context_end])
+            if narrow not in targets:targets.append(narrow)
     ordered=sorted(targets, key=lambda t: (t.start, not bool(t.preserved_head),
                                          t.boundary_kind=='lexical', -(t.end-t.start)))
     if _keep_completed and completed_boundaries:
@@ -3900,7 +3931,9 @@ def _source_object_predicate_frame(line,start,end):
     lo,hi=_source_clause_bounds(line,start,end)
     original=line[lo:hi]
     from reading_segments import native_completed_clause_boundaries
-    seams=tuple(edge for edge in native_completed_clause_boundaries(original) if edge<=start-lo)
+    from reading_segments import _native_source_clauses
+    punctuation=tuple(offset for offset,clause in _native_source_clauses(original) if offset<=start-lo)
+    seams=tuple(edge for edge in native_completed_clause_boundaries(original) if edge<=start-lo)+punctuation
     frames=[f for f in native_object_predicate_contexts(original) if f[1]<=start-lo
             and not any(f[1]<edge for edge in seams)]
     # An independently completed earlier clause owns its object. A mark
@@ -3926,7 +3959,7 @@ def _original_counted_object_slots(text,include_unexplained=False):
         tail=text[position+1:]
         sizes=_native_counter_prefixes(tail,tokenize(tail))
         if sizes:slots.append((position+1,sizes))
-        elif (include_unexplained and 2<=position<=12 and _is_input_reading(text[:position])
+        elif (include_unexplained and position>0
                 and not native_nominal_phrase_faces(text[:position])):
             complete=completed_native_link_clause(tail)
             if not complete:
@@ -3963,6 +3996,17 @@ def _original_counted_object_slots(text,include_unexplained=False):
     return tuple(slots)
 
 
+def _source_te_edges(text):
+    """Actual native continuative + te/de boundaries, before any repair."""
+    from morphology import tokenize
+    parts=tokenize(text)
+    return tuple(link.end for verb,link in zip(parts,parts[1:])
+        if verb.has_reading and verb.pos=='動詞' and verb.end==link.start
+        and link.has_reading and link.pos=='助詞' and link.pos_sub=='接続助詞'
+        and link.surface in ('て','で')
+        and _modern_te_allowed(verb.surface,verb.reading,link.surface) is True)
+
+
 def _changed_object_slot_allowed(line,start,end,surface,require_positive_plain=False):
     """48-AIG/ALT: a changed object owns its unchanged case and predicate.
 
@@ -3985,6 +4029,51 @@ def _changed_object_slot_allowed(line,start,end,surface,require_positive_plain=F
             for begin,cut,nouns in native_object_predicate_contexts(clause,allow_written_predicate=True)]
     matcher=SequenceMatcher(None,original,changed,autojunk=False)
     edits=[(a,b,c,d) for tag,a,b,c,d in matcher.get_opcodes() if tag!='equal']
+    # A newly repaired noun cannot introduce an explicit conflict with its
+    # own unchanged predicate. Missing meaning stays unknown; a separate
+    # later clause cannot veto this object edit.
+    from reading_segments import _native_written_predicate_conflicts,native_predicate_link_boundaries
+    for begin,cut,nouns,finish in frames:
+        if not any(begin<=c<cut-1 and c<d<=cut-1 for a,b,c,d in edits):continue
+        fragment=changed[begin:finish];head=cut-begin
+        edge=min(native_predicate_link_boundaries(fragment,head) or (len(fragment),))
+        if any(head<=a<edge for _,_,a,b in _native_written_predicate_conflicts(fragment)):
+            return False
+        # Complete native grammar and the same object's positive meaning
+        # outrank an accidental short kana verb in the best tokenization.
+        if (native_object_predicate_proof(fragment,head,nouns)
+                or native_object_predicate_proof(fragment,head,nouns,allow_link=True)):
+            continue
+        from morphology import tokenize as native_tokenize
+        from semantic_roles import nominal_roles,nominal_role_matches,native_verb_roles
+        native=native_tokenize(fragment);verb=next((p for p in native if p.start==head),None)
+        from morphology import dictionary_inflections
+        forms=tuple(row for row in dictionary_inflections(verb.surface) or ()
+            if row[0].startswith('動詞,自立,') and row[1]==verb.infl_form and row[3]==verb.reading) if verb else ()
+        native_head=bool(verb and verb.has_reading and forms and
+            (verb.end==edge or _allows_grammatical_tail(forms,fragment[verb.end:edge],verb.reading,verb.surface)))
+        roles=native_verb_roles(verb.surface,verb.infl_form,verb.reading) if native_head else ()
+        # Only a proposed replacement is checked here. An unknown role
+        # remains unknown and cannot mark normal source text as erroneous.
+        if (roles and nouns and all(nominal_roles(noun) for noun in nouns)
+                and not any(nominal_role_matches(noun,roles) for noun in nouns)):
+            return False
+    if require_positive_plain:
+        # A malformed written noun may end in a spurious auxiliary, so
+        # nominal source discovery cannot yet recognize it. The literal
+        # accusative particle and entire unchanged predicate still bound
+        # the candidate's own positive meaning check.
+        from morphology import tokenize
+        for part in tokenize(original):
+            if not (part.has_reading and part.surface=='を' and part.pos=='助詞'
+                    and part.pos_sub.startswith('格助詞') and end-lo<=part.start):continue
+            cut=next((block.b+part.end-block.a for block in matcher.get_matching_blocks()
+                if block.a<=part.start and len(original)<=block.a+block.size),None)
+            if cut is None:continue
+            for begin,edge,nouns,finish in frames:
+                if edge!=cut or not all(begin<=c<=d<=cut-1 for a,b,c,d in edits):continue
+                if native_object_predicate_proof(changed[begin:finish],cut-begin,nouns):
+                    proved_plain=True
     for predicate_start,quantities in _original_counted_object_slots(original,include_unexplained=True):
         if quantities==(0,) and not any(block.a<=predicate_start-1
                 and len(original)<=block.a+block.size for block in matcher.get_matching_blocks()):
@@ -4000,6 +4089,12 @@ def _changed_object_slot_allowed(line,start,end,surface,require_positive_plain=F
                 from reading_segments import native_surface_nominal_heads,native_lexical_reading_faces
                 prefix=changed[:cut-1]
                 if native_surface_nominal_heads(prefix) or native_lexical_reading_faces(prefix):
+                    continue
+                from reading_segments import native_modified_nominal_contexts
+                if any(case+1==cut for begin,head,case,finish,faces
+                       in native_modified_nominal_contexts(changed)):
+                    # The same relative/genitive modifier and unchanged
+                    # predicate already prove this exact repaired object.
                     continue
                 # The legacy two-word composer already proves these exact
                 # native nouns through the shared compound relation. This is
@@ -4018,11 +4113,11 @@ def _changed_object_slot_allowed(line,start,end,surface,require_positive_plain=F
             if not any(edge==cut for begin,edge,nouns,finish in frames):
                 from morphology import tokenize
                 from reading_segments import (native_completed_clause_boundaries,
-                                              completed_native_link_clause)
+                                              native_object_clause_edges,completed_native_link_clause)
                 for offset,clause in clauses:
                     if not offset<cut<=offset+len(clause):continue
                     prefix=clause[:cut-offset-1]
-                    boundaries=list(native_completed_clause_boundaries(clause))
+                    boundaries=list(native_completed_clause_boundaries(clause))+list(native_object_clause_edges(clause))+list(native_predicate_link_boundaries(clause,0))
                     for part in tokenize(prefix):
                         if not (part.has_reading and part.pos=='助詞'
                                 and part.pos_sub=='接続助詞'):continue
@@ -4312,9 +4407,63 @@ def _written_object_native_finite_action(line):
                                                cut,(object_text,),allow_link=True))
 
 
+def _later_object_scope(line,start,end,surface):
+    """Locate a later actual object without requiring a semantic label."""
+    from reading_segments import native_object_clause_edges,native_object_predicate_frames
+    edges=sorted(set(_source_te_edges(line[:start]))|set(native_object_clause_edges(line[:start])))
+    for edge in reversed(edges):
+        original=line[edge:];changed=line[edge:start]+surface+line[end:]
+        # The new actual noun/case owns its unchanged predicate. Absence of
+        # a role label is not evidence that this ordinary noun is invalid.
+        if (native_object_predicate_frames(changed.rstrip('。！？.!?'),True)
+                and _changed_object_slot_allowed(original,start-edge,end-edge,surface)
+                and _wide_object_predicate_allowed(original,start-edge,end-edge,surface)):
+            return edge
+    return None
+
+
+
+def independently_spelled_object_verb(line,start,end,surface):
+    """Spell one existing finite verb while leaving an unknown modifier alone.
+
+    The literal head, inflection and full tail must be unchanged. Its sense
+    needs a positively fitting original object in the same argument scope.
+    This proves only the spelling; it never clears the unknown phrase.
+    """
+    from morphology import tokenize,dictionary_inflections,native_spelling_only
+    if not native_spelling_only(line[start:end],surface):return False
+    parts=tokenize(line)
+    head=next((t for t in parts if t.start==start and t.end==end
+        and t.has_reading and t.pos=='動詞' and t.pos_sub=='自立'),None)
+    if head is None:return False
+    tail=line[end:].rstrip('。！？.!?')
+    forms=tuple(row for row in dictionary_inflections(surface) or ()
+        if row[0].startswith('動詞,自立,') and row[1]==head.infl_form and row[3]==head.reading)
+    if (not forms or not _allows_grammatical_tail(forms,tail,head.reading,surface)
+            or not _productive_predicate(surface+tail,surface)):
+        return False
+    ending=tokenize(surface+tail)
+    if not ending:return False
+    last=ending[-1]
+    if not _completed_predicate_token((last.surface,last.pos+':'+last.pos_sub,
+            last.reading,last.start,last.end,last.has_reading,last.infl_form)):
+        return False
+    from reading_segments import native_object_predicate_contexts,native_predicate_link_boundaries
+    from semantic_roles import candidate_evidence
+    for begin,cut,faces in native_object_predicate_contexts(line,True):
+        if cut>start or any(cut<edge<=start for edge in native_predicate_link_boundaries(line,cut)):
+            continue
+        for face in faces:
+            proof=candidate_evidence(face,surface,tail,line[:start])
+            if proof and proof.get('shared_roles'):return proof
+    return False
+
+
 def object_predicate_candidate_allowed(line,start,end,surface,spelling=False):
     """A proposed edit completes the same independently proved object clause."""
     if not _changed_genitive_object_allowed(line,start,end,surface):return False
+    if spelling and independently_spelled_object_verb(line,start,end,surface):return True
+    if _later_object_scope(line,start,end,surface) is not None:return True
     frame=_source_object_predicate_frame(line,start,end)
     if frame is None:
         return (_changed_object_slot_allowed(line,start,end,surface)
@@ -4365,6 +4514,39 @@ def _changed_shifted_predicate_tail_allowed(line,start,end,surface):
     return True
 
 
+def _changed_adjective_excess_allowed(line,start,end,surface):
+    """An actual adjective/excess connection keeps its own native head.
+
+    The best parse of a proposal can introduce a conjunction between them;
+    that does not repair the original bound degree expression. Other native
+    clauses, including an original conjunction, provide no such constraint.
+    """
+    from morphology import tokenize,native_spelling_only,native_excess_head
+    from difflib import SequenceMatcher
+    source=tokenize(line)
+    frames=[(head,tail) for head,tail in zip(source,source[1:])
+        if head.has_reading and head.pos=='形容詞' and head.pos_sub=='自立'
+        and head.end==tail.start and tail.has_reading and tail.pos=='動詞'
+        and tail.pos_sub=='非自立' and tail.base_form in ('すぎる','過ぎる')
+        and head.start<end and start<=tail.end]
+    if not frames:return True
+    changed=line[:start]+surface+line[end:]
+    if changed==line:return True
+    blocks=SequenceMatcher(None,line,changed,autojunk=False).get_matching_blocks()
+    parts=tokenize(changed)
+    for head,tail in frames:
+        mapped=next((b.b+tail.end-b.a for b in blocks
+                     if b.a<tail.end<=b.a+b.size),None)
+        if mapped is None:return False
+        adjacent=[(a,b) for a,b in zip(parts,parts[1:]) if b.end==mapped
+            and b.has_reading and b.pos=='動詞' and b.base_form in ('すぎる','過ぎる')
+            and a.has_reading and a.end==b.start and a.pos=='形容詞'
+            and native_spelling_only(head.base_form,a.base_form)
+            and native_excess_head(a.surface,a.reading) is True]
+        if not adjacent:return False
+    return True
+
+
 def changed_native_action_attachment_allowed(line,start,end,surface):
     """A narrow/wide edit cannot leave an unchanged action head unattached.
 
@@ -4376,6 +4558,7 @@ def changed_native_action_attachment_allowed(line,start,end,surface):
     if not changed_past_link_allowed(line,start,end,surface):return False
     if not changed_written_suru_allowed(line,start,end,surface):return False
     if not _changed_shifted_predicate_tail_allowed(line,start,end,surface):return False
+    if not _changed_adjective_excess_allowed(line,start,end,surface):return False
     from reading_segments import native_written_action_attachment_heads
     written=native_written_action_attachment_heads(line)
     if written:
@@ -4389,7 +4572,12 @@ def changed_native_action_attachment_allowed(line,start,end,surface):
     lo,hi=_source_clause_bounds(line,start,end)
     original=line[lo:hi];changed=line[lo:start]+surface+line[end:hi]
     begins=[0]+[edge for edge in native_completed_clause_boundaries(original) if edge<=start-lo]
-    begin=max(begins);old=original[begin:];new=changed[begin:]
+    # A best-path clause edge inside the proved action noun cannot remove
+    # that noun from the common check of a narrower competing repair.
+    owners=[begin for begin in begins for cut in native_polite_action_prefixes(original[begin:])
+            if begin<=start-lo<begin+cut]
+    begin=min(owners) if owners else max(begins)
+    old=original[begin:];new=changed[begin:]
     if not old or not new or not all('ぁ'<=c<='ゖ' for c in old):return True
     for cut in native_polite_action_prefixes(old):
         if old==new:continue
@@ -4401,6 +4589,7 @@ def changed_native_action_attachment_allowed(line,start,end,surface):
             elif part.has_reading:readings.append(part.reading)
             else:return False
         reading=''.join(readings)
+        if not reading.startswith(old[:cut]):return False
         if (not _written_predicate_reading_preserved(parts,0,reading)
                 or not (completed_native_reading(reading) or completed_native_source_sequence(reading))):
             return False
@@ -4508,10 +4697,18 @@ def preserves_completed_reading_link(line,start,end,surface):
 def _reading_strength(reading):
     direct=(reading.source in ('current_ime_occurrence','original_spelling','literal_kana')
             or (reading.segments and all(s[3] in ('literal_kana','current_ime_occurrence') for s in reading.segments)))
+    native=bool(reading.segments and all(s[3] in ('literal_kana','current_ime_occurrence','analyzed_word') for s in reading.segments))
     saved=reading.source=='saved_ime_pair'
-    first=reading.source=='ime_first_roundtrip'
-    return (0 if direct else 1 if first else 2 if saved
-            else 3 if reading.source=='ime_source_candidate' else 4,
+    context_roundtrip=(reading.source=='ime_context_roundtrip' and reading.rank==0
+        and bool(reading.segments) and reading.segments[0][0]==0
+        and all(a<b and kind=='ime_context_word' for a,b,rd,kind in reading.segments)
+        and all(left[1]==right[0] for left,right in zip(reading.segments,reading.segments[1:]))
+        and ''.join(segment[2] for segment in reading.segments)==reading.text)
+    first=reading.source=='ime_first_roundtrip' or context_roundtrip
+    # A dictionary analysis is stronger than a speculative reverse reading,
+    # but it is not the person's committed IME reading or a proved roundtrip.
+    return (0 if direct else 1 if first else 2 if saved else 3 if native
+            else 4 if reading.source=='ime_source_candidate' else 5,
             reading.rank, reading.text,
             reading.segments, reading.source)
 
@@ -4596,6 +4793,36 @@ def _with_search_report(fn):
             return surface,diagnostic
         finally:_SEARCH.reset(token)
     return wrapped
+
+
+
+def _keeps_native_inflection_readings(reading,parts):
+    """Weak reverse guesses keep the original word's attested inflection."""
+    evidence=reading.provenance or ((reading.source,reading.rank,reading.segments),)
+    if any(source in ('current_ime_occurrence','saved_ime_pair','original_spelling',
+            'ime_first_roundtrip','ime_context_roundtrip','ime_source_candidate')
+            for source,rank,segments in evidence):return True
+    from morphology import dictionary_inflections
+    constraints=[]
+    for token in parts:
+        if not (token[5] and token[1].startswith(('動詞:自立','形容詞:自立'))
+                and any('一'<=c<='鿿' for c in token[0])
+                and any('ぁ'<=c<='ゖ' for c in token[0])):continue
+        readings={rd for pos,form,base,rd in dictionary_inflections(token[0]) or ()
+            if pos.startswith(token[1].split(':')[0]+',自立,')
+            and form==token[6]}
+        if token[2] in readings:constraints.append((token[3],token[4],readings))
+    if not constraints:return True
+    for source,rank,segments in evidence:
+        compatible=True
+        for start,end,readings in constraints:
+            hit=[(a,b,rd) for a,b,rd,kind in segments if start<=a<b<=end]
+            if not (hit and hit[0][0]==start and hit[-1][1]==end
+                    and all(left[1]==right[0] for left,right in zip(hit,hit[1:]))
+                    and ''.join(rd for a,b,rd in hit) in readings):
+                compatible=False;break
+        if compatible:return True
+    return False
 
 
 def reading_evidence(target, tokenize, dictionary, limit=32):
@@ -4821,7 +5048,8 @@ def reading_evidence(target, tokenize, dictionary, limit=32):
             have = {r for r, _, _ in options}
             options.extend((rd, score+4, 'unrecognized_ime_sequence')
                            for rd, score in raw if rd not in have)
-        elif (not confirmed_first and len(t[0]) == 1 and '一' <= t[0] <= '鿿'
+        elif ((not confirmed_first or target.boundary_kind=='question_particle')
+                and len(t[0]) == 1 and '一' <= t[0] <= '鿿'
                 and (t[1].startswith('名詞') or target.boundary_kind=='question_particle')):
             # 一字の誤変換には、最良解析の品詞以外の音訓もあり得る。
             # 終止した丁寧節の異様な末尾も、名詞だけでなく同じ読み根拠で扱う。
@@ -4840,7 +5068,8 @@ def reading_evidence(target, tokenize, dictionary, limit=32):
     if not out:
         for r in _bounded(kanji_guess.reading_combos_with_evidence(text, dictionary, max_combos=limit+1),limit,'fallback_readings'):
             add(Reading(r['reading'], r['source'], r['rank']))
-    return _bounded(merge_readings(out.values()),limit,'readings')
+    return _bounded([rd for rd in merge_readings(out.values())
+                     if _keeps_native_inflection_readings(rd,parts)],limit,'readings')
 
 
 def _render(keys):
@@ -5039,14 +5268,21 @@ def lexical_omission_repairs(reading,dictionary,include_shift=False,nominal_comp
 
 @lru_cache(maxsize=2048)
 def _native_sahen_reading_heads(reading):
-    from reading_segments import _native_nominal_reading_faces,native_action_noun_reading
+    from reading_segments import _native_nominal_reading_faces,native_bare_action_faces
     out=[]
+    # A longer original noun before an actual nominal particle owns its
+    # internal syllables, even when that noun has no semantic label yet.
+    # A shorter homophone cannot claim the rest of the clause as its tail.
+    nominal_edges=[edge for edge in range(2,len(reading))
+        if reading[edge] in 'をがにへでもはと' and _native_nominal_reading_faces(reading[:edge])]
     for cut in range(2,len(reading)):
         prefix=reading[:cut]
-        heads=tuple(face for face in _native_nominal_reading_faces(prefix)
-                    if native_action_noun_reading(face,prefix))
+        if any(cut<=edge for edge in nominal_edges):continue
+        heads=native_bare_action_faces(prefix)
         if heads:out.append((cut,prefix,heads))
-    return tuple(out)
+    # Prefer the longest independently attested original action head.
+    # Its internal homophones cannot claim a longer functional tail.
+    return tuple(sorted(out,reverse=True))
 
 
 @lru_cache(maxsize=2048)
@@ -5158,14 +5394,14 @@ def request_shift_key_repairs(target, reading, before='', after=''):
                 first.cost+second.cost,(first,second))
 
 
-def _original_intrusion_allowed(reading, repair, before='', after=''):
+def _original_intrusion_allowed(reading, repair, before='', after='', removed=()):
     """Check every dropped key against the original neighbors, including Shift."""
     if repair.operation!='adjacent_intrusion':return True
     import kana_layout as k
     keys=tuple(key for c in reading for key in k.keystrokes(c))
     i=repair.position
     if not 0<=i<len(keys) or keys[i]!=repair.pressed:return False
-    adjacent=[keys[j] for j in (i-1,i+1) if 0<=j<len(keys)]
+    adjacent=[keys[j] for j in (i-1,i+1) if 0<=j<len(keys) and j not in removed]
     if i==0 and before:adjacent.append(k.keystrokes(before[-1])[-1])
     if i==len(keys)-1 and after:adjacent.append(k.keystrokes(after[0])[0])
     return (not any(k.same_physical_key(keys[i],other) for other in adjacent)
@@ -5227,6 +5463,13 @@ def independent_key_pair_repairs(reading,dictionary,before='',after=''):
         for second in atoms:
             b=second.position;bz=b+len(second.pressed)
             if not a<b or az>b:continue
+            # Two deleted keys cannot serve as each other's only physical
+            # witness. An intrusion still needs an original neighbor which
+            # survives this pair; reconstructed or inserted neighbors do not count.
+            removed={i for row in (first,second) if row.operation=='adjacent_intrusion'
+                       for i in range(row.position,row.position+len(row.pressed))}
+            if not all(_original_intrusion_allowed(reading,row,before,after,removed)
+                       for row in (first,second)):continue
             if not _search_step('independent_key_pairs',16384):return
             changed=keys[:a]+tuple(first.intended)+keys[az:b]+tuple(second.intended)+keys[bz:]
             restored=_render(changed)
@@ -5458,7 +5701,19 @@ def validate(target, surface, engine, tokenize, store, dictionary, decisions=Non
     if target.spelling and surface!=target.spelling[0].normal:
         return False, 'spelling_stem_changed'
     if target.preserved_head and not surface.startswith(target.preserved_head):
-        return False, 'known_action_changed'
+        # A preserved kana head may gain only its exact native spelling.
+        # Align complete candidate tokens; do not cut inside written words
+        # or compare an IME-guessed reading to the source's lexical head.
+        from morphology import tokenize as native_tokenize,native_spelling_only
+        kept=False;reading=''
+        if _is_input_reading(target.preserved_head):
+            for token in native_tokenize(surface):
+                if not token.has_reading:break
+                reading+=token.reading
+                if len(reading)>=len(target.preserved_head):
+                    kept=(reading==target.preserved_head and native_spelling_only(
+                        target.preserved_head,surface[:token.end]));break
+        if not kept:return False, 'known_action_changed'
     if target.boundary_kind=='case_leading_intrusion' and surface!=target.text[1:]:
         return False, 'source_verb_changed'
     accepted, reason = engine._check_replacement(target.source,
@@ -5493,6 +5748,40 @@ def validate(target, surface, engine, tokenize, store, dictionary, decisions=Non
     if oddness.structural_anomaly_in_range(changed,local_start,local_end,
                                           tokenize,store,dictionary):
         return False, 'context_still_anomalous'
+    # Preserve a dictionary-form source verb with a proved fitting object
+    # while repairing its polite attachment. Original nominal/case seams
+    # remain evidence even when the full parse swallowed the predicate.
+    from semantic_roles import object_before,native_verb_roles,nominal_role_matches
+    from reading_segments import native_nominal_phrase_faces,native_object_predicate_frames
+    from morphology import dictionary_inflections,native_potential_origins
+    original_parts=list(tokenize(target.context))
+    source_segments=[(0,original_parts,())]
+    if (any(not t[5] for t in original_parts)
+            or any(oddness.polite_aux_mismatch(a,b) for a,b in zip(original_parts,original_parts[1:]))):
+        for cut,faces in native_object_predicate_frames(target.context.rstrip('。！？.!?')):
+            source_segments.append((cut,list(tokenize(target.context[cut:])),faces))
+    proved=set()
+    for offset,segment,object_faces in source_segments:
+        for original,aux in zip(segment,segment[1:]):
+            begin,end=offset+original[3],offset+original[4]
+            if (not original[5] or original[1]!='動詞:自立' or original[6]!='基本形'
+                    or not _is_reading(original[0]) or original[4]!=aux[3]
+                    or not oddness.polite_aux_mismatch(original,aux)
+                    or not (begin<target.end-target.context_start
+                            and target.start-target.context_start<end)):continue
+            if not any(p.startswith('動詞,自立,') and f==original[6] and r==original[2]
+                    for p,f,b,r in dictionary_inflections(original[0]) or ()):continue
+            obj=object_before(target.context,begin,tokenize)
+            faces=object_faces or (native_nominal_phrase_faces(obj) if _is_reading(obj) else (obj,))
+            roles=native_verb_roles(original[0],original[6],original[2])
+            if any(nominal_role_matches(face,roles) for face in faces):proved.add(('reading',original[2]))
+    if proved:
+        actual=set(_candidate_verb_bases(changed,tokenize))
+        for token in tokenize(changed):
+            if token[5] and token[1].startswith('動詞'):
+                actual.update(('reading',rd) for base,rd in
+                    native_potential_origins(token[0],token[6],token[2]))
+        if not proved & actual:return False,'original_object_verb_reading'
     if target.boundary_kind=='relative_predicate':
         from relative_key_repair import supports_replacement
         if not supports_replacement(target,surface):return False,'relative_head_meaning'
@@ -5591,8 +5880,40 @@ def validate(target, surface, engine, tokenize, store, dictionary, decisions=Non
     # on every pre-existing lexical repair in the application.
     source_contexts=(native_argument_predicate_contexts if target.boundary_kind=='kana_predicate'
                      else native_object_predicate_contexts)
-    source_frames=[(start,cut,faces) for start,cut,faces in source_contexts(target.context)
-                   if cut<=target.start-target.context_start and target.end<=target.context_end]
+    frames=source_contexts(target.context)
+    if target.boundary_kind!='kana_predicate' and not frames:
+        # An unchanged written continuation does not detach a malformed
+        # kana predicate from its original object. Keep discovery separate:
+        # this check only validates an already discovered candidate.
+        from reading_segments import native_completed_clause_boundaries,native_object_clause_edges
+        local=target.start-target.context_start
+        scopes=tuple(native_completed_clause_boundaries(target.context))+tuple(native_object_clause_edges(target.context))
+        frames=tuple(row for row in native_object_predicate_contexts(target.context,True)
+            if row[1]<=local and not any(row[1]<edge<=local for edge in scopes))
+    from reading_segments import _native_source_clauses
+    own_clause=max((offset for offset,clause in _native_source_clauses(target.context)
+        if offset<=target.start-target.context_start<offset+len(clause)),default=0)
+    source_frames=[(start,cut,faces) for start,cut,faces in frames
+                   if own_clause<=start and cut<=target.start-target.context_start
+                   and target.end<=target.context_end]
+    # A separately written finite path motion owns no earlier non-path
+    # object when another actual verb already intervenes. Its lexical sense
+    # and auxiliary chain are still checked at the unchanged source span.
+    from semantic_roles import _motion_tail_cannot_take_object
+    from morphology import tokenize as native_tokenize
+    local=target.start-target.context_start
+    if source_frames:
+        native=native_tokenize(target.context)
+        source_frames=[row for row in source_frames if not (row[2]
+            and all(_motion_tail_cannot_take_object(target.context[local:],face) for face in row[2])
+            and any(row[1]<=part.start<part.end<=local and part.has_reading
+            and part.pos=='動詞' and part.pos_sub=='自立' for part in native))]
+    # A later noun/case owns its predicate. Share the same scope as the
+    # common replacement check; absent meaning labels cannot revive an
+    # earlier clause's object as the argument of this different action.
+    edge=_later_object_scope(target.context,target.start-target.context_start,
+                             target.end-target.context_start,surface)
+    if edge is not None:source_frames=[row for row in source_frames if row[0]>=edge]
     if target.boundary_kind=='kana_predicate' or source_frames:
         proof_start=max((start for start,cut,faces in source_frames),default=0)
         changed_start=proof_start+sum(len(text)-(b-a) for a,b,text in siblings if b<=proof_start)
@@ -5608,13 +5929,33 @@ def validate(target, surface, engine, tokenize, store, dictionary, decisions=Non
         if expected_reading is not None:
             actual=''.join(p.surface if _is_reading(p.surface) else p.reading
                 for p in native_tokenize(surface) if _is_reading(p.surface) or p.has_reading)
-            if actual!=expected_reading:return False,'predicate_reading'
+            if actual!=expected_reading:
+                from morphology import native_spelling_only
+                if not native_spelling_only(expected_reading,surface):return False,'predicate_reading'
         completed=native_object_predicate_proof(changed_predicate_context,local_cut,source_faces)
         if not completed:
             retained=_unchanged_finite_connective(source_predicate_context,changed_predicate_context)
             bare=changed_predicate_context[:-1] if changed_predicate_context[-1:] in '。！？.!?' else changed_predicate_context
             if retained and bare.endswith(retained):
                 completed=native_object_predicate_proof(bare[:-len(retained)],local_cut,source_faces)
+        if not completed:
+            # Validate this predicate up to an unchanged native link. A
+            # second malformed clause must not invalidate the first repair.
+            from difflib import SequenceMatcher
+            blocks=SequenceMatcher(None,source_predicate_context,
+                                   changed_predicate_context,autojunk=False).get_matching_blocks()
+            source_edit_end=target.end-target.context_start-proof_start
+            for edge in _source_te_edges(source_predicate_context):
+                if edge<source_edit_end:continue
+                mapped=next((block.b+edge-block.a for block in blocks
+                             if block.a<=edge-1 and edge<=block.a+block.size),None)
+                if mapped is None or mapped<local_end-changed_start:continue
+                if native_object_predicate_proof(changed_predicate_context[:mapped],
+                                                 local_cut,source_faces,allow_link=True):
+                    completed=True
+                    source_predicate_context=source_predicate_context[:edge]
+                    changed_predicate_context=changed_predicate_context[:mapped]
+                    break
         if not completed:return False,'unproven_object_predicate'
         if expected_reading is not None:
             # The isolated spelling and its full-context parse can select
@@ -5628,7 +5969,25 @@ def validate(target, surface, engine, tokenize, store, dictionary, decisions=Non
             if contextual!=expected_reading:
                 literal=(changed_predicate_context[:begin]+expected_reading
                          +changed_predicate_context[finish:])
-                if not _object_predicate_candidate_fits(
+                from morphology import dictionary_inflections
+                from semantic_roles import native_case_support
+                from context_meaning import supports_span
+                # A written argument can have several attested native readings.
+                # Keep its already proved word/case meaning instead of requiring
+                # a fresh kana parse to rediscover that same nominal boundary.
+                nominal_reading=(len(written)==1 and written[0].pos=='名詞'
+                    and written[0].start==begin and written[0].end==finish
+                    and any(pos.startswith('名詞,') and base==written[0].base_form
+                            and rd==expected_reading for pos,form,base,rd
+                            in dictionary_inflections(surface) or ())
+                    and (any((a,b)==(begin,finish) for a,b,case
+                            in native_case_support(changed_predicate_context))
+                        or supports_span(
+                            source_predicate_context,changed_predicate_context,
+                            target.start-target.context_start-proof_start,
+                            target.end-target.context_start-proof_start,
+                            begin,finish,surface)))
+                if not nominal_reading and not _object_predicate_candidate_fits(
                         source_predicate_context,literal,local_cut,source_faces):
                     return False,'unproven_candidate_reading_object'
         # A wider auxiliary window observes the same source-proved meaning
@@ -5658,6 +6017,16 @@ def validate(target, surface, engine, tokenize, store, dictionary, decisions=Non
     if not oddness.preserves_bound_verb(target.context,target.end-target.context_start,
                                         changed,local_end,tokenize):
         return False,'bound_verb_slot'
+    # A source action-head scope promises to repair its grammatical
+    # attachment. The existence of each token is insufficient: use the
+    # same complete suru/note proof for readable and unknown parses.
+    if target.boundary_kind=='sahen_tail' and target.preserved_head:
+        from reading_segments import completed_sahen_reading,completed_native_action_note
+        from morphology import tokenize as native_tokenize
+        reading=expected_reading or ''.join(t.reading for t in native_tokenize(surface) if t.has_reading)
+        if not (completed_sahen_reading(reading,allow_nonpolite=True)
+                or completed_native_action_note(reading)):
+            return False,'unproven_sahen_attachment'
     parts = list(tokenize(surface))
     if not parts or not all(t[5] for t in parts):
         # A whole kana action can remain unknown in the best parse even
@@ -5736,6 +6105,14 @@ def validate(target, surface, engine, tokenize, store, dictionary, decisions=Non
         suffix=[]
         cursor=target.end-target.context_start
         for part in original_following:
+            # An actually attested noun after a finite adjective owns its
+            # whole reading; an old kana split inside it is not an auxiliary.
+            if not suffix and native_head.pos=='形容詞' and native_head.infl_form=='基本形':
+                from reading_segments import native_adnominal_reading_parts
+                nominal_edge=any(changed[noun_end] in 'をにでがへとのはも'
+                    and native_adnominal_reading_parts(native_head.reading+changed[local_end:noun_end])
+                    for noun_end in range(local_end+len(part[0])+1,min(len(changed),local_end+16)))
+                if nominal_edge:break
             if (part[3]!=cursor or not part[5] or not part[1].startswith(
                     ('助動詞','動詞:非自立','動詞:接尾','助詞:接続助詞','助詞:終助詞'))):
                 break
@@ -5823,6 +6200,14 @@ def validate(target, surface, engine, tokenize, store, dictionary, decisions=Non
         if not continuation:
             return False,'unfinished_aspect_auxiliary'
     source_parts = list(tokenize(target.text))
+    preserved={base for kind,base in _source_preserved_verb_bases(target,tokenize) if kind=='surface'}
+    if preserved:
+        from morphology import native_potential_origins
+        actual={base for kind,base in _candidate_verb_bases(changed,tokenize) if kind=='surface'}
+        for token in tokenize(changed):
+            if token[5] and token[1].startswith('動詞'):
+                actual.update(base for base,rd in native_potential_origins(token[0],token[6],token[2]))
+        if not preserved & actual:return False,'original_written_predicate'
     # 48-ZZ / GPT-6 / 2026-09-11: repairing a native predicate's broken
     # auxiliary connection must not invent an interjection at its head.
     # あかげます can be split into filler あ + verb かげ + ます; that
@@ -5897,6 +6282,15 @@ def validate(target, surface, engine, tokenize, store, dictionary, decisions=Non
         if not proved:return False, 'nominal_phrase'
     if following:
         first = following[0]
+        if (first[1].startswith('助詞:格助詞') and lexical_parts
+                and lexical_parts[-1][1].startswith('助詞:終助詞')):
+            # The joined parser can turn a final particle into the end of a
+            # newly invented noun. An actual whole nominal reading may
+            # override that parse; a speculative relative-clause head may not.
+            from reading_segments import native_nominal_spelling_faces
+            reading=expected_reading or ''.join(t[2] for t in lexical_parts if t[5])
+            if not native_nominal_spelling_faces(reading):
+                return False,'final_particle_before_nominal_case'
         if (first[0]=='まい' and first[1].startswith('助動詞')
                 and _native_mai_connection(parts[-1][0],parts[-1][2],parts[-1][1].split(':')[0]) is False):
             return False,'negative_volition_following_slot'
@@ -6159,6 +6553,7 @@ def _sahen_grammatical_tail(tail):
             if tail[n:].startswith('まい'):
                 if _native_mai_connection(tail[:n],tr,tp.split(',')[0]) is not True:continue
                 if state is None:state='END'
+            if _native_te_auxiliary_tail(((tp,tf,tb,tr),),tail[n:],tr,tail[:n]):return True
             if state and _grammatical_suffix(tail[n:],state):return True
     return False
 
@@ -6480,7 +6875,16 @@ def _productive_predicate(surface, head, before=""):
            and _native_mai_connection(a[0],a[2],a[1].split(':')[0]) is not True
            for a,b in zip(legacy,legacy[1:])):
         return False
+    from morphology import TE_AUXILIARY_BASES,dictionary_inflections
     for a,b in zip(parts,parts[1:]):
+        # A native te/de auxiliary cannot attach directly to an arbitrary
+        # verb merely because the parser labels it non-independent. An
+        # independently attested compound retains its own lexical grammar.
+        if (a.pos=='動詞' and b.pos=='動詞' and b.pos_sub.startswith('非自立')
+                and b.base_form in TE_AUXILIARY_BASES
+                and not any(p.startswith('動詞,') and f==b.infl_form
+                    and r==a.reading+b.reading for p,f,base,r in
+                    dictionary_inflections(a.surface+b.surface) or ())):return False
         if (b.pos=='動詞' and b.pos_sub.startswith('非自立')
                 and b.base_form in (_CONTINUATIVE_BOUND_VERBS | _PHASE_VERB_BASES)
                 and (a.pos!='動詞' or a.infl_form!='連用形')):
@@ -6503,8 +6907,9 @@ def _productive_predicate(surface, head, before=""):
     for i,t in enumerate(parts[1:],1):
         if t.pos=='助動詞' or (t.pos=='助詞' and t.pos_sub.startswith('接続助詞')):
             continue
-        if t.pos=='動詞' and (t.pos_sub.startswith(('非自立','接尾'))
-                               or _native_continuative_attachment(parts[i-1],t)):
+        if t.pos=='動詞' and ((t.pos_sub.startswith(('非自立','接尾'))
+                and not (parts[i-1].pos=='助詞' and parts[i-1].surface in ('て','で')))
+                or _native_continuative_attachment(parts[i-1],t)):
             continue
         if (t.pos=='動詞' and parts[i-1].pos=='助詞'
                 and parts[i-1].pos_sub=='接続助詞' and parts[i-1].surface in ('て','で')):
@@ -6616,6 +7021,26 @@ def _surface_score_head(surface,following="",before=""):
 
 
 
+
+def _candidate_usage_tier(surface,head,following='',before=''):
+    """A kana predicate cannot borrow familiarity from an unrelated noun."""
+    from kango_tier import candidate_usage_tier,known_reading_usage_tier
+    if _is_reading(head):
+        from morphology import dictionary_inflections
+        forms=tuple(row for row in dictionary_inflections(head) or ()
+            if row[0].startswith(('動詞,自立,','形容詞,自立,')) and row[3]==head)
+        tail=surface[len(head):] if surface.startswith(head) else ''
+        if forms and any((suffix or any(row[1]=='基本形' for row in forms))
+                and _allows_grammatical_tail(forms,suffix,head,head)
+                and _productive_predicate(head+suffix,head,before=before)
+                for suffix in (tail if tail else following,)):
+            # Keep an unclassified verb unclassified; うて as a verb is not
+            # the independently judged noun 右手 just because it reads alike.
+            return candidate_usage_tier(head,reading=head)
+        return known_reading_usage_tier(head)
+    return candidate_usage_tier(head)
+
+
 def _ime_predicate_nominal_prefix(target):
     """A retained initial object/case belongs to a clause, not one predicate.
 
@@ -6704,6 +7129,27 @@ def context_material(target, tokenize):
     return tuple(t[0] for t in parts)
 
 
+def _native_sahen_heads(parts, linked_only=False):
+    """Native action nouns own their actual suru form, not a guessed noun."""
+    from reading_segments import native_action_noun_reading
+    from morphology import dictionary_inflections
+    for index,(noun,verb) in enumerate(zip(parts,parts[1:])):
+        if (not noun[5] or not verb[5] or not noun[1].startswith('名詞:サ変接続')
+                or noun[4]!=verb[3] or not verb[1].startswith('動詞')
+                or not native_action_noun_reading(noun[0],noun[2])):continue
+        if not any(_sahen_verb_form(pos,base,verb[0],form,reading)
+                and form==verb[6] and reading==verb[2]
+                for pos,form,base,reading in dictionary_inflections(verb[0]) or ()):continue
+        if linked_only:
+            link=parts[index+2] if index+2<len(parts) else None
+            if (not link or not link[5] or verb[4]!=link[3]
+                    or verb[6]!='連用形'
+                    or not link[1].startswith('助詞:接続助詞')
+                    or link[0] not in ('て','で')
+                    or _modern_te_allowed(verb[0],verb[2],link[0]) is not True):continue
+        yield noun
+
+
 def _source_preserved_verb_bases(target, tokenize):
     """Preserve native predicate lemmas at a proved malformed attachment."""
     from morphology import dictionary_inflections
@@ -6711,6 +7157,35 @@ def _source_preserved_verb_bases(target, tokenize):
     # Every overlapping candidate observes the same original polite attachment.
     parts=list(tokenize(target.context))
     bases=set()
+    # A completed written action + native connective belongs to the source.
+    # A separate malformed request after it cannot replace that action.
+    from semantic_roles import object_before,nominal_roles,support,native_verb_roles
+    from context_meaning import anomalous_frames
+    from process_familiarity import frames as familiarity_frames
+    # A source-proved meaning comparison owns the same lexical range in
+    # every route. A written sahen form does not erase that evidence merely
+    # because its suru/te attachment is grammatical. Other source actions
+    # still retain their own lemmas; candidate validation keeps the same
+    # positive meaning, key and explicit-choice requirements.
+    source_meaning_frames=list(anomalous_frames(target.context))
+    # Use the same closed object/predicate conflict that created the target.
+    # A grammatical suru suffix cannot restore the rejected lexical sense.
+    from semantic_roles import conflicting_object_predicates,subject_only_predicate_spans
+    source_meaning_frames.extend(dict(start=a,end=b) for noun,predicate,a,b in
+        conflicting_object_predicates(target.context,parts)+subject_only_predicate_spans(target.context,parts))
+    source_meaning_frames.extend(dict(start=f['start']-target.context_start,
+        end=f['end']-target.context_start) for f in familiarity_frames(target.source)
+        if target.context_start<=f['start']<f['end']<=target.context_end)
+    for noun in _native_sahen_heads(parts,linked_only=True):
+        if (not any('一'<=c<='鿿' for c in noun[0])
+                or not (noun[3]<target.end-target.context_start
+                        and target.start-target.context_start<noun[4])):continue
+        if any(f['start']<=noun[3] and noun[4]<=f['end']
+               for f in source_meaning_frames):continue
+        obj=object_before(target.context,noun[3],tokenize)
+        if (obj and nominal_roles(obj) and native_verb_roles(noun[0],'',noun[2])
+                and not support(obj,noun[0])):continue
+        bases.add(('surface',noun[0]))
     for a,b in zip(parts,parts[1:]):
         if (a[5] and a[1].startswith(('動詞:自立','形容詞:自立')) and a[6]=='基本形'
                 and a[3]<target.end-target.context_start
@@ -6744,11 +7219,52 @@ def _source_preserved_verb_bases(target, tokenize):
                     or not (a[3]<target.end-target.context_start
                             and target.start-target.context_start<a[4])):continue
             if not b[1].startswith(('助詞:接続助詞','助動詞')):continue
+            # A noncontinuative stem before perfective tsu is an invalid
+            # source attachment, not proof of this written verb's identity.
+            if oddness.completed_tsu_aux_mismatch(a,b):continue
+            if (b[0] in ('て','で') and b[1].startswith('助詞:接続助詞')
+                    and _modern_te_allowed(a[0],a[2],b[0]) is not True):continue
+            # An anomalous isolated small kana before this written token
+            # belongs to the broken head. The token alone does not prove
+            # an intact verb, even when its object would fit that verb.
+            head_start=target.context_start+a[3]
+            if (head_start and target.source[head_start-1] in 'ぁぃぅぇぉっゃゅょゎ'
+                    and any(lo<head_start and a[4]+target.context_start<=hi
+                            for _,_,lo,hi in target.anomalies)):continue
+            if (head_start>target.start and any(
+                    left[4]==right[3] and target.start<=right[3]+target.context_start<head_start
+                    and oddness.object_particle_mismatch(left[0],left[1],right[0],right[1])
+                    for left,right in zip(parts,parts[1:]))):continue
+            previous=next((p for p in parts if p[4]==a[3]),None)
+            if (previous and previous[5] and
+                    oddness.can_join(previous[0],previous[1],a[0],a[1],previous[2]) is False
+                    and any(lo<=target.context_start+previous[3]
+                        and target.context_start+a[4]<=hi for _,_,lo,hi in target.anomalies)):
+                # The unchanged object cannot certify an isolated verb inside
+                # a source-marked, independently invalid lexical attachment.
+                continue
+            if (previous and previous[5] and previous[1].startswith('動詞')
+                    and previous[6].startswith('体言接続')
+                    and any(lo<=target.context_start+previous[3]
+                        and target.context_start+a[4]<=hi for _,_,lo,hi in target.anomalies)):
+                # A marked attributive stem cannot directly attach this
+                # second verb. Its convenient isolated object role does not
+                # certify the malformed cluster's original lexical head.
+                continue
             forms=tuple(row for row in dictionary_inflections(a[0]) or ()
                         if row[0].startswith('動詞,') and row[1]==a[6] and row[3]==a[2])
-            if not _allows_grammatical_tail(forms,b[0],a[2],a[0]):continue
-            evidence=candidate_evidence(obj,a[0],b[0])
-            if evidence and evidence['shared_roles']:
+            from semantic_roles import native_verb_roles,nominal_role_matches
+            # The broken auxiliary is what is being repaired. The unchanged
+            # written stem and its source object prove the lexical identity
+            # independently of that malformed tail.
+            roles=native_verb_roles(a[0],a[6],a[2])
+            if forms and nominal_role_matches(obj,roles):
+                # A broad object category cannot override a more specific
+                # source relation that already proves this same verb wrong.
+                # Candidate meaning is still checked by the common validator.
+                from context_meaning import anomalous_frames
+                if any(f['start']<=a[3] and a[4]<=f['end']
+                       for f in source_meaning_frames):continue
                 bases.update(('surface',base) for pos,form,base,rd in forms)
     return frozenset(bases)
 
@@ -6756,8 +7272,9 @@ def _source_preserved_verb_bases(target, tokenize):
 def _candidate_verb_bases(surface, tokenize):
     from morphology import dictionary_inflections
     from inflected_lexicon import dictionary_readings
-    bases=set()
-    for t in tokenize(surface):
+    parts=list(tokenize(surface))
+    bases={('surface',noun[0]) for noun in _native_sahen_heads(parts)}
+    for t in parts:
         if not t[5] or not t[1].startswith(('動詞','形容詞')):
             continue
         for pos,form,base,rd in dictionary_inflections(t[0]) or ():
@@ -6886,6 +7403,18 @@ def _native_written_te_action(surface,reading,tokenize):
 def _native_phase_repair_evidence(target,surface,tokenize):
     """A marked noun+auxiliary seam retains its native activity host."""
     if not (target.structural and target.anomalies):return False
+    from reading_segments import native_temporal_nominal_faces,native_bare_action_faces
+    from morphology import native_spelling_only
+    if surface in native_temporal_nominal_faces(surface):
+        # Overlapping lexical/request scopes share the original action-noun
+        # boundary already used to create a sahen-tail scope. A scope label
+        # must not erase that unchanged host when comparing a phase noun.
+        prefixes=((target.preserved_head,) if target.preserved_head else
+            tuple(prefix for cut,prefix,heads in _native_sahen_reading_heads(target.text))
+            if _is_input_reading(target.text) else ())
+        for prefix in prefixes:
+            for head in native_bare_action_faces(prefix):
+                if surface.startswith(head) and native_spelling_only(prefix,head):return True
     import oddness
     parts=list(tokenize(target.text))
     if len(parts)<3:return False
@@ -7011,9 +7540,15 @@ def rank_candidates(rows):
     # A proved source contrast distinguishes specific senses. Broad case
     # compatibility alone cannot tie that relation through double counting.
     core=('native_predicate','source_relation','meaning','written_native','native_inflection','method_spelling','bases','script',
-          'proper','terminal','guesses','restricted_usage','common_usage')
+          'proper','terminal','guesses','restricted_usage','common_usage','nonadjacent_key')
     cohorts={}
     for row in rows:
+        # Once source, meaning and known usage tie, an unexplained distant
+        # key cannot outrank a physical neighbor only through parse/n-gram
+        # frequency. Multi-step Shift repairs keep their actual operations.
+        operations=(row['repair'],)+tuple(row['repair'].get('steps',()))
+        row['rank_evidence']['nonadjacent_key']=int(any(
+            step.get('operation')=='nonadjacent_substitution' for step in operations))
         # Explicitly judged restricted use remains negative evidence even
         # beside an unjudged word. Unknown usage is still not everyday proof.
         row['rank_evidence']['restricted_usage']=int(row['rank_evidence'].get('usage')==3)
@@ -7021,7 +7556,11 @@ def rank_candidates(rows):
         # candidate. Missing usage stays unknown; it does not erase what is
         # already known about the competing, more ordinary interpretation.
         row['rank_evidence']['common_usage']=-int(row['rank_evidence'].get('usage')==1)
-        key=(int(row['rank_evidence']['direct']!=0),)+tuple(
+        # A short raw-kana suffix is not stronger source evidence than a
+        # complete native reading of the containing anomalous word. Keep
+        # actual committed input first, and speculative readings last.
+        key=(-row['rank_evidence'].get('input_reading',0),
+             int(row['rank_evidence']['direct']>3))+tuple(
             row['rank_evidence'].get(name,0) if name in ('native_predicate','source_relation','native_inflection')
             else row['rank_evidence'][name] for name in core)
         cohorts.setdefault(key,[]).append(row)
@@ -7031,7 +7570,12 @@ def rank_candidates(rows):
         # is the same scope and has the same positively evidenced length.
         scopes={(row.get('context_scope'),row.get('context_reading_length')) for row in cohort}
         comparable=(len(scopes)==1 and all(part is not None for part in next(iter(scopes))))
-        tail=(('context','cost','local_reading','parse_cost','continuation') if comparable
+        # When every alternative inflects the same independently attested
+        # local verb, parse cost compares its grammar, not unrelated lexical
+        # meanings. Character n-grams alone must not decide that inflection.
+        verbs={row.get('local_verb_bases',()) for row in cohort}
+        same_verb=len(verbs)==1 and bool(next(iter(verbs)))
+        tail=(('context','cost','local_reading','parse_cost','continuation') if comparable and not same_verb
               else ('context','cost','parse_cost','local_reading','continuation'))
         optional=('usage',)+tail
         available={key for key in optional if all(row['rank_evidence'].get(key) is not None
@@ -7103,6 +7647,7 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
     ime_evidence = {}
     homophone_positive = {}
     compose = target.structural or target.boundary_kind=='auxiliary_connection'
+    from morphology import native_spelling_only
     preserve_kana=_is_input_reading(target.text) and _source_predicate_context(target,tokenize)
     unattached_masu=(preserve_kana and target.boundary_kind=='auxiliary_connection'
         and target.start==target.context_start and target.end==target.context_end
@@ -7300,11 +7845,13 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
             return
         if target.boundary_kind=='sahen_tail':
             # This interpretation proves an unchanged native action head.
-            # Only its functional omission can supply a candidate; an absent
-            # repair does not license changing that head into another word.
+            # Share ordinary physical repairs at the same unchanged action
+            # boundary; the special omission rule is not the only tail error.
             for reading in readings:
-                for repair in sahen_omission_repairs(reading.text,target.following):
-                    if repair.reading.startswith(target.preserved_head):
+                repairs=tuple(sahen_omission_repairs(reading.text,target.following))+cached_key_repairs(reading)
+                for repair in dict.fromkeys(repairs):
+                    if (repair.operation!='same_reading' and repair.position>=len(target.preserved_head)
+                            and repair.reading.startswith(target.preserved_head)):
                         yield reading,repair,False
             return
         if target.boundary_kind=='particle_intrusion':
@@ -7366,8 +7913,15 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
             semantic_omission=any(a<target.end-target.context_start and
                 target.start-target.context_start<b for obj,verb,a,b in
                 conflicting_object_predicates(target.context,list(tokenize(target.context))))
+            # A source-proved inflection error can be a missing lexical
+            # key just as well as a neighboring key. The unchanged native
+            # connector supplies that evidence before any candidate search.
+            native_parts=list(tokenize(target.text))
+            malformed_link=bool(target.following[:1] in ('て','で') and native_parts
+                and native_parts[-1][5] and native_parts[-1][1].startswith('動詞:自立')
+                and _modern_te_allowed(native_parts[-1][0],native_parts[-1][2],target.following[0]) is False)
             for reading in readings:
-                if not (semantic_omission or nominal_omission) and reading.source not in ('ime_reverse','ime_first_roundtrip','ime_context_roundtrip','ime_source_candidate'):continue
+                if not (semantic_omission or nominal_omission or malformed_link or reading.text[:1] in 'ゃゅょ') and reading.source not in ('ime_reverse','ime_first_roundtrip','ime_context_roundtrip','ime_source_candidate'):continue
                 for repair in lexical_omission_repairs(reading.text,dictionary,include_shift=semantic_omission,nominal_compound=nominal_omission):
                     yield reading,repair,False
         if not candidates:
@@ -7591,6 +8145,13 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
         # still proves the whole attachment, including narrower contenders.
         if target.preserved_head and _is_reading(target.text) and _is_reading(target.preserved_head):
             surfaces.append(repair.reading)
+            # The exact source head can be a native prefixed action absent
+            # from the single-word table. Reuse its morphology for candidate
+            # spelling as well as for the finite-reading proof.
+            if target.boundary_kind=='sahen_tail' and repair.reading.startswith(target.preserved_head):
+                from reading_segments import native_bare_action_faces
+                surfaces.extend(face+repair.reading[len(target.preserved_head):]
+                    for face in native_bare_action_faces(target.preserved_head))
         # 既存経路の先頭候補も、同じ読みに同じ一手で届くなら同列で比較。
         # 新設の経路であること自体を、優先する理由にしない。
         if not target.spelling and legacy_reading == repair.reading and target.boundary_kind not in ('kana_action_note','particle_intrusion','kana_request'):
@@ -7660,7 +8221,11 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
                 from reading_segments import _native_action_note_heads
                 action_heads=_native_action_note_heads(target.substitute(surface))
                 if action_heads:score_head=action_heads[0]
-            cost = engine._table_cost(score_head)
+            # A partial lexical head's corpus cost is not the cost of a
+            # newly composed action/phrase. Missing whole-surface evidence
+            # is omitted across the cohort, then full-context parse cost
+            # remains comparable for both a whole word and a composition.
+            cost = engine._table_cost(surface if score_head!=surface else score_head)
             # A shared spelling cost cannot identify which native lexical
             # base a composed predicate used (ふい: ふう / ふく). Missing
             # evidence is omitted across its comparison group, never zero.
@@ -7761,6 +8326,12 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
             # of known words only at an already anomalous auxiliary seam.
             # This uses the same source grammar and never supplies a spelling.
             native_predicate=_native_candidate_clause_rank(target,repair.reading)
+            from reading_segments import completed_sahen_reading,native_bare_action_faces
+            retained_action=(target.boundary_kind=='sahen_tail' and target.preserved_head
+                and repair.reading.startswith(target.preserved_head)
+                and _sahen_grammatical_tail(repair.reading[len(target.preserved_head):])
+                and completed_sahen_reading(repair.reading,allow_nonpolite=True,return_action=True)
+                    in native_bare_action_faces(target.preserved_head))
             phase_nominal=_native_phase_repair_evidence(target,surface,tokenize)
             native_te=(target.boundary_kind=='lexical' and target.text.endswith('て')
                 and any(kind=='品詞文法' for kind,reason,a,b in target.anomalies)
@@ -7769,11 +8340,13 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
             retained_stem=_retained_auxiliary_stem(target,surface)
             rank_evidence=dict(
                 direct=_reading_strength(reading)[0],
+                input_reading=int(reading.source=='current_ime_occurrence' or
+                    any(segment[3]=='current_ime_occurrence' for segment in reading.segments)),
                 native_predicate=native_predicate,
                 # In this source-proved compound-verb window, an exact native
                 # continuative form has stronger spelling evidence than an
                 # unlisted mixed-kana face of the same repaired reading.
-                native_inflection=-int(native_te or retained_stem or target.boundary_kind=='compound_verb' and any(
+                native_inflection=-int(native_te or retained_stem or retained_action or target.boundary_kind=='compound_verb' and any(
                     pos.startswith('動詞,自立,') and form=='連用形'
                     and rd==repair.reading
                     for pos,form,base,rd in dictionary_inflections(surface) or ())),
@@ -7803,14 +8376,17 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
                 bases=len(complete_verbs-candidate_bases),
                 script=int((any('ァ'<=c<='ヶ' for c in target.text)
                             and not any('ァ'<=c<='ヶ' for c in surface))
-                           or (preserve_kana and not _is_reading(surface))),
+                           or (preserve_kana and not _is_reading(surface)
+                               and not (target.boundary_kind=='sahen_tail'
+                                   and target.preserved_head
+                                   and native_spelling_only(repair.reading,surface)))),
                 proper=int(engine._is_whole_proper_noun(surface,tokenize)),
                 terminal=int(_terminal_auxiliary_fragment(surface,target.following,tokenize))
                          if grammar_rank else 0,
                 guesses=sum(segment[3] in ('character_guess','unrecognized_ime_sequence','compound_voicing')
                             for segment in reading.segments),
-                usage=(known_reading_usage_tier(score_head) if _is_reading(score_head)
-                       else candidate_usage_tier(score_head)),
+                usage=_candidate_usage_tier(surface,score_head,target.following,
+                    target.context[:target.start-target.context_start]),
                 context=-semantic.context_score(score_head,material),
                 cost=cost,local_reading=local_prediction,continuation=continuation,parse_cost=context_cost,
                 start=target.start,end=target.end)
@@ -7822,8 +8398,13 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
                         else 'unproven_nonadjacent_key_context')
                 diagnostic['rejected'][reason]=diagnostic['rejected'].get(reason,0)+1
                 continue
+            local_parts=list(tokenize(surface))
+            local_verb_bases=tuple(sorted(_candidate_verb_bases(surface,tokenize))) if (
+                local_parts and local_parts[0][5] and local_parts[0][3]==0
+                and local_parts[0][1].startswith('動詞:自立')) else ()
             rank=()
             row = dict(surface=surface, rank=rank, rank_evidence=rank_evidence, score_head=score_head, local_prediction=local_prediction,
+                       local_verb_bases=local_verb_bases,
                        context_scope=(target.context_start,target.context_end),context_reading_length=context_length,
                        object_word=object_word or homophone_positive.get(surface,("",))[0],
                        argument_fit=argument_fit, argument_evidence=argument_evidence,
@@ -8095,9 +8676,24 @@ def _choose_joint_candidates(targets,diagnostics,old_changes,engine,
         facts=tuple(sorted(atom for atom in atoms if any(a<=atom[0] and atom[1]<=b
                               for a,b in _anomaly_spans(target))))
         if not facts:continue
+        # A word repair can also resolve an overlapping source fact whose
+        # diagnostic starts at the preceding case particle. Count its actual
+        # resolution, not how many marks happened to enter this search scope.
+        extra=[(a,b) for a,b in atoms if (a,b) not in facts
+               and target.context_start<=a<b<=target.context_end
+               and _overlaps(a,b,target.start,target.end)]
         for row in diagnostic.get('candidates',()):
+            resolved=list(facts)
+            if extra:
+                projected=target.substitute(row['surface'])
+                fresh=engine._odd_spans_for_line(projected,tokenize,[],store,dictionary,include_pending=False)
+                delta=len(row['surface'])-(target.end-target.start)
+                for a,b in extra:
+                    left=(a if a<=target.start else target.start)-target.context_start
+                    right=(b+delta if b>=target.end else target.start+len(row['surface']))-target.context_start
+                    if not any(_overlaps(left,right,x,y) for x,y in fresh):resolved.append((a,b))
             options.append(dict(start=target.start,end=target.end,surface=row['surface'],
-                rank=row['rank'],anomalies=facts,context=(target.context_start,target.context_end),
+                rank=row['rank'],anomalies=tuple(sorted(resolved)),context=(target.context_start,target.context_end),
                 target=target,candidate=row,diagnostic=diagnostic))
     selected=[];reports=[]
     for group in groups(options):
@@ -8218,6 +8814,79 @@ def _legacy_covering_targets(targets,changes):
             following=covered[0].source[end:covered[0].context_end])
         if target not in out:out.append(target)
     return out
+
+
+def _contained_scope_resolution(target, completed, engine, tokenize, store, dictionary, decisions):
+    """Reuse a completed native-word repair after rechecking its whole clause.
+
+    A coarse overlapping search is a fallback, not a second typing event.
+    If the local repair is later rejected during joint selection, that search
+    is reopened. No candidate, unresolved mark or search cutoff is concealed.
+    """
+    if (target.boundary_kind not in ('lexical','ime_scope','kana_predicate') or target.spelling
+            or target.preserved_head or target.semantic_conflict):return None
+    for owner,surface,diagnostic in completed:
+        if (not owner.structural or not surface or owner.spelling
+                or owner.context_start!=target.context_start or owner.context_end!=target.context_end
+                or not (target.start<=owner.start<owner.end<=target.end)
+                or (owner.start,owner.end)==(target.start,target.end)
+                or diagnostic.get('search',{}).get('state')!='complete'):continue
+        if target.boundary_kind not in ('ime_scope','kana_predicate') and any(
+                not any(c<=a and b<=d for _,_,c,d in owner.anomalies)
+                for _,_,a,b in target.anomalies):continue
+        if owner.start>target.start:
+            from reading_segments import native_completed_clause_boundaries,native_object_clause_edges
+            from morphology import tokenize as native_tokenize
+            local=owner.start-owner.context_start
+            edges=set(native_completed_clause_boundaries(owner.context))|set(native_object_clause_edges(owner.context))
+            edges.update(p.end for p in native_tokenize(owner.context) if p.has_reading
+                and p.pos=='助詞' and p.pos_sub.startswith('格助詞'))
+            # A merely plausible word prefix is not an independently closed
+            # source field. Search the competing whole word before reusing
+            # a tail repair; a fresh absence of purple alone proves no boundary.
+            if local not in edges:
+                from reading_segments import native_attributive_predicate_end
+                from morphology import dictionary_inflections
+                prefix=owner.context[:local];parts=native_tokenize(prefix)
+                adnominal=(len(parts)>=2 and parts[-1].surface=='な'
+                    and parts[-1].base_form=='だ' and parts[-1].infl_form=='体言接続'
+                    and parts[-2].end==parts[-1].start and parts[-2].has_reading
+                    and any(pos.startswith('名詞,形容動詞語幹,') and rd==parts[-2].reading
+                            for pos,form,base,rd in dictionary_inflections(parts[-2].surface) or ()))
+                from reading_segments import native_surface_nominal_heads
+                genitive=(parts and parts[-1].surface=='の' and parts[-1].pos=='助詞'
+                    and parts[-1].end==len(prefix)
+                    and native_surface_nominal_heads(prefix[:parts[-1].start]))
+                # A bare written verb before a malformed tail can itself
+                # belong to the damaged word. A real original argument
+                # distinguishes a relative clause from that guess.
+                relative=(native_attributive_predicate_end(prefix) and any(
+                    part.has_reading and part.pos=='助詞' and part.pos_sub.startswith('格助詞')
+                    for part in parts[:-1]))
+                # A source-proved action noun already supplies the original
+                # head boundary for a suru-connection repair. Its homographic
+                # tail need not reopen the unchanged head as a new key error.
+                from particle_frames import converted_suru_connection_frames
+                action_head=(owner.boundary_kind=='suru_connection' and any(
+                    frame['start']==target.start and frame['verb_start']==owner.start
+                    and frame['verb_end']==owner.end
+                    for frame in converted_suru_connection_frames(owner.source)))
+                if not (adnominal or genitive or relative or action_head):continue
+        candidate=next((c for c in diagnostic.get('candidates',()) if c['surface']==surface),None)
+        if candidate is None:continue
+        valid,_=validate(owner,surface,engine,tokenize,store,dictionary,decisions,
+                         candidate['repair']['reading'],**_candidate_source_kwargs(candidate))
+        if not valid:continue
+        projected=owner.substitute(surface)
+        # Pending marks are in original coordinates. Only fresh structural
+        # checks apply to this projected clause; original diagnostics remain.
+        if engine._odd_spans_for_line(projected,tokenize,[],store,dictionary,include_pending=False):continue
+        # validate above already applies the common final validator to this
+        # exact source edit in its full original context. Recasting it as one
+        # sentence-sized word makes the word length_delta guard reject a
+        # valid contained edit; it adds no new grammatical evidence.
+        return (owner.start,owner.end,surface)
+    return None
 
 
 def _prepare_reopen_choices(line,targets,engine,tokenize,store,dictionary,decisions):
@@ -8374,7 +9043,9 @@ def with_contextual_repair(fn):
                 and any('一'<=c<='鿿' for c in field)):
             for target in targets:
                 if (target.start!=0 or target.end!=len(field)
-                        or not target.structural or target.spelling):
+                        or not target.structural or target.spelling
+                        or any(t.structural and target.start<=t.start<t.end<=target.end
+                               and (t.start,t.end)!=(target.start,target.end) for t in targets)):
                     continue
                 surface,diagnostic=resolve(target,engine,tokenize,store,
                                            dictionary,decisions,None)
@@ -8429,6 +9100,11 @@ def with_contextual_repair(fn):
             if note or finite:
                 from kana_spelling import project,_compose_result
                 proposal=project(line,store,dictionary,decisions)
+                # A rejected completed source spelling must not be retried
+                # as a partial spelling by the later finish pass. Keep only
+                # this already checked source range, not unrelated edits.
+                if proposal and engine._user_blocks_replacement(decisions,line,proposal[0]):
+                    legacy=dict(legacy,_spelling_keep=[(0,len(line))])
                 if (proposal and proposal[1]
                         and (finite or _mixed_action_note_first_spelling(
                             line,*proposal[1][0]))
@@ -8462,8 +9138,19 @@ def with_contextual_repair(fn):
                     and all(engine._SAMEKEY_PUNCT.get(c)==p for c,p in zip(line[a:b],face))):
                 punctuation_changes.add((a,b,face))
         targets=_legacy_covering_targets(targets,old_changes)
-        selected = []; diagnostics = []
+        # Resolve contained source-word ranges before their coarse fallbacks.
+        # Stable ordering is retained for unrelated and equal-sized ranges.
+        targets=sorted(targets,key=lambda t:-sum(
+            other.start<=t.start<t.end<=other.end and (t.start,t.end)!=(other.start,other.end)
+            for other in targets))
+        selected = []; diagnostics = []; completed=[]; deferred={}
         for target in targets:
+            covered=_contained_scope_resolution(target,completed,engine,tokenize,store,dictionary,decisions)
+            if covered is not None:
+                deferred[len(diagnostics)]=covered
+                diagnostics.append(dict(start=target.start,end=target.end,text=target.text,
+                    status='resolved_by_contained_change',resolved_by=covered))
+                continue
             if _legacy_resolves_anomaly(target,old_changes,engine,tokenize,store,dictionary,decisions,punctuation_changes):
                 diagnostic=dict(start=target.start,end=target.end,text=target.text,
                                 status='resolved_by_existing_change')
@@ -8499,11 +9186,24 @@ def with_contextual_repair(fn):
             _trace_diagnostic(engine, '文脈補正', diagnostic)
             if surface is not None:
                 selected.append((target.start, target.end, surface))
+                completed.append((target,surface,diagnostic))
         from joint_meaning import extend as extend_joint_meaning
         targets,diagnostics=extend_joint_meaning(targets,diagnostics,engine,tokenize,store,dictionary,decisions)
         provenance={}
         selected,joint_reports=_choose_joint_candidates(targets,diagnostics,old_changes,engine,
             tokenize,store,dictionary,decisions,provenance)
+        # Joint selection can reject the local proposal. Reopen exactly
+        # those deferred scopes before accepting the combined result.
+        reopened=False
+        for index,dependency in deferred.items():
+            if dependency in selected:continue
+            target=targets[index]
+            surface,diagnostics[index]=resolve(target,engine,tokenize,store,dictionary,decisions,None)
+            reopened=True
+        if reopened:
+            provenance={}
+            selected,joint_reports=_choose_joint_candidates(targets,diagnostics,old_changes,engine,
+                tokenize,store,dictionary,decisions,provenance)
         # 語本体を直す新候補へ、同じ接続の語尾を直す旧候補を重ねない。
         # どちらも単独では成立しても、合成すると別の文になるため。
         retained = _retain_independent_changes(old_changes, selected, targets)
@@ -8558,6 +9258,8 @@ def with_contextual_repair(fn):
         result['_repair_surfaces']=retained_frames(line,legacy,retained,selected,engine)
         result['_repair_surfaces'] += [(a,b,surface,provenance[(a,b,surface)][0].boundary_kind
             if (a,b,surface) in provenance else '') for a,b,surface in selected]
+        from repaired_spelling import display_frames
+        result['_grammatical_display_frames']=display_frames(line,corrected,targets,diagnostics,engine,tokenize)
         stale_mark=any(_overlaps(a,b,x,y) or a==y for a,b in result.get('odd_spans',())
                        for x,y in resolved_ranges)
         if corrected == old and not stale_mark:
@@ -8590,6 +9292,28 @@ def with_contextual_repair(fn):
         if adjacent:
             resolved_ranges+=adjacent
             odd=[span for span in odd if span not in adjacent]
+        # An unchanged opaque recipient may become grammatical when its
+        # predicate is repaired. Reuse the same final-source proof used for
+        # typing that result directly; absence of a mark alone proves nothing.
+        if odd and selected and corrected!=line:
+            from reading_segments import source_opaque_object_ranges
+            from difflib import SequenceMatcher
+            proved=source_opaque_object_ranges(corrected)
+            if proved:
+                blocks=SequenceMatcher(None,line,corrected,autojunk=False).get_matching_blocks()
+                edits=list(engine._diff_spans(line,corrected))
+                fresh=engine._odd_spans_for_line(corrected,tokenize,[],store,dictionary,include_pending=False)
+                cleared=[]
+                for a,b in odd:
+                    mapped=next(((block.b+a-block.a,block.b+b-block.a) for block in blocks
+                                 if block.a<=a<b<=block.a+block.size),None)
+                    if not mapped:continue
+                    x,y=mapped
+                    if any(x<z and c<y for c,z in fresh):continue
+                    if any(lo<=x<y<=hi and any(lo<=c<d<=hi for aa,bb,c,d in edits)
+                           for lo,cut,hi in proved):cleared.append((a,b))
+                resolved_ranges+=cleared
+                odd=[span for span in odd if span not in cleared]
         unsure = [span for span in result.get('unsure_spans', []) if not any(
                   _overlaps(span[0], span[1], a, b) for a, b in original_spans)]
         result.update(original=line, corrected=corrected, changed=corrected != line,

@@ -1070,7 +1070,23 @@ def ranked_property_prefix_spans(text, tokens, store=None):
     if not words:
         return []
     out = []
-    for a,b,c in zip(tokens,tokens[1:],tokens[2:]):
+    triples=list(zip(tokens,tokens[1:],tokens[2:]))
+    # Productive prefix merging preserves lexical readings, not attestation
+    # of the derived property. Retain the original native affix witnesses.
+    for head,tail in zip(tokens,tokens[1:]):
+        if (len(head)<6 or len(tail)<6 or len(head[0])!=3
+                or head[0][:1] not in ('主','副') or 'サ変' not in (head[1] or '')
+                or not head[5] or tail[0]!='性' or head[4]!=tail[3]):
+            continue
+        from morphology import _tokenize_janome
+        native=_tokenize_janome(head[0])
+        if (len(native)!=2 or ''.join(t.surface for t in native)!=head[0]
+                or not all(t.has_reading for t in native)):
+            continue
+        parts=[(t.surface,t.pos+':'+t.pos_sub,t.reading,
+                head[3]+t.start,head[3]+t.end,t.has_reading) for t in native]
+        triples.append((parts[0],parts[1],tail))
+    for a,b,c in triples:
         if any(len(t)<6 for t in (a,b,c)):
             continue
         if not (a[0] in ('主','副') and '接頭' in (a[1] or '')
@@ -2813,7 +2829,7 @@ def finite_copula_aux_mismatch(a,b,previous=None):
         from morphology import dictionary_inflections
         if (any(pos.startswith('助詞,接続助詞,') and rd==a[2]
                 for pos,form,base,rd in dictionary_inflections(a[0]) or ())
-                and any(pos.startswith('助動詞,') and base in ('だ','です')
+                and any(pos.startswith('助動詞,') and base in ('だ','です','や')
                         and form==b[6]=='基本形' and rd==b[2]
                         for pos,form,base,rd in dictionary_inflections(b[0]) or ())):
             return True
@@ -2836,7 +2852,7 @@ def finite_copula_aux_mismatch(a,b,previous=None):
             from contextual_repair import _modern_te_allowed
             if _modern_te_allowed(a[0],a[2],b[0]) is True:return False
         from reading_segments import native_common_noun_reading
-        return bool(left and any(base in ('だ','です') and form=='基本形'
+        return bool(left and any(base in ('だ','です','や') and form=='基本形'
                                  for base,form in right)
                     and not native_common_noun_reading(a[0],a[2]))
     # Polite past ました/でした keeps its politeness across native た.
@@ -2844,13 +2860,13 @@ def finite_copula_aux_mismatch(a,b,previous=None):
     if (previous is not None and len(previous)>=7 and previous[5]
             and previous[4]==a[3] and previous[1].startswith('助動詞')
             and any(base=='た' for base,form in left)
-            and any(base in ('だ','です') and form=='基本形' for base,form in right)
+            and any(base in ('だ','です','や') and form=='基本形' for base,form in right)
             and any(pos.startswith('助動詞,') and base in ('ます','です')
                     and form==previous[6] and rd==previous[2]
                     for pos,form,base,rd in dictionary_inflections(previous[0]) or ())):
         return True
     if (any(base in ('ます','です','つ','まい') for base,form in left)
-            and any(base in ('だ','です') for base,form in right)):return True
+            and any(base in ('だ','です','や') for base,form in right)):return True
     # 48-ANF / GPT-6 Astra / 2026-09-20: a completed native past or
     # copula is not a nominal stem for another finite だ. Conditional なら
     # has its own attachment and stays outside this candidate-only check.

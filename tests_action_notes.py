@@ -96,7 +96,7 @@ class ActionNoteTests(unittest.TestCase):
         forms={'保存':(('名詞,サ変接続,*,*','*','保存','ほぞん'),),
                '普通':(('名詞,一般,*,*','*','普通','ふつう'),)}
         with patch.object(R,'_native_nominal_reading_faces',side_effect=lambda rd:tuple(forms)), \
-             patch.object(M,'dictionary_inflections',side_effect=lambda w:forms[w]):
+             patch.object(M,'dictionary_inflections',side_effect=lambda w:forms.get(w,())):
             self.assertEqual(R.native_bare_action_faces('ほぞん'),('保存',))
             self.assertEqual(R.native_bare_action_faces('ふつう'),())
             self.assertEqual(R.native_bare_action_faces('べつよみ'),())
@@ -260,5 +260,17 @@ class ActionNoteTests(unittest.TestCase):
             self.assertFalse(result['odd_spans'],text)
         self.assertEqual(a.store.revision(),revision)
 
+
+
+    @unittest.skipUnless(M.HAS_JANOME,'requires native attachment grammar')
+    def test_readable_tokens_cannot_certify_a_broken_sahen_attachment(self):
+        import app,corrector as C,contextual_repair as Q
+        from tests_analysis_async import initial
+        a=initial();tok=C.make_tokenizer(a.store)
+        for source,bad,reading in (('かくりんしてほぞん','隔離んしてほじん','かくりんしてほじん'),
+                                  ('かくにんしうほぞんしてしゅうりょう','確認しほうぞんしてしゅうりょう','かくにんしほうぞんしてしゅうりょう')):
+            target=next(t for t in Q.targets_for_line(source,tok,a.store,a.dict_index) if t.boundary_kind=='sahen_tail')
+            self.assertEqual(Q.validate(target,bad,C,tok,a.store,a.dict_index,a.decisions,
+                expected_reading=reading),(False,'unproven_sahen_attachment'))
 
 if __name__=='__main__':unittest.main()

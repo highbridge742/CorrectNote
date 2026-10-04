@@ -620,6 +620,136 @@ def mixed_kana_syllable_scope(line,start,end):
                    for lo,hi in mixed_kana_syllable_ranges(line))
 
 
+@lru_cache(maxsize=4096)
+def preserves_native_adverbial_word(original,changed):
+    """A native temporal/adverbial noun keeps its word boundary and sense.
+
+    Match unchanged readings, so repairs elsewhere do not freeze the whole
+    clause. A homophonic nominal needs its own original case relation.
+    """
+    if original==changed:return True
+    old_parts=tokenize(original)
+    protected=[t for t in old_parts if t.has_reading and t.pos=='名詞'
+        and t.pos_sub=='副詞可能' and any(p.startswith('名詞,副詞可能,')
+        and r==t.reading for p,f,b,r in dictionary_inflections(t.surface) or ())]
+    if not protected:return True
+    # A source-proved malformed numeric unit owns the inner homographic
+    # adverb. Require the actual replacement to complete that same native
+    # counter; an unrelated noun or a normal approximation is not exempt.
+    from numeric_mark_repair import candidate_evidence
+    lo=0
+    while lo<min(len(original),len(changed)) and original[lo]==changed[lo]:lo+=1
+    tail=0
+    while (tail<len(original)-lo and tail<len(changed)-lo
+            and original[len(original)-tail-1]==changed[len(changed)-tail-1]):tail+=1
+    hi=len(original)-tail;face=changed[lo:len(changed)-tail]
+    if candidate_evidence(original,lo,hi,face):
+        protected=[t for t in protected if not (lo<=t.start and t.end<=hi)]
+        if not protected:return True
+    # Prove the original longest action before protecting a shorter token
+    # inside it. A kana parse of a native sahen word can invent an adverb.
+    from reading_segments import (native_bare_action_faces,completed_sahen_reading,
+                                   native_predicate_link_boundaries)
+    # A proved original te/de seam can introduce a bare action note.
+    # The word ending exactly at the clause edge owns its whole range,
+    # including any shorter temporal noun found by the best-path split.
+    action_edges=native_predicate_link_boundaries(original,0)
+    from pos_grammar import unexplained_shifted_predicate_tails
+    original_predicates=unexplained_shifted_predicate_tails(original)
+    def inside_original_action(token):
+        # A native original continuative plus its intact functional prefix
+        # owns an inner best-parse adverb. The final broken small vowel is
+        # excluded; no repaired candidate supplies this source boundary.
+        if any(start<token.start and token.end<=end-1
+               for start,end,cut,reading in original_predicates):return True
+        bare=original.rstrip('。！？.!?')
+        if any(edge<=token.start and token.end<=len(bare)
+               and native_bare_action_faces(bare[edge:]) for edge in action_edges):return True
+        for start in range(max(0,token.start-24),token.start+1):
+            if start and original[start-1] not in '、。！？!?\t\r\nをにがでもとは':continue
+            for end in range(token.end+1,min(len(original),start+24)+1):
+                heads=native_bare_action_faces(original[start:end])
+                if not heads:continue
+                for cut in range(end+1,min(len(original),end+10)+1):
+                    if completed_sahen_reading(original[start:cut],allow_nonpolite=True,
+                            return_action=True,finite_only=True) in heads:return True
+        return False
+    from oddness import case_particle_mismatch
+    def broken_case_attachment(token):
+        following=[part for part in old_parts if part.start>=token.end]
+        return bool(len(following)>=2 and following[0].start==token.end
+            and following[0].end==following[1].start
+            and all(part.has_reading and part.pos=='助詞' for part in following[:2])
+            and case_particle_mismatch(following[0].surface,following[0].pos_sub,
+                                       following[1].surface,following[1].pos_sub))
+    def broken_past_attachment(token):
+        from oddness import noun_past_aux_mismatch
+        following=next((part for part in old_parts if part.start==token.end),None)
+        if following is None:return False
+        def legacy(part):
+            return (part.surface,part.pos+':'+part.pos_sub,part.reading,
+                    part.start,part.end,part.has_reading,part.infl_form)
+        return noun_past_aux_mismatch(legacy(token),legacy(following),original)
+    from semantic_roles import adverbial_reading_needs_host
+    def missing_adverbial_host(token):
+        if not adverbial_reading_needs_host(token.surface,token.reading):return False
+        preceding=next((p for p in old_parts if p.end==token.start),None)
+        return preceding is None or (preceding.pos=='助詞'
+            and preceding.pos_sub.startswith('格助詞'))
+    protected=[token for token in protected if not inside_original_action(token)
+               and not broken_case_attachment(token) and not missing_adverbial_host(token)
+               and not broken_past_attachment(token)]
+    if not protected:return True
+    from difflib import SequenceMatcher
+    def reading_positions(parts):
+        result=[];reading=''
+        for t in parts:
+            word=t.surface if all('ぁ'<=c<='ゖ' or c=='ー' for c in t.surface) else t.reading if t.has_reading else t.surface
+            result.append((t,len(reading),len(reading)+len(word)));reading+=word
+        return reading,result
+    old_reading,old_positions=reading_positions(old_parts)
+    new_reading,new_positions=reading_positions(tokenize(changed))
+    blocks=SequenceMatcher(None,old_reading,new_reading,autojunk=False).get_matching_blocks()
+    def keeps_particle(source,target):
+        following=next((t for t in old_parts if t.start==source.end and t.has_reading and t.pos=='助詞'),None)
+        if following is None:return True
+        return any(t.start==target.end and t.surface==following.surface and t.pos=='助詞'
+                   and (t.pos_sub==following.pos_sub or
+                        # The same written nominal and identical particle
+                        # retain their boundary across a repaired comparison.
+                        # Native POS ambiguity of to is not a word edit.
+                        following.surface=='と'
+                        and {t.pos_sub,following.pos_sub}=={'並立助詞','格助詞:一般'}
+                        or following.surface=='の'
+                        and {t.pos_sub,following.pos_sub}=={'連体化','格助詞:一般'})
+                   for t,c,d in new_positions)
+    for source,lo,hi in old_positions:
+        if source not in protected:continue
+        match=next((b for b in blocks if b.a<=lo and hi<=b.a+b.size),None)
+        if match is None:
+            # An IME-only/unknown compound supplies no readable inner edge.
+            # Accept another actual reading of the same adverbial word only
+            # after aligning its unchanged source prefix.
+            if any(any(p.startswith('名詞,副詞可能,') and r==source.reading
+                       for p,f,base,r in dictionary_inflections(t.surface) or ())
+                   and (original[:source.start]==changed[:t.start]
+                        or native_spelling_only(original[:source.start],changed[:t.start]))
+                   for t,c,d in new_positions if keeps_particle(source,t)):continue
+            return False
+        a=match.b+lo-match.a;b=a+hi-lo
+        target=next((t for t,c,d in new_positions if c==a and d==b),None)
+        if target and (target.surface==source.surface or any(
+                p.startswith('名詞,副詞可能,') and r==source.reading
+                for p,f,base,r in dictionary_inflections(target.surface) or ())) and keeps_particle(source,target):continue
+        if target:
+            from semantic_roles import candidate_nominal_spelling_evidence
+            following=original[source.end:]
+            if following.startswith(('を','が','に','で','の')) and candidate_nominal_spelling_evidence(
+                    original[:source.start],target.surface,following):continue
+        return False
+    return True
+
+
 def spelling_edit_allowed(line,start,end,replacement):
     if line[start:end]!=replacement and not mixed_kana_syllable_scope(line,start,end):return False
     """None: unrelated; False: loses a proven stem; True: exact scoped size edit."""
@@ -736,7 +866,7 @@ def _restore_attested_nouns(line, tokens):
     if not tokens:
         return tokens
     katakana=lambda text:bool(text) and all('ァ'<=c<='ヶ' or c=='ー' for c in text)
-    if not any(w in line for w in attested) and not any(
+    if not any(w in line for w in attested) and not any(katakana(t.surface) and not t.has_reading for t in tokens) and not any(
             katakana(a.surface) and katakana(b.surface) and a.end==b.start
             for a,b in zip(tokens,tokens[1:])):
         return tokens
@@ -745,14 +875,24 @@ def _restore_attested_nouns(line, tokens):
         first=tokens[i];best=None;word='';end=first.start
         for j in range(i,min(len(tokens),i+8)):
             part=tokens[j]
-            if part.start!=end or part.pos not in ('名詞','接頭詞'):
+            # A source-attested written noun can be split into archaic
+            # bound verb stems by the old native dictionary. These fragments
+            # supply no lexical reading; only the exact external whole word
+            # below may restore it. Existing names/finite verbs stay native.
+            nominal_fragment=(part.pos=='動詞' and part.infl_form.startswith('体言接続')
+                and all('一'<=c<='鿿' for c in part.surface)
+                and any(w.startswith(word+part.surface) for w in SOURCED_COMMON_NOUNS))
+            if part.start!=end or part.pos not in ('名詞','接頭詞') and not nominal_fragment:
                 break
             word+=part.surface;end=part.end
             if line[first.start:end]!=word:
                 break
             entry=EXACT_NOUNS.get(word)
             if (entry is None and word in SOURCED_COMMON_NOUNS
-                    and any(not item.has_reading for item in tokens[i:j+1])
+                    and (any(not item.has_reading for item in tokens[i:j+1])
+                        or all('一'<=c<='鿿' for c in word)
+                        and any(item.pos=='動詞' and item.infl_form.startswith('体言接続')
+                            for item in tokens[i:j+1]))
                     and not dictionary_inflections(word)):
                 # External facts restore only a whole unread nominal range.
                 # Known native homographs and ambiguous readings stay native.
@@ -769,7 +909,7 @@ def _restore_attested_nouns(line, tokens):
             # Whole, unchanged dictionary nouns may be split into names by
             # the surrounding text. A cost-table spelling is not this proof.
             native=katakana(word) and len(word)<=32
-            if entry is None and native and j>i:
+            if entry is None and native and (j>i or not first.has_reading):
                 rows=[(rd,pos.split(',')[1]) for pos,form,base,rd in dictionary_inflections(word) or ()
                       if pos.startswith(('名詞,一般,','名詞,サ変接続,','名詞,形容動詞語幹,'))
                       and base==word and rd==katakana_to_hiragana(word)]
@@ -1061,10 +1201,22 @@ def native_potential_origins(surface,form,reading,pos_prefix='動詞,自立,'):
     return tuple(dict.fromkeys(found))
 
 
+# Te/de auxiliaries have their own attachment, distinct from continuative
+# compounds and contracted auxiliaries which already include te/de.
+# TUFS: https://www.tufs.ac.jp/blog/icjs/activityreports/pdf/project_report_02.pdf
+# JPF: https://www.jpf.go.jp/j/project/japanese/teach/tsushin/grammar/201409.html
+TE_AUXILIARY_BASES=frozenset(('いる','居る','おる','居る','ある','有る','在る',
+    'おく','置く','しまう','仕舞う','いく','行く','ゆく','くる','来る',
+    'みる','見る','みせる','見せる','もらう','貰う','いただく','頂く',
+    'あげる','上げる','さしあげる','差し上げる','やる','くれる','呉れる',
+    'くださる','下さる'))
+
+
 @lru_cache(maxsize=8192)
 def native_potential_auxiliary(surface,form,reading):
     """An attested potential of a native non-independent godan auxiliary."""
-    origins=native_potential_origins(surface,form,reading,'動詞,非自立,')
+    origins=tuple(row for row in native_potential_origins(surface,form,reading,'動詞,非自立,')
+                  if row[0] in TE_AUXILIARY_BASES)
     return origins[0][0] if origins else None
 
 
@@ -1258,9 +1410,22 @@ def native_sahen_compound_reading(surface):
     This does not add a dictionary entry or allow arbitrary noun+suffix words.
     """
     if not HAS_JANOME or not surface or not 2<=len(surface)<=24:return ''
+    parts=_tokenize_janome(surface)
+    # A native nominal prefix keeps an independently attested sahen host.
+    # This is productive source morphology, not a new dictionary entry or
+    # a requirement that the compound already have a semantic roster row.
+    if parts and parts[0].has_reading and parts[0].pos=='接頭詞' and parts[0].pos_sub=='名詞接続':
+        first=parts[0];host=surface[first.end:]
+        # Repetition applies to the action itself. Merely distributive
+        # nominal prefixes (each N, etc.) do not turn N into a verb.
+        # Other compounds keep their independent whole-word POS evidence.
+        if first.surface=='再' and any(pos.startswith('接頭詞,名詞接続,') and rd==first.reading
+               for pos,form,base,rd in dictionary_inflections(first.surface) or ()):
+            readings={rd for pos,form,base,rd in dictionary_inflections(host) or ()
+                      if pos.startswith('名詞,サ変接続,') and base==host}
+            if len(readings)==1:return first.reading+next(iter(readings))
     from semantic_roles import VERB_ROLES
     if surface not in VERB_ROLES:return ''
-    parts=_tokenize_janome(surface)
     if (len(parts)<2 or ''.join(t.surface for t in parts)!=surface
             or parts[0].start!=0 or parts[-1].end!=len(surface)
             or any(a.end!=b.start for a,b in zip(parts,parts[1:]))
@@ -1280,12 +1445,12 @@ def _contextualize_sahen_compounds(tokens):
     out=[];i=0
     while i<len(tokens):
         head=tokens[i];merged=False
-        if head.pos=='名詞' and head.has_reading:
+        if head.has_reading and (head.pos=='名詞' or head.pos=='接頭詞' and head.pos_sub=='名詞接続'):
             for j in range(i+1,min(len(tokens),i+8)):
                 tail=tokens[j]
                 if (tokens[j-1].end!=tail.start or tail.end-head.start>24
                         or tail.pos!='名詞' or not tail.has_reading):break
-                if tail.pos_sub!='接尾:サ変接続':continue
+                if tail.pos_sub!='接尾:サ変接続' and not (head.pos=='接頭詞' and tail.pos_sub=='サ変接続'):continue
                 word=''.join(t.surface for t in tokens[i:j+1])
                 reading=native_sahen_compound_reading(word)
                 if reading and reading==''.join(t.reading for t in tokens[i:j+1]):
@@ -2141,9 +2306,9 @@ def _native_small_particle_tail(word,index,parts):
         for pos,form,base,reading in native:
             if not pos.startswith(('動詞,自立,','形容詞,自立,')):continue
             state=continuation_state(form)
-            if state is not None and explain_kana_run('よ'+after,no_words=True,initial_state=state):return True
+            if state is not None and explain_kana_run('よ',no_words=True,initial_state=state):return True
         if t.pos not in ('助詞','助動詞'):continue
-        tail=katakana_to_hiragana(word[t.start:index]+'よ'+after)
+        tail=katakana_to_hiragana(word[t.start:index]+'よ')
         if not j:
             if t.pos=='助動詞' and explain_kana_run(tail,no_words=True,initial_state='Bw'):return True
             continue

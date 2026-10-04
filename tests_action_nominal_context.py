@@ -24,6 +24,24 @@ class ActionNominalContextTests(unittest.TestCase):
         return [(t.surface,t.pos+(':'+t.pos_sub if t.pos_sub else ''),t.reading,
                  t.start,t.end,t.has_reading,t.infl_form) for t in M.tokenize(text)]
 
+    def test_written_action_needs_its_own_spelling_before_reading_projection(self):
+        source='大切な結果を機録します'
+        frames=R.native_object_predicate_contexts(source,allow_written_predicate=True)
+        self.assertTrue(frames)
+        for begin,cut,faces in frames:
+            self.assertFalse(R.native_object_predicate_proof(source[begin:],cut-begin,faces))
+        self.assertNotIn((0,len(source)),R.native_context_ranges(source))
+        fixed=self.correct(source+'。')
+        self.assertEqual(fixed['corrected'],'大切な結果を記録します。')
+        self.assertFalse(fixed['odd_spans'])
+        self.assertEqual(fixed['analysis_status'],'complete')
+        for text in ('資料を記録します。','資料を再記録します。','データを画像処理します。',
+                     '資料を電子化します。','問題を具体化します。','旅行の日程を田中と相談しました。'):
+            with self.subTest(text=text):
+                result=self.correct(text)
+                self.assertEqual(result['corrected'],text)
+                self.assertFalse(result['odd_spans'])
+
     def test_native_action_noun_keeps_argument_roles_and_process_use(self):
         for word in ('入力','作成','検索','文字入力','資料作成','平仮名入力'):
             with self.subTest(word=word):self.assertIn('process',S.nominal_roles(word))
@@ -105,8 +123,8 @@ class ActionNominalContextTests(unittest.TestCase):
             self.assertFalse(result['odd_spans'],text)
         # Explicit ぇ can now release Shift and replace the same physical key.
         # The two operations retain the original object/predicate proof.
-        for text in ('あしたまでにぶんしょうをなおしまぇ。',
-                     'あしたまでにぶんしょうをなおすします。'):
+        for text in ('あしたまでにぶんしょうをなおしまぅ。',
+                     'あしたまでにぶんしょうをなおそします。'):
             result=self.correct(text)
             self.assertEqual(result['corrected'],'あしたまでに文章を直します。')
             self.assertFalse(result['odd_spans'],text)
@@ -204,7 +222,7 @@ class ActionNominalContextTests(unittest.TestCase):
 
     def test_actual_adjacent_repairs_retain_original_nominal_and_normal_alternatives(self):
         for text in ('もじにゅうりょくをためはます。','もじにゅうりょくをためさします。',
-                     'もじにゅうりょくをためしまきす。'):
+                     'もじにゅうりょくをためしまくす。'):
             with self.subTest(text=text):
                 r=self.correct(text)
                 assert_repaired_spelling(self, r, 'もじにゅうりょくを試します。')

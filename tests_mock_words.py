@@ -1755,12 +1755,12 @@ def test_misplaced_dakuten_48jp():
     （項目48-JP・2026-08-25。【Opus への実装方針】1番）。
 
     かな入力では濁点が独立したキーなので、隣を叩くと**印だけが
-    取り残される**（`もじれつ` の れ → ゛ で `もじ゛つ`）。
+    取り残される**（`いけん` の け → ゛ で `い゛ん`）。
     `normalize_marks` はこれを誤打として**落とす**ので、
     そこから先の探索は材料を失っていた（48-JN の台帳の「別のもの」）。
 
     見るもの:
-      (1) 落とす前に隣のキーで戻す（もじ゛つ → もじれつ）
+      (1) 落とす前に隣のキーで戻す（い゛ん → いけん）
       (2) **わざと書いた印は触らない**（行頭・記号の後ろ）
       (3) 合成できる印・打つ順番の入れ替え（48-AO）は触らない
       (4) **印を落としても語になるなら身を引く**（決められない）
@@ -1786,12 +1786,12 @@ def test_misplaced_dakuten_48jp():
         def lookup(self, reading):
             return [{'count': 5}] if reading in self.words else []
 
-    st = _Store(['もじれつ', 'たんご', 'へんかん'])
-    check('場違いな濁点を隣のキーで戻す（もじ゛つ → もじれつ）',
-          C._misplaced_dakuten_fixes('もじ゛つ', st), [(0, 4, 'もじれつ')])
+    st = _Store(['いけん', 'たんご', 'へんかん'])
+    check('場違いな濁点を隣のキーで戻す（い゛ん → いけん）',
+          C._misplaced_dakuten_fixes('い゛ん', st), [(0, 3, 'いけん')])
     check('文の中でも同じ（範囲は連続だけ）',
-          C._misplaced_dakuten_fixes('この もじ゛つ を見る', st),
-          [(3, 7, 'もじれつ')])
+          C._misplaced_dakuten_fixes('この い゛ん を見る', st),
+          [(3, 6, 'いけん')])
     check('戻して語にならなければ触らない',
           C._misplaced_dakuten_fixes('かい゛き', st), [])
     check('行頭の印は触らない（わざと書いた印）',
@@ -1803,30 +1803,32 @@ def test_misplaced_dakuten_48jp():
     check('打つ順番の入れ替え（48-AO）は触らない（たん゛こ）',
           C._misplaced_dakuten_fixes('たん゛こ', st), [])
     check('印が1つも無ければ何もしない',
-          C._misplaced_dakuten_fixes('もじれつ', st), [])
+          C._misplaced_dakuten_fixes('いけん', st), [])
 
-    st2 = _Store(['もじれつ', 'もじつ'])
+    st2 = _Store(['いけん', 'いん'])
     check('印を落としても語になるなら身を引く（今までどおり）',
-          C._misplaced_dakuten_fixes('もじ゛つ', st2), [])
+          C._misplaced_dakuten_fixes('い゛ん', st2), [])
 
-    st3 = _Store(['もじれつ'])
+    st3 = _Store(['いけん'])
     check('連続に落とされる印が2つ以上あれば決めない',
-          C._misplaced_dakuten_fixes('も゛じ゛つ', st3), [])
+          C._misplaced_dakuten_fixes('い゛゛ん', st3), [])
 
     # 語＋助詞の尾でも立つ（設計38 と同じ物差しを使っている）
-    st4 = _Store(['もじれつ'])
-    check('語＋助詞の尾でも立つ（もじ゛つを）',
-          C._misplaced_dakuten_fixes('もじ゛つを', st4), [(0, 5, 'もじれつを')])
+    st4 = _Store(['いけん'])
+    check('語＋助詞の尾でも立つ（い゛んを）',
+          C._misplaced_dakuten_fixes('い゛んを', st4), [(0, 4, 'いけんを')])
 
     # 落とす決まりは normalize_marks だけが持つ（学び22）
     from morphology import normalize_marks
     dropped = []
     check('normalize_marks が落とした印の位置を教える',
-          (normalize_marks('もじ゛つ', swap_across=True, dropped=dropped),
-           dropped), ('もじつ', [2]))
+          (normalize_marks('い゛ん', swap_across=True, dropped=dropped),
+           dropped), ('いん', [1]))
     dropped = []
     normalize_marks('@ ⇒ ゛', swap_across=True, dropped=dropped)
     check('わざと書いた印は落とさない（名簿にも出ない）', dropped, [])
+    check('除外した斜めの゛/れは隣接へ戻さない',
+          C._misplaced_dakuten_fixes('もじ゛つ', _Store(['もじれつ'])), [])
     return all_ok
 
 

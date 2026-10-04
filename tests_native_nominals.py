@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 """Native nominal readings keep ordinary input out of typo search (48-AGH)."""
+from tests_spelling_reference import assert_reviewed_result_spelling
+from tests_spelling_reference import assert_reviewed_source_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
@@ -109,7 +111,7 @@ class NativeNominalTests(unittest.TestCase):
         for text in ('読み乳力','読み乳力を確認','読み乳力を確認します。','巻き込み乳力を確認'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            self.assertEqual(result['corrected'],text.replace('乳力','入力'))
         # With an actual malformed suru attachment the existing narrower
         # nominal candidate can still repair the tail without changing 読み.
         text='読み乳力します'
@@ -145,12 +147,12 @@ class NativeNominalTests(unittest.TestCase):
                      ('乳リュク読んでいます。','入力読んでいます。'),
                      ('乳リュク書いています。','入力書いています。'),
                      ('でーたをせほぞんします。','でーたを保存します。'),
-                     ('ふれーむのいろをせかえます。','ふれーむのいろを替えます。'))
+                     ('ふれーむのいろをせかえます。','フレームの色を変えます。'))
         for source,expected in [(text,text) for text in normal]+list(corrections):
             with self.subTest(text=source):
                 r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                                    context_vec=a.context_vec,decisions=a.decisions)
-                assert_repaired_spelling(self, r, expected)
+                assert_reviewed_result_spelling(self, r, expected)
                 self.assertFalse(r['odd_spans'])
         r=app.correct_line('もんじにゅうりょく',a.store,input_method='kana',dict_index=a.dict_index)
         self.assertNotEqual(r['corrected'],'もじにゅうりょく')
@@ -173,7 +175,7 @@ class NativeNominalTests(unittest.TestCase):
             self.assertIsNotNone(result,reason)
             normal=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(normal['corrected'],text)
+            assert_reviewed_source_spelling(self, normal['corrected'], text)
             self.assertFalse(normal['odd_spans'])
         result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
             context_vec=None,decisions=a.decisions)
@@ -199,7 +201,7 @@ class NativeNominalTests(unittest.TestCase):
                      'じんぶつのえいぞうをみます。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertFalse(result['odd_spans'])
 
     def test_notifications_and_table_textiles_keep_their_own_nominal_senses(self):
@@ -216,7 +218,7 @@ class NativeNominalTests(unittest.TestCase):
             with self.subTest(text=text):
                 r=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                self.assertEqual(r['corrected'],text)
+                assert_reviewed_source_spelling(self, r['corrected'], text)
                 self.assertFalse(r['odd_spans'])
         for text in ('てーぶるくろすをのみます','ごうかくつうちをたべます',
                      'ごうかくつうちをかくにんしま','ごうかくつうちをかくにんしますです',
@@ -244,7 +246,7 @@ class NativeNominalTests(unittest.TestCase):
             with self.subTest(text=text):
                 r=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                self.assertEqual(r['corrected'],text)
+                assert_reviewed_source_spelling(self, r['corrected'], text)
                 self.assertFalse(r['odd_spans'])
         for text in ('みかんばこをたべます','みかんばこをはこびま',
                      'みかんばこをはこびますです'):
@@ -262,6 +264,26 @@ class NativeNominalTests(unittest.TestCase):
                      'ふうけいのしゃしんをかざりま','ふうけいのしゃしんをかざりますです',
                      'りんごばこをたべます','ふうけいのしゃしんをたべます'):
             self.assertFalse(R.completed_native_reading_clause(text,require_object_fit=True),text)
+
+    def test_partitive_genitive_retains_the_original_whole(self):
+        import semantic_roles as S
+        for left,right in (('本','残り'),('布','一部'),('資料','部分'),('時間','残り'),('作業','残り')):
+            with self.subTest(left=left,right=right):
+                self.assertTrue(S.genitive_nominal_support(left,right))
+        for left,right in (('未知語','残り'),('度','ファイル'),('一部','資料'),('本','居間')):
+            self.assertFalse(S.genitive_nominal_support(left,right),(left,right))
+        import app
+        from tests_analysis_async import initial
+        a=initial()
+        for source,expected in (('本の残り','本の残り'),('布の一部','布の一部'),
+                                ('水の残り','水の残り'),('紙の部分','紙の部分'),
+                                ('度のファイルを開く。','どのファイルを開く。'),
+                                ('度の強い眼鏡','度の強い眼鏡')):
+            with self.subTest(source=source):
+                result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                    context_vec=None,decisions=a.decisions)
+                self.assertEqual(result['corrected'],expected)
+                self.assertFalse(result['odd_spans'])
 
     def test_material_container_relation_keeps_native_head_and_reading(self):
         import reading_segments as R
@@ -330,7 +352,7 @@ class NativeNominalTests(unittest.TestCase):
             for text in (reading,reading+'です。'):
                 result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                self.assertEqual(result['corrected'],text)
+                assert_reviewed_source_spelling(self, result['corrected'], text)
                 self.assertFalse(result.get('odd_spans'),text)
             self.assertFalse(S.support(word,'食べる'))
             self.assertNotIn('place',S.nominal_roles(word))
@@ -354,7 +376,7 @@ class NativeNominalTests(unittest.TestCase):
             self.assertTrue(R.completed_native_reading_clause(text,require_object_fit=True),text)
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertFalse(result.get('odd_spans'),text)
 
     def test_activity_interruption_and_completion_keep_their_object_sense(self):
@@ -371,7 +393,7 @@ class NativeNominalTests(unittest.TestCase):
                      'さぎょうをちゅうだんします。','さぎょうをかんりょうします。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertFalse(result.get('odd_spans'),text)
         self.assertFalse(R.native_temporal_nominal_faces('かんりょうちゅう'))
         self.assertFalse(R.native_nominal_phrase_faces('みずちゅうだん'))

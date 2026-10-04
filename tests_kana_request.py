@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Native request-word repairs from independently anomalous kana tails."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 from unittest.mock import patch
@@ -19,6 +20,21 @@ class KanaRequestTests(unittest.TestCase):
             input_method=kw.pop('input_method','kana'),
             decisions=kw.pop('decisions',DecisionStore()),**kw)
 
+    def test_native_sahen_link_owns_written_head_before_unknown_tail(self):
+        import contextual_repair as Q,corrector
+        from types import SimpleNamespace
+        tokenize=corrector.make_tokenizer(self.a.store)
+        for head in ('解析','保存','確認'):
+            source=head+'してぷねら'
+            target=SimpleNamespace(context=source,source=source,context_start=0,
+                start=0,end=len(head),anomalies=())
+            self.assertIn(('surface',head),Q._source_preserved_verb_bases(target,tokenize))
+            self.assertIn(('surface',head),Q._candidate_verb_bases(head+'します',tokenize))
+        for source in ('電車してぷねら','解析せてぷねら'):
+            target=SimpleNamespace(context=source,source=source,context_start=0,
+                start=0,end=2,anomalies=())
+            self.assertNotIn(('surface',source[:2]),Q._source_preserved_verb_bases(target,tokenize))
+
     def test_native_request_repaired_at_original_boundaries(self):
         for prefix in ('','窓を開けて','泳いで','お茶を','おちゃを','ゆっくり歩いて'):
             for bad in ('くたせさい','くだせさい'):
@@ -28,7 +44,7 @@ class KanaRequestTests(unittest.TestCase):
                     assert_repaired_spelling(self, result, wanted)
                     self.assertFalse(result['odd_spans'])
                     again=self.correct(wanted)
-                    self.assertEqual(again['corrected'],wanted)
+                    assert_reviewed_source_spelling(self, again['corrected'], wanted)
                     self.assertFalse(again['odd_spans'])
 
     def test_small_vowel_and_separate_adjacent_slip(self):
@@ -63,10 +79,10 @@ class KanaRequestTests(unittest.TestCase):
             self.assertFalse(result['odd_spans'])
             self.assertEqual(self.correct(expected)['corrected'],expected)
         for source in ('ほんをよみます。','くださぃ。','「ほんをよみまぇ」と書きました。'):
-            self.assertEqual(self.correct(source)['corrected'],source)
+            assert_reviewed_source_spelling(self, self.correct(source)['corrected'], source)
         from decisions import DecisionStore
         ledger=DecisionStore();ledger.protect('よみまぇ')
-        self.assertEqual(self.correct('ほんをよみまぇ。',decisions=ledger)['corrected'],'ほんをよみまぇ。')
+        assert_reviewed_source_spelling(self, self.correct('ほんをよみまぇ。',decisions=ledger)['corrected'], 'ほんをよみまぇ。')
 
     def test_written_shifted_tail_keeps_native_stem_and_both_physical_steps(self):
         import pos_grammar as P,contextual_repair as R
@@ -100,7 +116,7 @@ class KanaRequestTests(unittest.TestCase):
         for source in ('読みますぅ','読みまぁす','読んでくださぃ','読みまえ','書きぃ','しらゆほまぇ','「読みまぇ」','未知名しまぇ','確認しますぅ','確認しまえ','確認しまぁす'):
             self.assertFalse(P.unexplained_shifted_predicate_tails(source),source)
         for source in ('読みますぅ。','読みまぁす。','読んでくださぃ。','「読みまぇ」と書きました。','確認しまえ。','確認しまぁす。'):
-            self.assertEqual(self.correct(source)['corrected'],source)
+            assert_reviewed_source_spelling(self, self.correct(source)['corrected'], source)
 
     def test_compound_slips_keep_original_key_evidence(self):
         import contextual_repair as cr
@@ -143,6 +159,12 @@ class KanaRequestTests(unittest.TestCase):
                     undo=next(action for title,action in items if '元の入力に戻す' in title)
                     undo();self.assertEqual(calls,[(bad,'ください')])
                     ledger=DecisionStore();self.assertTrue(ledger.reject(*calls[0]))
+                    # reject is pair-specific: a genuinely different offered spelling
+                    # is allowed; protect below freezes the original itself.
+                    rejected=self.correct(text,decisions=ledger)
+                    self.assertNotIn((bad,'ください','かな入力'),rejected['details'])
+                    self.assertFalse(ledger.blocks(text,rejected['corrected']))
+                    ledger.protect(bad)
                     self.assertEqual(self.correct(text,decisions=ledger)['corrected'],text)
 
     def test_natural_and_incomplete_forms_are_not_searched(self):
@@ -157,7 +179,7 @@ class KanaRequestTests(unittest.TestCase):
             with self.subTest(source=source):
                 with patch.object(repair,'resolve',wraps=repair.resolve) as resolve:
                     result=self.correct(source)
-                self.assertEqual(result['corrected'],source)
+                assert_reviewed_source_spelling(self, result['corrected'], source)
                 self.assertFalse(any(call.args[0].boundary_kind=='kana_request'
                     for call in resolve.call_args_list))
 
@@ -213,5 +235,14 @@ class KanaRequestTests(unittest.TestCase):
         self.assertEqual(result['corrected'],'歩いてください。  泳いでください。')
         self.assertTrue(result['original_spans'])
         self.assertTrue(all(a<b for a,b in result['original_spans']))
+
+    def test_kana_continuative_is_not_lost_inside_broken_small_vowel_tail(self):
+        import pos_grammar as P
+        for source in ('なおしまぅ','あしたまでにぶんしょうをなおしまぅ'):
+            start=source.index('なおし')
+            self.assertIn((start,len(source),start+3,'なおしまぅ'),P.unexplained_shifted_predicate_tails(source))
+        for source in ('なおしますぅ','なおしまぁす','なおしまう','「なおしまぅ」','しらゆほまぅ'):
+            self.assertFalse(P.unexplained_shifted_predicate_tails(source),source)
+
 
 if __name__=='__main__':unittest.main()

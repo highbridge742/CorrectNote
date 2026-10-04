@@ -4,6 +4,16 @@ import unittest
 import search as S
 
 class SearchBoundaryTests(unittest.TestCase):
+    def test_bare_pipe_is_literal_with_regex_enabled(self):
+        text='甲|乙||丙'
+        for regex in (False,True):
+            for whole_word in (False,True):
+                p=S.build_pattern('|',regex=regex,whole_word=whole_word)
+                self.assertEqual(S.find_all(text,p),[(1,2),(3,4),(4,5)])
+                self.assertEqual(S.replace_all(text,p,'/',regex=regex),('甲/乙//丙',3))
+        self.assertEqual(S.find_all(text,S.build_pattern('甲|丙',regex=True)),[(0,1),(5,6)])
+        self.assertEqual(S.find_all(text,S.build_pattern(r'\|',regex=True)),[(1,2),(3,4),(4,5)])
+
     def test_newline_scope_keeps_inner_blank_lines_and_counts(self):
         text='\n \t\n 先頭😀 \t\n\n末尾 \t\n\t \n\n'
         first=text.index(' 先頭')

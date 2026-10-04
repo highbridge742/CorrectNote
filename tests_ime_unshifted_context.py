@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Compare attested source keys with Shift repairs using native argument roles."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 import morphology
 from semantic_roles import native_case_support
@@ -45,6 +46,6 @@ class IMEUnshiftedContextTests(unittest.TestCase):
                 self.assertFalse(result.get('odd_spans'))
     def test_explicit_written_and_natural_kana_sources_stay_intact(self):
         for text in ('規約が歩きました','規約が来ました','客が読まれました','きやくをよみます'):
-            with self.subTest(text=text):self.assertEqual(self.correct(text)['corrected'],text)
+            with self.subTest(text=text):assert_reviewed_source_spelling(self,self.correct(text)['corrected'],text)
 
 if __name__=='__main__':unittest.main()

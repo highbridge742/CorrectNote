@@ -18,6 +18,14 @@ class SourceKeyScopeTests(unittest.TestCase):
         return C._check_replacement(text,(start,end,surface,'かな入力'),self.a.store,
             self.tok,self.a.dict_index,conv_taken=((start,end),))
 
+    def test_new_diagonal_exclusion_is_not_an_adjacent_substitution(self):
+        import kana_layout as K
+        self.assertGreater(K.kana_key_distance('ん','ま'),1.0)
+        self.assertFalse(any(row.reading=='よみます' and row.operation=='adjacent_substitution'
+                             for row in Q.key_repairs('よみんす')))
+        self.assertTrue(any(row.reading=='よみます' and row.operation=='nonadjacent_substitution'
+                            for row in Q.nonadjacent_key_repairs('よみんす')))
+
     def test_unchanged_padding_cannot_hide_nonadjacent_deletions(self):
         for char in ('あ','こ'):
             text='他の行と'+char+'同じです。'
@@ -106,6 +114,24 @@ class SourceKeyScopeTests(unittest.TestCase):
         try:
             self.assertFalse(C._nonadjacent_drop_in_source(text,0,len(text),'他の行と同じです。',self.tok))
         finally:C._CORRECTION_INPUT_METHOD.reset(token)
+
+    def test_excluded_diagonals_are_not_intrusion_or_substitution_proof(self):
+        import kana_layout as K
+        for bad,good in (('ほきん','ほん'),('きすり','きり'),('まきす','ます'),
+                         ('でしあた','でした'),('ちいちさく','ちいさく'),
+                         ('はさまして','さまして'),('資料を゜保存','資料を保存')):
+            with self.subTest(source=bad):self.assertIs(K.single_key_drop_adjacency(bad,good),False)
+        for left,right in (('え','い'),('せ','り'),('の','る'),('ま','ん')):
+            with self.subTest(keys=(left,right)):self.assertGreater(K._base_distance(left,right),1.0)
+
+
+    def test_retired_legacy_targets_have_no_neighbor_key_proof(self):
+        import kana_layout as K
+        for bad,good in (('かたづけるて','かたづけて'),('まんど','まど'),
+                         ('おくれ゛ました','おくれました')):
+            with self.subTest(source=bad):self.assertIs(K.single_key_drop_adjacency(bad,good),False)
+        for left,right in (('は','さ'),('つ','し'),('い','は')):
+            with self.subTest(keys=(left,right)):self.assertGreater(K._base_distance(left,right),1.0)
 
 
 if __name__=='__main__':unittest.main()

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """A source adjunct edge does not approve its unexplained following text."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
@@ -46,7 +47,7 @@ class NominalTemporalTests(unittest.TestCase):
             with self.subTest(text=text):
                 result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                self.assertEqual(result['corrected'],text)
+                assert_reviewed_source_spelling(self, result['corrected'], text)
                 self.assertEqual(result.get('odd_spans'),[])
 
 
@@ -99,7 +100,7 @@ class NominalTemporalTests(unittest.TestCase):
             self.assertEqual(result.get('odd_spans'),[],text)
             normal=app.correct_line(expected,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(normal['corrected'],expected)
+            assert_reviewed_source_spelling(self, normal['corrected'], expected)
             self.assertEqual(normal.get('odd_spans'),[],expected)
 
 
@@ -126,7 +127,7 @@ class NominalTemporalTests(unittest.TestCase):
                      'さぎょうちゅうはしずかです。','にゅうりょくちゅうほぞんします。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertFalse(result.get('odd_spans'),text)
         for text in ('にゅうりょくちゅうにぷねらをよみます',
                      'にゅうりょくちゅうにほんをよみるます'):
@@ -149,7 +150,7 @@ class NominalTemporalTests(unittest.TestCase):
                      'きじつにしりょうをほぞんします。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertFalse(result.get('odd_spans'),text)
         self.assertFalse(R.intact_native_reading('しめきりまでにぷねらをほぞんします'))
 
@@ -162,7 +163,7 @@ class NominalTemporalTests(unittest.TestCase):
             with self.subTest(text=text):
                 result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                self.assertEqual(result['corrected'],text)
+                assert_reviewed_source_spelling(self, result['corrected'], text)
                 self.assertEqual(result.get('odd_spans'),[])
         self.assertTrue(R.native_object_predicate_proof('資料を保存したときに連絡します',3,('資料',)))
         self.assertFalse(R.native_object_predicate_proof('患者を保存したときに連絡します',3,('患者',)))

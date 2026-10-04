@@ -8,7 +8,7 @@ import contextual_repair as R
 @unittest.skipUnless(M.dictionary_inflections('買う'), 'requires native dictionary')
 class QuantityObjectValidationTests(unittest.TestCase):
     def test_changed_object_needs_positive_fit_to_the_same_predicate(self):
-        source='ほきんをにさつかいます。'
+        source='ほくんをにさつかいます。'
         for candidate,expected in (('ほん',True),('本',True),('ほんき',False),
                                    ('本気',False),('きほん',False)):
             with self.subTest(candidate=candidate):
@@ -29,11 +29,11 @@ class QuantityObjectValidationTests(unittest.TestCase):
         self.assertTrue(R.object_predicate_candidate_allowed('ほんゃをにさつかいます。',0,3,'ほん'))
 
     def test_wider_replacement_uses_the_same_original_case_and_counter(self):
-        source='ほきんをにさつかいます。'
+        source='ほくんをにさつかいます。'
         for end,candidate in ((4,'ほんきを'),(len(source),'ほんきをにさつかいます。')):
             with self.subTest(end=end):
                 self.assertFalse(R.object_predicate_candidate_allowed(source,0,end,candidate))
-        source='ほきんをにさつかいなす。'
+        source='ほくんをにさつかいなす。'
         self.assertFalse(R.object_predicate_candidate_allowed(source,0,len(source),
             'ほんきをにさつかいます。'))
         self.assertTrue(R.object_predicate_candidate_allowed(source,0,len(source),
@@ -46,7 +46,7 @@ class QuantityObjectValidationTests(unittest.TestCase):
         self.assertTrue(R.object_predicate_candidate_allowed('きかいてをにだいならべます。',0,4,'機械'))
 
     def test_case_and_counter_do_not_certify_an_unknown_or_broken_predicate(self):
-        for source in ('ほきんをにさつかいなす。','ほきんをにさつしらゆほます。'):
+        for source in ('ほくんをにさつかいなす。','ほくんをにさつしらゆほます。'):
             with self.subTest(source=source):
                 self.assertFalse(R.object_predicate_candidate_allowed(source,0,3,'ほん'))
 
@@ -67,7 +67,7 @@ class QuantityObjectValidationTests(unittest.TestCase):
         for source in ('よみなす、ほんをにさつかいます。',
                        'よみなす。ほんをにさつかいます。',
                        'よみなすがほんをにさつかいます。',
-                       'よみなすがほきんをにさつかいます。'):
+                       'よみなすがほくんをにさつかいます。'):
             with self.subTest(source=source):
                 self.assertTrue(R.object_predicate_candidate_allowed(source,0,4,'よみます'))
 
@@ -78,7 +78,7 @@ class QuantityObjectValidationTests(unittest.TestCase):
         self.assertEqual(S.counted_object_roles('二台'),frozenset(('device',)))
         for text in ('にこ','二枚','二本','二つ','二冊目','しらゆほ冊'):
             self.assertIsNone(S.counted_object_roles(text),text)
-        source='ほきんをにさつください。'
+        source='ほくんをにさつください。'
         for candidate in ('ほん','本','資料','絵本'):
             self.assertTrue(R.object_predicate_candidate_allowed(source,0,3,candidate),candidate)
         for candidate in ('保菌','本気','基本','保管','鉛筆','先生'):
@@ -86,7 +86,7 @@ class QuantityObjectValidationTests(unittest.TestCase):
                 self.assertFalse(R.object_predicate_candidate_allowed(source,0,end,surface),(candidate,end))
         for text in ('ほんをにさつください','きかいをにだいください'):
             self.assertTrue(RS.completed_native_reading_clause(text,require_object_fit=True),text)
-        for text in ('ほきんをにさつください','えんぴつをにさつください','ほんをにだいください'):
+        for text in ('ほくんをにさつください','えんぴつをにさつください','ほんをにだいください'):
             self.assertFalse(RS.completed_native_reading_clause(text,require_object_fit=True),text)
 
     def test_written_quantity_uses_the_same_original_object_validation(self):
@@ -95,7 +95,7 @@ class QuantityObjectValidationTests(unittest.TestCase):
         from tests_analysis_async import initial
         a=initial();tk=C.make_tokenizer(a.store)
         for quantity in ('二冊','にさつ','0冊','100冊','１２３冊'):
-            source='ほきんを'+quantity+'ください。'
+            source='ほくんを'+quantity+'ください。'
             for candidate in ('本気','保菌','基本','本社'):
                 self.assertFalse(R.object_predicate_candidate_allowed(source,0,3,candidate),candidate)
                 value,reason=C._check_replacement(source,(0,3,candidate,'かな入力'),
@@ -107,7 +107,7 @@ class QuantityObjectValidationTests(unittest.TestCase):
         for text in ('二冊目からよみます','にさつめからよみます','三冊目をください'):
             self.assertFalse(RS._native_counter_prefixes(text,M.tokenize(text)),text)
         # No predicate is supplied by a bare object/count note.
-        self.assertFalse(R.object_predicate_candidate_allowed('ほきんを二冊',0,3,'本気'))
+        self.assertFalse(R.object_predicate_candidate_allowed('ほくんを二冊',0,3,'本気'))
         self.assertTrue(R.object_predicate_candidate_allowed('よみなす。ほんを二冊',0,4,'よみます'))
 
     def test_one_homophone_must_fit_both_the_counter_and_the_predicate(self):
@@ -128,13 +128,13 @@ class QuantityObjectValidationTests(unittest.TestCase):
         import app
         from tests_analysis_async import initial
         a=initial()
-        for source in ('ほきんをにさつください。','ほきんをにさつかいます。','ほきんをにさつよみます。'):
+        for source in ('ほくんをにさつください。','ほくんをにさつかいます。','ほくんをにさつよみます。'):
             result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],source.replace('ほきん','本'))
+            self.assertEqual(result['corrected'],source.replace('ほくん','本'))
             self.assertEqual(result.get('odd_spans'),[])
         for text in ('「保菌」を二冊ください。','「本気」を二冊ください。',
-                     '「ほきんをにさつください」を入力しました。'):
+                     '「ほくんをにさつください」を入力しました。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
             self.assertEqual(result['corrected'],text)
@@ -164,7 +164,7 @@ class QuantityObjectValidationTests(unittest.TestCase):
         import corrector as C
         from tests_analysis_async import initial
         a=initial();tk=C.make_tokenizer(a.store)
-        accepted,reason=C._check_replacement('ほきんをにさつかいます。',
+        accepted,reason=C._check_replacement('ほくんをにさつかいます。',
             (0,3,'ほんき','かな入力'),a.store,tk,a.dict_index,a.decisions)
         self.assertIsNone(accepted)
         self.assertEqual(reason,'unproven_original_object_predicate')

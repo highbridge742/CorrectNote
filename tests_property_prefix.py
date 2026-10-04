@@ -52,4 +52,14 @@ class PropertyPrefixTests(unittest.TestCase):
                 ts=self.tokens();t=ts[1];ts[1]=(t[0],pos,t[2],t[3],t[4],known,'')
                 self.assertEqual(O.ranked_property_prefix_spans('主同調性',ts),[])
 
+
+    def test_native_compound_merge_retains_original_affix_witnesses(self):
+        import morphology as M
+        if not M.HAS_JANOME:self.skipTest('native dictionary')
+        for text,expected in (('主同調性',[('主','同調性',0,4)]),
+                              ('副交感性',[]),('主作用性',[]),('主従属性',[])):
+            tokens=[(t.surface,t.pos+':'+t.pos_sub,t.reading,t.start,t.end,t.has_reading,t.infl_form)
+                    for t in M.tokenize(text)]
+            self.assertEqual(O.ranked_property_prefix_spans(text,tokens),expected,text)
+
 if __name__=='__main__':unittest.main()

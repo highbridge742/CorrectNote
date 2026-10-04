@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Representation properties differ from the document and its ownership."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 import morphology as M
 import semantic_roles as S
@@ -10,6 +11,12 @@ class RepresentationFormatTests(unittest.TestCase):
     def tokens(self,text):
         return [(t.surface,t.pos+':'+t.pos_sub,t.reading,t.start,t.end,t.has_reading,t.infl_form)
                 for t in M.tokenize(text)]
+
+    def test_adnominal_action_with_copula_closes_its_original_object(self):
+        # The existing terminal-predicate proof closes N + native copula;
+        # an outer case/predicate still leaves this object scope open.
+        text='保存形式を返還する方法です。'
+        self.assertTrue(S.conflicting_object_predicates(text,self.tokens(text)))
 
     def test_same_property_roles_supply_the_conflict_and_positive_fit(self):
         for noun in ('保存形式','ファイル形式','画像形式','文字コード'):
@@ -36,7 +43,7 @@ class RepresentationFormatTests(unittest.TestCase):
         for text in ('ファイルを返還します。','資料を返還します。','形式を返還します。',
                      '書式を返還します。','保存形式の資料を返還します。',
                      '文字コードの権利を返還します。','文字コードを変換します。',
-                     '保存形式を返還する方法です。','ぷねらを返還します。'):
+                     '保存形式を返還する方法を説明します。','ぷねらを返還します。'):
             self.assertFalse(S.conflicting_object_predicates(text,self.tokens(text)),text)
 
     def test_application_keeps_literal_meaning_and_quotes(self):
@@ -54,7 +61,7 @@ class RepresentationFormatTests(unittest.TestCase):
                      '「保存形式を返還します」という誤記です。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertEqual(result.get('odd_spans'),[],text)
 
     def test_rejection_does_not_authorize_another_unfitting_word(self):

@@ -13,14 +13,19 @@ def _source_frames(source):
         if not field.startswith('再'):
             lo=end
             continue
-        parts=M.tokenize(field)
-        if (len(parts)==2 and parts[0].pos=='接頭詞' and parts[0].surface=='再'
-                and 'intrinsic_process' in nominal_roles(parts[1].surface)
-                and parts[1].pos=='名詞' and parts[1].pos_sub=='サ変接続'
+        # A tokenizer may merge a productive prefix with its noun. The
+        # unchanged native prefix and whole following action prove the same
+        # source structure independently of that best-path aggregation.
+        prefixes=[rd for pos,form,base,rd in M.dictionary_inflections(field[:1]) or ()
+                  if pos.startswith('接頭詞,名詞接続,') and base==field[:1]]
+        actions=[rd for pos,form,base,rd in M.dictionary_inflections(field[1:]) or ()
+                 if pos.startswith('名詞,サ変接続,') and base==field[1:]]
+        readings={a+b for a in prefixes for b in actions}
+        if (len(readings)==1 and 'intrinsic_process' in nominal_roles(field[1:])
                 and E._table_cost(field) is None):
             if protected is None:protected=protected_ranges(source)
             if not overlaps(lo,hi,protected):
-                result.append(dict(start=lo,end=hi,reading=''.join(t.reading for t in parts)))
+                result.append(dict(start=lo,end=hi,reading=next(iter(readings))))
         lo=end
     return tuple(result)
 

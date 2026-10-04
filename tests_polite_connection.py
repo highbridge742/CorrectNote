@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Auxiliary attachment, dictionary alternatives, and original repair boundaries."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
@@ -547,7 +548,7 @@ class NativeChangedPoliteTests(unittest.TestCase):
                      '「たまねぎ」と「にんじん」をきります。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertEqual(result.get('odd_spans'),[],text)
 
     def test_old_wrong_local_action_is_retained_and_still_odd(self):

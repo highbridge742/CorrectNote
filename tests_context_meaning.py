@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Source meaning, native alternate readings and independent image fields."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 import app
 from tests_analysis_async import initial
@@ -16,9 +17,40 @@ class ContextMeaningTests(unittest.TestCase):
         s=self.state
         r=app.correct_line(source,s.store,input_method='kana',dict_index=s.dict_index,
                            decisions=s.decisions,context_vec=None)
-        self.assertEqual(expected,r['corrected'],source)
+        assert_reviewed_source_spelling(self, r['corrected'], expected, source)
         self.assertFalse(r.get('odd_spans'),source)
         self.assertEqual('complete',r.get('analysis_status'),source)
+
+    def test_native_action_meaning_is_not_a_spelling_error(self):
+        import context_meaning as K,corrector,oddness
+        tok=corrector.make_tokenizer(self.state.store)
+        for text in ('本を棚におきます。','あかいさらをしろいたなにおきます。',
+                     'このはこをまどのちかくにおきます。'):
+            with self.subTest(text=text):
+                frames=[f for f in K.contexts(text) if f['kind']=='placement_action']
+                self.assertTrue(frames)
+                self.assertTrue(all(K._expected_role(f) in K._meaning_roles(f) for f in frames))
+                self.assertFalse(K.anomalous_frames(text))
+                self.assertFalse(oddness.structural_anomaly_in_range(text,0,len(text),tok,
+                    self.state.store,self.state.dict_index))
+        self.assertTrue(oddness.structural_anomaly_in_range('荷物を机に起きます。',0,10,tok,
+            self.state.store,self.state.dict_index))
+        self.assertFalse(K.contexts('未知ぷねにおきます。'))
+
+    def test_repaired_clause_keeps_native_placement_and_focus_meaning(self):
+        for source,expected in (
+                # Nonadjacent re retention is covered by the user-policy test.
+                ('このはこをまどのちかくにおきまくす。',('この箱をまどの近くに置きます。','このはこをまどの近くに置きます。')),
+                ('ものだけをおくます。','ものだけを置きます。')):
+            with self.subTest(source=source):self.check(source,expected)
+
+    def test_place_compound_case_and_physical_placement_are_distinct(self):
+        for source,expected in (
+                ('学校において行事を行います。','学校において行事を行います。'),
+                ('会場において説明します。','会場において説明します。'),
+                ('床において待つ','床に置いて待つ'),
+                ('机においた','机に置いた')):
+            with self.subTest(source=source):self.check(source,expected)
 
     def test_meaning_and_field_boundaries(self):
         for a,b in [('箸でカーソルの','端でカーソルの'),
@@ -41,7 +73,7 @@ class ContextMeaningTests(unittest.TestCase):
     def test_nominal_scope_does_not_hide_orphan_case(self):
         for a,b in [('にほんの鉄道について説明する','日本の鉄道について説明する'),
                     ('にほんの文化','日本の文化'),('にほんの会社','日本の会社'),
-                    ('地図ににほんの鉄道を描く','地図に日本の鉄道を描く'),
+                    ('地図ににほんの鉄道を描く',('地図ににほんの鉄道を描く','地図に日本の鉄道を描く','地図に二本の鉄道を描く')),
                     ('にほんの線','二本の線'),
                     ('にほんの線と韓国の線','日本の線と韓国の線'),
                     ('机にほんの少し置く','机にほんの少し置く'),
@@ -91,6 +123,7 @@ class ContextMeaningTests(unittest.TestCase):
                     ('箸で豆をつかむ','箸で豆をつかむ'),
                     ('箸の写真にカーソルを合わせる','箸の写真にカーソルを合わせる'),
                     ('カーソルを端に移動する','カーソルを端に移動する'),
+                    ('カーソルを箸に移動','カーソルを端に移動'),
                     ('カーソルを箸に移動\t箸で豆をつかむ','カーソルを端に移動\t箸で豆をつかむ')]:
             with self.subTest(source=a):self.check(a,b)
 

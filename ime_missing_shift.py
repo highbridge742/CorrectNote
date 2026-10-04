@@ -135,7 +135,15 @@ def _written_multi_noun_case(source, tokenize):
             # Written nominal proof also owns the Shift fallback's boundary.
             # Re-reading a valid group in kana supplies no missing-key evidence.
             nominal=source[parts[start+1].start:case.start]
-            if native_lexical_phrase(nominal,tokenize):continue
+            from morphology import dictionary_inflections
+            # Multiple ordinary written nouns alone do not establish a
+            # missing Shift. This is only a limit of this fallback; ordinary
+            # anomaly/meaning analysis still examines the whole compound.
+            ordinary=all(any(pos.startswith(('名詞,一般,','名詞,サ変接続,'))
+                and base==t.surface and rd==t.reading
+                for pos,form,base,rd in dictionary_inflections(t.surface) or ())
+                for t in parts[start+1:i])
+            if native_lexical_phrase(nominal,tokenize) or ordinary:continue
             return True
     return False
 
@@ -306,6 +314,12 @@ def complete_field(source, approved, store, dictionary, decisions, tokenize):
         if not source_odd and not source_mismatch:
             source_marked=bool(engine._odd_spans_for_line(
                 source,tokenize,[],store,dictionary))
+            if not source_marked and source_first and source_reverse and source_reverse[0]==source:
+                # The source's first IME conversion can expose a broken
+                # native seam hidden by its fragmented kana tokenization.
+                # No Shift trial or proposed correction exists at this point.
+                source_marked=bool(engine._odd_spans_for_line(
+                    source_first,tokenize,[],store,dictionary,include_pending=False))
             if not source_marked:
                 return None
         if engine._chunk_is_intact(source,tokenize):

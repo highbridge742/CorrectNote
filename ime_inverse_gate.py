@@ -24,7 +24,8 @@ def _kana_reading(text):
 
 def _native_argument_prefix(field,tokenize):
     """Leave original dictionary nouns and their actual case chain unchanged."""
-    from reading_segments import native_lexical_phrase,native_genitive_nominal_splits
+    from reading_segments import native_lexical_phrase,native_genitive_nominal_splits,native_surface_nominal_heads
+    from morphology import dictionary_inflections
     parts=list(tokenize(field))
     if not parts or ''.join(t[0] for t in parts)!=field:return 0
     begin=0;edge=0;last_case=''
@@ -33,13 +34,23 @@ def _native_argument_prefix(field,tokenize):
         chunk=parts[begin:index]
         if (not chunk or not case[5] or not all(t[5] for t in chunk)
                 or chunk[-1][4]!=case[3]):break
-        nominal=field[chunk[0][3]:case[3]]
+        # Focus particles qualify the same original noun; they do not
+        # change its boundary or prove the following malformed predicate.
+        nominal_end=case[3]
+        while chunk and chunk[-1][1].startswith('助詞:副助詞'):
+            focus=chunk[-1]
+            if not any(pos.startswith('助詞,副助詞,') and rd==focus[2]
+                       for pos,form,base,rd in dictionary_inflections(focus[0]) or ()):break
+            nominal_end=focus[3];chunk=chunk[:-1]
+        if not chunk:break
+        nominal=field[chunk[0][3]:nominal_end]
         if not (native_lexical_phrase(nominal,tokenize)
-                or native_genitive_nominal_splits(nominal)):break
+                or native_genitive_nominal_splits(nominal)
+                or native_surface_nominal_heads(nominal)):break
         edge=case[4];last_case=case[0];begin=index+1
     remaining=parts[begin:]
     return edge if (last_case=='を' and edge<len(field) and remaining
-                    and all(t[1].startswith('名詞') for t in remaining)) else 0
+                    and remaining[0][3]==edge) else 0
 
 
 def _source_readings(surface, tokenize):
@@ -90,6 +101,14 @@ def _written_nominal_group(field, group, tokenize):
               and all(t[1].startswith('名詞') for t in group[1:]))
     if not (prefixed or all(t[1].startswith('名詞') for t in group)):return False
     face=field[group[0][3]:group[-1][4]]
+    first=group[0]
+    if (first[1].startswith('名詞:接尾') and not any(
+            pos.startswith(('名詞,一般,','名詞,サ変接続,','名詞,副詞可能,'))
+            and rd==first[2] and base==first[0]
+            for pos,form,base,rd in dictionary_inflections(first[0]) or ())):
+        # A different reading of this glyph may be a noun. It cannot supply
+        # a missing host to the suffix in this actual source segmentation.
+        return False
     if native_lexical_phrase(face,tokenize):return True
     if prefixed:return False
     # The original anomaly judge already accepts this productive noun
@@ -505,7 +524,9 @@ def anomalous_source_fields(line, tokenize, store, dictionary, source_marks=(), 
                 forms=tuple(row for row in dictionary_inflections(head[0]) or ()
                     if row[0].split(',')[0]==head[1].split(':')[0]
                     and row[3]==head[2] and (row[1] if row[1]!='*' else '')==head[6])
-                written_predicate=bool(forms and (
+                from reading_segments import native_likeness_predicate_ranges
+                written_predicate=(0,len(surface)) in native_likeness_predicate_ranges(surface)
+                written_predicate=written_predicate or bool(forms and (
                     _allows_grammatical_tail(forms,surface[len(head[0]):],head[2],head[0])
                     and _productive_predicate(surface,head[0],before=field[:head[3]])
                     or _native_open_predicate(surface,head[0],before=field[:head[3]])))
@@ -643,6 +664,13 @@ def anomalous_source_fields(line, tokenize, store, dictionary, source_marks=(), 
                         cache['source_readings',surface]=((reading,first_match),)
                     edge=completed_source_prefix(surface)
                     if not edge:edge=_native_argument_prefix(surface,tokenize)
+                    # Trimming an independently proved original prefix changes
+                    # the scope being accused by this inverse-reading clue.
+                    # Judge that actual suffix again; a whole-line bad reparse
+                    # cannot override its own intact native word or grammar.
+                    if edge and intact_predicate(surface[edge:],closed,
+                            any(start+edge<=lo<hi<=end for lo,hi in marks)):
+                        break
                     found.append((start+edge,end,reading))
                     if reading in alias_scopes:
                         lo,hi=alias_scopes[reading]

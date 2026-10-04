@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 import app,corrector as C,reading_segments as R,morphology as M
 from tests_analysis_async import initial
@@ -24,7 +25,7 @@ class ActionValueNominalTests(unittest.TestCase):
                 with self.subTest(phase=phase,source=source):
                     r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                         context_vec=a.context_vec if phase=='fresh' else None,decisions=a.decisions)
-                    self.assertEqual(r['corrected'],source);self.assertEqual(r.get('odd_spans'),[])
+                    assert_reviewed_source_spelling(self, r['corrected'], source);self.assertEqual(r.get('odd_spans'),[])
             r=app.correct_line('まとがい',a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=a.context_vec if phase=='fresh' else None,decisions=a.decisions)
             self.assertEqual(r['corrected'],'間違い');self.assertEqual(r.get('odd_spans'),[])

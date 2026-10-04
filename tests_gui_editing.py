@@ -8,6 +8,35 @@ import tkinter as tk
 import app
 
 class EditingTkTests(unittest.TestCase):
+    def test_pasted_multiline_ranges_are_autofixed_without_touching_loaded_text(self):
+        a=self.a;w=a.editor
+        w.insert('1.0','遠くの原文\n既存😀\n末尾');w.mark_set('insert','2.end')
+        a._sync_typed_shadow()
+        a._after_id=None;a._dirty=False
+        a._auto_detect_input_method=Mock();a._maybe_start_pick_from_equals=Mock()
+        a._schedule_whitespace_paint=Mock();a._redraw_gutter_now=lambda:None
+        a.editor_source_text=lambda:self.text()
+        w.bind('<<Paste>>',a._on_change)
+        self.root.tk.setvar('::test_paste_text','あ\nい\nう')
+        w.event_generate('<<Paste>>');self.root.update_idletasks()
+        a._mark_typed_from_shadow()
+        self.assertEqual(a._typed_ranges_of_row(2),[(3,4)])
+        self.assertEqual(a._typed_ranges_of_row(3),[(0,1)])
+        self.assertEqual(a._typed_ranges_of_row(4),[(0,1)])
+        self.assertEqual(a._typed_ranges_of_row(1),[])
+        self.assertEqual(a._typed_ranges_of_row(5),[])
+        before=self.text();sources=before.split('\n')
+        changes=['遠い原文','既存😀亜','伊','宇','終端']
+        a.unified_autofix_on=lambda:True;a.store=types.SimpleNamespace(_tokenize_fn=lambda text:[])
+        a.line_results=[dict(original=x,corrected=y,pending=False) for x,y in zip(sources,changes)]
+        a._units_cache={(x,y):(y,[]) for x,y in zip(sources,changes)}
+        a._autofix_live_records=lambda:[];a._autofix_remember=Mock();a._repaint_autofix_tags=Mock()
+        with patch('ime_watch.composition_active',return_value=False):
+            self.assertTrue(a._apply_unified_autofix())
+        self.assertEqual(self.text(),'遠くの原文\n既存😀亜\n伊\n宇\n末尾')
+        self.assertEqual(a._autofix_remember.call_count,3)
+        w.event_generate('<<Undo>>');self.assertEqual(self.text(),before)
+
     def setUp(self):
         self.root=tk.Tk();self.root.withdraw()
         self.a=app.CorrectNoteApp.__new__(app.CorrectNoteApp)

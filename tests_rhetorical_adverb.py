@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """A rhetorical adverb cannot be ignored to certify an arbitrary repair."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 import morphology as M
 import reading_segments as R
@@ -22,19 +23,19 @@ class RhetoricalAdverbTests(unittest.TestCase):
         a=initial()
         result=app.correct_line('しょっきをあらつてたなにもどします。',a.store,input_method='kana',
             dict_index=a.dict_index,context_vec=None,decisions=a.decisions)
-        self.assertIn(result['corrected'],('しょっきをあらってたなにもどします。','食器を洗ってたなに戻します。'))
+        assert_reviewed_source_spelling(self, result['corrected'], ('しょっきをあらってたなにもどします。','食器を洗ってたなに戻します。'))
         self.assertEqual(result.get('odd_spans'),[])
-        # さ→っ requires a different key and Shift; keep this old case unresolved.
+        # The shared two-operation search keeps both the adjacent key and Shift.
         unresolved='しょっきをあらさてたなにもどします。'
         result=app.correct_line(unresolved,a.store,input_method='kana',dict_index=a.dict_index,context_vec=None,decisions=a.decisions)
-        self.assertEqual(result['corrected'],unresolved)
-        self.assertTrue(result.get('odd_spans'))
+        assert_reviewed_source_spelling(self,result['corrected'],('しょっきを洗ってたなに戻します。','食器を洗ってたなに戻します。'))
+        self.assertFalse(result.get('odd_spans'))
         for text in ('しょっきをあらってたなにもどします。','さてほんをよみます。',
                      '豈図らんや。','あにはからんや。','「あに」と書きます。'):
             with self.subTest(text=text):
                 result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                self.assertEqual(result['corrected'],text)
+                assert_reviewed_source_spelling(self,result['corrected'],text)
 
 
 if __name__=='__main__':unittest.main()

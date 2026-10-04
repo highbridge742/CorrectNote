@@ -416,14 +416,27 @@ def _euclid(p1, p2):
     return math.hypot(p1[0] - p2[0], x1 - x2)
 
 
+def physical_keys_adjacent(p1, p2):
+    """JIS neighbours: exclude upper-left/lower-right and middle-row diagonals.
+
+    Rows include the number row. The QWERTY/ASDF pair has only vertical
+    neighbours; the other row pairs also allow the lower key to the left.
+    Shift variants share positions but are not a different adjacent key.
+    """
+    if p1 is None or p2 is None or p1 == p2:return False
+    if p1[0] == p2[0]:return abs(p1[1]-p2[1]) == 1
+    upper,lower=sorted((p1,p2))
+    if lower[0]-upper[0] != 1:return False
+    return lower[1] == upper[1] or (upper[0] != 1 and lower[1] == upper[1]-1)
+
+
 @functools.lru_cache(maxsize=None)
 def _base_distance(c1, c2):
     """
     清音同士のキー距離。
 
-    「隣接キー」とは、そのキーを中心とした周囲8方向のキーを指す。
-    段ごとの横ずれがあるため単純な座標差では判定できないので、
-    実座標での距離が「キー1個分の範囲に収まるか」で判断する。
+    隣接はphysical_keys_adjacentで定める。除外方向を距離の近さだけで
+    隣接へ戻さない。非隣接の距離は候補比較用であり、隣接の証明ではない。
 
     戻り値: 隣接なら 1.0 前後、2つ隣なら 2.0 前後、それ以上は FAR
     """
@@ -449,13 +462,10 @@ def _base_distance(c1, c2):
             return 2.0          # 2つ隣
         return FAR
 
-    # 隣の段: 段ごとの横ずれがあるため、真上・斜め上のどれも
-    # 「キー1個分＋ずれ」の範囲に入る。実機で指が届く範囲に合わせて
-    # 横方向 1.55 までを隣接として扱う。
-    # （例: 「い」から見た「あ う え て す と し は」がすべてこの範囲）
+    # Only the explicitly permitted physical directions count as adjacent.
     if row_diff == 1:
-        if col_diff <= 1.55:
-            return 1.0          # 真上・真下・斜め隣
+        if physical_keys_adjacent(p1, p2):
+            return 1.0
         if col_diff <= 2.55:
             return 1.8          # やや離れた斜め
         return FAR

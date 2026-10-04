@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Native hypothetical stems do not borrow a finite verb or object identity."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 import morphology as M
 import reading_segments as R
@@ -56,7 +57,7 @@ class NativeBaConditionalTests(unittest.TestCase):
             with self.subTest(text=text):
                 result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                                        context_vec=None,decisions=a.decisions)
-                self.assertEqual(result['corrected'],text)
+                assert_reviewed_source_spelling(self, result['corrected'], text)
                 self.assertFalse(result.get('odd_spans'))
 
 

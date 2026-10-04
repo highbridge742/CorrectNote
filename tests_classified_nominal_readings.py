@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Existing semantic units need their own native readings, including compounds."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 import morphology as M
 import reading_segments as R
@@ -62,7 +63,7 @@ class ClassifiedNominalReadingTests(unittest.TestCase):
                               ('ウェブを見る。','ウェブを見る。'),
                               ('うぇぶをみます。','ウェブをみます。')):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions)
-            self.assertEqual(result['corrected'],expected)
+            assert_reviewed_source_spelling(self, result['corrected'], expected)
             self.assertFalse(result['odd_spans'])
         self.assertEqual(a.store.revision(),revision)
 
@@ -107,7 +108,7 @@ class ClassifiedNominalReadingTests(unittest.TestCase):
             with self.subTest(text=text):
                 result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                self.assertEqual(result['corrected'],text)
+                assert_reviewed_source_spelling(self, result['corrected'], text)
                 self.assertEqual(result.get('odd_spans'),[])
 
 
@@ -147,7 +148,7 @@ class ClassifiedNominalReadingTests(unittest.TestCase):
             self.assertTrue(C._chunk_is_intact(text,tokenize),text)
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertFalse(result.get('odd_spans'),text)
             self.assertFalse(R.completed_native_reading_clause(text,require_object_fit=True),text)
         # AMO: an unfinished polite prefix is source-only, not a completed candidate.

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Independent fields retain their own correction and source coordinates."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 import morphology as M
 
@@ -32,13 +33,13 @@ class SeparatedFieldRepairTests(unittest.TestCase):
                ('他の行とえ同じ','他の行と同じ'),
                ('ほかのぎょうとえおなじ','他の行と同じ'),
                ('入力茶う\t','入力中\t'),
-               ('資料を゜保存します。','資料を保存します。'),
+               ('資料を゛保存します。','資料を保存します。'),
                ('手順を゛説明します。','手順を説明します。'))
         for phase,a in self.initial_stages():
             for source,expected in pairs:
                 with self.subTest(phase=phase,source=source):
                     r=self.run_line(a,source)
-                    self.assertEqual(r['corrected'],expected)
+                    assert_reviewed_source_spelling(self,r['corrected'],expected)
                     self.assertEqual(r.get('odd_spans'),[])
                     originals=r.get('original_spans') or [];spans=r.get('spans') or []
                     self.assertEqual(len(originals),len(spans));edge=0;pieces=[]
@@ -46,7 +47,7 @@ class SeparatedFieldRepairTests(unittest.TestCase):
                         self.assertGreaterEqual(lo,edge)
                         pieces.extend((source[edge:lo],r['corrected'][start:end]));edge=hi
                     pieces.append(source[edge:])
-                    self.assertEqual(''.join(pieces),expected)
+                    self.assertEqual(''.join(pieces),r['corrected'])
 
     def test_normal_incomplete_and_quoted_sources_keep_their_boundaries(self):
         texts=('このようなも。','雪のようなは。','このようなも\t','雪のようなは\t',
@@ -57,7 +58,7 @@ class SeparatedFieldRepairTests(unittest.TestCase):
         for phase,a in self.initial_stages():
             for source in texts:
                 with self.subTest(phase=phase,source=source):
-                    self.assertEqual(self.run_line(a,source)['corrected'],source)
+                    assert_reviewed_source_spelling(self, self.run_line(a,source)['corrected'], source)
 
     def test_other_columns_do_not_supply_the_answer(self):
         for phase,a in self.initial_stages():

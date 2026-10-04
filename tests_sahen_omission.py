@@ -31,19 +31,19 @@ class SahenOmissionTests(unittest.TestCase):
                          {('omission','','し')})
         for reading,before in (('ほせいしまし','ゆうせんして'),
                                ('ほせいまぇ','ゆうせんして'),
-                               ('せつめいまし',''),('なまし','')):
+                               ('なまし','')):
             self.assertFalse(C.sahen_open_omission_repairs(reading,before),reading)
         from tests_analysis_async import initial
         import app
         state=initial()
         for source,expected in (('ゆうせんしてほせいまし','優先して補正しまし'),
                                 ('かくにんしてほぞんまし','確認して保存しまし'),
-                                ('ゆうせんしてほせいまし。','優先して補正しまし。')):
+                                ('ゆうせんしてほせいまし。','優先して補正しまし。'),('せつめいまし','説明しまし')):
             result=app.correct_line(source,state.store,input_method='kana',
                 decisions=state.decisions,dict_index=state.dict_index,context_vec=None)
             self.assertEqual(result['corrected'],expected,source)
             self.assertFalse(result['odd_spans'],source)
-        for source in ('せつめいまし','なまし','ゆうせんしてほせいまぇ'):
+        for source in ('なまし','ゆうせんしてほせいまぇ'):
             result=app.correct_line(source,state.store,input_method='kana',
                 decisions=state.decisions,dict_index=state.dict_index,context_vec=None)
             self.assertEqual(result['corrected'],source)

@@ -72,6 +72,17 @@ class CandidateContracts(unittest.TestCase):
         self.assertEqual(R._reading_strength(a)[0],R._reading_strength(b)[0])
         self.assertLess(R._reading_strength(a)[0],R._reading_strength(R.Reading('か','saved_ime_pair',0))[0])
 
+    def test_context_roundtrip_does_not_rank_as_an_unattested_guess(self):
+        exact=R.Reading('うさつし','ime_context_roundtrip',0,
+            ((0,1,'う','ime_context_word'),(1,2,'さつ','ime_context_word'),
+             (2,3,'し','ime_context_word')))
+        isolated=R.Reading('うさつ','ime_first_roundtrip',0)
+        guessed=R.Reading('うさつし','character_guess',0)
+        self.assertEqual(R._reading_strength(exact)[0],R._reading_strength(isolated)[0])
+        self.assertLess(R._reading_strength(exact)[0],R._reading_strength(guessed)[0])
+        # Ranking does not bypass the existing original argument checks.
+        self.assertTrue(R.needs_source_argument_proof(exact))
+
     @staticmethod
     def candidate(surface,cost=None):
         evidence=dict(direct=0,added=0,meaning=0,written_native=0,method_spelling=0,edits=1,physical=1.0,
@@ -79,6 +90,24 @@ class CandidateContracts(unittest.TestCase):
             usage=1,context=0,cost=cost,local_reading=0,continuation=0,parse_cost=0,start=0,end=2)
         return dict(surface=surface,reading=dict(text='かな'),rank_evidence=evidence,
                     repair=dict(reading='かな',position=0,operation='adjacent_substitution',pressed='x',intended='y'))
+
+    def test_native_whole_and_literal_suffix_compare_positive_meaning(self):
+        short=self.candidate('局所');whole=self.candidate('全体')
+        short['rank_evidence'].update(direct=0,usage=None)
+        whole['rank_evidence'].update(direct=3,usage=1)
+        self.assertEqual(R.rank_candidates([short,whole])[0]['surface'],'全体')
+        # An actual positioned IME reading still outranks dictionary inference.
+        short['rank_evidence']['input_reading']=1
+        self.assertEqual(R.rank_candidates([whole,short])[0]['surface'],'局所')
+
+    def test_equal_meaning_distant_key_cannot_win_only_by_frequency(self):
+        near=self.candidate('隣接');far=self.candidate('遠方')
+        far['repair']['operation']='nonadjacent_substitution'
+        far['rank_evidence'].update(local_reading=-100,parse_cost=-100,physical=2.2)
+        self.assertEqual(R.rank_candidates([far,near])[0]['surface'],'隣接')
+        far['rank_evidence']['meaning']=-1
+        self.assertEqual(R.rank_candidates([near,far])[0]['surface'],'遠方')
+
 
     def test_rank_is_total_and_order_independent(self):
         rows=[self.candidate('仮名'),self.candidate('かな')]
@@ -359,6 +388,7 @@ class SpellingEngineContracts(unittest.TestCase):
         self.assertTrue(M.spelling_edit_allowed(text,0,2,'寒い'))
         self.assertFalse(M.spelling_edit_allowed(text,0,2,'暑い'))
         self.assertEqual(text[facts[0].change_start], 'ぃ')
+
 
 
 if __name__=='__main__':unittest.main(verbosity=2)

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """A voicing transposition must not turn a mere reading key into a word."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 from unittest.mock import patch
 import morphology as M
@@ -38,7 +39,7 @@ class MovedWordEvidenceTests(unittest.TestCase):
         for text in ('へやのまどをあけてくうきをいれかえます。','はなしのつづきをよみます。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self,result['corrected'],text)
 
 
 if __name__=='__main__':unittest.main()

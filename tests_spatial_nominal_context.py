@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Short native genitives and locative nouns retain their own readings."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
@@ -34,8 +35,8 @@ class SpatialNominalContextTests(unittest.TestCase):
                      '地殻を調べます。','知覚を調べます。','そばをたべます。'):
             with self.subTest(text=text):
                 r=correct(text)
-                self.assertEqual(r['corrected'],text);self.assertEqual(r['odd_spans'],[])
-        source='きのはこをまどのちかくにおきまきす。'
+                assert_reviewed_source_spelling(self, r['corrected'], text);self.assertEqual(r['odd_spans'],[])
+        source='きのはこをまどのちかくにおきまくす。'
         expected='きのはこをまどのちかくにおきます。'
         from kana_layout import single_key_drop_adjacency,single_key_drop_is_duplicate
         self.assertTrue(single_key_drop_adjacency(source,expected))

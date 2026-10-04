@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """A result writing system is distinct from a borrowed item's return owner."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
@@ -11,6 +12,12 @@ class WritingSystemConversionTests(unittest.TestCase):
     def tokens(self,text):
         return [(t.surface,t.pos+':'+t.pos_sub,t.reading,t.start,t.end,t.has_reading,t.infl_form)
                 for t in M.tokenize(text)]
+
+    def test_adnominal_action_with_copula_closes_its_original_object(self):
+        # The existing terminal-predicate proof closes N + native copula;
+        # an outer case/predicate still leaves this object scope open.
+        text='ひらがなを漢字に返還する人です。'
+        self.assertTrue(S.conflicting_object_predicates(text,self.tokens(text)))
 
     def test_both_argument_orders_use_their_actual_cases(self):
         for text in ('ひらがなを漢字に返還します。','漢字に平仮名を返還します。',
@@ -26,7 +33,7 @@ class WritingSystemConversionTests(unittest.TestCase):
                      '漢字を作者に返還します。','ひらがなを漢字に変換します。',
                      '文字を元に返還します。','漢字を平仮名に戻します。',
                      'ひらがなを漢字に返還すると説明しました。',
-                     'ひらがなを漢字に返還する人です。',
+                     'ひらがなを漢字に返還する人に伝えます。',
                      'ぷねらを漢字に返還します。','漢字をぷねらに返還します。',
                      '平仮名をひらがなに返還します。','かなをカナに返還します。',
                      'かんじをひらがなに返還します。','ひらがなを作者に返還します。'):
@@ -47,7 +54,7 @@ class WritingSystemConversionTests(unittest.TestCase):
                      '「ひらがなを漢字に返還します」という誤記です。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertEqual(result.get('odd_spans'),[])
 
     def test_modifier_phrase_is_not_invented_as_a_single_argument_head(self):

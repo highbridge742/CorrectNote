@@ -10,9 +10,22 @@ validator. No result is committed to the IME or to a personal dictionary.
 def _crosses_negative_attachment(text,start,end):
     """Keep a proved verb + negative auxiliary + dependent noun in source."""
     from morphology import tokenize as native_tokenize
+    # A complete source noun with its actual object case and positive
+    # predicate meaning owns the whole range. A best parse's internal
+    # nai + dependent noun cannot invent a negative attachment there.
+    from reading_segments import native_independent_object_reading
+    if native_independent_object_reading(text,start,end):return False
     for begin in range(start,-1,-1):
         fragment=text[begin:end]
         parts=native_tokenize(fragment)
+        if len(parts)>=2:
+            negative,noun=parts[-2:]
+            if (negative.has_reading and negative.pos=='形容詞'
+                    and negative.base_form in ('ない','無い') and negative.infl_form=='基本形'
+                    and noun.has_reading and noun.pos=='名詞'
+                    and noun.pos_sub.startswith('非自立') and negative.end==noun.start
+                    and start<begin+noun.start<end):
+                return True
         if len(parts)<3:continue
         verb,negative,noun=parts[-3:]
         if (verb.pos=='動詞' and verb.pos_sub=='自立'
@@ -33,6 +46,7 @@ def _reinterprets_function_attachment(text,start,end,face=None,nominal_context=N
     """
     from morphology import tokenize as native_tokenize, FUNCTION_WORDS, dictionary_inflections
     source=text[start:end]
+    if _crosses_negative_attachment(text,start,end):return True
     # A spelling cannot detach only the head of an original function word.
     # Recovering a larger nominal from a bad parse is handled separately.
     if any(t.has_reading and t.start==start and end<t.end
@@ -45,6 +59,13 @@ def _reinterprets_function_attachment(text,start,end,face=None,nominal_context=N
     token=next((part for part in native_tokenize(text)
                 if part.start==start and part.end==end and part.has_reading),None)
     if token and token.pos=='動詞':
+        following=next((p for p in native_tokenize(text) if p.start==end),None)
+        if following and following.surface in ('て','で') and following.pos=='助詞' and following.pos_sub=='接続助詞':
+            from contextual_repair import _modern_te_allowed
+            if _modern_te_allowed(token.surface,token.reading,following.surface) is True:
+                forms=dictionary_inflections(face) if face else ()
+                if not any(pos.startswith('動詞,') and rd==source and form==token.infl_form
+                           for pos,form,base,rd in forms or ()):return True
         from morphology import native_potential_auxiliary
         from semantic_roles import native_te_auxiliary_forms
         from last_choice import surface_for_reading
@@ -60,6 +81,11 @@ def _reinterprets_function_attachment(text,start,end,face=None,nominal_context=N
         same_role=face and any(pos.startswith(role) and rd==source
                               for pos,form,base,rd in dictionary_inflections(face) or ())
         if face and not same_role:
+            from reading_segments import native_honorific_stem_parts
+            for a,b,forms in native_honorific_stem_parts(text):
+                if (a==start and b==end and any(p==q and f==g and r==s
+                        for p,f,base,r in forms
+                        for q,g,lemma,s in dictionary_inflections(face) or ())):return False
             from last_choice import surface_for_reading
             if surface_for_reading(source)==face:return False
             from semantic_roles import candidate_nominal_spelling_evidence

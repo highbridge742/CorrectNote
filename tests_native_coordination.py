@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Native coordination retains every member and their shared argument roles."""
+from tests_spelling_reference import assert_reviewed_source_spelling
 from tests_spelling_reference import assert_repaired_spelling
 import unittest
 import morphology as M
@@ -38,7 +39,7 @@ class NativeCoordinationTests(unittest.TestCase):
         from tests_analysis_async import initial
         a=initial()
         for noun in ('たまねぎとにんじん','玉葱と人参','野菜と果物','布と紙','ぬのとかみ'):
-            text=noun+'をこまかくきすります。'
+            text=noun+'をこまかくきくります。'
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
             assert_repaired_spelling(self, result, noun+'をこまかくきります。')
@@ -77,10 +78,10 @@ class NativeCoordinationTests(unittest.TestCase):
                      'たまねぎとにんじんをこまかくすります。',
                      '野菜と果物を買います。','弟と図書館に行きます。',
                      '糸と布を切ります。','友達と資料を読みます。',
-                     '「たまねぎとにんじんをこまかくきすります」という誤入力例です。'):
+                     '「たまねぎとにんじんをこまかくきくります」という誤入力例です。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertEqual(result.get('odd_spans'),[],text)
 
 
@@ -137,8 +138,8 @@ class NativeCoordinationTests(unittest.TestCase):
         from tests_analysis_async import initial
         a=initial();revision=a.store.revision()
         for text,expected in (
-            ('ぬのとかみをこまかくきすります。','布と紙をこまかく切ります。'),
-            ('かみとぬのをこまかくきすります。','紙と布をこまかく切ります。')):
+            ('ぬのとかみをこまかくきくります。','布と紙をこまかく切ります。'),
+            ('かみとぬのをこまかくきくります。','紙と布をこまかく切ります。')):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
             self.assertEqual(result['corrected'],expected)
@@ -147,7 +148,7 @@ class NativeCoordinationTests(unittest.TestCase):
                      '神と仏を信じます。','ぬのとかみをこまかくきります。'):
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
-            self.assertEqual(result['corrected'],text)
+            assert_reviewed_source_spelling(self, result['corrected'], text)
             self.assertFalse(result.get('odd_spans'))
         self.assertEqual(a.store.revision(),revision)
 
