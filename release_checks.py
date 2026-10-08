@@ -25,6 +25,7 @@ def main():
         'tests_ci_runner',
         'tests_exe_verification',
         'tests_toolbar_wordbook',
+        'tests_word_book_native',
         'tests_editor_operations',
         'tests_bracket_composition',
         'tests_gui_startup',
@@ -42,7 +43,8 @@ def main():
         names.extend('tests_gui_editing.'+case.__name__+'.'+name for name in vars(case)
                      if name.startswith('test_'))
     suite = unittest.defaultTestLoader.loadTestsFromNames(names)
-    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    from ci_runner import Checks
+    result = Checks().run_suite(suite)
     if not result.wasSuccessful():
         return 1
     print('RELEASE_OPERATIONS_OK: correction-quality suite is a separate report.', flush=True)

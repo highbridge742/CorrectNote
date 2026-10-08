@@ -87,7 +87,14 @@ class _WordBookNative:
             fn = getattr(cc, name); fn.argtypes = args; fn.restype = result
         self.hwnd = u.GetAncestor(window.winfo_id(), 2)
         self.previous = None
-        self.taskbar = _TaskbarButton()
+        self.taskbar = None
+        self.taskbar_error = None
+        try:
+            self.taskbar = _TaskbarButton()
+        except OSError as error:
+            # Explorer/taskbar can be absent (CI, another Windows desktop).
+            # The window and its activation tracking must still be usable.
+            self.taskbar_error = str(error)
         self._remember(previous)
 
         def message(hwnd, msg, wp, lp, uid, ref):
@@ -112,7 +119,8 @@ class _WordBookNative:
     def show_taskbar(self):
         if self.hwnd and self.taskbar is not None:
             if self.taskbar.call(4, self.hwnd) < 0:  # AddTab
-                raise OSError('Cannot add word book to taskbar')
+                self.taskbar_error = 'Cannot add word book to taskbar'
+                self._remove_taskbar()
 
     def _remove_taskbar(self):
         if self.taskbar is not None:
@@ -274,7 +282,9 @@ class WordBook:
             font=('Yu Gothic UI', 9), cursor='hand2', takefocus=True)
         self.minimize_button.pack(side='right')
         self.minimize_button.bind('<Enter>', lambda e: self.app.status.config(
-            text='単語帳を最小化します（タスクバーまたは単語帳ボタンで元に戻せます）'))
+            text=('単語帳を最小化します（単語帳ボタンで元に戻せます）'
+                  if self._native is not None and self._native.taskbar_error else
+                  '単語帳を最小化します（タスクバーまたは単語帳ボタンで元に戻せます）')))
         self.canvas = tk.Canvas(win, bg=bg, highlightthickness=0, width=1, height=1)
         self.scroll = tk.Scrollbar(win, command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=self.scroll.set)
