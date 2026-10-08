@@ -11,6 +11,156 @@ import reading_segments as R
 
 
 class LexicalUsageTests(unittest.TestCase):
+    def test_phrase_usage_keeps_each_aligned_readings_existing_judgment(self):
+        for surface,reading,tier in (('外で相談','そとでそうだん',1),
+                ('外で相談','がいでそうだん',2),('叔父に相談','おじにそうだん',1),
+                ('叔父に相談','しゅくふにそうだん',3),('他を確認','ほかをかくにん',1),
+                ('行を確認','ぎょうをかくにん',1),('資料を読みます','しりょうをよみます',2)):
+            with self.subTest(surface=surface,reading=reading):
+                self.assertTrue(M.native_spelling_only(reading,surface))
+                self.assertEqual(K.candidate_usage_tier(surface,reading),tier)
+        self.assertEqual(K.candidate_usage_tier('外で相談'),2)
+        self.assertEqual(K.candidate_usage_tier('叔父に相談'),1)
+
+    def test_phrase_usage_requires_the_entire_native_reading_and_covered_parts(self):
+        for surface,reading in (('外で相談','そとにそうだん'),('外で相談','そとで'),
+                ('外で相談','そとでそうだんして'),('外で相談','そででそうだん'),
+                ('他を確認','たをかくにん'),('行を確認','こうをかくにん'),
+                ('未評価語を確認','みひょうかごをかくにん'),('同じ資料','おなじしりょう'),
+                ('東京で相談','とうきょうでそうだん')):
+            with self.subTest(surface=surface,reading=reading):
+                self.assertIsNone(K.candidate_usage_tier(surface,reading))
+
+    def test_phrase_usage_does_not_choose_one_ambiguous_native_alignment(self):
+        # Two exact dictionary segmentations have the same total reading.
+        # Dictionary row order cannot choose one usage interpretation.
+        parts=[M.Token('甲','名詞','甲','た',0,1,True,'一般',''),
+               M.Token('乙','名詞','乙','ち',1,2,True,'一般','')]
+        forms={'甲':(('名詞,一般,*,*','*','甲','た'),('名詞,一般,*,*','*','甲','たな')),
+               '乙':(('名詞,一般,*,*','*','乙','なち'),('名詞,一般,*,*','*','乙','ち'))}
+        tiers={('甲','た'):1,('甲','たな'):2,('乙','なち'):1,('乙','ち'):1}
+        try:
+            with patch.object(M,'tokenize',return_value=parts), \
+                 patch.object(M,'dictionary_inflections',side_effect=lambda word:forms.get(word,())), \
+                 patch.object(K,'known_usage_tier',return_value=None), \
+                 patch.object(K,'usage_tier_for_reading',side_effect=lambda word,rd:tiers.get((word,rd))):
+                for reverse in (False,True):
+                    if reverse:forms={key:tuple(reversed(value)) for key,value in forms.items()}
+                    K.candidate_usage_tier.cache_clear()
+                    self.assertIsNone(K.candidate_usage_tier('甲乙','たなち'))
+                tiers['甲','たな']=1;K.candidate_usage_tier.cache_clear()
+                self.assertEqual(K.candidate_usage_tier('甲乙','たなち'),1)
+                tiers['甲','た']=None;K.candidate_usage_tier.cache_clear()
+                self.assertIsNone(K.candidate_usage_tier('甲乙','たなち'))
+                # An unknown path that cannot reach the end is not a rival.
+                forms['乙']=(('名詞,一般,*,*','*','乙','ち'),)
+                K.candidate_usage_tier.cache_clear()
+                self.assertEqual(K.candidate_usage_tier('甲乙','たなち'),1)
+        finally:K.candidate_usage_tier.cache_clear()
+
+    def test_actual_composed_candidate_keeps_its_complete_reading_usage(self):
+        import app
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        a=initial();original=K.candidate_usage_tier;seen=[]
+        def observed(surface,reading=None):
+            value=original(surface,reading)
+            if surface in ('まとめて文章','纏めて文章'):seen.append((surface,reading,value))
+            return value
+        try:
+            with patch.object(K,'candidate_usage_tier',side_effect=observed):
+                result=app.correct_line('聞いた話を纏路手文章にします。',a.store,
+                    input_method='kana',dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+            self.assertTrue(any(reading=='まとめてぶんしょう' and tier==1 for surface,reading,tier in seen),seen)
+            self.assertEqual(result['corrected'],'聞いた話をまとめて文章にします。')
+            self.assertEqual(result['odd_spans'],[])
+            self.assertEqual(result['analysis_status'],'complete')
+        finally:set_active(None)
+
+    def test_candidate_usage_preserves_explicit_reading_judgments(self):
+        # Existing assessments of these exact native readings are facts;
+        # a written word's general usage cannot erase either sign.
+        for face,reading,tier in (('叔父','しゅくふ',3),('叔母','しゅくぼ',3),
+                                 ('伯父','はくふ',3),('外','そと',1),
+                                 ('他','ほか',1),('同じ','おなじ',1),('行','ぎょう',1)):
+            with self.subTest(face=face,reading=reading):
+                self.assertTrue(any(row[3]==reading for row in M.dictionary_inflections(face)))
+                self.assertEqual(K.candidate_usage_tier(face,reading),tier)
+        self.assertEqual(K.candidate_usage_tier('叔父','おじ'),1)
+        self.assertEqual(K.candidate_usage_tier('叔父'),1)
+        self.assertEqual(K.candidate_usage_tier('外','がい'),2)
+        self.assertIsNone(K.candidate_usage_tier('他','た'))
+        self.assertIsNone(K.candidate_usage_tier('行','こう'))
+        self.assertIsNone(K.candidate_usage_tier('未評価の候補','みひょうかのこうほ'))
+
+    def test_repair_usage_uses_only_the_exact_whole_candidate_reading(self):
+        from contextual_repair import _candidate_usage_tier as usage
+        self.assertEqual(usage('叔父','叔父',reading='しゅくふ'),3)
+        self.assertEqual(usage('叔父','叔父',reading='おじ'),1)
+        self.assertEqual(usage('他','他',reading='ほか'),1)
+        self.assertIsNone(usage('他','他',reading='た'))
+        # A whole phrase's reading is not the reading of its shortened head.
+        self.assertEqual(usage('叔父の話','叔父',reading='しゅくふのはなし'),1)
+        self.assertIsNone(usage('他の話','他',reading='ほかのはなし'))
+
+    def test_actual_repair_passes_its_reading_to_usage_after_validation(self):
+        import app,contextual_repair as Q
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        a=initial();original=Q._candidate_usage_tier;seen=[]
+        def observed(surface,head,following='',before='',**kwargs):
+            value=original(surface,head,following,before,**kwargs)
+            seen.append((surface,head,kwargs.get('reading'),value))
+            return value
+        try:
+            with patch.object(Q,'_candidate_usage_tier',side_effect=observed):
+                result=app.correct_line('タフ毛',a.store,input_method='kana',
+                    dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+            whole=[row for row in seen if row[0]==row[1] and not Q._is_reading(row[1])]
+            self.assertTrue(whole)
+            self.assertTrue(all(reading for surface,head,reading,value in whole))
+            for surface,head,reading,value in whole:
+                self.assertEqual(value,K.candidate_usage_tier(head,reading))
+            self.assertEqual(result['analysis_status'],'complete')
+            # This checks the real validated ranking path. It intentionally
+            # makes no claim that the known semantic error here is solved.
+        finally:set_active(None)
+
+    def test_reading_usage_reaches_shared_ranking_without_excluding_a_candidate(self):
+        import contextual_repair as Q
+        from tests_spec_contracts import CandidateContracts
+        rare=CandidateContracts.candidate('叔父',1)
+        common=CandidateContracts.candidate('修復',1000)
+        rare['repair']['reading']='しゅくふ';common['repair']['reading']='しゅうふく'
+        for row in (rare,common):
+            row['rank_evidence']['usage']=Q._candidate_usage_tier(
+                row['surface'],row['surface'],reading=row['repair']['reading'])
+        for rows in ([rare,common],[common,rare]):
+            ordered=Q.rank_candidates(rows)
+            self.assertEqual([row['surface'] for row in ordered],['修復','叔父'])
+        rare['rank_evidence']['meaning']=-1
+        self.assertEqual(Q.rank_candidates([common,rare])[0]['surface'],'叔父')
+        self.assertEqual(Q.rank_candidates([rare])[0]['surface'],'叔父')
+
+    def test_shared_prefix_compares_proved_heads_without_judging_whole_words(self):
+        faces=('再編集','再編修','再編輯');rd='さいへんしゅう'
+        self.assertEqual(K.shared_prefixed_sahen_usage(faces,rd),
+                         {'再編集':1,'再編修':3,'再編輯':3})
+        for face in faces:self.assertIsNone(K.candidate_usage_tier(face,rd))
+        for group,reading in ((('各編集','各編修'),rd),
+                              (('再編集','再ぷねら'),rd),
+                              (('再編集','再編修'),'へんしゅう'),
+                              (('再編集',),rd)):
+            self.assertEqual(K.shared_prefixed_sahen_usage(group,reading),{})
+        old=K.known_usage_tier
+        with patch.object(K,'known_usage_tier',side_effect=lambda word:2 if word=='再編修' else old(word)):
+            self.assertEqual(K.shared_prefixed_sahen_usage(faces,rd),{})
+        old_reading=K.usage_tier_for_reading
+        with patch.object(K,'usage_tier_for_reading',side_effect=lambda word,reading:
+                          None if word=='編修' else old_reading(word,reading)):
+            self.assertEqual(K.shared_prefixed_sahen_usage(faces,rd),{})
+
+
     def test_public_cache_survives_git_line_endings_but_rejects_changed_content(self):
         import tempfile
         from pathlib import Path
@@ -115,6 +265,54 @@ class LexicalUsageTests(unittest.TestCase):
         for word in ('性数角','せいすうかく','性性数','性数格誤','性'):
             self.assertFalse(is_nominal_coordination(word),word)
 
+    def test_restored_negative_judgments_have_exact_original_scope(self):
+        import json,re
+        from pathlib import Path
+        root=Path(K.__file__).parent;src=root/'tools_local/kango_tier_src'
+        judged={}
+        for i in range(16):
+            choices=json.loads((src/f'tiers_{i:02d}.json').read_text(encoding='utf8'))
+            explicit={word:tier for tier in (1,2,3) for word in choices.get(f't{tier}',[]) or []}
+            pairs=re.findall(r'([^\s()]+)\(([^\s()]+)\)',(src/f'chunk_{i:02d}.txt').read_text(encoding='utf8'))
+            for word,reading in pairs:
+                tier=explicit.get(word,choices.get('default',3))
+                judged[word]=min(judged.get(word,3),tier)
+        data=json.loads((root/'kango_tier.json').read_text(encoding='utf8'))
+        self.assertEqual({w for w,t in data['tiers'].items() if t==3},
+                         {w for w,t in judged.items() if t==3})
+        for word,tier in judged.items():
+            if tier in (1,2):self.assertEqual(data['tiers'][word],tier,word)
+        self.assertNotIn('所見',judged)
+        self.assertNotIn('手稿',judged)
+
+    def test_restored_scope_keeps_later_positive_and_unknown_judgments(self):
+        self.assertEqual(K.known_usage_tier('書見'),3)
+        self.assertIsNone(K.known_usage_tier('所見'))
+        self.assertIsNone(K.known_usage_tier('手稿'))
+        self.assertIsNone(K.known_usage_tier('未評価の試験語'))
+        for word,tier in (('挙動',2),('監察',2),('官庁',2),('林間',2)):
+            self.assertEqual(K.known_usage_tier(word),tier,word)
+        self.assertIn('書見',K._explicit_reading_faces().get('しょけん',()))
+        self.assertFalse(K.reading_is_explicitly_restricted('しょけん'))
+
+    def test_restored_usage_keeps_written_words_and_explicit_input_quotes(self):
+        import app
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        try:
+            for source in ('書見台を使います。','朝廷の制度を調べます。',
+                           '処暑を迎えました。','謄写して保管。','校閲して出版。',
+                           '浄書して保存。','「ょ見」と入力します。',
+                           '「書見」と入力します。','所見を記録します。'):
+                with self.subTest(source=source):
+                    a=initial()
+                    result=app.correct_line(source,a.store,input_method='kana',
+                        dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+                    self.assertEqual(result['corrected'],source)
+                    self.assertEqual(result['odd_spans'],[])
+                    self.assertEqual(result['analysis_status'],'complete')
+        finally:set_active(None)
+
     def test_missing_classification_is_distinct_from_an_explicit_restricted_judgment(self):
         self.assertEqual(K.known_usage_tier('按針'),3)
         self.assertEqual(K.known_usage_tier('工房'),1)
@@ -122,6 +320,26 @@ class LexicalUsageTests(unittest.TestCase):
         self.assertIsNone(K.known_usage_tier('未分類の試験用語'))
         self.assertFalse(K.is_restricted('未分類の試験用語'))
         self.assertEqual(C._kango_tier_of('委員会'),1)
+
+    @unittest.skipUnless(M.dictionary_inflections('取れる'),'requires native dictionary')
+    def test_attested_potential_keeps_origin_usage_without_new_judgments(self):
+        row=next(r for r in M.dictionary_inflections('取れる')
+                 if r[1:] == ('基本形','取れる','とれる'))
+        self.assertIsNone(K.known_usage_tier('取れる'))
+        self.assertEqual(K.known_usage_tier('取る'),1)
+        self.assertEqual(K.native_inflection_usage_tier('取れる',*row),1)
+        self.assertEqual(K.candidate_usage_tier('取れる','とれる'),1)
+        other=next(r for r in M.dictionary_inflections('採れる')
+                   if r[1:] == ('基本形','採れる','とれる'))
+        self.assertIsNone(K.native_inflection_usage_tier('採れる',*other))
+        self.assertIsNone(K.native_inflection_usage_tier('取れる',row[0],row[1],row[2],'ちれる'))
+        self.assertIsNone(K.native_inflection_usage_tier('取れれ',*row))
+        native=K.usage_tier_for_reading
+        with patch.object(K,'usage_tier_for_reading',side_effect=lambda word,rd:
+                          3 if word=='取れる' else native(word,rd)):
+            self.assertEqual(K.native_inflection_usage_tier('取れる',*row),3)
+        with patch.object(K,'usage_tier_for_reading',return_value=None):
+            self.assertIsNone(K.native_inflection_usage_tier('取れる',*row))
 
     def test_literal_candidate_usage_shares_positive_reading_roster(self):
         with patch.object(K,'_explicit_reading_faces',return_value={'よみ':{'日常','専門'},'みち':{'専門'}}), \

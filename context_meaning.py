@@ -6,6 +6,8 @@ supplies same-reading spellings only after a source relationship is suspect.
 The selected spelling must fit that relationship after all edits are joined.
 """
 
+from functools import lru_cache
+
 _EXPECTED={'addressed_venue':'reservable_place','use_action':'general_use_action','familiar_nominal':'ordinary_spelling','familiar_action':'ordinary_spelling','return_action':'homecoming','attainment_action':'attain_result','duty_action':'fulfill_role','repair_action':'structural_repair','placement_action':'object_placement','measurement_action':'dimension_measure','text_edit_action':'text_edit_activity','photographic_action':'image_capture','counted_object':'object','reserved_place':'reservable_place','assessment_quality':'quality_measure','motion_extent':'physical_motion',
            'ui_case':'screen_location','geometric_count':'linear_quantity',
            'deliberative_arrival':'epistemic_result'}
@@ -143,6 +145,51 @@ def anomalous_frames(source):
                  # Prefer quantity only with an attested same-reading quantity.
                  and (f['kind'] not in ('geometric_count','deliberative_arrival','counted_object','photographic_action') or bool(candidates(f))))
 
+@lru_cache(maxsize=1)
+def _native_country_readings():
+    """Reverse only actual native country entries, never arbitrary proper nouns."""
+    from janome_import import iter_janome_entries
+    result={}
+    for face,reading,pos,sub,sub2,cost in iter_janome_entries(
+            min_len=1,max_len=32,pos_prefix='名詞,固有名詞,地域,国'):
+        result.setdefault(reading,set()).add(face)
+    return {reading:tuple(sorted(faces)) for reading,faces in result.items()}
+
+
+def nominal_spelling_context_evidence(source,start,end,surface):
+    """A positive original relation also supports a non-anomalous reading.
+
+    candidate_evidence repairs an anomalous sense. A kana quantity can
+    already have the expected sense and only need its written spelling.
+    Retain the same exact source span and independently proved relation.
+    """
+    for frame in contexts(source):
+        if 'inflection' in frame or (frame['start'],frame['end'])!=(start,end):continue
+        expected=_expected_role(frame)
+        if expected not in _meaning_roles(frame,surface):continue
+        if not (expected in _meaning_roles(frame)
+                or frame.get('reading_spelling') and surface in candidates(frame)):continue
+        return dict(kind=frame['kind'],expected_role=expected,
+                    evidence_start=frame['evidence_start'],evidence_end=frame['evidence_end'])
+    return None
+
+
+def preserves_nominal_spelling_context(source,start,end,surface):
+    """Share a proved source relation with every same-reading nominal choice."""
+    for frame in contexts(source):
+        if ('inflection' in frame or (frame['start'],frame['end'])!=(start,end)):
+            continue
+        expected=_expected_role(frame)
+        # A tentative reading frame without a native spelling of the
+        # expected sense is not positive evidence against another sense.
+        # This matches the source anomaly contract for quantity relations.
+        if not (expected in _meaning_roles(frame)
+                or frame.get('reading_spelling') and candidates(frame)):
+            continue
+        if expected not in _meaning_roles(frame,surface):return False
+    return True
+
+
 def candidates(frame):
     if frame['kind']=='familiar_nominal':return frame['ordinary_faces']
     if frame.get('owner_spelling'):
@@ -156,9 +203,15 @@ def candidates(frame):
     role=_expected_role(frame)
     cache=_CORRECTION_CACHE.get();key=('meaning_candidates',frame['kind'],role,frame['reading'])
     if cache is not None and key in cache:return cache[key]
+    # The same native nominal/quantity evidence remains usable when the
+    # operating system cannot supply conversion candidates. Generation does
+    # not choose a sense: exact reading, native form and the source role are
+    # still checked below, then rechecked against the joined replacement.
+    from reading_segments import _native_nominal_reading_faces
     with SearchCandidates() as search:
-        if not search.available:return ()
-        generated=search.candidates(frame['reading'])
+        generated=list(search.candidates(frame['reading'])) if search.available else []
+    generated.extend(_native_nominal_reading_faces(frame['reading']))
+    if role=='country':generated.extend(_native_country_readings().get(frame['reading'],()))
     result=tuple(s for s in dict.fromkeys(generated)
         if role in nominal_roles(s) and
         (native_spelling_only(frame['reading'],s) if frame['kind']=='geometric_count' else
@@ -253,10 +306,18 @@ def _local_contexts(source):
                 start=parts[index-1].start;face=combined
                 reading=parts[index-1].reading+head.reading
         if 'country' in nominal_roles(face):
+            # A best token reading is not the word's only native reading.
+            # Compare all readings of this exact noun before depending on
+            # an optional IME reverse conversion. No character guesses.
+            readings=tuple(dict.fromkeys(rd for pos,form,base,rd
+                in M.dictionary_inflections(face) or ()
+                if pos.startswith('名詞,') and base==face))
             from ime_language import JapaneseIME
             with JapaneseIME() as ime:
                 inverse=ime.reverse_words(face) if ime.available else None
-            if inverse:reading=inverse[0]
+            if inverse:readings=tuple(dict.fromkeys((*readings,inverse[0])))
+            reading=next((rd for rd in readings if candidates(dict(
+                kind=kind,reading=rd))),reading)
         if protected is None:protected=protected_ranges(source)
         if overlaps(start,noun.end,protected):continue
         out.append(dict(start=start,end=head.end,surface=face,reading=reading,kind=kind,
@@ -272,6 +333,14 @@ def _meaning_roles(frame,surface=None):
         # Only a replacement must supply the coordinated written prefix.
         if surface is None:return _meaning_roles(owner['core'])
         return _meaning_roles(owner['core'],face[len(prefix):]) if face.startswith(prefix) else frozenset()
+    if frame.get('sahen_action'):
+        from morphology import dictionary_inflections
+        from semantic_roles import ACTION_MEANINGS
+        # The original literal suru and its whole auxiliary chain were
+        # proved separately. Only the nominal head is replaced here.
+        lemmas={base for pos,form,base,rd in dictionary_inflections(face) or ()
+                if pos.startswith('名詞,サ変接続,') and rd==frame['reading']}
+        return frozenset(role for role,words in ACTION_MEANINGS.items() if words & lemmas)
     if frame['kind']=='familiar_nominal':
         from familiar_nominal import roles
         return roles(frame,face)
@@ -295,6 +364,14 @@ def _meaning_roles(frame,surface=None):
 
 
 def _action_candidates(frame):
+    if frame.get('sahen_action'):
+        from semantic_roles import ACTION_MEANINGS
+        from morphology import dictionary_inflections
+        # Native action heads, same exact reading and unchanged suru tail.
+        # Meaning membership never fabricates a noun or a conjugation.
+        return tuple(sorted(face for face in ACTION_MEANINGS[_expected_role(frame)]
+            if any(pos.startswith('名詞,サ変接続,') and base==face and rd==frame['reading']
+                   for pos,form,base,rd in dictionary_inflections(face) or ())))
     if frame['kind']=='familiar_action':
         from familiar_meaning import candidates
         return candidates(frame)
@@ -342,9 +419,11 @@ def _photographic_action_contexts(source):
             ('image_capture','acquisition'),
             '画像を作る撮影と、物を手に取る動作の同読みを比較しています')
         if frame is None:continue
-        if frame['query_tail'].startswith(('て','で')):
-            tail=parts[i+3]
-            following=[t for t in parts[i+4:] if t.start-tail.end<=16]
+        tail_index=next((j for j,t in enumerate(parts)
+                         if t.start==frame.get('action_end',frame['end'])),None)
+        if tail_index is not None and parts[tail_index].surface in ('て','で'):
+            tail=parts[tail_index]
+            following=[t for t in parts[tail_index+1:] if t.start-tail.end<=16]
             nextverb=next((t for t in following if t.pos=='動詞' and t.pos_sub=='自立'),None)
             handling=('置く','並べる','渡す','しまう','破る','捨てる','返す','重ねる')
             from semantic_owner_spelling import placement_continuation
@@ -554,7 +633,8 @@ def _reading_head_contexts(source,parts):
             frame=dict(start=start,end=end,surface=raw,reading=raw,kind=kind,
                 evidence_start=start,evidence_end=noun.end,reading_spelling=True,
                 reason='後続名詞の意味関係で、かなの読みを表記する')
-            if not candidates(frame):continue
+            if not (candidates(frame) or kind=='geometric_count'
+                    and candidates(dict(frame,expected_role='country'))):continue
             if protected is None:protected=protected_ranges(source)
             if overlaps(start,noun.end,protected):continue
             out.append(frame)
@@ -659,6 +739,8 @@ def action_verb_frame(source,parts,index,evidence_start,kind,expected,conflicts,
     """The same exact verb frame serves case and original-usage relations."""
     from semantic_roles import ACTION_MEANINGS
     verb=parts[index]
+    if verb.pos=='名詞':
+        return _sahen_action_frame(source,parts,index,evidence_start,kind,expected,conflicts,reason,lexemes)
     if verb.pos!='動詞' or not verb.has_reading:return None
     raw=all('ぁ'<=c<='ゖ' for c in verb.surface)
     lemmas=(frozenset(lexemes) if lexemes is not None else
@@ -678,6 +760,44 @@ def action_verb_frame(source,parts,index,evidence_start,kind,expected,conflicts,
         kind=kind,expected_role=expected,inflection=verb.infl_form,conflict_roles=tuple(conflicts),
         query_tail=''.join(t.surface for t in tail),tail_reading=''.join(t.reading for t in tail),
         evidence_start=evidence_start,evidence_end=cursor,reading_spelling=raw,reason=reason)
+
+
+
+def _sahen_action_frame(source,parts,index,evidence_start,kind,expected,conflicts,reason,lexemes):
+    """Reuse an existing action meaning only at a native noun + suru seam."""
+    import morphology as M
+    from semantic_roles import ACTION_MEANINGS
+    head=parts[index]
+    if not (head.has_reading and head.pos_sub=='サ変接続' and index+1<len(parts)):return None
+    suru=parts[index+1]
+    if not (suru.start==head.end and suru.pos=='動詞' and suru.has_reading
+            and M.native_suru_form(suru.surface,suru.infl_form,suru.reading,False)):return None
+    forms=tuple(row for row in M.dictionary_inflections(head.surface) or ()
+                if row[0].startswith('名詞,サ変接続,') and row[3]==head.reading)
+    lemmas=(frozenset(lexemes) if lexemes is not None else
+            frozenset().union(*(ACTION_MEANINGS[r] for r in conflicts)))
+    if not any(base in lemmas for pos,form,base,rd in forms):return None
+    tail=[suru];cursor=suru.end
+    for part in parts[index+2:index+6]:
+        if (part.start!=cursor or not part.has_reading or not
+            (part.pos=='助動詞' or part.pos=='助詞' and part.pos_sub=='接続助詞'
+             or part.pos=='動詞' and part.pos_sub.startswith('非自立'))):break
+        tail.append(part);cursor=part.end
+    suffix=source[head.end:cursor]
+    from contextual_repair import _allows_grammatical_tail,_productive_predicate
+    from reading_segments import _native_open_predicate,native_polite_auxiliary_chains
+    literal=head.surface+suffix
+    grammatical=(_allows_grammatical_tail(forms,suffix,head.reading,head.surface)
+                 and _productive_predicate(literal,head.surface))
+    open_polite=(any(end==len(literal) for start,end,signature in
+                    native_polite_auxiliary_chains(literal,include_open=True))
+                 and _native_open_predicate(literal,head.surface))
+    if not (grammatical or open_polite):return None
+    return dict(start=head.start,end=head.end,surface=head.surface,reading=head.reading,
+        kind=kind,expected_role=expected,inflection=suru.infl_form,conflict_roles=tuple(conflicts),
+        sahen_action=True,action_end=suru.end,query_tail=suffix,
+        tail_reading=''.join(t.reading for t in tail),evidence_start=evidence_start,
+        evidence_end=cursor,reading_spelling=all('ぁ'<=c<='ゖ' for c in head.surface),reason=reason)
 
 
 def _placement_contexts(source):

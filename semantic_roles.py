@@ -23,7 +23,7 @@ Unknown or unmatched categories provide no evidence. Metaphor, metonymy and omit
 arguments remain possible. This is a small, versioned classification of ordinary
 words and grammatical roles; it is not intended to describe all Japanese semantics.
 """
-KNOWLEDGE_VERSION = '2026-10-04b'
+KNOWLEDGE_VERSION = '2026-10-04d'
 ROLE_ASSIGNMENT_ACTIONS = ('指名','任命','選任','選出','推薦')
 TRANSLATION_ACTIONS=frozenset('翻訳 和訳 英訳 直訳 意訳 訳す'.split())
 
@@ -702,7 +702,14 @@ PREDICATE_GROUPS=(
  # These are positive ingestible-object senses, not spelling replacements.
  ('drink medicine','飲む 呑む 吞む'),
  # 2026-09-14 / GPT-6 Astra: ordinary insertion/pouring. Positive fit only.
- ('object food drink information text','入れる'),
+ # NINJAL Basic Verb Bank, 入れる: the moved object (ヲ) can be a
+ # person as well as a thing. This is lexical meaning, not a repair rule.
+ # https://www2.ninjal.ac.jp/basicverbbank/single_headwords/いれる-入れる.html
+ ('object person food drink information text','入れる'),
+ # NINJAL Compound Verb Lexicon, 取り出す: physical removal, with
+ # an accusative item and a source marked by から (e.g. bag and notebook).
+ # https://www2.ninjal.ac.jp/vvlexicon/js/headwords.js (headword_id 1633)
+ ('object text','取り出す 取出す'),
  # 2026-09-14 / GPT-6 Astra: creation of things/content/meals, and washing
  # physical items or ingredients. Food as a whole does not license washing:
  # a meal or confection is not classified as an ingredient by this evidence.
@@ -758,6 +765,7 @@ CASE_PREDICATE_GROUPS=(
  # intentional daily activities. This shares the actual comitative case;
  # it does not make people the accusative food/object of those verbs.
  ('と','person','食べる 食う 飲む 作る 調理 料理 試食 買う 選ぶ 運ぶ 歩く 走る 散歩 遊ぶ 旅行 買い物 読む 書く 練習 勉強 学習'),
+ ('から','container','取り出す 取出す'),
  ('から','person','教わる 聞く 学ぶ 受け取る 借りる 受信 受領 伝授'),
  ('から','continuation','始める 再開'),
  ('で','place','遊ぶ 働く 学ぶ 暮らす 泳ぐ 休む 待つ 走る 歩く 散歩 運動 食事 会議 作業 調理 料理 掃除 保存 確認 勉強 練習'),
@@ -881,8 +889,16 @@ def nominal_roles(surface):
         roles=roles | {'process'}
     if not roles and len(surface)>2:
         parts=tokenize(surface)
-        if (len(parts)>=2 and all(t.has_reading and t.pos=='名詞'
-                and not any(x in t.pos_sub for x in ('固有名詞','非自立')) for t in parts)
+        from reading_segments import native_deverbal_nominal_faces
+        # The same written continuative may have an independently attested
+        # common-noun use with exactly this reading. Share that lexical
+        # proof; the whole object's positive relation to the action below
+        # is still required before the compound can name a process.
+        if (len(parts)>=2 and all(t.has_reading and (
+                t.pos=='名詞' and not any(x in t.pos_sub for x in ('固有名詞','非自立'))
+                or t is parts[0] and t.pos=='動詞' and t.pos_sub=='自立'
+                and t.infl_form=='連用形'
+                and t.surface in native_deverbal_nominal_faces(t.reading)) for t in parts)
                 and parts[0].start==0 and parts[-1].end==len(surface)
                 and all(a.end==b.start for a,b in zip(parts,parts[1:]))
                 and classified_nominal_action(parts[-1].surface,parts[-1].reading)
@@ -895,7 +911,7 @@ def nominal_roles(surface):
     if not roles and surface.endswith('まで'):
         from reading_segments import native_deictic_range
         if native_deictic_range(surface):return frozenset(('extent',))
-    if not roles and surface.endswith('たち'):
+    if not roles and surface.endswith(('たち','達')):
         from reading_segments import native_plural_nominal_heads
         if native_plural_nominal_heads(surface):return frozenset(('person',))
     # A single role still requires that role for every coordinated member.
@@ -1070,12 +1086,11 @@ def case_argument_before(context,start,tokenize,through_object=False):
     return None
 
 
-def _token_case_argument_before(context,start,tokenize,through_object=False):
-    """One explicit native common noun plus its actual non-accusative case."""
-    parts,edge=_argument_prefix(context,start,tokenize)
-    if through_object and len(parts)>=2:
+def _argument_prefix_before_object(context,parts,edge):
+    """Keep the existing whole native object seam for every earlier argument."""
+    if len(parts)>=2:
         particle=parts[-1];noun_index=_case_noun_index(parts,len(parts)-1)
-        if noun_index<0:return None
+        if noun_index<0:return parts,edge
         noun=parts[noun_index]
         if (particle[4]==edge and particle[0]=='を' and particle[5]
                 and particle[1].startswith('助詞:格助詞')
@@ -1084,6 +1099,14 @@ def _token_case_argument_before(context,start,tokenize,through_object=False):
             whole=_classified_argument_head(context,parts,noun_index)
             begin=whole[1] if whole else noun_index
             edge=parts[begin][3];parts=parts[:begin]
+    return parts,edge
+
+
+def _token_case_argument_before(context,start,tokenize,through_object=False):
+    """One explicit native common noun plus its actual non-accusative case."""
+    parts,edge=_argument_prefix(context,start,tokenize)
+    if through_object:
+        parts,edge=_argument_prefix_before_object(context,parts,edge)
     if len(parts)<2:return None
     particle=parts[-1];noun_index=_case_noun_index(parts,len(parts)-1)
     if noun_index<0:return None
@@ -1544,6 +1567,8 @@ def preserves_nominal_spelling_argument(line,start,end,surface):
     from last_choice import surface_for_reading
     original=line[start:end]
     if surface_for_reading(original)==surface:return True
+    from context_meaning import preserves_nominal_spelling_context
+    if not preserves_nominal_spelling_context(line,start,end,surface):return False
     before,following=line[:start],line[end:]
     proof=candidate_nominal_spelling_evidence(before,original,following)
     return not proof or bool(candidate_nominal_spelling_evidence(before,surface,following))
@@ -1758,7 +1783,13 @@ def candidate_evidence(object_word, surface, following, before="", case=None):
     if case is None and 'photographic_media' in nominal:
         from context_meaning import photographic_candidate_relation
         photographic=photographic_candidate_relation(before,surface,following)
-        if photographic:preferred=photographic
+        if photographic:
+            preferred=photographic
+            # The actual accusative, native action head and literal suru
+            # chain supply the existing capture relationship. This is not
+            # a blanket transfer from action meanings to all noun roles.
+            if photographic=='photographic_action/image_capture':
+                predicate=predicate|frozenset(('photographic_media',))
     return dict(version=KNOWLEDGE_VERSION,object=object_word,predicate=head,case=case or 'を',
                 object_roles=sorted(nominal),predicate_roles=sorted(predicate),
                 shared_roles=sorted(matches(predicate)),preferred_relation=preferred)
@@ -1973,6 +2004,15 @@ def proved_action_case_support(noun,particle,action,context=''):
     if (support(noun,action) if particle=='を' else case_action_support(noun,particle,action)):
         return True
     if not action:return False
+    if context and particle=='を' and 'photographic_media' in nominal_roles(noun):
+        from context_meaning import _photographic_action_contexts,_meaning_roles,_expected_role
+        for frame in _photographic_action_contexts(context):
+            if (frame['surface']==action and frame.get('sahen_action')
+                    and frame['evidence_start']==0 and frame['start']==len(noun)+1
+                    and context[:frame['start']]==noun+'を'
+                    and _expected_role(frame)=='image_capture'
+                    and 'image_capture' in _meaning_roles(frame)):
+                return True
     from morphology import dictionary_inflections
     roles=set()
     for pos,form,base,rd in dictionary_inflections(action) or ():
@@ -1982,6 +2022,25 @@ def proved_action_case_support(noun,particle,action,context=''):
             if particle!='が':
                 roles.update(native_verb_roles(action,form,rd,
                     case=None if particle in ('を','は','も','しか') else particle))
+    # A proved written clause returns its complete inflected predicate,
+    # while the reading-only path returns the lexical head. Resolve that
+    # same original suffix to its actual verb, keeping the native form,
+    # reading and auxiliary context rather than stripping a guessed ending.
+    if context:
+        from morphology import tokenize
+        heads=[t for t in tokenize(context) if t.has_reading
+               and t.pos=='動詞' and t.pos_sub=='自立'
+               and context[t.start:]==action and t.surface!=action]
+        if len(heads)==1:
+            head=heads[0]
+            kwargs=dict(tail=context[head.end:],before=context[:head.start])
+            if particle in ('が','は','も','しか'):
+                roles.update(native_verb_roles(head.surface,head.infl_form,
+                    head.reading,subject=True,**kwargs))
+            if particle!='が':
+                roles.update(native_verb_roles(head.surface,head.infl_form,
+                    head.reading,case=None if particle in ('を','は','も','しか')
+                    else particle,**kwargs))
     # Preserve the completed clause's auxiliary when an outer case is
     # carried by receiving an action, not by the lexical verb alone.
     if context and particle in _BENEFACTIVE_CASES:
@@ -2443,19 +2502,46 @@ for roles,words in SUBJECT_PREDICATE_GROUPS:
 
 
 def subject_before(context,start,tokenize):
-    """Only an adjacent, explicit が with a single known common nominal head."""
-    parts=[t for t in tokenize(context) if t[4]<=start]
+    """Keep a proved whole subject across the shared native argument seam.
+
+    This is the same original boundary used by object/case readers.
+    Actual topics also need the already proved separate object/predicate
+    frame; an unbound or ambiguous topic supplies no subject claim.
+    """
+    parts,edge=_argument_prefix(context,start,tokenize)
+    object_edge=edge
+    parts,edge=_argument_prefix_before_object(context,parts,edge)
+    object_begin=edge
+    if edge<object_edge:
+        # The same source adjunct may precede the intervening object too.
+        # Neither an earlier verb nor a gap is an argument seam.
+        parts,edge=_argument_prefix(context,edge,tokenize)
     if len(parts)<2:return ''
     noun,particle=parts[-2:]
-    if (particle[4]!=start or particle[0]!='が'
-            or not particle[1].startswith('助詞:格助詞') or noun[4]!=particle[3]
+    actual_ga=particle[0]=='が' and particle[1].startswith('助詞:格助詞')
+    topic_heads=()
+    if (not actual_ga and edge<object_edge and particle[0] in ('は','も')
+            and particle[1]=='助詞:係助詞' and particle[2]==particle[0]
+            and particle[5]):
+        from reading_segments import native_preposed_object_parts
+        topic_heads=tuple(head for begin,case,heads,cut,faces
+            in native_preposed_object_parts(context,True,
+                object_start=object_begin if edge<object_begin else None)
+            if begin==edge and case==particle[0] and cut==object_edge
+            for head in heads)
+    if (particle[4]!=edge or not (actual_ga or topic_heads) or noun[4]!=particle[3]
             or not noun[5] or not noun[1].startswith('名詞')
-            or '固有名詞' in noun[1] or '接尾' in noun[1]):
+            or '固有名詞' in noun[1]):
         return ''
+    # Share the whole classified argument used by object and case readers.
+    # A productive suffix must not become either a bare noun or no subject.
+    whole=_classified_argument_head(context,parts,len(parts)-2)
+    if whole:return whole[0] if actual_ga or whole[0] in topic_heads else ''
+    if '接尾' in noun[1]:return ''
     # Do not read only the last part of a compound as the whole subject.
     if len(parts)>2 and parts[-3][4]==noun[3] and parts[-3][1].startswith(('名詞','接頭詞')):
         return ''
-    return noun[0]
+    return noun[0] if actual_ga or noun[0] in topic_heads else ''
 
 
 @lru_cache(maxsize=4096)
@@ -2479,10 +2565,10 @@ def _subject_predicate_roles(surface,following):
 
 def subject_candidate_evidence(subject_word,surface,following):
     """Rank positive fits after detection; never reject unmatched natural senses."""
-    if subject_word not in NOUN_ROLES:return None
+    nominal=nominal_roles(subject_word)
+    if not nominal:return None
     head,predicate=_subject_predicate_roles(surface,following)
     if not head:return None
-    nominal=frozenset(NOUN_ROLES[subject_word])
     return dict(version=KNOWLEDGE_VERSION,subject=subject_word,predicate=head,
                 subject_roles=sorted(nominal),predicate_roles=sorted(predicate),
                 shared_roles=sorted(nominal & predicate))

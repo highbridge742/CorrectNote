@@ -125,8 +125,28 @@ class CandidateContracts(unittest.TestCase):
         known['rank_evidence']['usage']=2;unknown['rank_evidence']['usage']=None
         rows=R.rank_candidates([unknown,known])
         self.assertEqual(rows[0]['surface'],'既知')
-        self.assertTrue(all('usage' in row['omitted_numeric_evidence'] for row in rows))
+        self.assertNotIn('usage',next(row for row in rows if row['surface']=='既知')['omitted_numeric_evidence'])
+        self.assertIn('usage',next(row for row in rows if row['surface']=='未評価')['omitted_numeric_evidence'])
         self.assertIsNone(unknown['rank_evidence']['usage'])
+
+    def test_explicit_general_usage_is_not_erased_by_an_unjudged_cheap_rival(self):
+        known=self.candidate('一般',10000);unknown=self.candidate('未評価',1)
+        known['rank_evidence']['usage']=2;unknown['rank_evidence']['usage']=None
+        for rows in ([unknown,known],[known,unknown]):
+            self.assertEqual(R.rank_candidates(rows)[0]['surface'],'一般')
+            self.assertIsNone(unknown['rank_evidence']['usage'])
+        # Positive meaning can still choose a previously unjudged word.
+        unknown['rank_evidence']['meaning']=-1
+        self.assertEqual(R.rank_candidates([known,unknown])[0]['surface'],'未評価')
+        unknown['rank_evidence']['meaning']=0
+        unknown['rank_evidence']['source_relation']=-1
+        self.assertEqual(R.rank_candidates([known,unknown])[0]['surface'],'未評価')
+        unknown['rank_evidence']['source_relation']=0
+        unknown['rank_evidence']['usage']=1
+        self.assertEqual(R.rank_candidates([known,unknown])[0]['surface'],'未評価')
+        # No judgment is fabricated when both alternatives are uncovered.
+        known['rank_evidence']['usage']=None;unknown['rank_evidence']['usage']=None
+        self.assertEqual(R.rank_candidates([known,unknown])[0]['surface'],'未評価')
 
     def test_local_reading_scope_precedes_parse_without_target_length_bias(self):
         fluent=self.candidate('自然');cheap=self.candidate('低費用')

@@ -16,6 +16,24 @@ class SpatialNominalContextTests(unittest.TestCase):
         for text in ('しらゆほのはこ','きのしらゆほ','きののはこ'):
             with self.subTest(text=text):self.assertFalse(R.native_nominal_phrase_faces(text))
 
+    def test_projected_genitive_keeps_both_whole_nouns_and_source_word_ownership(self):
+        for phrase,head,tail in (('きのはこ','箱','を置きます。'),
+                                 ('まどのちかく','近く','に置きます。'),
+                                 ('まどのそと','外','を見ます。'),
+                                 ('えきまえのみせ','店','で買います。'),
+                                 ('昨日のせれくしょん','セレクション','を見ました。')):
+            for context in (None,phrase+tail):
+                with self.subTest(phrase=phrase,context=context):
+                    splits=R.native_genitive_nominal_splits(phrase,original_context=context)
+                    self.assertTrue(any(head in right for cut,left,right in splits))
+                    self.assertTrue(all(left and right for cut,left,right in splits))
+        source='会議のしはょ類を送信します。'
+        self.assertEqual(R.native_genitive_nominal_splits('会議のし',original_context=source),())
+        self.assertEqual(R.native_surface_nominal_heads('会議のし',original_context=source),())
+        for phrase in ('きのこ','ものさし','いのしし','ぷねらのはこ','きのぷねら'):
+            self.assertFalse(R.native_genitive_nominal_splits(phrase),phrase)
+        self.assertFalse(R.native_genitive_nominal_splits('会議のし',original_context='資料の本'))
+
     def test_locative_readings_do_not_lend_their_role_to_a_written_homophone(self):
         self.assertIn('近く',R._native_nominal_reading_faces('ちかく'))
         for word in ('近く','付近','近所','辺り','そば','脇'):

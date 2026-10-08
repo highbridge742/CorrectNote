@@ -9,6 +9,50 @@ import contextual_repair as C
 
 @unittest.skipUnless(M.dictionary_inflections('読む'),'requires native dictionary')
 class FocusedSequenceTests(unittest.TestCase):
+    def test_temporal_link_keeps_the_first_actions_actual_object(self):
+        from unittest.mock import patch
+        for text,cut,faces in (('荷物を運んでから戻ります',3,('荷物',)),
+                ('大きな荷物を運んでから戻ります',6,('荷物',)),
+                ('資料を運んでから戻ります',3,('資料',))):
+            with self.subTest(text=text):
+                self.assertTrue(R.native_object_predicate_proof(text,cut,faces))
+                self.assertTrue(R.native_object_predicate_proof(text+'。',cut,faces))
+        for text in ('資料を食べてから戻ります','資料を運んてから戻ります',
+                     '資料を運んでので戻ります','資料を運んでからぽねます',
+                     '資料を運んでから戻りま','資料を運んで	から戻ります'):
+            with self.subTest(text=text):
+                self.assertFalse(R.native_object_predicate_proof(text,3,('資料',)))
+        R.native_object_predicate_proof.cache_clear()
+        with patch.object(R,'completed_native_reading_link',return_value=False):
+            self.assertFalse(R.native_object_predicate_proof('荷物を運んでから戻ります',3,('荷物',)))
+        R.native_object_predicate_proof.cache_clear()
+
+    def test_temporal_motion_repair_keeps_common_gate_and_input_boundaries(self):
+        import app,corrector as E
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        from unittest.mock import patch
+        def run(text):
+            a=initial()
+            return app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
+                                    decisions=a.decisions,context_vec=None)
+        try:
+            for source in ('大きな荷物を箱館でから戻ります。','資料を箱館でから戻ります。'):
+                with self.subTest(source=source):
+                    result=run(source)
+                    self.assertEqual(result['corrected'],source.replace('箱館で','運んで'))
+                    self.assertEqual(result['odd_spans'],[])
+                    self.assertEqual(result['analysis_status'],'complete')
+            source='資料を箱館でから戻ります。'
+            with patch.object(E,'_check_replacement',return_value=(None,'test_common_gate')):
+                self.assertEqual(run(source)['corrected'],source)
+            for source in ('資料を運んでから戻ります。','箱館から戻ります。',
+                    '資料を箱館でから','資料をぽねでから戻ります。',
+                    '資料を箱館で	から戻ります。','「資料を箱館でから戻ります」という文字列です。'):
+                with self.subTest(source=source):
+                    self.assertEqual(run(source)['corrected'],source)
+        finally:set_active(None)
+
     def test_motion_does_not_borrow_the_first_actions_object(self):
         for source in ('荷物を置いて出かけます','荷物を置いて帰ります'):
             self.assertTrue(R.native_object_predicate_proof(source,3,('荷物',)),source)
@@ -41,6 +85,65 @@ class FocusedSequenceTests(unittest.TestCase):
                         ('読んでないようです','読んだないようです')):
             self.assertFalse(R.preserves_native_negative_auxiliary(old,new),(old,new))
         self.assertTrue(R.preserves_native_negative_auxiliary('ほんをよんでないようです','本を読んでないようです'))
+
+    def test_negative_host_keeps_the_same_native_auxiliary_attachment(self):
+        parts=M.tokenize('飲めるみず')
+        self.assertTrue(M.native_te_auxiliary_attachment_mismatch(parts[0],parts[1]))
+        self.assertFalse(C._productive_predicate('飲めるみず','飲める'))
+        self.assertEqual(R.native_negative_auxiliary_chains('飲めるみず'),())
+        self.assertTrue(R.preserves_native_negative_auxiliary('飲めるみず','飲める水'))
+        for source,changed in (('飲んでみず','飲んで水'),('読んでみず','読んで水'),
+                               ('資料を見ず','資料を見る'),('見ずに進む','見て進む')):
+            with self.subTest(source=source):
+                self.assertTrue(R.native_negative_auxiliary_chains(source))
+                self.assertFalse(R.preserves_native_negative_auxiliary(source,changed))
+
+    def test_bound_negative_keeps_its_original_link_before_case_like_tail(self):
+        for source in ('試してみずに決めます。','読んでみずに返します。'):
+            with self.subTest(source=source):
+                self.assertTrue(R.native_negative_auxiliary_chains(source))
+                self.assertFalse(R.preserves_native_negative_auxiliary(source,source.replace('みず','水')))
+        for source in ('飲めるみず','水に入れます。','しないをふります。','しゃしんをとります。'):
+            self.assertFalse(R.native_negative_auxiliary_chains(source),source)
+        self.assertTrue(R.preserves_native_negative_auxiliary('飲めるみず','飲める水'))
+        self.assertFalse(R.preserves_native_negative_auxiliary('資料を見ずに閉じます。','資料を見て閉じます。'))
+
+    def test_application_preserves_proved_negative_without_borrowing_noun_reading(self):
+        import app
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        try:
+            for source,expected in (('試してみずに決めます。','試してみずに決めます。'),
+                    ('飲めるみず','飲める水'),('水に入れます。','水に入れます。'),
+                    ('「試してみずに」と入力します。','「試してみずに」と入力します。')):
+                with self.subTest(source=source):
+                    a=initial()
+                    result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                                            decisions=a.decisions,context_vec=None)
+                    self.assertEqual(result['corrected'],expected)
+                    self.assertEqual(result['analysis_status'],'complete')
+                    self.assertEqual(result['odd_spans'],[])
+        finally:set_active(None)
+
+    def test_relative_noun_spelling_still_requires_common_check(self):
+        import app,corrector as E
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        from unittest.mock import patch
+        try:
+            a=initial()
+            def run(source):
+                return app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                                        decisions=a.decisions,context_vec=None)
+            result=run('飲めるみず')
+            self.assertEqual(result['corrected'],'飲める水')
+            self.assertEqual(result['odd_spans'],[])
+            self.assertEqual(result['analysis_status'],'complete')
+            for source in ('「飲めるみず」と入力します。','内容を見ずに閉じます。'):
+                self.assertEqual(run(source)['corrected'],source)
+            with patch.object(E,'_check_replacement',return_value=(None,'test_reject')):
+                self.assertEqual(run('飲めるみず')['corrected'],'飲めるみず')
+        finally:set_active(None)
 
     def test_whole_noun_reading_is_not_a_negative_auxiliary(self):
         for original,changed in (('しゃしんをとった','写真を撮った'),
@@ -253,14 +356,14 @@ class FocusedSequenceTests(unittest.TestCase):
         import app,corrector as E
         from tests_analysis_async import initial
         a=initial()
-        source='予定を聞く人して画素背うを保存します。'
+        source='予定を書く人して画素背うを保存します。'
         result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                                 decisions=a.decisions,context_vec=None)
         self.assertEqual(result['corrected'],'予定を確認して画像を保存します。')
         self.assertFalse(result['odd_spans'])
         self.assertEqual(result['analysis_status'],'complete')
         for following,allowed in (('保存します。',True),('飲みます。',False)):
-            line='予定を聞く人して画素背うを'+following
+            line='予定を書く人して画素背うを'+following
             checked,reason=E._check_replacement(line,(8,12,'画像','かな入力'),
                 a.store,E.make_tokenizer(a.store),a.dict_index,a.decisions)
             self.assertEqual(checked is not None,allowed,reason)

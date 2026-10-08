@@ -4,6 +4,113 @@ from literal_examples import protected_ranges, subtract_ranges, masked_case_rang
 
 class LiteralExampleTests(unittest.TestCase):
 
+    def test_input_output_value_reports_keep_only_the_asserted_quote(self):
+        for before in ('入力は','出力が','今回の入力は','前の文。出力は'):
+            for after in ('です。','でした。','だった。','ではありません。','である。'):
+                source=before+'「変更するない」'+after+'変更するない。'
+                with self.subTest(source=source):
+                    self.assertEqual([source[a:b] for a,b in protected_ranges(source)],['変更するない'])
+                    self.assertEqual(protected_ranges(source),[(source.index('「')+1,source.index('」'))])
+        source='入力は「😀あ『い』う」です。'
+        self.assertEqual([source[a:b] for a,b in protected_ranges(source)],['😀あ『い』う'])
+
+    def test_input_output_value_reports_require_original_subject_and_copula(self):
+        import literal_examples as L,morphology as M
+        from unittest.mock import patch
+        from copy import copy
+        for source in ('入力を「変更するない」です。','入力は「変更するない」と話します。',
+                       '入力は「変更するない」ですます。','入力は「変更するない」では',
+                       '入力は\t「変更するない」です。','入力は「変更するない」\tです。',
+                       '入力は「変更するない。','入力は「変更するない』です。',
+                       '入力を確認します。「変更するない」です。','「変更するない」です。'):
+            self.assertEqual(protected_ranges(source),[],source)
+        source='入力は「変更するない」です。';prefix=source[:3]
+        tokens=M.tokenize(prefix);tokenize=M.tokenize
+        for index,field,value in ((0,'reading','でりょく'),(0,'pos','動詞'),(0,'base_form','出力'),(0,'end',1),
+                                  (1,'reading','が'),(1,'pos','名詞'),(1,'base_form','が'),(1,'infl_form','未然形'),(1,'has_reading',False)):
+            changed=[copy(t) for t in tokens];setattr(changed[index],field,value)
+            with patch.object(M,'tokenize',side_effect=lambda text:changed if text==prefix else tokenize(text)):
+                self.assertFalse(L._input_output_value_report(source,3,10),(index,field))
+        actual=M.dictionary_inflections
+        for missing in ('入力','は'):
+            with patch.object(M,'dictionary_inflections',side_effect=lambda face:() if face==missing else actual(face)):
+                self.assertFalse(L._input_output_value_report(source,3,10),missing)
+
+    def test_input_value_mask_preserves_outside_marks_and_codepoint_offsets(self):
+        source='入力は「😀変更するない」です。外';seen=[]
+        def engine(line):
+            seen.append(line)
+            return dict(original=line,corrected=line,changed=False,odd_spans=[(0,len(line))],odd_reasons=[(0,len(line),'rule')],unsure_spans=[])
+        result=C._with_literal_examples(engine)(source)
+        lo=source.index('「')+1;hi=source.index('」')
+        self.assertEqual(len(seen),1);self.assertEqual(len(seen[0]),len(source))
+        self.assertNotIn('😀変更するない',seen[0])
+        self.assertEqual(result['corrected'],source)
+        self.assertEqual(result['odd_spans'],[(0,lo),(hi,len(source))])
+
+    def test_input_value_application_retains_literal_and_validates_outside_change(self):
+        import app
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        from unittest.mock import patch
+        state=initial()
+        def result(source):
+            return app.correct_line(source,state.store,input_method='kana',dict_index=state.dict_index,decisions=state.decisions,context_vec=None)
+        source='入力は「変更するない」です。'
+        try:
+            r=result(source);self.assertEqual(r['corrected'],source)
+            self.assertFalse(r['odd_spans']);self.assertEqual(r['analysis_status'],'complete')
+            bare=result('変更するない');self.assertEqual(bare['corrected'],'変更するない')
+            self.assertTrue(bare['odd_spans']);self.assertEqual(bare['analysis_status'],'complete')
+            source+='話を纏路手文章にします。'
+            r=result(source);self.assertEqual(r['corrected'],'入力は「変更するない」です。話をまとめて文章にします。')
+            self.assertFalse(r['odd_spans']);self.assertEqual(r['analysis_status'],'complete')
+            self.assertTrue(r['original_spans'])
+            self.assertTrue(all(a>=source.index('話') for a,b in r['original_spans']))
+            with patch.object(C,'_check_replacement',return_value=(None,'test_reject')):
+                r=result(source);self.assertEqual(r['corrected'],source)
+                self.assertEqual(r['analysis_status'],'complete')
+        finally:set_active(None)
+
+
+    def test_unquoted_spelling_labels_keep_the_original_bounded_text(self):
+        for label in ('表記','綴り','文字列','文字'):
+            for link in ('という','といった'):
+                source='前の文。纏路手'+link+label+'です。後の文。'
+                with self.subTest(source=source):
+                    self.assertEqual(protected_ranges(source),[(4,7)])
+        for source,wanted in (
+                ('ぽねという文字列です。',[(0,2)]),
+                ('纏路手という文字列を確認します。',[(0,3)]),
+                ('纏路手\tぽねという文字列です。',[(4,6)]),
+                ('纏路手⇒ぽねという文字列です。',[(4,6)]),
+                ('纏路手という文字列です。\tぽね',[(0,3)])):
+            with self.subTest(source=source):self.assertEqual(protected_ranges(source),wanted)
+        for source in ('纏路手と話します。','文字列を調べて纏路手と書きます。',
+                       '纏路手という文字列挙を確認します。','「纏路手という文字列です。',
+                       '（纏路手）という文字列です。','纏路手\tという文字列です。',
+                       '纏路手\nという文字列です。','纏路手という\t文字列です。'):
+            with self.subTest(source=source):self.assertEqual(protected_ranges(source),[])
+
+    def test_unquoted_spelling_data_preserves_other_field_repairs(self):
+        import app
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        try:
+            for source,expected in (
+                    ('纏路手という文字列です。','纏路手という文字列です。'),
+                    ('ぽねという表記です。','ぽねという表記です。'),
+                    ('纏路手という文字列です。\t話を纏路手文章にします。',
+                     '纏路手という文字列です。\t話をまとめて文章にします。')):
+                with self.subTest(source=source):
+                    state=initial()
+                    result=app.correct_line(source,state.store,input_method='kana',
+                        dict_index=state.dict_index,decisions=state.decisions,context_vec=None)
+                    self.assertEqual(result['corrected'],expected)
+                    self.assertEqual(result['odd_spans'],[])
+                    self.assertEqual(result['analysis_status'],'complete')
+        finally:set_active(None)
+
     def test_literal_copy_and_search_objects_keep_exact_characters(self):
         for operation in ('コピー','コピーします。','コピーしない','検索','検索する'):
             line='「ぬるかった゛゜」を'+operation
@@ -193,6 +300,74 @@ class LiteralExampleTests(unittest.TestCase):
 
 
 class MaskedCaseTests(unittest.TestCase):
+    def test_masked_case_source_head_and_candidate_suffix_are_separate(self):
+        import literal_examples as L,oddness as O
+        from tests_analysis_async import initial
+        a=initial();tokenize=C.make_tokenizer(a.store)
+        source='がぞせうを保存したます。';masked='    を保存したます。'
+        bound=L.masked_case_ranges(source,[(0,4)]);self.assertEqual(bound,[(4,5)])
+        def rows(text):return O.is_odd_run(text,tokenize,with_spans=True,store=a.store,dict_index=a.dict_index)
+        self.assertIn(('を','保存',4,7),rows(masked))
+        with L.masked_case_scope(source,[(0,4)],masked,bound):
+            self.assertNotIn(('を','保存',4,7),rows(masked))
+            self.assertIn(('た','ます',8,11),rows(masked))
+            self.assertFalse(rows('    を保存してます。'))
+            self.assertFalse(L.masked_case_head_bound('    が保存してます。',4,5,7))
+            self.assertFalse(L.masked_case_head_bound('    を説明してます。',4,5,7))
+            self.assertFalse(L.masked_case_head_bound('    を保存してます。',4,5,6))
+            self.assertFalse(L.masked_case_head_bound('を保存してます',0,1,3))
+        self.assertIn(('を','保存',4,7),rows(masked))
+
+    def test_masked_case_source_views_require_original_prefix_and_reset(self):
+        import literal_examples as L
+        source='がぞせうを保存したます。';masked='    を保存したます。'
+        bound=L.masked_case_ranges(source,[(0,4)])
+        with L.masked_case_scope(source,[(0,4)],masked,bound):
+            with L.masked_case_view(masked,4,11):
+                self.assertTrue(L.masked_case_head_bound('を保存してます',0,1,3))
+                self.assertFalse(L.masked_case_head_bound('を説明してます',0,1,3))
+            self.assertTrue(L.masked_case_head_bound(masked,4,5,7))
+            with L.masked_case_view('xxxxを保存したます。',4,11):
+                self.assertFalse(L.masked_case_head_bound('を保存してます',0,1,3))
+            with L.masked_case_view(masked,5,11):
+                self.assertFalse(L.masked_case_head_bound('保存してます',0,1,2))
+            with self.assertRaises(RuntimeError):
+                with L.masked_case_scope(source,[(0,4)],masked,[]):raise RuntimeError()
+            self.assertTrue(L.masked_case_head_bound(masked,4,5,7))
+        self.assertFalse(L.masked_case_head_bound(masked,4,5,7))
+
+    def test_masked_case_source_missing_proof_and_tab_do_not_bind(self):
+        import literal_examples as L
+        for source,ranges,masked in (
+                ('がぞせうをぷねらします。',[(0,4)],'    をぷねらします。'),
+                ('がぞせう\tを保存します。',[(0,4)],'    \tを保存します。'),
+                ('本を保存します。',[(0,2)],'  保存します。')):
+            with self.subTest(source=source):
+                bound=L.masked_case_ranges(source,ranges);self.assertFalse(bound)
+                with L.masked_case_scope(source,ranges,masked,bound):
+                    self.assertFalse(L.masked_case_head_bound(masked,4,5,7))
+        source='がぞせうを保存したます。'
+        with L.masked_case_scope(source,[(0,4)],'    を説明したます。',[(4,5)]):
+            self.assertFalse(L.masked_case_head_bound('    を説明してます。',4,5,7))
+
+    def test_masked_case_source_tail_still_uses_common_gate(self):
+        import app,literal_examples as L
+        from tests_analysis_async import initial
+        from unittest.mock import patch
+        source='がぞせうを保存したます。';a=initial();a.decisions.protect('がぞせう')
+        check=C._check_replacement;seen=[]
+        def refuse(line,replacement,*args,**kwargs):
+            result=check(line,replacement,*args,**kwargs)
+            seen.append((line,replacement,result[0] is not None))
+            return None,'forced_common_gate_rejection'
+        with patch.object(C,'_check_replacement',side_effect=refuse):
+            result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+        self.assertEqual(result['corrected'],source);self.assertEqual(result['analysis_status'],'complete')
+        self.assertTrue(any(ok and '保存して' in replacement[2] for line,replacement,ok in seen))
+        self.assertTrue(any(lo<=8 and hi>=11 for lo,hi in result['odd_spans']))
+        self.assertTrue(all(lo>=4 for lo,hi in result['odd_spans']))
+        self.assertFalse(L.masked_case_head_bound('    を保存してます。',4,5,7))
+
     def test_declared_edges_require_a_native_case_and_its_original_head_role(self):
         for source,bound in (('がぞせうを保存します。',(4,5)),('がぞせうが届きました。',(4,5)),
                 ('未知ぷねらを保存します。',(5,6)),('がぞせうの資料を保存します。',(4,5)),

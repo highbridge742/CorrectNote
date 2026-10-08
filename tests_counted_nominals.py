@@ -97,6 +97,20 @@ class CountedNominalTests(unittest.TestCase):
             self.assertIsNone(S.counted_object_roles(quantity))
             self.assertFalse(R._native_counter_prefixes(quantity+'からよみます',M.tokenize(quantity+'からよみます')))
 
+    def test_retired_neighbor_directions_do_not_return_as_physical_repairs(self):
+        from contextual_repair import key_repairs,neighbor_shift_key_repairs
+        # The semantic/counting fixtures below now use horizontal slips.
+        # Retain these former vertical/diagonal slips as negative controls.
+        for original,wanted in (('よみまぇ','よみます'),('つやいます','つかいます'),
+                                ('はまして','さまして')):
+            with self.subTest(original=original):
+                self.assertNotIn(wanted,{r.reading for r in key_repairs(original)})
+                self.assertNotIn(wanted,{r.reading for r in neighbor_shift_key_repairs(original)})
+        for original,wanted in (('よみまか','よみます'),('つすいます','つかいます'),
+                                ('そまして','さまして')):
+            with self.subTest(original=original):
+                self.assertIn(wanted,{r.reading for r in key_repairs(original)})
+
     def test_normal_and_adjacent_repairs_share_counted_noun_evidence(self):
         import app
         from tests_analysis_async import initial
@@ -105,8 +119,8 @@ class CountedNominalTests(unittest.TestCase):
             ('さんさつめをよみます。','さんさつめをよみます。'),
             ('ほんをにさつにわけます。','ほんをにさつにわけます。'),
             ('ふたりめにてがみをわたします。','ふたりめにてがみをわたします。'),
-            ('さんさつめをよみまぇ。',('さんさつめを読みます。','さんさつめをよみます。')),
-            ('にだいめをつやいます。','にだいめを使います。'),
+            ('さんさつめをよみまか。',('さんさつめを読みます。','さんさつめをよみます。')),
+            ('にだいめをつすいます。','にだいめを使います。'),
             ('二枚目は俳優です。','二枚目は俳優です。'),
             ('一つ目の妖怪です。','一つ目の妖怪です。')):
             with self.subTest(text=text):

@@ -48,6 +48,39 @@ class AttestedNominalCandidateTests(unittest.TestCase):
             self.assertFalse([t for t in R.targets_for_line(text,tokenize,a.store,a.dict_index)
                               if t.boundary_kind=='nominal_object'],text)
 
+    def test_food_fixtures_separate_horizontal_keys_from_old_direction(self):
+        import app,corrector as C
+        from unittest.mock import patch
+        from tests_analysis_async import initial
+        from kana_layout import kana_key_distance
+        self.assertEqual(kana_key_distance('す','い'),1.0)
+        self.assertGreater(kana_key_distance('と','て'),1.0)
+        for generator in (R.key_repairs,R.nonadjacent_key_repairs,
+                          R.adjacent_shift_key_repairs,R.neighbor_shift_key_repairs):
+            self.assertFalse(any(row.reading=='まてがい' for row in generator('まとがい')))
+        self.assertTrue(any(row.reading=='まちがい' for row in R.key_repairs('まとがい')))
+        self.assertTrue(any(row.reading=='まてがい' and row.operation=='adjacent_substitution'
+                            for row in R.key_repairs('まてがす')))
+        for source in ('まとがいをたべます。','まとがいをやきます。'):
+            with self.subTest(source=source):
+                a=initial()
+                result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                    context_vec=None,decisions=a.decisions)
+                self.assertEqual(result['corrected'],source)
+                self.assertTrue(result['odd_spans'])
+                self.assertEqual(result['analysis_status'],'complete')
+        for source in ('「まてがすをたべます」と入力します。','「まとがいをたべます」と入力します。'):
+            a=initial()
+            result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                context_vec=None,decisions=a.decisions)
+            self.assertEqual(result['corrected'],source)
+        source='まてがすをたべます。';a=initial()
+        with patch.object(C,'_check_replacement',return_value=(None,'test_common_gate')):
+            result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                context_vec=None,decisions=a.decisions)
+        self.assertNotEqual(result['corrected'],'マテガイを食べます。')
+        self.assertTrue(result['odd_spans'])
+
     def test_candidate_meaning_uses_the_same_unchanged_predicate(self):
         import app
         from tests_analysis_async import initial
@@ -55,9 +88,9 @@ class AttestedNominalCandidateTests(unittest.TestCase):
         # 2026-09-22: the explicit everyday-word judgment gives 間違い
         # the same usage tier as its kana spelling; native cost selects kanji.
         for source,expected in (('まとがいをなおします。','間違いをなおします。'),
-                                 ('まとがいをたべます。','マテガイをたべます。'),
+                                 ('まてがすをたべます。','マテガイをたべます。'),
                                  ('まとがいをしゅうせいします。','間違いをしゅうせいします。'),
-                                 ('まとがいをやきます。','マテガイをやきます。')):
+                                 ('まてがすをやきます。','マテガイをやきます。')):
             result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
             assert_repaired_spelling(self, result, expected, source)

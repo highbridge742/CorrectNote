@@ -589,7 +589,7 @@ def _parse_extra_pos(item):
     return ''
 
 
-def iter_janome_entries(min_len=2, max_len=12):
+def iter_janome_entries(min_len=2, max_len=12, pos_prefix=None):
     """
     janome の内蔵辞書から語を順に返す。
 
@@ -617,17 +617,16 @@ def iter_janome_entries(min_len=2, max_len=12):
             if not surface or not (min_len <= len(surface) <= max_len):
                 continue
 
-            reading = ''
-            extra_item = None
-            if extra_data is not None:
-                extra_item = _get_item(extra_data, key)
-                reading = _parse_extra(extra_item)
-                # **品詞は extra 側から取る**（_parse_extra_pos の説明）。
-                if not pos_full:
-                    pos_full = _parse_extra_pos(extra_item)
+            extra_item = _get_item(extra_data, key) if extra_data is not None else None
+            # **品詞は extra 側から取る**（_parse_extra_pos の説明）。
+            if not pos_full:
+                pos_full = _parse_extra_pos(extra_item)
+            # Narrow class indices need no reading extraction for other words.
+            if pos_prefix is not None and not pos_full.startswith(pos_prefix):
+                continue
+            reading = _parse_extra(extra_item) if extra_item is not None else ''
             if not reading:
                 continue
-
             parts = pos_full.split(',') if pos_full else []
             pos = parts[0] if parts else ''
             sub_pos = parts[1] if len(parts) > 1 else ''

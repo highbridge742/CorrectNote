@@ -11,6 +11,213 @@ class SourceSuffixBoundaryTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.a=initial();cls.tok=staticmethod(C.make_tokenizer(cls.a.store))
+    def test_marked_basic_verb_keeps_the_original_suru_connective(self):
+        source='本を貸すして戻ります。'
+        targets=Q.targets_for_line(source,self.tok,self.a.store,self.a.dict_index)
+        wide=[t for t in targets if (t.start,t.end,t.text)==(2,5,'貸すし')]
+        self.assertEqual(len(wide),1)
+        self.assertFalse(any((t.start,t.end)==(2,4) for t in targets))
+        self.assertEqual(wide[0].following,'て戻ります')
+        self.assertTrue(any(a==2 and b==5 for _,_,a,b in wide[0].anomalies))
+        for source in ('本を貸して戻ります。','本を貸すし、話もします。',
+                       '本を貸す。して戻ります。','本を貸す\tして戻ります。'):
+            with self.subTest(source=source):
+                targets=Q.targets_for_line(source,self.tok,self.a.store,self.a.dict_index)
+                self.assertFalse(any(t.text=='貸すし' for t in targets))
+
+    def test_replaced_basic_verb_scope_is_not_consumed_by_finite_tail_again(self):
+        for source,expected in (('本を貸すしてみました。','本を貸してみました。'),
+                                ('本を貸すしています。','本を貸しています。')):
+            with self.subTest(source=source):
+                a=initial();tok=C.make_tokenizer(a.store)
+                targets=Q.targets_for_line(source,tok,a.store,a.dict_index)
+                self.assertEqual(len([t for t in targets if (t.start,t.end)==(2,5)]),1)
+                self.assertFalse(any((t.start,t.end)==(2,4) for t in targets))
+                result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                    decisions=a.decisions,context_vec=None)
+                self.assertEqual(result['corrected'],expected)
+                self.assertEqual(result['odd_spans'],[])
+                self.assertEqual(result['analysis_status'],'complete')
+
+    def test_marked_basic_verb_link_finishes_through_shared_checks(self):
+        from unittest.mock import patch
+        for source,expected in (('本を貸すして戻ります。','本を貸して戻ります。'),
+                                ('本を貸すして帰ります。','本を貸して帰ります。')):
+            with self.subTest(source=source):
+                a=initial()
+                result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                    decisions=a.decisions,context_vec=None)
+                self.assertEqual(result['corrected'],expected)
+                self.assertEqual(result['odd_spans'],[])
+                self.assertEqual(result['analysis_status'],'complete')
+        a=initial();source='本を貸すして戻ります。'
+        with patch.object(C,'_check_replacement',return_value=(None,'test_common_gate')):
+            result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                decisions=a.decisions,context_vec=None)
+        self.assertEqual(result['corrected'],source)
+        self.assertTrue(result['odd_spans'])
+
+    def test_marked_basic_verb_link_retains_keys_meaning_and_quotes(self):
+        rows=(('資料を出すして戻ります。','資料を出して戻ります。'),
+              ('税を課すして戻ります。','税を課して戻ります。'),
+              ('辞書を貸すして戻ります。','辞書を貸して戻ります。'))
+        for source,forbidden in rows:
+            with self.subTest(source=source):
+                a=initial()
+                result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                    decisions=a.decisions,context_vec=None)
+                self.assertNotEqual(result['corrected'],forbidden)
+        for source in ('本を貸して戻ります。','本を貸すし、話もします。',
+                       '「本を貸すして戻ります」と入力しました。'):
+            with self.subTest(source=source):
+                a=initial()
+                result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                    decisions=a.decisions,context_vec=None)
+                self.assertEqual(result['corrected'],source)
+
+    def test_source_suru_link_requires_a_later_clause_not_a_trailing_particle(self):
+        for source in ('宇佐したら','宇佐したら。','宇佐したらば','宇佐しましたら',
+                       '宇佐して','宇佐しても','宇佐すれば'):
+            with self.subTest(source=source):
+                target=next(t for t in Q.targets_for_line(source,self.tok,self.a.store,self.a.dict_index)
+                            if t.text=='宇佐')
+                self.assertFalse(Q._source_marked_nominal_suru_omission(target,'うさ'))
+        for source in ('宇佐したら戻ります。','宇佐したらば戻ります。',
+                       '宇佐してから戻ります。','宇佐してぽねます。'):
+            target=next(t for t in Q.targets_for_line(source,self.tok,self.a.store,self.a.dict_index)
+                        if t.text=='宇佐')
+            self.assertTrue(Q._source_marked_nominal_suru_omission(target,'うさ'))
+
+    def test_source_unfinished_suru_link_retains_body_and_anomaly(self):
+        for source in ('宇佐したら','宇佐しましたら','宇佐したらば'):
+            with self.subTest(source=source):
+                a=initial()
+                result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                    decisions=a.decisions,context_vec=None)
+                self.assertEqual(result['corrected'],source)
+                self.assertTrue(result['odd_spans'])
+                self.assertEqual(result['analysis_status'],'complete')
+
+    def test_original_conditional_auxiliary_keeps_its_actual_verb_scope(self):
+        for source,start,prefix in (
+                ('宇佐したら戻ります。',2,'したら'),
+                ('宇佐しましたら戻ります。',2,'しましたら'),
+                ('本を読んだら返します。',2,'読んだら'),
+                ('書いたら戻ります。',0,'書いたら')):
+            with self.subTest(source=source):
+                self.assertIn(start+len(prefix),R.native_predicate_link_boundaries(source,start))
+        for source,start in (('宇佐しだら戻ります。',2),('宇佐し\tたら戻ります。',2),
+                             ('書いだら戻ります。',0),('読んたら戻ります。',0),
+                             ('宇佐したら戻ります。',3)):
+            self.assertFalse(R.native_predicate_link_boundaries(source,start),source)
+        source='宇佐したら戻ります。'
+        target=next(t for t in Q.targets_for_line(source,self.tok,self.a.store,self.a.dict_index)
+                    if t.text=='宇佐')
+        self.assertTrue(Q._source_marked_nominal_suru_omission(target,'うさ'))
+
+    def test_original_conditional_suru_omission_keeps_shared_validation(self):
+        from unittest.mock import patch
+        for source,expected in (('宇佐したら戻ります。','操作したら戻ります。'),
+                                ('あとで宇佐したら戻ります。','あとで操作したら戻ります。')):
+            with self.subTest(source=source):
+                a=initial()
+                result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                    decisions=a.decisions,context_vec=None)
+                self.assertEqual(result['corrected'],expected)
+                self.assertFalse(result['odd_spans'])
+                self.assertEqual(result['analysis_status'],'complete')
+        for source in ('操作したら戻ります。','宇佐に着いたら戻ります。',
+                       '「宇佐したら戻ります」と入力します。','宇佐し\tたら戻ります。'):
+            a=initial()
+            result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                decisions=a.decisions,context_vec=None)
+            self.assertEqual(result['corrected'],source)
+        a=initial()
+        with patch.object(C,'_check_replacement',return_value=(None,'test_common_gate')):
+            result=app.correct_line('宇佐したら戻ります。',a.store,input_method='kana',dict_index=a.dict_index,
+                decisions=a.decisions,context_vec=None)
+        self.assertNotEqual(result['corrected'],'操作したら戻ります。')
+        self.assertTrue(result['odd_spans'])
+
+    def test_source_suru_link_owns_omission_without_later_predicate_proof(self):
+        for source in ('宇佐してから戻ります。','宇佐して帰ります。','宇佐すれば戻ります。',
+                       '宇佐してぽねます。'):
+            with self.subTest(source=source):
+                target=next(t for t in Q.targets_for_line(source,self.tok,self.a.store,self.a.dict_index)
+                            if t.text=='宇佐')
+                self.assertTrue(Q._source_marked_nominal_suru_omission(target,'うさ'))
+        for source in ('宇佐しで戻ります。','宇佐し\tて戻ります。','宇佐し'):
+            target=next(t for t in Q.targets_for_line(source,self.tok,self.a.store,self.a.dict_index)
+                        if t.text=='宇佐')
+            self.assertFalse(Q._source_marked_nominal_suru_omission(target,'うさ'),source)
+
+    def test_source_suru_link_finishes_only_through_the_shared_candidate_gate(self):
+        from unittest.mock import patch
+        for source,expected in (
+                ('宇佐してから戻ります。','操作してから戻ります。'),
+                ('宇佐して帰ります。','操作して帰ります。'),
+                ('宇佐すれば戻ります。','操作すれば戻ります。')):
+            with self.subTest(source=source):
+                a=initial()
+                result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                    decisions=a.decisions,context_vec=None)
+                self.assertEqual(result['corrected'],expected)
+                self.assertFalse(result['odd_spans'])
+                self.assertEqual(result['analysis_status'],'complete')
+        for source in ('宇佐に行ってから戻ります。','操作してから戻ります。',
+                       '「宇佐してから戻ります」と入力します。','宇佐し\tて戻ります。'):
+            a=initial()
+            result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                decisions=a.decisions,context_vec=None)
+            self.assertEqual(result['corrected'],source)
+        a=initial()
+        result=app.correct_line('宇佐してぽねます。',a.store,input_method='kana',dict_index=a.dict_index,
+            decisions=a.decisions,context_vec=None)
+        self.assertTrue(result['odd_spans'])
+        self.assertTrue(result['corrected'].endswith('ぽねます。'))
+        a=initial()
+        with patch.object(C,'_check_replacement',return_value=(None,'test_common_gate')):
+            result=app.correct_line('宇佐してから戻ります。',a.store,input_method='kana',dict_index=a.dict_index,
+                decisions=a.decisions,context_vec=None)
+        self.assertNotEqual(result['corrected'],'操作してから戻ります。')
+        self.assertTrue(result['odd_spans'])
+
+    def test_marked_nominal_suru_shares_original_omission_scope(self):
+        from dataclasses import replace
+        source='宇佐します。'
+        target=next(t for t in Q.targets_for_line(source,self.tok,self.a.store,self.a.dict_index)
+                    if t.text=='宇佐')
+        self.assertTrue(Q._source_marked_nominal_suru_omission(target,'うさ'))
+        self.assertFalse(Q._source_marked_nominal_suru_omission(target,'そうさ'))
+        self.assertFalse(Q._source_marked_nominal_suru_omission(replace(target,anomalies=()),'うさ'))
+        self.assertFalse(Q._source_marked_nominal_suru_omission(replace(target,end=1),'うさ'))
+        for source in ('宇佐し','宇佐です。','宇佐\tします。','保存します。','ぽねします。'):
+            for target in Q.targets_for_line(source,self.tok,self.a.store,self.a.dict_index):
+                self.assertFalse(Q._source_marked_nominal_suru_omission(target,'うさ'),source)
+        target=next(t for t in Q.targets_for_line('宇佐します。',self.tok,self.a.store,self.a.dict_index)
+                    if t.text=='宇佐')
+        selected,report=Q.resolve(target,C,self.tok,self.a.store,self.a.dict_index,self.a.decisions)
+        rows=[row for row in report['candidates'] if row['surface']=='操作']
+        self.assertTrue(rows)
+        self.assertTrue(any(row['repair']['operation']=='omission'
+                            and row['repair']['reading']=='そうさ' for row in rows))
+
+    def test_nominal_suru_omission_keeps_the_shared_gate_and_written_names(self):
+        from unittest.mock import patch
+        for source in ('宇佐です。','宇佐に行きます。','宇佐は町です。',
+                       '「宇佐します」と入力します。','保存します。','操作します。'):
+            a=initial()
+            result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                decisions=a.decisions,context_vec=None)
+            self.assertEqual(result['corrected'],source)
+            self.assertEqual(result['analysis_status'],'complete')
+        a=initial()
+        with patch.object(C,'_check_replacement',return_value=(None,'test_common_gate')):
+            result=app.correct_line('宇佐します。',a.store,input_method='kana',dict_index=a.dict_index,
+                decisions=a.decisions,context_vec=None)
+        self.assertNotEqual(result['corrected'],'操作します。')
+        self.assertTrue(result['odd_spans'])
+
     def test_marked_lexical_head_reuses_written_suru_only_with_source_arguments(self):
         rows=(
             ('メモの内容を別のファイルに宇佐します。',
@@ -115,9 +322,9 @@ class SourceSuffixBoundaryTests(unittest.TestCase):
     def test_revised_adjacency_does_not_restore_excluded_old_targets(self):
         from kana_layout import kana_key_distance,single_key_drop_adjacency
         from janome_import import import_from_janome
-        for left,right in (('つ','し'),('ら','れ'),('す','し')):
+        for left,right in (('つ','し'),('ら','れ'),('す','し'),('そ','し')):
             self.assertGreater(kana_key_distance(left,right),1.0)
-        for left,right in (('そ','し'),('り','れ')):
+        for left,right in (('は','し'),('り','れ')):
             self.assertEqual(kana_key_distance(left,right),1.0)
         self.assertFalse(single_key_drop_adjacency('だすしました','だしました'))
         # The old edit targets require keys excluded by the user's new policy.

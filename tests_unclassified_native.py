@@ -47,7 +47,7 @@ class UnclassifiedNativeTests(unittest.TestCase):
                 ('なやんではけっします。', 'なやんではけっします。'),
                 ('てがみをかいてはけっします。', 'てがみをかいてはけっします。'),
                 ('かいてはけしなます。', 'かいては消します。'),
-                ('ふでをあらいまぇ。', 'ふでを洗います。'),
+                ('ふでをあらいまか。', 'ふでを洗います。'),
                 ('会議の日程を長生します。', '会議の日程を調整します。'),
                 ('もんじにゅうりょく。', 'もんじにゅうりょく。')):
             with self.subTest(text=text):
@@ -55,6 +55,18 @@ class UnclassifiedNativeTests(unittest.TestCase):
                     dict_index=a.dict_index, context_vec=None, decisions=a.decisions)
                 assert_reviewed_result_spelling(self, result, expected)
                 self.assertEqual(result.get('odd_spans'), [])
+
+
+    def test_same_position_shift_and_neighbor_does_not_restore_an_excluded_tail(self):
+        import app,contextual_repair as Q
+        from tests_analysis_async import initial
+        for generator in (Q.key_repairs,Q.nonadjacent_key_repairs):
+            self.assertNotIn('あらいます',{r.reading for r in generator('あらいまぇ')})
+        a=initial();source='ふでをあらいまぇ。'
+        r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+        self.assertIn(r['corrected'],(source,'筆をあらいまぇ。'))
+        self.assertTrue(r['odd_spans'])
+        self.assertEqual(r['analysis_status'],'complete')
 
 
 if __name__ == '__main__':

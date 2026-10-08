@@ -4,6 +4,25 @@ from dataclasses import replace
 from copy import deepcopy
 
 
+def _prepend_source_reading(reading,parts,prefix_length):
+    """Keep canonical reading evidence when extending its original scope.
+
+    The unchanged noun/case is native evidence, not a new IME roundtrip.
+    Each original origin keeps its rank and its own segment provenance.
+    Argument/meaning diagnostics belong outside this three-field contract.
+    """
+    prefix=tuple((p.start,p.end,p.reading,'analyzed_word') for p in parts)
+    def widen(segments):
+        return prefix+tuple((a+prefix_length,b+prefix_length,rd,kind)
+                            for a,b,rd,kind in segments)
+    evidence=reading.get('provenance') or ((reading['source'],reading['rank'],reading['segments']),)
+    out=deepcopy(reading)
+    out.update(text=''.join(p.reading for p in parts)+reading['text'],
+        source='joint_source_argument',segments=widen(reading['segments']),
+        provenance=tuple((origin,rank,widen(segments)) for origin,rank,segments in evidence))
+    return out
+
+
 def extend(targets,diagnostics,engine,tokenize,store,dictionary,decisions):
     from contextual_repair import validate,rank_candidates
     from semantic_roles import object_before,nominal_roles,candidate_evidence
@@ -47,13 +66,8 @@ def extend(targets,diagnostics,engine,tokenize,store,dictionary,decisions):
                     if not ok:continue
                     extended=deepcopy(row)
                     extended['surface']=surface
-                    extended['reading']['text']=prefix_rd+row['reading']['text']
-                    extended['reading']['source']='joint_source_argument'
+                    extended['reading']=_prepend_source_reading(row['reading'],parts,len(prefix))
                     extended['also_from_legacy']=False
-                    segments=tuple((a+len(prefix),b+len(prefix),reading,kind)
-                                   for a,b,reading,kind in row['reading']['segments'])
-                    extended['reading']['segments']=tuple((p.start,p.end,p.reading,'analyzed_word') for p in parts)+segments
-                    extended['reading']['provenance']=(('joint_original_argument',obj,rd,row['reading']),)
                     extended['repair']['reading']=changed_reading
                     if extended['repair']['position']>=0:extended['repair']['position']+=len(prefix_rd)
                     for step in extended['repair'].get('steps',()):

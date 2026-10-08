@@ -121,13 +121,21 @@ class ActionNominalContextTests(unittest.TestCase):
             result=self.correct(text)
             assert_preserved_source_spelling(self,result,text)
             self.assertFalse(result['odd_spans'],text)
-        # Explicit ぇ can now release Shift and replace the same physical key.
-        # The two operations retain the original object/predicate proof.
-        for text in ('あしたまでにぶんしょうをなおしまぅ。',
+        # A horizontal same-Shift key error keeps the original object and time scope.
+        for text in ('あしたまでにぶんしょうをなおしまか。',
                      'あしたまでにぶんしょうをなおそします。'):
             result=self.correct(text)
             self.assertEqual(result['corrected'],'あしたまでに文章を直します。')
             self.assertFalse(result['odd_spans'],text)
+        # The former same-position Shift+neighbor example stays excluded.
+        import contextual_repair as Q
+        for generator in (Q.key_repairs,Q.nonadjacent_key_repairs):
+            self.assertNotIn('なおします',{r.reading for r in generator('なおしまぅ')})
+        source='あしたまでにぶんしょうをなおしまぅ。'
+        r=self.correct(source)
+        self.assertIn(r['corrected'],(source,'あしたまでに文章をなおしまぅ。'))
+        self.assertTrue(r['odd_spans'])
+        self.assertEqual(r['analysis_status'],'complete')
         malformed='旅行の日程を素左右田んしました'
         self.assertFalse(R.native_object_predicate_proof(malformed,6,('日程',)))
         self.assertNotIn((0,len(malformed)),R.native_context_ranges(malformed))

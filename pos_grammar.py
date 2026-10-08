@@ -1732,6 +1732,52 @@ def closed_subject_topic_spans(line):
     return tuple(out)
 
 
+
+def native_object_functional_tail_frames(text):
+    """An unchanged object/verb and an unfinished functional prefix.
+
+    Native case, actual continuative and positive object meaning establish
+    the predicate head. The original functional prefix belongs to that
+    verb even if a best parse invents an adjective or temporal noun inside
+    it. The last unexplained key is excluded from this boundary proof.
+    """
+    from reading_segments import _native_source_clauses,native_object_predicate_contexts
+    from morphology import dictionary_inflections
+    from semantic_roles import native_verb_roles,nominal_roles
+    from literal_examples import protected_ranges,overlaps
+    if not text or 'を' not in text:return ()
+    literal=protected_ranges(text);out=[]
+    for offset,clause in _native_source_clauses(text):
+        for begin,cut,objects in native_object_predicate_contexts(
+                clause,include_written_mismatch=False):
+            predicate=clause[cut:]
+            if not (4<=len(predicate)<=18 and all('ぁ'<=c<='ゖ' for c in predicate)):
+                continue
+            if overlaps(offset+cut,offset+len(clause),literal):continue
+            object_roles=frozenset().union(*(nominal_roles(word) for word in objects))
+            if not object_roles:continue
+            for edge in range(1,len(predicate)-1):
+                head,tail=predicate[:edge],predicate[edge:]
+                if not 2<=len(tail)<=10:continue
+                # A literal complete/open auxiliary is normal. A merely
+                # nominal reading of the final key does not close a verb.
+                if (not any(piece.startswith(tail[:-1]) and piece!=tail[:-1]
+                            for piece,state in _PIECES['R'])
+                        or any(piece.startswith(tail) for piece,state in _PIECES['R'])
+                        or explain_kana_run(tail,no_words=True,initial_state='R',before_kanji=False)):
+                    continue
+                forms=tuple(row for row in dictionary_inflections(head) or ()
+                    if row[0].startswith('動詞,自立,') and row[1]=='連用形' and row[3]==head)
+                if not forms or not (native_verb_roles(head,'連用形',head)&object_roles):continue
+                out.append((offset+cut,offset+len(clause),offset+cut+edge,predicate))
+    return tuple(dict.fromkeys(out))
+
+
+def _native_object_predicate_mismatches(text):
+    return tuple(dict.fromkeys((start,end) for start,end,cut,reading
+        in native_object_functional_tail_frames(text)))
+
+
 def odd_kana_spans(line, dict_index=None, store=None, preserve_unknown_source=True):
     """
     **行の中の、説明の付かない ひらがな連続**（項目48-KS の①-a）。
@@ -1758,6 +1804,7 @@ def odd_kana_spans(line, dict_index=None, store=None, preserve_unknown_source=Tr
     out0.extend(_completed_kana_attachment_spans(line))
     from reading_segments import native_reading_polite_mismatches
     out0.extend(native_reading_polite_mismatches(line))
+    out0.extend(_native_object_predicate_mismatches(line))
     out0.extend(closed_subject_topic_spans(line))
     out0.extend(_interrupted_sahen_past_spans(line, store))
     out0.extend(_interrupted_sahen_auxiliary_spans(line, store))

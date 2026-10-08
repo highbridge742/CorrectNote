@@ -29,6 +29,70 @@ class SpellingSenseEvidenceTests(unittest.TestCase):
                 again=self.run_line(wanted)
                 assert_reviewed_source_spelling(self, again['corrected'], wanted)
                 self.assertEqual(again.get('odd_spans'),[])
+    def test_native_okurigana_variants_are_not_different_senses(self):
+        with patch('ime_language._factory',None):
+            for source,wanted in (
+                    ('物をとりだします。','物を取り出します。'),
+                    ('箱から資料をとりだします。','箱から資料を取り出します。'),
+                    ('箱からとりだします。','箱から取り出します。')):
+                with self.subTest(source=source):
+                    self.assertEqual(self.project(source),wanted)
+            # Different kanji and lexical senses still need independent proof.
+            for text in ('すこしおくれました','時間をかえます','天気をとりだします。'):
+                with self.subTest(source=text):self.assertIsNone(self.project(text))
+            with patch('last_choice.surface_for_reading',side_effect=lambda rd:'取出し' if rd=='とりだし' else None):
+                self.assertEqual(self.project('物をとりだします。'),'物を取出します。')
+
+    def test_literal_kana_meaning_survives_reverse_spelled_homophones(self):
+        with patch('ime_language._factory',None):
+            for source,wanted in (
+                    ('ものをはこにいれます。','ものを箱に入れます。'),
+                    ('ものだけをはこにいれます。','ものだけを箱に入れます。'),
+                    ('ひつようなものだけをはこにいれておきます。','必要なものだけを箱に入れておきます。'),
+                    ('はこにいれたものをとりだします。','箱に入れたものを取り出します。'),
+                    ('ものをとりだします。','ものを取り出します。'),
+                    ('ものを招待します。','者を招待します。')):
+                with self.subTest(source=source):
+                    r=self.run_line(source)
+                    self.assertEqual(r['corrected'],wanted)
+                    self.assertFalse(r['odd_spans'])
+                    self.assertEqual(r['analysis_status'],'complete')
+            # The meaning of an unclassified noun cannot come from its
+            # guessed spelling. No normal clause is marked as an error.
+            for text in ('ぷねらをとりだします。','天気をとりだします。'):
+                with self.subTest(source=text):self.assertIsNone(self.project(text))
+
+    def test_focus_boundary_does_not_choose_an_unassessed_short_noun_sense(self):
+        import reading_segments as R, kango_tier as K
+        for face in ('桃','股','腿'):
+            self.assertIn(face,R.native_lexical_reading_faces('もも'))
+        self.assertIsNone(K.usage_tier_for_reading('腿','もも'))
+        for text in ('ももだけにします。','ももばかりにします。','ももなどにします。',
+                     '桃だけにします。','腿だけにします。','「ももだけ」と入力します。',
+                     'ももだけにします。\t資料を保存します。'):
+            with self.subTest(source=text):
+                r=self.run_line(text)
+                self.assertEqual(r['corrected'],text)
+                self.assertEqual(r['odd_spans'],[])
+                self.assertEqual(r['analysis_status'],'complete')
+
+    def test_focus_ambiguity_keeps_independent_words_and_valid_choice(self):
+        # The earlier discarded global tier change stopped these ordinary
+        # spellings and selected an unproved person sense. Keep that evidence
+        # distinct from the new focus boundary's unresolved interpretation.
+        for source,expected in (('くつを履きます。','靴を履きます。'),
+                                ('でんしゃに乗ります。','電車に乗ります。'),
+                                ('いしを選びます。','いしを選びます。'),
+                                ('ねこだけを見ます。','猫だけを見ます。')):
+            with self.subTest(source=source):
+                r=self.run_line(source)
+                self.assertEqual(r['corrected'],expected)
+                self.assertEqual(r['odd_spans'],[])
+        with patch('last_choice.surface_for_reading',side_effect=lambda rd:'桃' if rd=='もも' else None):
+            self.assertEqual(self.project('ももだけにします。'),'桃だけにします。')
+        with patch('corrector._check_replacement',return_value=(None,'test_reject_shared_gate')):
+            self.assertIsNone(self.project('ねこだけを見ます。'))
+
     def test_unresolved_senses_do_not_become_a_different_written_meaning(self):
         # Holding an unresolved reading is not completion of general spelling.
         self.verify((('じかんをかえます。','じかんをかえます。'),

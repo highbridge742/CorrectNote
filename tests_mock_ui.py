@@ -528,8 +528,8 @@ def run_settings_cases():
     _r = _cl('単語のつあがり', im='romaji')
     check('つあがり→つながり（**ローマ字限定**。n の脱字）',
           _r['corrected'], '単語のつながり')
-    _r = _cl('単語のちながり')
-    check('ちながり→つながり（かな）', _r['corrected'], '単語のつながり')
+    _r = _cl('単語のさながり')
+    check('さながり→つながり（かな）', _r['corrected'], '単語のつながり')
     _r = _cl('たんほの繋がり', im='romaji')
     check('たんほ→たんご（ローマ字: h/g が QWERTY で隣接）',
           _r['corrected'], 'たんごの繋がり')
@@ -566,8 +566,8 @@ def run_settings_cases():
     import vocabulary as _v_dup
     check('48-VH 栓は 1 か所で決めている（既定オフ）',
           _v_dup.dup_repair_enabled(), False)
-    _r = _cl('たんごのちながり')
-    check('ちながり→つながり（助詞を剥がした芯で照合する）',
+    _r = _cl('たんごのさながり')
+    check('さながり→つながり（助詞を剥がした芯で照合する）',
           _r['corrected'], 'たんごのつながり')
 
     # --- まだ確信が持てず、色だけ付くもの ---

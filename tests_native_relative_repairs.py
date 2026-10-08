@@ -220,15 +220,42 @@ class NativeRelativeRepairTests(unittest.TestCase):
         import app
         from tests_analysis_async import initial
         a=initial()
-        # A nonadjacent deletion cannot invent hon. Another physical edit
-        # may yield a written report that fits both borrowing and pages.
-        for noun,wanted,purple in (('ほこん','報告',False),('ほんん','ほんん',True)):
+        # A nonadjacent deletion cannot invent hon. A horizontal repair
+        # yields the same report; the excluded old input remains unresolved.
+        for noun,wanted,purple in (('ほうこき','報告',False),('ほこん','ほこん',True),('ほんん','ほんん',True)):
             text='ともだちからかりた'+noun+'のぺーじをよみます。'
             result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                 context_vec=None,decisions=a.decisions)
             self.assertEqual(result['corrected'],text.replace(noun,wanted))
             self.assertEqual(bool(result.get('odd_spans')),purple,text)
             self.assertNotIn('本のぺーじ',result['corrected'])
+
+    def test_relative_report_fixture_keeps_physical_exclusion_and_final_gate(self):
+        import app,corrector as C,contextual_repair as Q
+        from unittest.mock import patch
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        for generator in (Q.key_repairs,Q.nonadjacent_key_repairs,
+                          Q.adjacent_shift_key_repairs,Q.neighbor_shift_key_repairs):
+            self.assertNotIn('ほうこく',{r.reading for r in generator('ほこん')})
+            self.assertNotIn('ほん',{r.reading for r in generator('ほこん')})
+        self.assertTrue(any(r.reading=='ほうこく' and r.operation=='adjacent_substitution'
+                            for r in Q.key_repairs('ほうこき')))
+        text='ともだちからかりたほうこきのぺーじをよみます。'
+        try:
+            source='「'+text+'」と入力します。';a=initial()
+            r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                context_vec=None,decisions=a.decisions)
+            self.assertEqual(r['corrected'],source)
+            self.assertEqual(r['odd_spans'],[])
+            self.assertEqual(r['analysis_status'],'complete')
+            a=initial()
+            with patch.object(C,'_check_replacement',return_value=(None,'test_common_gate')):
+                r=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
+                    context_vec=None,decisions=a.decisions)
+            self.assertEqual(r['corrected'],text)
+            self.assertTrue(r['odd_spans'])
+        finally:set_active(None)
 
     def test_original_proof_does_not_cover_an_unexplained_tail(self):
         import pos_grammar as P

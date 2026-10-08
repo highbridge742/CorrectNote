@@ -33,8 +33,13 @@ def proposed_keys(line, store, dictionary, decisions=None):
             projected=project(candidate,store,dictionary,decisions)
             if projected is None:continue
             projected_surface,edits=projected
+            # A native prefix plus its whole noun is independently attested
+            # even when the combined spelling has no single dictionary row.
+            # Reuse the same exact face/reading proof as the relative-clause
+            # check below; fragments and arbitrary noun joins supply none.
             primary=next(((lo,hi,face) for lo,hi,face in edits
-                if lo<=offset<hi and face in native_nominal_spelling_faces(candidate[lo:hi])),None)
+                if lo<=offset<hi and (face in native_nominal_spelling_faces(candidate[lo:hi])
+                    or face in native_attested_prefix_noun_faces(candidate[lo:hi]))),None)
             if primary is None:continue
             _,primary_end,primary_face=primary
             relative=False

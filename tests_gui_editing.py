@@ -690,13 +690,13 @@ class CrossTabQuoteTests(unittest.TestCase):
         a._on_editor_ctrl_c();self._type_quote_expression(w,'1-2')
         self._enter_quote_expression(w)
         self.assertEqual(self._calculated_text(),'前😀-1置換対象後')
-        for suffix,answer in (('+3','2'),('*4','11'),('/2','5')):
+        for suffix,answer in (('+3*1','2'),('*4','11'),('/2','5')):
             a._on_editor_ctrl_c();self._type_quote_expression(w,suffix)
             self._enter_quote_expression(w)
             self.assertIsNone(a._pick_mode)
             self.assertEqual(self._calculated_text(),'前😀'+answer+'置換対象後')
             self.assertEqual(len(a._input_document.calculations),1)
-        self.assertEqual(a._input_document.calculations[0].surface,'1-2+3*4/2')
+        self.assertEqual(a._input_document.calculations[0].surface,'1-2+3*1*4/2')
 
     def test_quote_append_does_not_join_an_unconfirmed_or_separated_prefix(self):
         import analysis_work_app as work
@@ -704,11 +704,11 @@ class CrossTabQuoteTests(unittest.TestCase):
         w.replace('1.0','end-1c','1-2 ')
         work.select_document(a,a.editor_source_text());work.install(a)
         w.mark_set('insert','end-1c')
-        a._on_editor_ctrl_c();self._type_quote_expression(w,'+3')
+        a._on_editor_ctrl_c();self._type_quote_expression(w,'+3*1')
         self._enter_quote_expression(w)
         self.assertEqual(self._calculated_text(),'1-2 3')
         w.insert('insert','　')
-        a._on_editor_ctrl_c();self._type_quote_expression(w,'+4')
+        a._on_editor_ctrl_c();self._type_quote_expression(w,'+4*1')
         self._enter_quote_expression(w)
         self.assertEqual(self._calculated_text(),'1-2 3　4')
 

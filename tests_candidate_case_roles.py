@@ -155,6 +155,34 @@ class CandidateCaseRoleTests(unittest.TestCase):
         for text in ('本を友人に貸しました','本を友人に田中ました','本をぷねらに男子ました'):
             self.assertFalse(R.native_object_predicate_contexts(text),text)
 
+    def test_owned_unfinished_predicate_keeps_a_wide_native_scope_without_ime(self):
+        import app,corrector as C,contextual_repair as Q
+        from tests_analysis_async import initial
+        from unittest.mock import patch
+        a=initial();tok=C.make_tokenizer(a.store)
+        with patch('ime_language._factory',None):
+            for source in ('旅行の日程を沿うて男子ました。','資料を沿うて男子ました。'):
+                with self.subTest(source=source):
+                    targets=Q.targets_for_line(source,tok,a.store,a.dict_index)
+                    self.assertTrue(any(t.text=='沿うて男子' for t in targets))
+                    self.assertTrue(any(t.text=='男子' for t in targets))
+            for source in ('資料を保存して男子ました。','友人を招待して男子ました。',
+                           '本を友人に男子ました。','ぷねらを沿うて男子ました。',
+                           '「日程を沿うて男子ました」と入力します。'):
+                with self.subTest(source=source):
+                    targets=Q.targets_for_line(source,tok,a.store,a.dict_index)
+                    self.assertFalse(any(t.text in ('保存して男子','招待して男子','友人に男子','沿うて男子') for t in targets))
+            for source,expected in (
+                    ('旅行の日程を沿うて男子ました。','旅行の日程を相談しました。'),
+                    ('資料を沿うて男子ました。','資料を沿うて男子ました。'),
+                    ('日程を説明して相談しました。','日程を説明して相談しました。'),
+                    ('川に沿って歩きます。','川に沿って歩きます。')):
+                with self.subTest(source=source):
+                    result=app.correct_line(source,a.store,input_method='kana',
+                        dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+                    self.assertEqual(result['corrected'],expected)
+                    self.assertEqual(bool(result['odd_spans']),source=='資料を沿うて男子ました。')
+
     def test_indirect_written_mismatch_stops_bad_candidate_without_losing_other_clauses(self):
         import app
         from tests_analysis_async import initial

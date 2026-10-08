@@ -1755,12 +1755,12 @@ def test_misplaced_dakuten_48jp():
     （項目48-JP・2026-08-25。【Opus への実装方針】1番）。
 
     かな入力では濁点が独立したキーなので、隣を叩くと**印だけが
-    取り残される**（`いけん` の け → ゛ で `い゛ん`）。
+    取り残される**（`いせき` の せ → ゛ で `い゛き`）。
     `normalize_marks` はこれを誤打として**落とす**ので、
     そこから先の探索は材料を失っていた（48-JN の台帳の「別のもの」）。
 
     見るもの:
-      (1) 落とす前に隣のキーで戻す（い゛ん → いけん）
+      (1) 落とす前に隣のキーで戻す（い゛き → いせき）
       (2) **わざと書いた印は触らない**（行頭・記号の後ろ）
       (3) 合成できる印・打つ順番の入れ替え（48-AO）は触らない
       (4) **印を落としても語になるなら身を引く**（決められない）
@@ -1786,12 +1786,12 @@ def test_misplaced_dakuten_48jp():
         def lookup(self, reading):
             return [{'count': 5}] if reading in self.words else []
 
-    st = _Store(['いけん', 'たんご', 'へんかん'])
-    check('場違いな濁点を隣のキーで戻す（い゛ん → いけん）',
-          C._misplaced_dakuten_fixes('い゛ん', st), [(0, 3, 'いけん')])
+    st = _Store(['いせき', 'たんご', 'へんかん'])
+    check('場違いな濁点を隣のキーで戻す（い゛き → いせき）',
+          C._misplaced_dakuten_fixes('い゛き', st), [(0, 3, 'いせき')])
     check('文の中でも同じ（範囲は連続だけ）',
-          C._misplaced_dakuten_fixes('この い゛ん を見る', st),
-          [(3, 6, 'いけん')])
+          C._misplaced_dakuten_fixes('この い゛き を見る', st),
+          [(3, 6, 'いせき')])
     check('戻して語にならなければ触らない',
           C._misplaced_dakuten_fixes('かい゛き', st), [])
     check('行頭の印は触らない（わざと書いた印）',
@@ -1803,27 +1803,27 @@ def test_misplaced_dakuten_48jp():
     check('打つ順番の入れ替え（48-AO）は触らない（たん゛こ）',
           C._misplaced_dakuten_fixes('たん゛こ', st), [])
     check('印が1つも無ければ何もしない',
-          C._misplaced_dakuten_fixes('いけん', st), [])
+          C._misplaced_dakuten_fixes('いせき', st), [])
 
-    st2 = _Store(['いけん', 'いん'])
+    st2 = _Store(['いせき', 'いき'])
     check('印を落としても語になるなら身を引く（今までどおり）',
-          C._misplaced_dakuten_fixes('い゛ん', st2), [])
+          C._misplaced_dakuten_fixes('い゛き', st2), [])
 
-    st3 = _Store(['いけん'])
+    st3 = _Store(['いせき'])
     check('連続に落とされる印が2つ以上あれば決めない',
-          C._misplaced_dakuten_fixes('い゛゛ん', st3), [])
+          C._misplaced_dakuten_fixes('い゛゛き', st3), [])
 
     # 語＋助詞の尾でも立つ（設計38 と同じ物差しを使っている）
-    st4 = _Store(['いけん'])
-    check('語＋助詞の尾でも立つ（い゛んを）',
-          C._misplaced_dakuten_fixes('い゛んを', st4), [(0, 4, 'いけんを')])
+    st4 = _Store(['いせき'])
+    check('語＋助詞の尾でも立つ（い゛きを）',
+          C._misplaced_dakuten_fixes('い゛きを', st4), [(0, 4, 'いせきを')])
 
     # 落とす決まりは normalize_marks だけが持つ（学び22）
     from morphology import normalize_marks
     dropped = []
     check('normalize_marks が落とした印の位置を教える',
-          (normalize_marks('い゛ん', swap_across=True, dropped=dropped),
-           dropped), ('いん', [1]))
+          (normalize_marks('い゛き', swap_across=True, dropped=dropped),
+           dropped), ('いき', [1]))
     dropped = []
     normalize_marks('@ ⇒ ゛', swap_across=True, dropped=dropped)
     check('わざと書いた印は落とさない（名簿にも出ない）', dropped, [])
@@ -1958,7 +1958,7 @@ def test_head_typo_48jt():
     門が崩れていないことを確かめられるように）。
 
     見るもの:
-      (1) 頭の1字を戻す（とくじょ → さくじょ）
+      (1) 頭の1字を戻す（つくじょ → さくじょ）
       (2) **連続がそれ自体で語なら触らない**（いちばん大事な門）
       (3) 2つ以上が語になったら決めない
       (4) **前が漢字・カタカナなら見ない**（送り仮名・複合語の途中）
@@ -1997,52 +1997,52 @@ def test_head_typo_48jt():
     def fix(line):
         return C._head_typo_fixes(line, st)
 
-    # (1) 頭の1字を戻す（と→さ は隣・る→め は隣）
-    check('頭の1字を隣のキーで戻す（とくじょ → さくじょ）',
-          fix('とくじょ'), [(0, 4, 'さくじょ')])
+    # (1) 頭の1字を戻す（つ→さ は隣・る→め は隣）
+    check('頭の1字を隣のキーで戻す（つくじょ → さくじょ）',
+          fix('つくじょ'), [(0, 4, 'さくじょ')])
     check('同（るもちょう → めもちょう）',
           fix('るもちょう'), [(0, 5, 'めもちょう')])
-    check('同（わんたく → せんたく。わ と せ は隣）',
-          fix('わんたく'), [(0, 4, 'せんたく')])
-    check('語＋助詞の尾でも立つ（とくじょを）',
-          fix('とくじょを'), [(0, 5, 'さくじょを')])
+    check('同（らんたく → せんたく。ら と せ は隣）',
+          fix('らんたく'), [(0, 4, 'せんたく')])
+    check('語＋助詞の尾でも立つ（つくじょを）',
+          fix('つくじょを'), [(0, 5, 'さくじょを')])
     check('文の中でも連続だけを見る',
-          fix('※ とくじょ ※'), [(2, 6, 'さくじょ')])
+          fix('※ つくじょ ※'), [(2, 6, 'さくじょ')])
 
     # (2) それ自体で語なら触らない
     check('それ自体で語なら触らない（さくじょ）', fix('さくじょ'), [])
     check('同（ください）', fix('ください'), [])
 
     # (3) 決められないときは触らない
-    st2 = _Store({'さくじょ': '削除', 'とくじょ': '特除'})
+    st2 = _Store({'さくじょ': '削除', 'つくじょ': '特除'})
     check('崩した形がそれ自体で語なら触らない',
-          C._head_typo_fixes('とくじょ', st2), [])
-    st3 = _Store({'さくじょ': '削除', 'しくじょ': '仕除'})
+          C._head_typo_fixes('つくじょ', st2), [])
+    st3 = _Store({'さくじょ': '削除', 'ひくじょ': '日除'})
     check('2つ以上が語になったら決めない',
-          C._head_typo_fixes('とくじょ', st3), [])
+          C._head_typo_fixes('そくじょ', st3), [])
 
     # (4) 前が漢字・カタカナなら見ない（送り仮名・複合語の途中）
     check('前が漢字なら見ない（送り仮名かもしれない）',
-          fix('補正とくじょ'), [])
-    check('前がカタカナなら見ない', fix('メモとくじょ'), [])
+          fix('補正つくじょ'), [])
+    check('前がカタカナなら見ない', fix('メモつくじょ'), [])
     check('前が記号なら見る（語の始まりの証拠）',
-          fix('、とくじょ'), [(1, 5, 'さくじょ')])
+          fix('、つくじょ'), [(1, 5, 'さくじょ')])
 
     # (5) 短い連続
     check('3字未満の連続は見ない', fix('とく'), [])
     check('頭が伸ばし棒の連続は設計40 が受け持つ', fix('ーくじょ'), [])
 
     # (6) 別の族の1手もあるなら身を引く（既存の道が決める）
-    st4 = _Store({'さくじょ': '削除', 'とくじょう': '特上'})
+    st4 = _Store({'さくじょ': '削除', 'つくじょう': '特上'})
     check('別の族（脱字）の1手もあるなら決めない',
-          C._head_typo_fixes('とくじょ', st4), [])
+          C._head_typo_fixes('つくじょ', st4), [])
     check('1手で届く語を族ごとに数える（頭・脱字の両方が出る）',
-          sorted(C._one_edit_words('とくじょ', st4).items()),
-          [('さくじょ', '頭'), ('とくじょう', '脱字')])
+          sorted(C._one_edit_words('つくじょ', st4).items()),
+          [('さくじょ', '頭'), ('つくじょう', '脱字')])
 
     C._DESIGN41_ON = _was
     check('**既定では動かない**（切り替えが要る）',
-          C._head_typo_fixes('とくじょ', st), [])
+          C._head_typo_fixes('つくじょ', st), [])
     return all_ok
 
 
@@ -6770,7 +6770,8 @@ def test_romaji_cost_wiring_48nj():
     # **かな配列の隣は見ない**——`や`(0,6) の隣 `ん` は、
     # ローマ字入力の人にとって根拠ではない（うにさんの指定）
     check('かな配列の隣（ん）は、ローマ字では入れない', got.get('ん'), None)
-    check('かな入力では今までどおり ん が隣に居る', kana.get('ん'), 1.0)
+    check('かな入力でも別段の ん は置換へ入れない', kana.get('ん'), None)
+    check('かな入力では同じ段の ゆ が隣に居る', kana.get('ゆ'), 1.0)
     check('かな入力では た は隣ではない（音の似かたで 1.4）',
           kana.get('た'), 1.4)
     # **同じキーの変わり者は、どちらでも残す**（小書き・濁点）
@@ -6782,9 +6783,11 @@ def test_romaji_cost_wiring_48nj():
     os.environ['CN_ROMAJI_COST'] = '0'
     try:
         K.nearby_candidates.cache_clear()
-        check('CN_ROMAJI_COST=0 で昔の形（かな配列）に戻る',
+        check('CN_ROMAJI_COST=0 でもかな配列の別段は置換へ入れない',
               dict(K.nearby_candidates(
-                  'や', input_method='romaji')).get('ん'), 1.0)
+                  'や', input_method='romaji')).get('ん'), None)
+        check('CN_ROMAJI_COST=0 はかな配列の左右を使う',
+              dict(K.nearby_candidates('や', input_method='romaji')).get('ゆ'), 1.0)
     finally:
         if _old is None:
             os.environ.pop('CN_ROMAJI_COST', None)

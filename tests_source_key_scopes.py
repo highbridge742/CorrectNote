@@ -18,12 +18,61 @@ class SourceKeyScopeTests(unittest.TestCase):
         return C._check_replacement(text,(start,end,surface,'かな入力'),self.a.store,
             self.tok,self.a.dict_index,conv_taken=((start,end),))
 
+    def test_native_okurigana_edge_keeps_original_neighbor_keys(self):
+        text='本を貸すしました';tokens=self.tok(text)
+        self.assertEqual(L.adjacent_readings(text,tokens,3,4),('','しま'))
+        self.assertEqual(L.adjacent_readings(text,tokens,3,4,native_boundaries=True),('か','しま'))
+        for start,end,new in ((3,4,''),(2,5,'貸し'),(2,8,'貸しました')):
+            with self.subTest(span=(start,end)):
+                self.assertIn(('かすし','かし'),list(C._source_kana_deletion_pairs(text,start,end,new,self.tok)))
+                self.assertFalse(C._nonadjacent_drop_in_source(text,start,end,new,self.tok))
+                candidate,reason=self.check(text,start,end,new)
+                self.assertIsNotNone(candidate,reason)
+        # The same original source is still used after an intermediate kana repair.
+        context=C._CORRECTION_PATH.set((text,'本をかしました'))
+        try:
+            self.assertFalse(C._nonadjacent_drop_in_source('本をかしました',2,4,'貸し',self.tok))
+        finally:C._CORRECTION_PATH.reset(context)
+
+    def test_okurigana_evidence_preserves_unknowns_ambiguity_and_remote_keys(self):
+        text='本を貸すしました';tokens=self.tok(text)
+        self.assertEqual(L._native_okurigana_before(text,tokens,2),'')
+        self.assertEqual(L._native_okurigana_before(text,tokens,4),'')
+        changed=[tuple((*t[:5],False,*t[6:])) if t[0]=='貸す' else t for t in tokens]
+        self.assertEqual(L._native_okurigana_before(text,changed,3),'')
+        with patch.object(L,'_options',return_value=(('かす','けす'),'native_word_boundary')):
+            self.assertEqual(L._native_okurigana_before(text,tokens,3),'')
+        with patch('kanji_guess.ime_readings_for',side_effect=lambda word:['かし'] if word=='貸す' else []):
+            self.assertEqual(L._native_okurigana_before(text,tokens,3),'')
+        for source,target in (('消すしました','消しました'),('増すしました','増しました')):
+            with self.subTest(source=source):
+                self.assertTrue(C._nonadjacent_drop_in_source(source,0,len(source),target,self.tok))
+        with patch('vocabulary.dup_repair_enabled',return_value=False):
+            self.assertTrue(C._repeat_repair_disabled_in_source('貸すすしました',0,7,'貸すしました',self.tok))
+
+    def test_written_intrusion_finishes_with_original_keys_and_shared_gate(self):
+        import app
+        from last_choice import set_active
+        try:
+            source='本を貸すしました';a=initial()
+            r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                decisions=a.decisions,context_vec=None)
+            self.assertEqual(r['corrected'],'本を貸しました')
+            self.assertEqual(r['odd_spans'],[])
+            self.assertEqual(r['analysis_status'],'complete')
+            a=initial()
+            with patch.object(C,'_check_replacement',return_value=(None,'test_common_gate')):
+                r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                    decisions=a.decisions,context_vec=None)
+            self.assertEqual(r['corrected'],source)
+        finally:set_active(None)
+
     def test_new_diagonal_exclusion_is_not_an_adjacent_substitution(self):
         import kana_layout as K
         self.assertGreater(K.kana_key_distance('ん','ま'),1.0)
         self.assertFalse(any(row.reading=='よみます' and row.operation=='adjacent_substitution'
                              for row in Q.key_repairs('よみんす')))
-        self.assertTrue(any(row.reading=='よみます' and row.operation=='nonadjacent_substitution'
+        self.assertFalse(any(row.reading=='よみます' and row.operation=='nonadjacent_substitution'
                             for row in Q.nonadjacent_key_repairs('よみんす')))
 
     def test_unchanged_padding_cannot_hide_nonadjacent_deletions(self):
@@ -98,6 +147,26 @@ class SourceKeyScopeTests(unittest.TestCase):
         invented=[('蒟','名詞:一般','',0,1,False,''),('゜','記号:一般','゜',1,2,True,''),
                   ('像','名詞:接尾:一般','ぞう',2,3,True,'')]
         self.assertEqual(L.native_joined_word_neighbors('蒟゜像',invented,1,2),('',''))
+
+    def test_joined_rendaku_supplies_keys_only_at_attested_source_edges(self):
+        with patch('ime_language._factory',None):
+            for source,span,pair,target in (
+                    ('平ん仮名',(1,2),('ひら','がな'),'平仮名'),
+                    ('花ん火',(1,2),('はな','び'),'花火')):
+                with self.subTest(source=source):
+                    self.assertEqual(L.native_joined_word_neighbors(source,self.tok(source),*span),pair)
+                    candidate,reason=self.check(source,0,len(source),target)
+                    self.assertIsNotNone(candidate,reason)
+            # 青ん is an actual inflected verb; its internal ん is not
+            # an independently bounded intrusion between two source nouns.
+            self.assertEqual(L.native_joined_word_neighbors('青ん空',self.tok('青ん空'),1,2),('',''))
+            # Rendaku is a word reading, not permission to delete a remote key.
+            source='紙ん袋'
+            self.assertEqual(L.native_joined_word_neighbors(source,self.tok(source),1,2),('かみ','ぶく'))
+            self.assertEqual(self.check(source,0,len(source),'紙袋'),
+                             (None,'nonadjacent_original_key_deletion'))
+            with patch('kanji_guess.ime_readings_for',side_effect=lambda s:['かな'] if s=='仮名' else []):
+                self.assertEqual(L.native_joined_word_neighbors('平ん仮名',self.tok('平ん仮名'),1,2),('',''))
 
     def test_unavailable_native_analyzer_keeps_attested_fallback_readings(self):
         token=('該当','名詞:一般','がいとう',0,2,True,'')

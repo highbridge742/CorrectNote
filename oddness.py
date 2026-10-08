@@ -1256,6 +1256,27 @@ def _source_object_predicate_spans(text,source_tokens,tokenize_fn,store,dict_ind
     return tuple(dict.fromkeys(found))
 
 
+def _native_nominal_prefix_join_mismatch(text, a, b):
+    """Use the original nominal slot and the same reading's actual noun POS.
+
+    A continuative verb alone still has its productive one-character
+    compounds. Only an independently owned nominal prefix with a matching
+    dictionary noun interpretation shares the existing noun-join judgment.
+    """
+    if (len(a)<7 or len(b)<6 or not a[5] or not b[5]
+            or a[1]!='動詞:自立' or a[6]!='連用形'
+            or not _plain_noun(b[1]) or a[4]!=b[3]
+            or text[a[3]:a[4]]!=a[0] or text[b[3]:b[4]]!=b[0]):return False
+    from reading_segments import native_nominal_verb_prefix_ranges
+    if (a[3],a[4]) not in native_nominal_verb_prefix_ranges(text):return False
+    from morphology import dictionary_inflections
+    nominal={':'.join(p for p in pos.split(',') if p!='*')
+        for pos,form,base,rd in dictionary_inflections(a[0]) or ()
+        if pos.startswith('名詞,') and rd==a[2]}
+    return bool(nominal and all(can_join(a[0],pos,b[0],b[1],a[2]) is False
+                               for pos in nominal))
+
+
 def is_odd_run(text, tokenize_fn, with_spans=False,
                store=None, dict_index=None, skip_join=False, complete_line=False,
                reading_reasons_out=None, preserve_unknown_source=False,
@@ -1550,6 +1571,8 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
             if native_nominal_reading_context(text,a_s,b_e,lambda _:source_tokens):
                 continue
         if (infl_mismatch(a, b, _prev) or suffix_then_yougen(spans, i)
+                or native_final_particle_inside_link(a,b,
+                    spans[i+2][2] if i+2<len(spans) else None,_prev,text=text,parts=toks)
                 or noun_past_aux_mismatch(a, b, text, dict_index)
                 or polite_aux_mismatch(a, b, source_tokens[:i])
                 or excess_aux_mismatch(a,b)
@@ -1606,11 +1629,13 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         # （読点や閉じ括弧のあとの助詞は、その前の句を受ける正しい形。
         # 実測: 「」を付与・（〜）に単語 まで見ると実機メモで36行が
         # 誤爆した。行頭だけなら立つのは的の4行だけ・誤爆0）。
+        from literal_examples import masked_case_head_bound
         if (len(a_sf) == 1 and a_sf in _HEAD_PARTICLES
                 and ap.startswith('助詞')
                 and bp.startswith('名詞')
                 and b_sf and kanji(b_sf[0])
-                and not text[:a_s].strip(' \t　・')):
+                and not text[:a_s].strip(' \t　・')
+                and not masked_case_head_bound(text,a_s,a_e,b_e)):
             out.append((a_sf, b_sf, a_s, b_e) if with_spans
                        else (a_sf, b_sf))
             continue
@@ -1969,7 +1994,11 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
                 # readcheck で**化けが1つ増えた**（157 → 158）。
                 # 上の1字の門だけなら **直った +2・化け 据え置き**。
                 if len(b_sf) == 1:
-                    continue
+                    # The same original nominal slot already protects this
+                    # head from verb rewrites. If its actual noun POS also
+                    # exists, share the existing noun-join judgment here.
+                    if skip_join or not _native_nominal_prefix_join_mismatch(text,a,b):
+                        continue
                 # **連用形＋動作性名詞は複合の型**（項目48-SN・2026-09-06。
                 # 飛び散り防止・立ち入り禁止・吹き出し防止・書き込み禁止・
                 # 取り扱い注意）。うにさんの実機で `飛び散り防止 →
@@ -2865,6 +2894,18 @@ def finite_copula_aux_mismatch(a,b,previous=None):
                     and form==previous[6] and rd==previous[2]
                     for pos,form,base,rd in dictionary_inflections(previous[0]) or ())):
         return True
+    # A finite negative retains the actual polite auxiliary immediately
+    # before it. Do not mistake ません + finite です for plain ないです,
+    # or the nominalizing んです. The continuative でし + た of the normal
+    # polite past remains available. Bind all three exact native pieces.
+    if (previous is not None and len(previous)>=7 and previous[5]
+            and previous[4]==a[3] and previous[1].startswith('助動詞')
+            and any(base in ('ぬ','ん') and form=='基本形' for base,form in left)
+            and any(base in ('だ','です','や') and form=='基本形' for base,form in right)
+            and any(pos.startswith('助動詞,') and base=='ます'
+                    and form==previous[6]=='未然形' and rd==previous[2]
+                    for pos,form,base,rd in dictionary_inflections(previous[0]) or ())):
+        return True
     if (any(base in ('ます','です','つ','まい') for base,form in left)
             and any(base in ('だ','です','や') for base,form in right)):return True
     # 48-ANF / GPT-6 Astra / 2026-09-20: a completed native past or
@@ -2872,6 +2913,42 @@ def finite_copula_aux_mismatch(a,b,previous=None):
     # has its own attachment and stays outside this candidate-only check.
     return (any(base in ('た','だ') for base,form in left)
             and any(base=='だ' and form=='基本形' for base,form in right))
+
+
+
+def _terminal_polite_auxiliary_parts(previous,following):
+    """Expose exact native past/copula pieces after a polite continuative.
+
+    A best-parse conjunction cannot hide an unfinished auxiliary chain at
+    the end of the changed predicate. The caller supplies that terminal
+    scope; a conjunction with its own following clause is not reopened.
+    This shares the existing finite-copula check, not a new source label.
+    """
+    if (min(len(previous),len(following))<7 or not previous[5] or not following[5]
+            or previous[4]!=following[3] or not previous[1].startswith('助動詞')
+            or previous[6]!='連用形' or not following[1].startswith('接続詞')):
+        return ()
+    from morphology import dictionary_inflections
+    if not any(pos.startswith('助動詞,') and base in ('ます','です')
+               and form==previous[6] and rd==previous[2]
+               for pos,form,base,rd in dictionary_inflections(previous[0]) or ()):
+        return ()
+    word=following[0];found=[]
+    for cut in range(1,len(word)):
+        left=tuple(row for row in dictionary_inflections(word[:cut]) or ()
+                   if row[0].startswith('助動詞,') and row[1]=='基本形' and row[2]=='た')
+        right=tuple(row for row in dictionary_inflections(word[cut:]) or ()
+                    if row[0].startswith('助動詞,') and row[1]=='基本形'
+                    and row[2] in ('だ','です','や'))
+        for lp,lf,lb,lr in left:
+            for rp,rf,rb,rr in right:
+                if lr+rr!=following[2]:continue
+                edge=following[3]+cut
+                a=(word[:cut],'助動詞',lr,following[3],edge,True,lf)
+                b=(word[cut:],'助動詞',rr,edge,following[4],True,rf)
+                if finite_copula_aux_mismatch(a,b,previous):found.append((a,b))
+    unique=tuple(dict.fromkeys(found))
+    return unique[0] if len(unique)==1 else ()
 
 
 def modern_ba_mismatch(a,b):
@@ -3019,6 +3096,16 @@ def changed_auxiliary_chain_allowed(changed,start,end,original=None):
             b=(right.surface,right.pos+':'+right.pos_sub,right.reading,right.start,right.end,True,right.infl_form)
             if not (negative_aux_mismatch(a,b,include_adjective=True)
                     or past_auxiliary_mismatch(a,b)):continue
+            # An independently attested original modifier can end inside
+            # the parser's apparent auxiliary. Its unchanged boundary owns
+            # that prefix, not a fictitious adjective/negative attachment.
+            # The remaining noun and every candidate chain are still checked.
+            from reading_segments import native_adnominal_modifier_ranges
+            if any(lo<=left.start and left.end<hi<right.end
+                   and any(tag=='equal' and a0<=lo and hi<=b0
+                           for tag,a0,b0,c,d in opcodes)
+                   for lo,hi in native_adnominal_modifier_ranges(original)):
+                continue
             if not any(tag!='equal' and (a0<right.end and left.start<b0
                        or a0==b0 and left.start<=a0<right.end)
                        for tag,a0,b0,c,d in opcodes):continue
@@ -3083,11 +3170,34 @@ def changed_auxiliary_chain_allowed(changed,start,end,original=None):
         lo=max(0,hit[0]-1);hi=hit[-1]+1
         while hi<len(parts) and parts[hi-1].end==parts[hi].start:
             t=parts[hi]
+            # The unchanged native suru form verbalizes the edited noun.
+            # Its self-standing POS must not end the affected chain before
+            # the very auxiliaries being validated. This proves no meaning
+            # or noun+verb acceptability; it only retains the grammar check.
+            from morphology import native_suru_form
+            nominal_suru=(parts[hi-1].has_reading and parts[hi-1].pos=='名詞'
+                and t.has_reading and t.pos=='動詞' and t.pos_sub=='自立'
+                and t.base_form=='する'
+                and native_suru_form(t.surface,t.infl_form,t.reading,False))
             if not (t.pos=='助動詞' or t.pos=='動詞' and t.pos_sub.startswith(('非自立','接尾'))
+                    or nominal_suru
                     or t.pos=='助詞' and ('接続助詞' in t.pos_sub or '終助詞' in t.pos_sub)):break
             hi+=1
-        native=[(t.surface,t.pos+(':'+t.pos_sub if t.pos_sub else ''),t.reading,
-                 t.start,t.end,t.has_reading,t.infl_form) for t in parts[lo:hi]]
+        # Retain a terminal best-parse conjunction only when its exact
+        # native pieces continue this same polite auxiliary. A real next
+        # clause, comma, quoted tail or another column supplies no scope.
+        if (hi<len(parts) and parts[hi-1].end==parts[hi].start
+                and parts[hi].pos=='接続詞'
+                and not changed[parts[hi].end:].strip('。．.!！?？')):
+            hi+=1
+        native=[]
+        for t in parts[lo:hi]:
+            row=(t.surface,t.pos+(':'+t.pos_sub if t.pos_sub else ''),t.reading,
+                 t.start,t.end,t.has_reading,t.infl_form)
+            split=(_terminal_polite_auxiliary_parts(native[-1],row)
+                   if native and t.pos=='接続詞'
+                   and not changed[t.end:].strip('。．.!！?？') else ())
+            native.extend(split or (row,))
         mismatches.extend((a[3],b[4]) for i,(a,b) in enumerate(zip(native,native[1:]))
             if auxiliary_connection_mismatch(a,b,native[i-1] if i else None)
             or past_auxiliary_mismatch(a,b,include_finite_verbs=True,include_adjective_forms=True) or volitional_auxiliary_mismatch(a,b)
@@ -3370,6 +3480,123 @@ def noun_past_aux_mismatch(a, b, text, dict_index=None):
         except Exception:
             pass
     return True
+
+
+def native_final_particle_inside_link(a, b, following, prev=None, *, text="", parts=()):
+    """A native connective keeps the preceding source inflection open.
+
+    A terminal particle at an utterance boundary remains protected. Only
+    an exact native written irrealis, a final particle, and a contiguous
+    te/de connective share the existing inflection check for that link.
+    """
+    if (following is None or any(len(t)<7 or not t[5] for t in (a,b,following))
+            or not a[1].startswith('動詞:自立') or not a[6].startswith('未然')
+            or not any('一'<=c<='鿿' for c in a[0])
+            or not any('ぁ'<=c<='ゖ' for c in a[0])
+            or not b[1].startswith('助詞:終助詞')
+            or following[0] not in ('て','で')
+            or following[0]!=following[2]
+            or not following[1].startswith('助詞:接続助詞')
+            or a[4]!=b[3] or b[4]!=following[3]
+            or any(t[4]-t[3]!=len(t[0]) for t in (a,b,following))):return False
+    from morphology import dictionary_inflections
+    if dictionary_inflections(a[0]+b[0]+following[0]):return False
+    for t in (a,b,following):
+        if not any(pos.startswith(t[1].replace(':',',')+',')
+                   and ('' if form=='*' else form)==t[6] and reading==t[2]
+                   for pos,form,base,reading in dictionary_inflections(t[0]) or ()):
+            return False
+    if not infl_mismatch(a,following,prev):return False
+    # A real later clause proves that this connective has not closed an
+    # utterance or a quoted/named expression. Keep the original column,
+    # native analysis and readings; its meaning is not borrowed by a.
+    from morphology import source_column_bounds,tokenize
+    field=source_column_bounds(text,a[3],following[4])
+    if not field or any(text[t[3]:t[4]]!=t[0] for t in (a,b,following)):return False
+    start=following[4]
+    if any(t[3]==start and t[0]=='から' for t in parts):
+        # A temporal particle outside this same original te/de link may
+        # precede the independently proved later clause. Bind both original
+        # representations before sharing its boundary; never skip an
+        # arbitrary token or use the later action as this one's meaning.
+        from particle_frames import _native_te_kara_end
+        native=tokenize(text)
+        link=next((t for t in native if (t.start,t.end)==following[3:5]),None)
+        if link is None:return False
+        edge=_native_te_kara_end(text,link,native)
+        if edge is None:return False
+        members=[following]+[t for t in parts if start<=t[3] and t[4]<=edge]
+        actual=[(t.surface,t.pos+(':'+t.pos_sub if t.pos_sub else ''),t.reading,
+                 t.start,t.end,t.has_reading,t.infl_form)
+                for t in native if following[3]<=t.start and t.end<=edge]
+        if len(actual)!=2 or members!=actual:return False
+        start=edge
+    return native_original_following_clause(text,start,field[1],parts)
+
+
+def native_original_following_clause(text,start,field_end,parts,*,standalone_only=False):
+    """Share exact original clause members, without a new action meaning.
+
+    The caller owns the preceding anomaly. This only proves the unchanged
+    following clause, including its full finite tail and original column.
+    """
+    from morphology import source_column_bounds,tokenize,dictionary_inflections
+    if not source_column_bounds(text,start,field_end):return False
+    tail=text[start:field_end].rstrip('。！？.!?')
+    end=start+len(tail)
+    owned=[t for t in parts if start<=t[3] and t[4]<=end]
+    if (not owned or owned[0][3]!=start or owned[-1][4]!=end
+            or not all(t[5] for t in owned)
+            or any(x[4]!=y[3] for x,y in zip(owned,owned[1:]))
+            or ''.join(t[0] for t in owned)!=tail):return False
+    native=[t for t in tokenize(text) if start<=t.start and t.end<=end]
+    parsed=tokenize(tail)
+    if len(owned)!=len(native) or len(native)!=len(parsed):return False
+    for actual,original,cut in zip(owned,native,parsed):
+        if (actual[0]!=original.surface or actual[2]!=original.reading
+                or actual[3:5]!=(original.start,original.end)
+                or actual[1]!=original.pos+(':'+original.pos_sub if original.pos_sub else '')
+                or actual[6]!=original.infl_form
+                or (original.surface,original.reading,original.pos,original.pos_sub,
+                    original.base_form,original.infl_form,original.has_reading,
+                    original.start-start,original.end-start)
+                !=(cut.surface,cut.reading,cut.pos,cut.pos_sub,cut.base_form,
+                   cut.infl_form,cut.has_reading,cut.start,cut.end)):return False
+    from reading_segments import native_written_relative_action
+    from contextual_repair import _finite_written_predicate
+    proof=() if standalone_only else native_written_relative_action(tail,allow_finite=True)
+    if proof:
+        if (_finite_written_predicate(proof[0])
+                or _finite_written_predicate(tail)):return True
+        # An action-noun proof names the native head, not its occupied
+        # arguments. Retain that exact original head and check its own
+        # full predicate suffix after the unchanged case/meaning proof.
+        if any(head.pos=='名詞' and head.pos_sub=='サ変接続'
+               and head.surface==proof[0]
+               and _finite_written_predicate(tail[head.start:])
+               for head in parsed):return True
+    # A standalone native sahen + suru has no following argument whose
+    # meaning needs to be inferred. Share its actual full inflection only
+    # to locate this original boundary, never as a candidate sense proof.
+    if len(native)<2:return False
+    head,action=native[:2]
+    if (head.pos!='名詞' or head.pos_sub!='サ変接続'
+            or action.pos!='動詞' or action.pos_sub!='自立'
+            or action.base_form!='する'
+            or any(t.pos!='助動詞' for t in native[2:])
+            or not any(pos.startswith('名詞,サ変接続,') and base==head.surface
+                       and reading==head.reading
+                       for pos,form,base,reading in dictionary_inflections(head.surface) or ())):
+        return False
+    from morphology import native_suru_form
+    if not native_suru_form(action.surface,action.infl_form,action.reading,
+                            allow_potential=False):return False
+    forms=tuple(row for row in dictionary_inflections(action.surface) or ()
+                if row[0].startswith('動詞,自立,') and row[1]==action.infl_form
+                and row[2]=='する' and row[3]==action.reading)
+    from contextual_repair import _allows_grammatical_tail
+    return bool(_finite_written_predicate(tail) and _allows_grammatical_tail(
+        forms,text[action.end:end],action.reading,action.surface))
 
 
 def infl_mismatch(a, b, prev=None):

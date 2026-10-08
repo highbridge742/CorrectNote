@@ -22,8 +22,8 @@ class OrphanFiniteBoundaryTests(unittest.TestCase):
         a=self.a
         for phase in ('seed','fresh'):
             if phase=='fresh':import_from_janome(a.store)
-            rows=[('のひっています','残っています')]
-            rows += [(t,t) for t in ('のこっています','ののしっています','のぼっています','がんばっています',
+            rows=[('のひっています','残っています'),('のこっています','残っています')]
+            rows += [(t,t) for t in ('ののしっています','のぼっています','がんばっています',
                      'ともします','これをかいています。','これをみてください。',
                      '「のひっています」と書きます。','残っています','ひっています')]
             for text,expected in rows:

@@ -15,6 +15,32 @@ def _crosses_negative_attachment(text,start,end):
     # nai + dependent noun cannot invent a negative attachment there.
     from reading_segments import native_independent_object_reading
     if native_independent_object_reading(text,start,end):return False
+    # A whole final noun may instead occupy the preceding completed
+    # relative predicate's open object slot. Every native nominal reading
+    # must carry its own positive meaning proof; dictionary presence or a
+    # candidate spelling alone does not undo an original negative chain.
+    if 0<start<end<len(text):
+        from reading_segments import native_written_action_nominal_parts
+        proof=native_written_action_nominal_parts(text[:end])
+        if proof and proof[0]==start:
+            # The same whole relative noun may end at an actual source
+            # nominal case instead of the field end. Preserve the real
+            # particle and its exact original spelling/reading/position.
+            from morphology import dictionary_inflections
+            case=next((t for t in native_tokenize(text) if t.start==end),None)
+            if (case and case.has_reading and case.pos=='助詞'
+                and case.pos_sub.startswith(('格助詞','係助詞'))
+                and case.end==end+len(case.surface) and text[end:case.end]==case.surface
+                and any(pos.startswith(('助詞,格助詞,','助詞,係助詞,'))
+                        and rd==case.reading and base==case.base_form
+                        and (form if form!='*' else '')==case.infl_form
+                        for pos,form,base,rd in dictionary_inflections(case.surface) or ())):return False
+    if 0<start<end==len(text):
+        from reading_segments import native_nominal_phrase_faces
+        from kana_spelling import _relative_object_spelling_evidence
+        faces=native_nominal_phrase_faces(text[start:end])
+        if faces and all(_relative_object_spelling_evidence(text[:start],face)
+                         for face in faces):return False
     for begin in range(start,-1,-1):
         fragment=text[begin:end]
         parts=native_tokenize(fragment)
@@ -81,6 +107,12 @@ def _reinterprets_function_attachment(text,start,end,face=None,nominal_context=N
         same_role=face and any(pos.startswith(role) and rd==source
                               for pos,form,base,rd in dictionary_inflections(face) or ())
         if face and not same_role:
+            # Share the exact whole source word's independently attested
+            # finite interpretation, including the candidate's own subject
+            # and whole-noun meanings and the original outer finite clause.
+            if token.pos=='副詞':
+                from kana_spelling import _dictionary_relative_spelling_evidence
+                if _dictionary_relative_spelling_evidence(text,start,end,face):return False
             from reading_segments import native_honorific_stem_parts
             for a,b,forms in native_honorific_stem_parts(text):
                 if (a==start and b==end and any(p==q and f==g and r==s

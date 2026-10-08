@@ -55,7 +55,9 @@ def child():
         try:
             a = app.CorrectNoteApp(root); root.withdraw(); until(done)
             assert tkfont.Font(font=a.editor.cget('font')).actual('size') == 16
-            assert a.pick_mode_btn.cget('text') == 'クリックして引用'
+            # The width-dependent label is exact-tested by ToolbarWordBookTests.
+            # A withdrawn window can legitimately keep the compact label.
+            assert a.pick_mode_btn.cget('text') in ('クリックして引用', '引用')
             assert a.pick_mode_btn.bind('<Enter>') and a.pick_mode_btn.bind('<Leave>')
             assert 'フォント' in [b.cget('text') for b in a._menu_buttons]
             a._choose_editor_font(size=18); root.update()

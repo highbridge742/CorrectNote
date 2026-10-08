@@ -21,6 +21,172 @@ class ContextMeaningTests(unittest.TestCase):
         self.assertFalse(r.get('odd_spans'),source)
         self.assertEqual('complete',r.get('analysis_status'),source)
 
+    def test_native_sahen_meaning_keeps_head_and_actual_suru_tail_separate(self):
+        import context_meaning as Q
+        for source,head,tail,roles in (
+                ('写真を撮影しました。','撮影','しました',{'image_capture'}),
+                ('写真を撮影しまし','撮影','しまし',{'image_capture'}),
+                ('写真を取得しました。','取得','しました',{'acquisition'})):
+            with self.subTest(source=source):
+                frames=Q._photographic_action_contexts(source)
+                self.assertEqual(len(frames),1)
+                frame=frames[0]
+                self.assertEqual(source[frame['start']:frame['end']],head)
+                self.assertEqual(frame['query_tail'],tail)
+                self.assertEqual(Q._meaning_roles(frame),roles)
+                if head=='撮影':self.assertIn(head,Q.candidates(frame))
+                else:self.assertEqual(Q.candidates(frame),())
+        for source in ('写真を撮影について調べます。','写真を撮影せて',
+                       '写真をぷねらします。','「写真を撮影しました」という文字列'):
+            with self.subTest(source=source):
+                self.assertFalse(Q._photographic_action_contexts(source))
+
+    def test_sahen_meaning_proof_stays_with_the_original_case(self):
+        import semantic_roles as S,reading_segments as R
+        evidence=S.candidate_evidence('写真','撮影','しまし','写真を')
+        self.assertEqual(evidence['shared_roles'],['photographic_media'])
+        self.assertTrue(S.proved_action_case_support('写真','を','撮影','写真を撮影しまし'))
+        self.assertEqual(R.native_written_relative_action('写真を撮影しまし',allow_open_polite=True),
+                         ('撮影',('を',)))
+        for noun,case,context in (('写真','に','写真に撮影しまし'),
+                ('本','を','本を撮影しまし'),
+                ('写真','を','本を撮影して写真を撮影しまし'),
+                ('写真','を','写真を撮影について話します。')):
+            with self.subTest(context=context,case=case):
+                self.assertFalse(S.proved_action_case_support(noun,case,'撮影',context))
+
+    def test_sahen_spelling_reaches_final_check_without_completing_the_tail(self):
+        from unittest.mock import patch
+        import ime_candidates,corrector as C
+        state=self.state;tok=C.make_tokenizer(state.store)
+        with patch('ime_language._factory',None),patch.object(
+                ime_candidates.SearchCandidates,'__enter__',lambda item:item):
+            for source,expected in (('写真をさつえいしまし','写真を撮影しまし'),
+                    ('写真をさつえいしました。','写真を撮影しました。'),
+                    ('写真を撮影しました。','写真を撮影しました。'),
+                    ('写真を取得しました。','写真を取得しました。'),
+                    ('「写真をさつえいしまし」と入力します。','「写真をさつえいしまし」と入力します。')):
+                with self.subTest(source=source):self.check(source,expected)
+            source='写真をさつえいしまし'
+            accepted=C._check_replacement(source,(3,7,'撮影','かな入力'),
+                state.store,tok,state.dict_index,decisions=state.decisions,spelling=True)
+            self.assertIsNotNone(accepted[0],accepted)
+            # A real final gate rejection must still stop the same spelling.
+            original=C._check_replacement
+            def blocked(text,item,*args,**kwargs):
+                if '撮影' in item[2]:return None,'test_reject_capture'
+                return original(text,item,*args,**kwargs)
+            with patch.object(C,'_check_replacement',side_effect=blocked):
+                result=app.correct_line(source,state.store,input_method='kana',
+                    dict_index=state.dict_index,decisions=state.decisions,context_vec=None)
+            self.assertEqual(result['corrected'],source)
+
+    def test_native_country_reading_index_keeps_exact_dictionary_classes(self):
+        import context_meaning as Q,morphology as M
+        countries=Q._native_country_readings()
+        self.assertIn('日本',countries.get('にほん',()))
+        self.assertIn('日本',countries.get('にっぽん',()))
+        self.assertNotIn('東京',countries.get('とうきょう',()))
+        self.assertNotIn('田中',countries.get('たなか',()))
+        for reading,faces in countries.items():
+            for face in faces:
+                with self.subTest(reading=reading,face=face):
+                    self.assertTrue(any(pos.startswith('名詞,固有名詞,地域,国') and rd==reading
+                        for pos,form,base,rd in M.dictionary_inflections(face) or ()))
+
+    def test_unproved_quantity_role_does_not_block_a_country_spelling(self):
+        from unittest.mock import patch
+        import context_meaning as Q,ime_candidates
+        with patch('ime_language._factory',None),patch.object(
+                ime_candidates.SearchCandidates,'__enter__',lambda item:item):
+            for source,face in (('ふらんすの線','フランス'),('かんこくの線','韓国')):
+                with self.subTest(source=source):
+                    end=source.index('の')
+                    self.assertTrue(Q.contexts(source))
+                    self.assertFalse(Q.anomalous_frames(source))
+                    self.assertTrue(Q.preserves_nominal_spelling_context(source,0,end,face))
+            self.assertFalse(Q.preserves_nominal_spelling_context('にほんの線',0,3,'日本'))
+            self.assertFalse(Q.preserves_nominal_spelling_context('にほんの線と韓国の線',0,3,'二本'))
+
+    def test_shared_spelling_gate_retains_the_original_nominal_relation(self):
+        from unittest.mock import patch
+        import ime_candidates,corrector as C
+        from last_choice import set_active
+        state=self.state;tok=C.make_tokenizer(state.store)
+        with patch('ime_language._factory',None),patch.object(
+                ime_candidates.SearchCandidates,'__enter__',lambda item:item):
+            try:
+                set_active(None)
+                for source,start,end,bad,good in (
+                        ('にほんの線と韓国の線',0,3,'二本','日本'),
+                        ('予測のせいど',3,6,'制度','精度'),
+                        ('ホイールのかいてん',5,9,'開店','回転')):
+                    with self.subTest(source=source):
+                        rejected=C._check_replacement(source,(start,end,bad,'かな入力'),
+                            state.store,tok,state.dict_index,decisions=state.decisions,spelling=True)
+                        self.assertEqual(rejected,(None,'original_nominal_argument_meaning'))
+                        accepted=C._check_replacement(source,(start,end,good,'かな入力'),
+                            state.store,tok,state.dict_index,decisions=state.decisions,spelling=True)
+                        self.assertIsNotNone(accepted[0],accepted)
+            finally:set_active(None)
+
+    def test_country_reading_reaches_contextual_selection_without_ime(self):
+        from unittest.mock import patch
+        import ime_candidates
+        with patch('ime_language._factory',None),patch.object(
+                ime_candidates.SearchCandidates,'__enter__',lambda item:item):
+            for source,expected in (
+                    ('にほんの線と韓国の線','日本の線と韓国の線'),
+                    ('にほんの線','二本の線'),
+                    ('にほんの線\t韓国の線','二本の線\t韓国の線'),
+                    ('「にほんの線と韓国の線」という文字列','「にほんの線と韓国の線」という文字列'),
+                    ('日本の線と韓国の線','日本の線と韓国の線'),
+                    ('二本の線と三本の線','二本の線と三本の線')):
+                with self.subTest(source=source):self.check(source,expected)
+
+    def test_native_nominal_meaning_candidates_without_conversion_apis(self):
+        from unittest.mock import patch
+        import ime_candidates
+        with patch('ime_language._factory',None), patch.object(
+                ime_candidates.SearchCandidates,'__enter__',lambda self:self):
+            for source,expected in (
+                    ('日本の線','二本の線'),
+                    ('箸でカーソルの','端でカーソルの'),
+                    ('予測の制度を上げる','予測の精度を上げる'),
+                    ('ホイールの開店が速い','ホイールの回転が速い'),
+                    ('二台の機会','二台の機械'),('一枚の神','一枚の紙'),
+                    ('カーソルを箸に移動する','カーソルを端に移動する'),
+                    ('予測のせいど','予測の精度'),
+                    ('二回の機会','二回の機会'),
+                    ('一枚の神の絵','一枚の神の絵'),
+                    ('「日本の線」という文字列','「日本の線」という文字列')):
+                with self.subTest(source=source):self.check(source,expected)
+
+    def test_alternate_native_reading_stays_with_its_source_relation(self):
+        from unittest.mock import patch
+        import ime_candidates
+        with patch('ime_language._factory',None), patch.object(
+                ime_candidates.SearchCandidates,'__enter__',lambda self:self):
+            for source,expected in (
+                    ('日本の線と韓国の線','日本の線と韓国の線'),
+                    ('日本の線\t地図','二本の線\t地図'),
+                    ('日本の文化','日本の文化'),
+                    ('日本の会社','日本の会社'),
+                    ('二本の線','二本の線'),
+                    ('二本の線\t韓国の線','二本の線\t韓国の線')):
+                with self.subTest(source=source):self.check(source,expected)
+
+    def test_native_meaning_keeps_reported_literal_spellings(self):
+        from unittest.mock import patch
+        import ime_candidates
+        with patch('ime_language._factory',None), patch.object(
+                ime_candidates.SearchCandidates,'__enter__',lambda self:self):
+            for source in ('「車輪の開店」をコピーします。',
+                           '「推定の制度」と表記した。',
+                           '「一枚の神」という文字列',
+                           '誤入力の例は「三台の機会」です。'):
+                with self.subTest(source=source):self.check(source,source)
+
     def test_native_action_meaning_is_not_a_spelling_error(self):
         import context_meaning as K,corrector,oddness
         tok=corrector.make_tokenizer(self.state.store)

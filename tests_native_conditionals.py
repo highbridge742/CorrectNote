@@ -202,8 +202,44 @@ class NativeConditionalTests(unittest.TestCase):
                 self.assertFalse(R.preserves_native_incomplete_source(text,text+'ます'))
                 result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                assert_reviewed_source_spelling(self, result['corrected'], text)
+                # The original conditional boundary now also reaches ordinary
+                # same-reading spelling. It does not finish the open 読み.
+                if text=='しりょうをほぞんしたらほんをよみ':
+                    self.assertEqual(result['corrected'],'資料をほぞんしたら本を読み')
+                    self.assertTrue(M.native_spelling_only(text,result['corrected']))
+                else:assert_reviewed_source_spelling(self, result['corrected'], text)
+                self.assertEqual(result['analysis_status'],'complete')
                 self.assertFalse(result.get('odd_spans'))
+
+    def test_unfinished_conditional_spelling_cannot_complete_its_original_tail(self):
+        import app,corrector as C
+        from unittest.mock import patch
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        source='しりょうをほぞんしたらほんをよみ'
+        a=initial();tok=C.make_tokenizer(a.store)
+        try:
+            for tail in ('読みます','読んだ','飲み'):
+                proposed=source[:-2]+tail
+                self.assertFalse(M.native_spelling_only(source,proposed),tail)
+                self.assertFalse(R.preserves_native_incomplete_source(source,proposed),tail)
+                accepted,reason=C._check_replacement(source,(len(source)-2,len(source),tail,'かな入力'),
+                    tok,a.store,decisions=a.decisions,spelling=True)
+                self.assertIsNone(accepted,tail)
+                self.assertEqual(reason,'spelling_reading_changed',tail)
+            quote='「'+source+'」と入力します。'
+            r=app.correct_line(quote,a.store,input_method='kana',dict_index=a.dict_index,
+                context_vec=None,decisions=a.decisions)
+            self.assertEqual(r['corrected'],quote)
+            self.assertEqual(r['odd_spans'],[])
+            self.assertEqual(r['analysis_status'],'complete')
+            with patch.object(C,'_check_replacement',return_value=(None,'test_common_gate')):
+                r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                    context_vec=None,decisions=a.decisions)
+            self.assertEqual(r['corrected'],source)
+            self.assertEqual(r['odd_spans'],[])
+            self.assertEqual(r['analysis_status'],'complete')
+        finally:set_active(None)
 
     def test_open_link_does_not_certify_unknown_or_malformed_clauses(self):
         for text in ('しりょうをほぞんするたられんらくし',

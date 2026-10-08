@@ -29,12 +29,16 @@ class MarkSlipSearchTests(unittest.TestCase):
   store=Mock();store.all_readings.return_value=set(words);store.reading_trie.return_value=_ReadingTrie(set(words))
   return _find_known_readings_flex_uncached(typed,store,max_edits=edits,input_method=method)
  def test_neighbor_of_mark_is_one_existing_key_error(self):
-  for typed,fixed in [('たふせ','たぶ'),('かせ','が'),('はへ','ぱ'),('はほ','ば')]:
+  for typed,fixed in [('たふせ','たぶ'),('かせ','が')]:
    with self.subTest(typed=typed):
     found=[r for r in self.search(typed,[fixed]) if r[0]==fixed]
     self.assertTrue(found)
     self.assertEqual(found[0][2],1)
     self.assertLessEqual(found[0][1],1.05)
+ def test_vertical_and_diagonal_mark_substitutions_are_excluded(self):
+  for typed,fixed in [('はへ','ぱ'),('はほ','ば')]:
+   with self.subTest(typed=typed):
+    self.assertEqual(self.search(typed,[fixed]),[])
  def test_long_vowel_keeps_physical_position_after_composition(self):
   found=self.search('たふせー',['たぶー'])
   self.assertTrue(found)

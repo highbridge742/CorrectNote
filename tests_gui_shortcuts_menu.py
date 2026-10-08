@@ -145,7 +145,7 @@ def child():
             assert a.editor.get('1.0','1.end')=='語「」'
             key('<Escape>')
             assert a.editor.get('1.0','1.end')=='語'
-            # Different buttons replace the pair; the same button removes it.
+            # Each bracket button assigns its own style; Escape cancels the gesture.
             a.editor.delete('1.0','end');a.editor.insert('1.0','語')
             a.editor.tag_add('sel','1.0','1.1')
             a.editor.mark_set('insert','1.1')
@@ -157,6 +157,8 @@ def child():
             buttons[1].invoke()
             assert a.editor.get('1.0','1.end')=='「語」'
             buttons[1].invoke()
+            assert a.editor.get('1.0','1.end')=='「語」'
+            key('<Escape>')
             assert a.editor.get('1.0','1.end')=='語'
             assert tuple(map(str,a.editor.tag_ranges('sel')))==('1.0','1.1')
             # ASCII selection keeps halfwidth parentheses across a replacement.

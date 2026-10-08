@@ -231,6 +231,10 @@ def native_lexical_phrase(text, tokenize):
         return False
     if native_case_adnominal_parts(text):return True
     if native_written_adnominal_parts(text):return True
+    if native_prefix_sahen_relative_parts(text):return True
+    if native_written_sahen_nominal_parts(text):return True
+    if native_argument_relative_nominal_parts(text):return True
+    if native_written_action_nominal_parts(text):return True
     # The same attested written noun is valid with or without a particle.
     # This requires the whole word, not just the last head of a noun chain.
     if _native_written_nominal_faces(text)==(text,):return True
@@ -1693,6 +1697,23 @@ def native_written_derived_nominal_faces(text):
             return tuple(host+suffix for host,host_kind in
                          _native_suffix_nominal_pairs(text,suffix,reading,kind)
                          if suffix!='度' or host_kind in ('サ変接続','形容動詞語幹'))
+    # A separately attested whole word can retain another native suffix.
+    # The word inventory supplies identity, never familiarity or an action
+    # role. Both the full host and the suffix still need their own native
+    # reading/POS, and the composed reading must belong to the whole word.
+    from seed_japanese import is_unit
+    if not any('一'<=c<='鿿' for c in text) or is_unit(text) is not True:return ()
+    from morphology import _tokenize_janome
+    parts=_tokenize_janome(text)
+    if (len(parts)<2 or parts[0].start!=0 or parts[-1].end!=len(text)
+            or any(a.end!=b.start for a,b in zip(parts,parts[1:]))
+            or any(not t.has_reading for t in parts)
+            or parts[-1].pos!='名詞' or parts[-1].pos_sub!='接尾:一般'):return ()
+    from corrector import _table_readings_for_surface
+    reading=''.join(t.reading for t in parts)
+    if reading not in _table_readings_for_surface(text):return ()
+    suffix=parts[-1]
+    if _native_suffix_nominal_pairs(text,suffix.surface,suffix.reading,suffix.pos_sub):return (text,)
     return ()
 
 
@@ -1884,6 +1905,83 @@ def native_written_sahen_relative(text):
     return False
 
 
+@lru_cache(maxsize=2048)
+def native_written_sahen_nominal_parts(text):
+    """An unchanged written action, literal suru chain and full noun reading.
+
+    This proves the source seam, never the sense or spelling of that noun.
+    Both the complete original action and the entire remaining noun must
+    exist independently; an internal noun or a broken auxiliary is no proof.
+    """
+    if not text or not 5<=len(text)<=80:return ()
+    from morphology import dictionary_inflections,tokenize,native_sahen_compound_reading
+    from contextual_repair import _allows_grammatical_tail
+    original_parts=tokenize(text)
+    out=[]
+    for head_end in range(1,min(18,len(text)-3)+1):
+        stem=text[:head_end]
+        if not any('一'<=c<='鿿' for c in stem):continue
+        if not (any(pos.startswith('名詞,サ変接続,') and base==stem
+                    for pos,form,base,rd in dictionary_inflections(stem) or ())
+                or native_sahen_compound_reading(stem)):continue
+        for noun_start in range(head_end+2,min(head_end+8,len(text)-1)+1):
+            # A whole native function token keeps its own attachment.
+            # A homophonic noun cannot certify that same complete token;
+            # a longer noun spanning several original pieces is separate.
+            if any(t.has_reading and t.start==noun_start and t.end==len(text)
+                   and t.pos in ('助詞','助動詞') for t in original_parts):continue
+            tail=text[head_end:noun_start];parts=tokenize(tail)
+            if not parts:continue
+            first=parts[0]
+            if not (first.start==0 and first.has_reading and first.pos=='動詞'
+                    and first.pos_sub=='自立' and first.base_form=='する'):continue
+            forms=tuple(row for row in dictionary_inflections(first.surface) or ()
+                        if row[0].startswith('動詞,自立,') and row[1]==first.infl_form
+                        and row[2]=='する' and row[3]==first.reading)
+            if not _allows_grammatical_tail(forms,tail[first.end:],first.reading,first.surface):continue
+            if not native_written_sahen_relative(text[:noun_start]):continue
+            faces=_native_nominal_reading_faces(text[noun_start:])
+            if faces:out.append((head_end,noun_start,faces))
+    return tuple(out)
+
+
+@lru_cache(maxsize=2048)
+def native_prefix_sahen_relative_parts(text):
+    """The original full prefix noun, actual suru tail and complete noun.
+
+    These are lexical/inflection boundaries, not a homophone decision.
+    Unknown following text cannot complete the relative clause's noun.
+    """
+    if not text or not 7<=len(text)<=60:return ()
+    from morphology import native_sahen_compound_reading,tokenize,native_suru_form
+    out=[]
+    for head_end in range(3,min(18,len(text)-3)+1):
+        reading=text[:head_end]
+        if not all('ぁ'<=c<='ゖ' or c=='ー' for c in reading):continue
+        faces=tuple(face for face in native_attested_prefix_noun_faces(reading)
+                    if native_sahen_compound_reading(face)==reading)
+        if not faces:continue
+        for end in range(head_end+2,min(head_end+8,len(text)-1)+1):
+            tail=text[head_end:end];parts=tokenize(tail)
+            if not parts:continue
+            first=parts[0]
+            if not (first.has_reading and first.start==0
+                    and first.pos=='動詞' and first.pos_sub=='自立'
+                    and first.base_form=='する'
+                    and native_suru_form(first.surface,first.infl_form,first.reading,False)):
+                continue
+            from morphology import dictionary_inflections
+            from contextual_repair import _allows_grammatical_tail
+            forms=tuple(row for row in dictionary_inflections(first.surface) or ()
+                        if row[0].startswith('動詞,自立,') and row[1]==first.infl_form
+                        and row[2]=='する' and row[3]==first.reading)
+            if not _allows_grammatical_tail(forms,tail[first.end:],first.reading,first.surface):continue
+            if not native_nominal_phrase_faces(text[end:]):continue
+            proved=tuple(face for face in faces if native_written_sahen_relative(face+tail))
+            if proved:out.append((head_end,end,first.end,proved))
+    return tuple(out)
+
+
 @lru_cache(maxsize=4096)
 def native_te_nominal_parts(text,allow_following=False):
     """A proved native te clause modifying an actual action noun with no.
@@ -1968,19 +2066,8 @@ def native_nominal_phrase_faces(text):
     # A native nominal focus particle preserves its noun's argument roles.
     # しか is deliberately separate: it requires a negative predicate.
     from morphology import tokenize,dictionary_inflections
-    for focus in ('だけ','ばかり','など'):
-        if not text.endswith(focus) or len(text)<=len(focus):continue
-        if not any(pos.startswith('助詞,副助詞,') and rd==focus
-                   for pos,form,base,rd in dictionary_inflections(focus) or ()):continue
-        focused=native_nominal_phrase_faces(text[:-len(focus)])
-        # Kana parsing can split だけ into copula だ + final け after an
-        # attested modifier. The independently proved nominal head and
-        # native focused spelling establish the same unchanged boundary.
-        for face in focused:
-            parts=tokenize(face+focus)
-            if (parts and parts[-1].start==len(face) and parts[-1].has_reading
-                    and parts[-1].surface==focus and parts[-1].pos=='助詞'
-                    and parts[-1].pos_sub=='副助詞'):return focused
+    focused=native_focused_nominal_parts(text)
+    if focused:return focused[1]
     if native_deictic_range(text):return (text,)
     plural=native_plural_nominal_heads(text)
     if plural:return tuple(face+'たち' for face in plural)
@@ -2496,6 +2583,44 @@ def native_relative_action(head):
     return (verb_head,occupied_cases) if verb_head else ()
 
 
+def native_adverbial_sahen_relative_parts(text):
+    """Share an original adjunct seam only with its complete relative proof.
+
+    The suffix supplies its own whole noun, completed suru and positive
+    relation. Returned positions are original boundaries, never spellings
+    chosen for output or evidence borrowed between homonymous predicates.
+    """
+    if not text or not 5<=len(text)<=48:return ()
+    from morphology import tokenize,dictionary_inflections
+    from semantic_roles import relative_action_support
+    kana=lambda value:bool(value) and all('ぁ'<=c<='ゖ' or c=='ー' for c in value)
+    for start in native_adverbial_reading_cuts(text):
+        suffix=text[start:]
+        written=not kana(suffix)
+        proof=(native_written_adnominal_parts(suffix) if written else
+               native_adnominal_reading_parts(suffix,allow_predicative=True))
+        if not proof:continue
+        nominal=proof[-1][0] if written else proof[-1][4]
+        if not suffix.endswith(nominal):continue
+        edge=len(suffix)-len(nominal);head=suffix[:edge]
+        if not kana(head) or not native_attributive_predicate_end(head):continue
+        nouns=(_native_written_nominal_faces(nominal) if written else
+               native_nominal_phrase_faces(nominal))
+        relative=native_relative_action(head)
+        if not nouns or not relative or relative[1]:continue
+        action=completed_sahen_reading(head,allow_nonpolite=True,
+            return_action=True,relative_faces=nouns,finite_only=True)
+        if not action or not all(relative_action_support(n,action) for n in nouns):continue
+        for pos,form,base,reading in dictionary_inflections(action) or ():
+            if not (pos.startswith('名詞,サ変接続,') and base==action and reading
+                    and head.startswith(reading) and len(reading)<len(head)):continue
+            prefix=tuple((t.surface,t.pos+','+t.pos_sub.replace(':',','),
+                t.infl_form,t.base_form,t.reading) for t in tokenize(text[:start]))
+            if not prefix or ''.join(p[4] for p in prefix)!=text[:start]:continue
+            return start,start+len(reading),start+edge,prefix+proof
+    return ()
+
+
 @lru_cache(maxsize=2048)
 def native_written_adnominal_parts(text):
     """Same native adjective/adnominal proof with its unchanged written noun.
@@ -2505,15 +2630,41 @@ def native_written_adnominal_parts(text):
     Unknown nouns, noun fragments and finite predicate tails cannot qualify.
     """
     if not text or not 3<=len(text)<=48 or not any('一'<=c<='鿿' for c in text):return ()
+    adverbial=native_adverbial_sahen_relative_parts(text)
+    if adverbial:return adverbial[3]
     from morphology import tokenize,dictionary_inflections
     parts=tokenize(text)
     if not parts:return ()
     noun=parts[-1];head=text[:noun.start]
     if (not noun.has_reading or noun.pos!='名詞' or noun.end!=len(text)
-            or noun.start<2 or not all('ぁ'<=c<='ゖ' or c=='ー' for c in head)
+            or noun.start<2
             or not any(pos.startswith('名詞,') and rd==noun.reading
                        and not any(kind in pos for kind in ('固有名詞','接尾','非自立'))
                        for pos,form,base,rd in dictionary_inflections(noun.surface) or ())):return ()
+    # The same exact modifier proof already protects source ranges. Its
+    # original spelling need not be kana, and the written noun supplies its
+    # own full lexical boundary without a synthetic kana segmentation.
+    # This establishes syntax only, not a new meaning or commonness tier.
+    modifier=native_adnominal_modifier_parts(head,allow_written=True)
+    nouns=[(noun.surface,pos,form,base,rd)
+           for pos,form,base,rd in dictionary_inflections(noun.surface) or ()
+           if pos.startswith('名詞,') and rd==noun.reading
+           and not any(kind in pos for kind in ('固有名詞','接尾','非自立'))]
+    if modifier and nouns:return modifier+(nouns[0],)
+    if (nouns and all('ぁ'<=c<='ゖ' or c=='ー' for c in head)
+            and native_attributive_predicate_end(head)):
+        relative=native_relative_action(head)
+        if relative and not relative[1]:
+            # The exact written noun constrains the original completed
+            # sahen reading. Its spelling and open object stay the same.
+            # These dictionary parts prove source grammar, not output text.
+            from semantic_roles import relative_action_support
+            faces=tuple(dict.fromkeys(row[0] for row in nouns))
+            action=completed_sahen_reading(head,allow_nonpolite=True,
+                return_action=True,relative_faces=faces,finite_only=True)
+            if action and all(relative_action_support(face,action) for face in faces):
+                return tuple((t.surface,t.pos+','+t.pos_sub.replace(':',','),
+                    t.infl_form,t.base_form,t.reading) for t in tokenize(head))+(nouns[0],)
     # The written noun already supplies its own boundary. A synthetic
     # all-kana parse must not swallow its first syllable into an adverb.
     # Keep this actual basic adjective and the exact ordinary noun entry.
@@ -2543,6 +2694,9 @@ def native_adnominal_reading_parts(text, allow_predicative=False):
     """
     if not text or len(text)<3 or not all('ぁ'<=c<='ゖ' or c=='ー' for c in text):
         return ()
+    if allow_predicative:
+        adverbial=native_adverbial_sahen_relative_parts(text)
+        if adverbial:return adverbial[3]
     from corrector import table_surfaces_for_reading
     from morphology import dictionary_inflections, native_independent_adjective, tokenize
     def entries(reading):
@@ -2577,6 +2731,17 @@ def native_adnominal_reading_parts(text, allow_predicative=False):
         if not result and verb_head:
             from semantic_roles import relative_action_support
             verb_nouns=[row for row in nouns if relative_action_support(row[0],verb_head,occupied_cases)]
+            if not verb_nouns and not occupied_cases:
+                # The first grammatical homophone is not a semantic choice.
+                # Reuse the native complete suru proof conditioned on the
+                # original noun readings, binding their positive relation
+                # to that same proved action. This returns source grammar,
+                # not the selected kanji spelling of the predicate.
+                action=completed_sahen_reading(head,allow_nonpolite=True,
+                    return_action=True,relative_faces=tuple(row[0] for row in nouns),
+                    finite_only=True)
+                if action and all(relative_action_support(row[0],action)
+                                  for row in nouns):verb_nouns=nouns
             if verb_nouns:
                 result=tuple((t.surface,t.pos+','+t.pos_sub.replace(':',','),
                               t.infl_form,t.base_form,t.reading) for t in verb_parts)+(verb_nouns[0],)
@@ -3870,13 +4035,37 @@ def native_polite_action_prefixes(text):
 
 
 @lru_cache(maxsize=4096)
-def _native_action_note_heads(text,require_link=True):
+def native_source_action_heads(text):
+    """Same-reading action heads with their actual finite/open polite tails.
+
+    Keep every grammatical homophone available to the caller's meaning
+    comparison. This is source evidence, not a completed-candidate test.
+    """
+    if not text or not 2<=len(text)<=80:return ()
+    if not all('ぁ'<=c<='ゖ' or c=='ー' for c in text):
+        proof=native_written_relative_action(text,allow_finite=True,allow_open_polite=True)
+        return (proof[0],) if proof else ()
+    from morphology import native_spelling_only
+    out=[]
+    for cut in range(2,min(12,len(text)-1)+1):
+        for face in native_bare_action_faces(text[:cut]):
+            written=face+text[cut:]
+            if not native_spelling_only(text,written):continue
+            proof=native_written_relative_action(written,allow_finite=True,allow_open_polite=True)
+            if proof and proof[0]==face:out.append(face)
+    return tuple(dict.fromkeys(out))
+
+
+@lru_cache(maxsize=4096)
+def _native_action_note_heads(text,require_link=True,allow_predicate=False):
     """Use the same clause proof and its exact action; never re-guess its boundary."""
     for cut in range(4,len(text)-1):
         left,right=text[:cut],text[cut:]
         if not left.endswith('して'):
             continue
-        right_heads=native_bare_action_faces(right) or _native_action_note_heads(right,require_link)
+        right_heads=native_bare_action_faces(right) or _native_action_note_heads(right,require_link,allow_predicate)
+        if not right_heads and allow_predicate:
+            right_heads=native_source_action_heads(right)
         if not right_heads:
             continue
         head=completed_native_reading_clause(left,allow_nonpolite=True,
@@ -4360,7 +4549,7 @@ def native_genitive_argument_slots(text, particles=('を','に','へ','で','と
 
 
 @lru_cache(maxsize=4096)
-def native_genitive_nominal_splits(text, allow_unknown_left=False):
+def native_genitive_nominal_splits(text, allow_unknown_left=False, original_context=None):
     """48-AKR: the original adnominal の and a complete nominal suffix.
 
     Normal proof requires both nouns. A repair range may leave its left
@@ -4371,10 +4560,15 @@ def native_genitive_nominal_splits(text, allow_unknown_left=False):
     from morphology import tokenize,dictionary_inflections
     kana=lambda value:all('ぁ'<=c<='ゖ' or c=='ー' for c in value)
     def faces(value):
-        return native_nominal_phrase_faces(value) if kana(value) else _native_written_nominal_faces(value)
+        return (native_nominal_phrase_faces(value) if kana(value) else
+                _native_written_nominal_faces(value) or _native_written_compound_nominal_heads(value))
     direct=_native_nominal_reading_faces(text) if kana(text) else _native_written_nominal_faces(text)
     if direct:return ()
-    original=tokenize(text);out=[]
+    if original_context is not None and not original_context.startswith(text):return ()
+    # Prefix-only tokenization may change the source word across the next
+    # particle. A caller owning the original context supplies that same
+    # unchanged text, never a repaired reading or a neighboring clause.
+    original=tokenize(original_context if original_context is not None else text);out=[]
     for cut,char in enumerate(text):
         if char!='の' or not 1<=cut<len(text)-1:continue
         right=faces(text[cut+1:])
@@ -4405,6 +4599,15 @@ def native_genitive_nominal_splits(text, allow_unknown_left=False):
         if not left and not allow_unknown_left:continue
         particle=any(t.start==cut and t.end==cut+1 and t.surface=='の'
             and t.pos=='助詞' and t.has_reading and t.pos_sub=='連体化' for t in original)
+        # An inferred head lying wholly inside an original known word
+        # cannot create its own genitive boundary. A token overlapping
+        # only part of an independently proved full noun is not that
+        # proof: the native best parse may itself split either noun.
+        # Use the same original context to retain complete-word ownership,
+        # while both whole nouns and their projected particle still have
+        # to be established independently below.
+        if not particle and any(t.has_reading and t.start<=cut
+                and cut+1<t.end and len(text)<=t.end for t in original):continue
         projected=any(any(t.start==len(a) and t.end==len(a)+1 and t.surface=='の'
             and t.pos=='助詞' and t.has_reading and t.pos_sub=='連体化'
             for t in tokenize(a+'の'+z)) for a in left for z in right)
@@ -4579,8 +4782,84 @@ def native_coordinated_nominal_heads(text):
     return native_surface_nominal_heads(tail)
 
 
+def native_subject_sahen_action(text):
+    """The original whole subject, actual ga and unchanged complete sahen.
+
+    This is a source boundary proof, not a selected output spelling. Keep
+    the subject case even when its written face precedes a kana predicate.
+    Every use still checks its own candidate and relative-noun meanings.
+    """
+    from morphology import tokenize,dictionary_inflections,COLUMN_SEPARATOR
+    if (not text or not 5<=len(text)<=80 or COLUMN_SEPARATOR.search(text)
+            or any(c in text for c in '\r\n')):return ()
+    kana=lambda value:bool(value) and all('ぁ'<=c<='ゖ' or c=='ー' for c in value)
+    for case in tokenize(text):
+        if not (case.start>=2 and case.end==case.start+1 and case.end<len(text)
+                and text[case.start:case.end]==case.surface=='が'
+                and case.has_reading and case.reading=='が' and case.pos=='助詞'
+                and case.pos_sub.startswith('格助詞')
+                and any(pos.startswith('助詞,格助詞,') and rd==case.reading
+                    and base==case.base_form and (form if form!='*' else '')==case.infl_form
+                    for pos,form,base,rd in dictionary_inflections(case.surface) or ())):continue
+        subject=text[:case.start];tail=text[case.end:]
+        subjects=native_nominal_phrase_faces(subject) if kana(subject) else _native_written_nominal_faces(subject)
+        if not subjects or not kana(tail):continue
+        # The original adjunct owns only its boundary. Keep the source ga,
+        # whole subject and the following predicate's independent finite
+        # and semantic proof; an arbitrary removed prefix supplies none.
+        for cut in (0,)+native_adverbial_reading_cuts(tail):
+            predicate=tail[cut:]
+            if not native_attributive_predicate_end(predicate):continue
+            action=completed_sahen_reading(predicate,allow_nonpolite=True,subject_faces=subjects,
+                                          return_action=True,finite_only=True)
+            if not action:continue
+            from semantic_roles import subject_candidate_evidence
+            for pos,form,base,reading in dictionary_inflections(action) or ():
+                if (pos.startswith('名詞,サ変接続,') and base==action and reading
+                        and predicate.startswith(reading) and len(reading)<len(predicate)):
+                    meanings=[subject_candidate_evidence(subject,action,predicate[len(reading):]) for subject in subjects]
+                    if any(p and p.get('predicate')==action and p.get('shared_roles') for p in meanings):
+                        return case.end+cut,case.end+cut+len(reading),action,tuple(subjects)
+    return ()
+
+
+def native_unknown_relative_object_action(text,parts):
+    """An original whole relative noun followed by its own finite action.
+
+    Only a case swallowed by an unknown native token is reopened. The
+    unchanged relative head proves every inner argument before the whole
+    noun is checked against the same actual outer predicate. No string is
+    repaired and no inner subject is lent to that outer action.
+    """
+    from morphology import COLUMN_SEPARATOR,dictionary_inflections
+    from contextual_repair import _finite_written_predicate
+    from semantic_roles import candidate_nominal_spelling_evidence
+    if (not text or not 6<=len(text)<=80 or COLUMN_SEPARATOR.search(text)
+            or any(c in text for c in '\r\n')):return ()
+    for cut in native_case_positions(text,parts,('を',)):
+        if not any(not t.has_reading and t.start<cut and cut+1<=t.end for t in parts):continue
+        if not any(pos.startswith('助詞,格助詞,') and base==rd=='を' and form=='*'
+                   for pos,form,base,rd in dictionary_inflections('を') or ()):continue
+        nominal=native_written_action_nominal_parts(text[:cut])
+        if not nominal or native_nominal_case_boundary(text,parts,cut,'を',nominal[1]) is None:continue
+        tail=text[cut+1:]
+        # This new path is finite only, even when its caller also allows
+        # note forms. Keep links and unfinished polite forms separate.
+        if not _finite_written_predicate(tail):continue
+        original_tail=[t for t in parts if t.start>=cut+1]
+        if (not original_tail or original_tail[0].start!=cut+1
+                or ''.join(t.surface for t in original_tail)!=tail
+                or not all(t.has_reading for t in original_tail)):continue
+        action=native_written_relative_action(tail,allow_finite=True)
+        if not action or action[1]:continue
+        proofs=[candidate_nominal_spelling_evidence('',face,text[cut:]) for face in nominal[1]]
+        if all(proof and proof.get('predicate')==action[0] and proof.get('case')=='を'
+               and proof.get('shared_roles') for proof in proofs):return action[0],('を',)
+    return ()
+
+
 @lru_cache(maxsize=4096)
-def native_written_relative_action(text,allow_link=False,allow_finite=False,allow_note=False):
+def native_written_relative_action(text,allow_link=False,allow_finite=False,allow_note=False,allow_open_polite=False):
     """Actual written predicate and all its unchanged nominal arguments.
 
     GPT-6 / 2026-09-29. Keep the native lemma, inflection and occupied cases.
@@ -4593,6 +4872,9 @@ def native_written_relative_action(text,allow_link=False,allow_finite=False,allo
     from semantic_roles import (classified_nominal_action,native_verb_roles,
         predicate_roles,nominal_role_matches)
     parts=tokenize(text)
+    if allow_finite and not (allow_link or allow_open_polite) and any(not t.has_reading for t in parts):
+        original=native_unknown_relative_object_action(text,parts)
+        if original:return original
     if (not parts or parts[0].start!=0 or parts[-1].end!=len(text)
             or not all(t.has_reading for t in parts)
             or not all(a.end==b.start for a,b in zip(parts,parts[1:]))):return ()
@@ -4603,7 +4885,12 @@ def native_written_relative_action(text,allow_link=False,allow_finite=False,allo
         before=text[:head.start];tail=text[head.start:]
         linked=(allow_link and parts[-1].surface in ('て','で')
                 and parts[-1].pos=='助詞' and parts[-1].pos_sub=='接続助詞')
-        if not ((native_attributive_predicate_end(tail) or linked
+        # Source spelling may reuse an actual unfinished polite chain.
+        # This option does not certify it as a completed relative clause.
+        open_polite=bool(allow_open_polite and any(end==len(tail)
+            for start,end,signature in native_polite_auxiliary_chains(tail,include_open=True))
+            and _native_open_predicate(tail,head.surface,before=before))
+        if not (open_polite or (native_attributive_predicate_end(tail) or linked
                 or allow_note and action and tail==head.surface
                 or allow_finite and _finite_written_predicate(tail))
                 and _productive_predicate(tail,head.surface,before=before)):continue
@@ -4643,10 +4930,33 @@ def native_written_relative_action(text,allow_link=False,allow_finite=False,allo
                     case=None if case.surface in ('を','が','は','も') else case.surface,**kwargs)
                 if case.surface in ('は','も'):
                     roles |= native_verb_roles(head.surface,head.infl_form,head.reading,**kwargs)
-            if not any(nominal_role_matches(face,roles) for face in faces):valid=False;break
+            supported=any(nominal_role_matches(face,roles) for face in faces)
+            if not supported and action:
+                # The completed/open native predicate was proved above.
+                # Reuse the same literal argument/action relation as the
+                # source-chain path, retaining this case's original scope.
+                from semantic_roles import proved_action_case_support
+                supported=any(proved_action_case_support(face,case.surface,head.surface,
+                    context=text[begin:]) for face in faces)
+            if not supported:valid=False;break
             occupied.append(case.surface);begin=case.end
-        if not valid or begin!=head.start:continue
+        if not valid:continue
+        if begin!=head.start:
+            # An unchanged internal adjunct can separate a proved argument
+            # from this same actual predicate. It consumes no case slot.
+            # Do not broaden open/link/note/finite-only modes here.
+            if (allow_link or allow_finite or allow_note or allow_open_polite
+                    or head.start-begin not in native_adverbial_reading_cuts(text[begin:])):continue
         return (head.surface if action else tail,tuple(occupied))
+    # An independently attested leading adjunct is not an occupied case.
+    # Reuse the completed written predicate's own identity and arguments;
+    # open, linked and note-only modes retain their existing contracts.
+    if not (allow_link or allow_finite or allow_note or allow_open_polite):
+        subject=native_subject_sahen_action(text)
+        if subject:return subject[2],('が',)
+        for cut in native_adverbial_reading_cuts(text):
+            relative=native_written_relative_action(text[cut:])
+            if relative:return relative
     return ()
 
 
@@ -4676,6 +4986,734 @@ def native_written_preference_nominal_heads(text):
     return tuple(dict.fromkeys(out))
 
 
+def native_argument_relative_object_evidence(head,noun):
+    """Retain a proved clause's cases while using its own complete action tail.
+
+    The full original clause proves every occupied argument first. Only an
+    open object slot may reuse the same sahen head and unchanged finite tail;
+    the stripped tail never replaces the original clause's occupied cases.
+    Returned semantic evidence is not an emitted spelling candidate.
+    """
+    if not head or not noun or len(head)>80:return None
+    kana=all('ぁ'<=c<='ゖ' or c=='ー' for c in head)
+    relative=native_relative_action(head) if kana else native_written_relative_action(head)
+    if not relative or not relative[1] or 'を' in relative[1]:return None
+    action=relative[0]
+    from morphology import tokenize,dictionary_inflections
+    entries=dictionary_inflections(action) or ()
+    if not any(pos.startswith('名詞,サ変接続,') and base==action
+               for pos,form,base,rd in entries):return None
+    suffix=''
+    if kana:
+        literal=_native_completed_action_suffix(head,action)
+        if literal and len(literal)<len(head):
+            suffix=_native_completed_action_suffix(head,action,native_surface=True)
+    else:
+        for token in tokenize(head):
+            if not (token.start>0 and token.has_reading and token.surface==action
+                    and token.end==token.start+len(token.surface)
+                    and head[token.start:token.end]==token.surface
+                    and token.pos=='名詞' and token.pos_sub=='サ変接続'
+                    and token.base_form==action and any(rd==token.reading
+                        and pos.startswith('名詞,サ変接続,') and base==action
+                        for pos,form,base,rd in entries)):continue
+            tail=head[token.start:]
+            if native_written_relative_action(tail)==(action,()):
+                suffix=tail;break
+    if not suffix and not kana:
+        original=native_subject_sahen_action(head)
+        if original and relative==(original[2],('が',)):
+            # Only this source-proved head and its literal tail are used as
+            # a semantic-helper argument; the original ga remains occupied.
+            suffix=action+head[original[1]:]
+    if not suffix or not native_attributive_predicate_end(suffix):return None
+    from semantic_roles import candidate_evidence
+    proof=candidate_evidence(noun,suffix,'')
+    if (proof and proof.get('predicate')==action and proof.get('case')=='を'
+            and proof.get('shared_roles')):return proof
+    return None
+
+
+def native_argument_relative_nominal_parts(text):
+    """Original argument-bearing relative clause and its entire final noun.
+
+    Each nominal face must fit the same original open object slot. This
+    proves a source grammar range only, never the chosen spelling of its
+    subject, predicate or noun and never a partial-replacement exemption.
+    """
+    if not text or not 5<=len(text)<=80:return ()
+    from morphology import tokenize,COLUMN_SEPARATOR
+    if COLUMN_SEPARATOR.search(text) or any(c in text for c in '\r\n'):return ()
+    parts=tokenize(text)
+    if not any(t.has_reading and t.pos=='助詞'
+               and t.pos_sub.startswith(('格助詞','係助詞')) for t in parts):return ()
+    for cut in sorted({t.end for t in parts if 2<t.end<len(text)}):
+        nominal=text[cut:]
+        faces=(native_nominal_phrase_faces(nominal)
+            if all('ぁ'<=c<='ゖ' or c=='ー' for c in nominal)
+            else _native_written_nominal_faces(nominal))
+        if faces and all(native_argument_relative_object_evidence(text[:cut],face)
+                         for face in faces):return cut,tuple(faces)
+    return ()
+
+
+def _native_genitive_subject_heads(head,end,parts):
+    """Bind a whole unchanged genitive subject to its own nominal heads.
+
+    Each original token and the actual adnominal particle retain their
+    dictionary identity and coordinates. Both complete nouns are proved
+    by the existing genitive relation; no suffix or projected parse alone
+    certifies the subject. Its predicate meaning is checked by the caller.
+    """
+    from morphology import tokenize,dictionary_inflections,COLUMN_SEPARATOR
+    if not (0<end<=len(head)) or COLUMN_SEPARATOR.search(head) or any(c in head for c in '\r\n'):return ()
+    subject=head[:end]
+    if 'の' not in subject:return ()
+    original=[t for t in parts if t.start<end]
+    actual=[t for t in tokenize(head) if t.start<end]
+    fields=('surface','reading','has_reading','pos','pos_sub','base_form','infl_form','start','end')
+    if (not original or original[0].start!=0 or original[-1].end!=end
+            or any(a.end!=b.start for a,b in zip(original,original[1:]))
+            or len(actual)!=len(original)
+            or any(any(getattr(a,k)!=getattr(b,k) for k in fields) for a,b in zip(original,actual))):return ()
+    for t in original:
+        if not (t.has_reading and t.end==t.start+len(t.surface) and subject[t.start:t.end]==t.surface
+                and (t.pos=='名詞' or t.pos=='助詞' and t.pos_sub=='連体化' and t.surface==t.reading=='の')
+                and any(pos.startswith(t.pos+','+(t.pos_sub.replace(':',',')+',' if t.pos_sub else ''))
+                    and base==t.base_form and rd==t.reading and (form if form!='*' else '')==t.infl_form
+                    for pos,form,base,rd in dictionary_inflections(t.surface) or ())):return ()
+    heads=[]
+    for cut,left,right in native_genitive_nominal_splits(subject,original_context=head):
+        if (left and right and any(t.start==cut and t.end==cut+1 and t.surface=='の'
+                and t.pos=='助詞' and t.pos_sub=='連体化' for t in original)):
+            heads.extend(right)
+    return tuple(dict.fromkeys(heads))
+
+
+def _native_coordinated_subject_heads(head,end,parts):
+    """Keep every original member of a native coordinated nominal subject.
+
+    Whole token identity and the actual parallel particle bind the existing
+    nominal proof to this clause. Each member still needs its own positive
+    relation to the very same predicate; no member lends another its role.
+    """
+    from morphology import tokenize,dictionary_inflections,COLUMN_SEPARATOR
+    if not (0<end<=len(head)) or COLUMN_SEPARATOR.search(head) or any(c in head for c in '\r\n'):return ()
+    subject=head[:end]
+    if 'と' not in subject:return ()
+    original=[t for t in parts if t.start<end]
+    actual=[t for t in tokenize(head) if t.start<end]
+    fields=('surface','reading','has_reading','pos','pos_sub','base_form','infl_form','start','end')
+    if (len(original)<3 or len(original)%2!=1 or original[0].start!=0 or original[-1].end!=end
+            or any(a.end!=b.start for a,b in zip(original,original[1:]))
+            or len(actual)!=len(original)
+            or any(any(getattr(a,k)!=getattr(b,k) for k in fields) for a,b in zip(original,actual))):return ()
+    for index,t in enumerate(original):
+        if (not t.has_reading or t.end!=t.start+len(t.surface) or subject[t.start:t.end]!=t.surface
+                or not any(pos.startswith(t.pos+','+(t.pos_sub.replace(':',',')+',' if t.pos_sub else ''))
+                    and base==t.base_form and rd==t.reading and (form if form!='*' else '')==t.infl_form
+                    for pos,form,base,rd in dictionary_inflections(t.surface) or ())):return ()
+        if index%2:
+            if not (t.surface==t.reading=='と' and t.pos=='助詞' and t.pos_sub=='並立助詞'):return ()
+        elif t.pos!='名詞' or any(kind in t.pos_sub for kind in ('固有名詞','接尾','非自立')):return ()
+    members=native_coordinated_nominal_parts(subject)
+    return members if members==tuple(t.surface for t in original[::2]) else ()
+
+
+def _native_plural_subject_heads(head,end,parts):
+    """Bind a productive plural's existing core to the whole source subject.
+
+    The original noun and suffix must retain their exact native identities
+    in both the clause and the plural proof. The core still has to support
+    the same predicate as every object; the suffix supplies no new meaning.
+    """
+    from morphology import tokenize,dictionary_inflections,COLUMN_SEPARATOR
+    if not (0<end<=len(head)) or COLUMN_SEPARATOR.search(head) or any(c in head for c in '\r\n'):return ()
+    subject=head[:end]
+    original=[t for t in parts if t.start<end]
+    actual=[t for t in tokenize(head) if t.start<end]
+    fields=('surface','reading','has_reading','pos','pos_sub','base_form','infl_form','start','end')
+    if (len(original)!=2 or original[0].start!=0 or original[-1].end!=end
+            or original[0].end!=original[1].start):return ()
+    for parsed in (actual,tokenize(subject)):
+        if (len(parsed)!=len(original)
+                or any(any(getattr(a,k)!=getattr(b,k) for k in fields) for a,b in zip(original,parsed))):return ()
+    noun,suffix=original
+    if (noun.pos!='名詞' or any(kind in noun.pos_sub for kind in ('固有名詞','接尾','非自立'))
+            or suffix.pos!='名詞' or suffix.pos_sub!='接尾:一般' or suffix.reading!='たち'):return ()
+    for t in original:
+        if (not t.has_reading or t.end!=t.start+len(t.surface) or subject[t.start:t.end]!=t.surface
+                or not any(pos.startswith(t.pos+','+(t.pos_sub.replace(':',',')+',' if t.pos_sub else ''))
+                    and base==t.base_form and rd==t.reading and (form if form!='*' else '')==t.infl_form
+                    for pos,form,base,rd in dictionary_inflections(t.surface) or ())):return ()
+    members=native_plural_nominal_heads(subject)
+    return members if members==(noun.surface,) else ()
+
+
+def _native_subject_kana_verb_nominal(head,relative,nouns,source_parts=None,candidate_face=None,subject_face=None,allow_written=False):
+    """One source inflection and one native lexeme prove both arguments.
+
+    A kana parse may expose several homophones. Their role unions cannot
+    certify this frame. Dictionary forms below are semantic arguments only;
+    no replacement is emitted and every coordinate belongs to the source.
+    An explicitly enabled written token proves only its own literal form;
+    another homophone may not lend its subject or object meaning.
+    """
+    if not relative or relative[1]!=('が',) or not nouns:return False
+    from morphology import tokenize,dictionary_inflections,COLUMN_SEPARATOR
+    from semantic_roles import (native_verb_lexemes,_native_lexeme_forms,
+        subject_candidate_evidence,candidate_evidence)
+    if COLUMN_SEPARATOR.search(head) or any(c in head for c in '\r\n'):return False
+    kana=lambda value:bool(value) and all('ぁ'<=c<='ゖ' or c=='ー' for c in value)
+    parts=tokenize(head) if source_parts is None else source_parts
+    for token in parts:
+        if not (token.has_reading and token.pos=='動詞' and token.pos_sub=='自立'
+                and (kana(token.surface) and token.reading==token.surface
+                    or allow_written and any('一'<=c<='鿿' for c in token.surface))
+                and token.end==token.start+len(token.surface)
+                and head[token.start:token.end]==token.surface
+                and head[token.start:]==relative[0]
+                and any(pos.startswith('動詞,自立,') and base==token.base_form
+                    and form==token.infl_form and rd==token.reading
+                    for pos,form,base,rd in dictionary_inflections(token.surface) or ())):continue
+        for case in parts:
+            if not (0<case.start<case.end<=token.start and case.end==case.start+1
+                    and head[case.start:case.end]==case.surface=='が'
+                    and case.has_reading and case.reading=='が' and case.pos=='助詞'
+                    and case.pos_sub.startswith('格助詞')
+                    and any(pos.startswith('助詞,格助詞,') and rd==case.reading
+                        and base==case.base_form and (form if form!='*' else '')==case.infl_form
+                        for pos,form,base,rd in dictionary_inflections(case.surface) or ())):continue
+            source_subject=head[:case.start]
+            subjects=(native_nominal_phrase_faces(source_subject) if kana(source_subject)
+                      else _native_written_nominal_faces(source_subject))
+            if not subjects:
+                subjects=_native_genitive_subject_heads(head,case.start,parts)
+            if not subjects:
+                subjects=_native_coordinated_subject_heads(head,case.start,parts)
+            if not subjects:
+                subjects=_native_plural_subject_heads(head,case.start,parts)
+            if not subjects:continue
+            if subject_face is not None:
+                # This conditional proof belongs to one emitted subject,
+                # never to all the unselected homophones of the source.
+                if not (kana(source_subject) and subject_face in subjects
+                        and any(pos.startswith('名詞,') and rd==source_subject and base==subject_face
+                            and not any(kind in pos for kind in ('固有名詞','接尾','非自立'))
+                            for pos,form,base,rd in dictionary_inflections(subject_face) or ())):continue
+                subjects=(subject_face,)
+            if (case.end!=token.start and token.start-case.end not in
+                    native_adverbial_reading_cuts(head[case.end:])):continue
+            tail=head[token.end:]
+            for lemma in native_verb_lexemes(token.surface,token.infl_form,token.reading):
+                for face in _native_lexeme_forms(lemma,token.infl_form,token.reading):
+                    if not kana(token.surface) and face!=token.surface:continue
+                    if candidate_face is not None and face!=candidate_face:continue
+                    if not any('一'<=c<='鿿' for c in face):continue
+                    bases={base for pos,form,base,rd in dictionary_inflections(face) or ()
+                           if pos.startswith('動詞,自立,') and form==token.infl_form and rd==token.reading}
+                    if bases!={lemma} or native_verb_lexemes(face,token.infl_form,token.reading)!={lemma}:continue
+                    if not _completed_native_verb_surface(face+tail,True,True,True):continue
+                    subjects_proof=[subject_candidate_evidence(noun,face,tail) for noun in subjects]
+                    objects_proof=[candidate_evidence(noun,face,tail) for noun in nouns]
+                    if (all(p and p.get('predicate')==face and p.get('shared_roles') for p in subjects_proof)
+                            and all(p and p.get('predicate')==face and p.get('case')=='を'
+                                    and p.get('shared_roles') for p in objects_proof)):return True
+    return False
+
+
+def native_relative_nominal_cuts(text,parts):
+    """Propose unchanged cuts without splitting a known lexical token.
+
+    Unknown-token interiors are only boundary proposals. Each caller still
+    proves the full original relative head, finite inflection, occupied
+    cases and every whole noun's own meaning before returning evidence.
+    No repaired reading or replacement text is parsed here.
+    """
+    from morphology import kana_syllable_boundary
+    cuts={t.end for t in parts if 2<t.end<len(text)}
+    for token in parts:
+        if token.has_reading:continue
+        cuts.update(cut for cut in range(max(3,token.start+1),min(token.end,len(text)))
+                    if kana_syllable_boundary(text,cut))
+    return tuple(sorted(cuts))
+
+
+def native_bound_relative_nominal_parts(text):
+    """An unchanged complete inflection can disambiguate a lexical overlap.
+
+    The best full parse and the independently completed prefix may have
+    different inflections. Preserve both dictionary checks: a familiar
+    adverb or a following noun alone cannot certify this alternative.
+    Returned tokens contain only the unedited original prefix, no spelling.
+    A written independent verb is checked against its own single lexeme;
+    the kana and written inputs never borrow each other's parsed tokens.
+    """
+    from morphology import tokenize,dictionary_inflections,kana_syllable_boundary,COLUMN_SEPARATOR
+    if (not text or not 4<=len(text)<=80 or COLUMN_SEPARATOR.search(text)
+            or any(c in text for c in '\r\n')):return ()
+    parts=tokenize(text)
+    def attested(token):
+        return (token.has_reading and token.end==token.start+len(token.surface)
+            and text[token.start:token.end]==token.surface
+            and any(pos.startswith(token.pos+','+(token.pos_sub.replace(':',',')+',' if token.pos_sub else ''))
+                and base==token.base_form and (form if form!='*' else '')==token.infl_form
+                and rd==token.reading for pos,form,base,rd in dictionary_inflections(token.surface) or ()))
+    for index,owner in enumerate(parts):
+        if not (index and owner.pos=='副詞' and attested(owner)):continue
+        # Literal source auxiliaries may separate the verb from the
+        # overlapping adverb. Keep every intervening token's identity;
+        # this cannot step across another lexical word or a gap.
+        stem_index=index-1;edge=owner.start
+        while stem_index>=0:
+            previous=parts[stem_index]
+            if not (previous.pos=='助動詞' and previous.end==edge and attested(previous)):break
+            edge=previous.start;stem_index-=1
+        if stem_index<0:continue
+        stem=parts[stem_index]
+        # A whole attested final particle may have a distinct verb entry.
+        # The completed unedited prefix must independently prove that verb;
+        # neither the particle's existence nor its reading chooses a spelling.
+        if not (stem.end==edge and (stem.pos=='動詞' and stem.pos_sub=='自立'
+                    or stem.pos=='助詞' and stem.pos_sub=='終助詞')
+                and attested(stem)):continue
+        kana_stem=(stem.surface==stem.reading
+            and all('ぁ'<=ch<='ゖ' or ch=='ー' for ch in stem.surface))
+        written_stem=(stem.pos=='動詞' and stem.pos_sub=='自立'
+            and any('一'<=ch<='鿿' for ch in stem.surface))
+        if not (kana_stem or written_stem):continue
+        for cut in range(owner.start+1,owner.end):
+            if not kana_syllable_boundary(text,cut):continue
+            tail=text[cut:]
+            if not all('ぁ'<=ch<='ゖ' or ch=='ー' for ch in tail):continue
+            nouns=native_nominal_phrase_faces(tail)
+            if not nouns:continue
+            head=text[:cut];relative=native_written_relative_action(head)
+            if not (relative and relative[1]==('が',) and head[stem.start:]==relative[0]
+                    and native_attributive_predicate_end(head)
+                    and _native_subject_kana_verb_nominal(head,relative,nouns,allow_written=written_stem)):continue
+            prefix=tokenize(head)
+            verb=next((t for t in prefix if t.start==stem.start and t.end==stem.end
+                and t.surface==stem.surface and t.reading==stem.reading
+                and t.pos=='動詞' and t.pos_sub=='自立' and attested(t)),None)
+            if verb is None:continue
+            # All preceding source words retain their exact original identity.
+            fields=('surface','reading','pos','pos_sub','base_form','infl_form','start','end','has_reading')
+            before=lambda seq:[tuple(getattr(t,k) for k in fields) for t in seq if t.end<=stem.start]
+            if before(prefix)!=before(parts):continue
+            original_auxiliaries=parts[stem_index+1:index]
+            unchanged_auxiliaries=[t for t in prefix if stem.end<=t.start and t.end<=owner.start]
+            identity=lambda seq:[tuple(getattr(t,k) for k in fields) for t in seq]
+            if identity(unchanged_auxiliaries)!=identity(original_auxiliaries):continue
+            auxiliaries=[t for t in prefix if t.start>=stem.end]
+            if not (auxiliaries and auxiliaries[0].start==stem.end and auxiliaries[-1].end==cut
+                    and all(a.end==b.start for a,b in zip(auxiliaries,auxiliaries[1:]))
+                    and all(attested(t) and (t.pos=='助動詞' or t.pos=='助詞'
+                        and t.pos_sub.startswith('接続助詞')) for t in auxiliaries)):continue
+            return cut,tuple(nouns),stem.start,stem.end,tuple(prefix)
+    return ()
+
+
+def native_progressive_bound_relative_nominal_parts(text):
+    """Verify an original whole reading against its complete te-auxiliary.
+
+    An attested noun may overlap a literal verb/link/bound-verb sequence.
+    Both analyses keep their own dictionary entries; the original whole
+    surface and reading must be preserved. Only the same completed clause
+    and each of its positively supported whole nouns certify the seam.
+    """
+    from morphology import tokenize,dictionary_inflections,kana_syllable_boundary,COLUMN_SEPARATOR
+    from contextual_repair import _native_te_auxiliary_tail
+    from semantic_roles import native_te_auxiliary_forms,candidate_evidence
+    if (not text or not 4<=len(text)<=80 or COLUMN_SEPARATOR.search(text)
+            or any(c in text for c in '\r\n')):return ()
+    parts=tokenize(text)
+    fields=('surface','reading','pos','pos_sub','base_form','infl_form','start','end','has_reading')
+    identity=lambda seq:[tuple(getattr(t,k) for k in fields) for t in seq]
+    kana=lambda value:bool(value) and all('ぁ'<=c<='ゖ' or c=='ー' for c in value)
+    def attested(token):
+        return (token.has_reading and token.end==token.start+len(token.surface)
+            and text[token.start:token.end]==token.surface
+            and any(pos.startswith(token.pos+','+(token.pos_sub.replace(':',',')+',' if token.pos_sub else ''))
+                and base==token.base_form and (form if form!='*' else '')==token.infl_form
+                and rd==token.reading for pos,form,base,rd in dictionary_inflections(token.surface) or ()))
+    for owner in parts:
+        if not (owner.pos=='副詞' and attested(owner)):continue
+        for cut in range(owner.start+1,owner.end):
+            if not kana_syllable_boundary(text,cut) or not kana(text[cut:]):continue
+            nouns=native_nominal_phrase_faces(text[cut:])
+            if not nouns:continue
+            head=text[:cut];relative=native_written_relative_action(head)
+            if not (relative and relative[1]==('が',) and native_attributive_predicate_end(head)):continue
+            start=len(head)-len(relative[0]);prefix=tokenize(head)
+            chain=[t for t in prefix if t.start>=start]
+            if not (len(chain)>=4 and chain[0].start==start and chain[-1].end==cut
+                    and all(a.end==b.start for a,b in zip(chain,chain[1:]))
+                    and all(attested(t) for t in chain)):continue
+            verb,link,aux=chain[:3]
+            if not (verb.pos=='動詞' and verb.pos_sub=='自立'
+                    and link.pos=='助詞' and link.pos_sub.startswith('接続助詞')
+                    and aux.pos=='動詞' and aux.pos_sub.startswith('非自立')
+                    and aux.end==owner.start and all(t.pos=='助動詞' for t in chain[3:])):continue
+            forms=tuple(row for row in dictionary_inflections(verb.surface) or ()
+                if row[0].startswith('動詞,自立,') and row[1]==verb.infl_form
+                and row[2]==verb.base_form and row[3]==verb.reading)
+            if not (forms and native_te_auxiliary_forms(aux.surface,aux.infl_form,aux.reading)
+                    and _native_te_auxiliary_tail(forms,head[verb.end:],verb.reading,verb.surface)):continue
+            original=[t for t in parts if start<=t.start and t.end<=owner.start]
+            if not original or original[0].start!=start or original[-1].end!=owner.start:continue
+            if not all(attested(t) for t in original):continue
+            if identity(original)!=identity(chain[:3]):
+                if not (len(original)==1 and original[0].pos=='名詞'
+                        and not any(x in original[0].pos_sub for x in ('固有名詞','非自立','接尾'))
+                        and kana(original[0].surface) and original[0].surface==original[0].reading
+                        and ''.join(t.surface for t in chain[:3])==original[0].surface
+                        and ''.join(t.reading for t in chain[:3])==original[0].reading):continue
+            if identity([t for t in parts if t.end<=start])!=identity([t for t in prefix if t.end<=start]):continue
+            if kana(verb.surface):
+                if not _native_subject_kana_verb_nominal(head,relative,nouns):continue
+            else:
+                if not any('一'<=ch<='鿿' for ch in verb.surface):continue
+                proofs=[candidate_evidence(noun,relative[0],'') for noun in nouns]
+                if not all(proof and proof.get('predicate')==relative[0] and proof.get('case')=='を'
+                        and proof.get('shared_roles') for proof in proofs):continue
+            return cut,tuple(nouns),verb.start,verb.end,tuple(prefix)
+    return ()
+
+
+def _native_unknown_relative_prefix(text,original,cut,prefix):
+    """Bind unchanged prefix tokens to one original unknown owner.
+
+    A known token remains whole. The only changed known-token boundary is
+    an entire native nominal prefix absorbed into its attested full adverb;
+    the remainder must belong to the adjacent original unknown token.
+    """
+    from morphology import dictionary_inflections
+    if not prefix or prefix[0].start!=0 or prefix[-1].end!=cut:return False
+    if not all(a.end==b.start for a,b in zip(prefix,prefix[1:])):return False
+    fields=('surface','reading','pos','pos_sub','base_form','infl_form','start','end','has_reading')
+    identity=lambda t:tuple(getattr(t,k) for k in fields)
+    def attested(t):
+        return (t.has_reading and t.end==t.start+len(t.surface)
+            and text[t.start:t.end]==t.surface
+            and any(pos.startswith(t.pos+','+t.pos_sub.replace(':',',')+',')
+                and base==t.base_form and (form if form!='*' else '')==t.infl_form
+                and rd==t.reading for pos,form,base,rd in dictionary_inflections(t.surface) or ()))
+    if not all(attested(t) for t in prefix):return False
+    verb=prefix[-1]
+    if not (verb.pos=='動詞' and verb.pos_sub=='自立' and verb.infl_form=='基本形'
+            and verb.surface==verb.reading==verb.base_form
+            and all('ぁ'<=c<='ゖ' or c=='ー' for c in verb.surface)):return False
+    owners=[t for t in original if not t.has_reading and t.start<=verb.start<cut<t.end]
+    if len(owners)!=1:return False
+    owner=owners[0]
+    if not (0<=owner.start<owner.end<=len(text)
+            and owner.end==owner.start+len(owner.surface)
+            and text[owner.start:owner.end]==owner.surface
+            and owner.base_form==owner.surface==owner.reading
+            and all('ぁ'<=c<='ゖ' or c=='ー' for c in owner.surface)):return False
+    before=[t for t in original if t.end<=owner.start]
+    if (not before or before[0].start!=0 or before[-1].end!=owner.start
+            or not all(a.end==b.start for a,b in zip(before,before[1:]))):return False
+    for old in before:
+        if any(identity(old)==identity(t) for t in prefix):continue
+        if not (old.end==owner.start and old.pos=='接頭詞' and old.pos_sub=='名詞接続'
+                and attested(old) and any(t.start==old.start<owner.start<t.end<=verb.start
+                    and t.pos=='副詞' and t.surface==t.reading
+                    and t.surface.startswith(old.surface) for t in prefix)):return False
+    for token in prefix:
+        if token.start>=owner.start:continue
+        if any(identity(token)==identity(t) for t in before):continue
+        if not (token.pos=='副詞' and token.start==before[-1].start
+                and token.start<owner.start<token.end<=verb.start):return False
+    return True
+
+
+def native_dictionary_relative_nominal_parts(text,subject_face=None):
+    """Prove a whole source word's finite alternative without repairing it.
+
+    The best parse and the alternative keep separate dictionary identities.
+    An already attested independent basic verb retains its original token.
+    Only the same literal reading, occupied subject and every whole noun's
+    positive one-lexeme relation can support a different grammatical role.
+    Returned tokens contain original text, never a selected output spelling.
+    """
+    from morphology import tokenize,dictionary_inflections,Token,COLUMN_SEPARATOR
+    if (not text or not 4<=len(text)<=80 or COLUMN_SEPARATOR.search(text)
+            or any(c in text for c in '\r\n')):return ()
+    kana=lambda value:bool(value) and all('ぁ'<=c<='ゖ' or c=='ー' for c in value)
+    parts=tokenize(text)
+    for owner in parts:
+        finite_owner=(owner.pos=='動詞' and owner.pos_sub=='自立'
+                      and owner.infl_form=='基本形' and owner.base_form==owner.surface)
+        if not ((owner.pos=='副詞' or finite_owner)
+                and owner.has_reading and kana(owner.surface)
+                and owner.surface==owner.reading and 0<owner.start<owner.end<len(text)
+                and owner.end==owner.start+len(owner.surface)
+                and text[owner.start:owner.end]==owner.surface):continue
+        entries=dictionary_inflections(owner.surface) or ()
+        if not any(pos.startswith(owner.pos+','+owner.pos_sub.replace(':',',')+',')
+                and base==owner.base_form and (form if form!='*' else '')==owner.infl_form
+                and rd==owner.reading for pos,form,base,rd in entries):continue
+        finite=tuple((pos,form,base,rd) for pos,form,base,rd in entries
+            if pos.startswith('動詞,自立,') and form=='基本形'
+            and base==owner.surface and rd==owner.reading)
+        if not finite:continue
+        cut=owner.end;tail=text[cut:]
+        if any(t.start==cut and t.end==len(text) and t.has_reading
+               and t.pos in ('助詞','助動詞') for t in parts):continue
+        nouns=native_nominal_phrase_faces(tail) if kana(tail) else _native_written_nominal_faces(tail)
+        if not nouns:continue
+        before=[t for t in parts if t.end<=owner.start]
+        if not (before and before[0].start==0 and before[-1].end==owner.start
+                and all(t.has_reading and text[t.start:t.end]==t.surface for t in before)
+                and all(a.end==b.start for a,b in zip(before,before[1:]))):continue
+        # A finite dictionary form certifies this unchanged suffix, while
+        # the existing helper proves the actual ga/adverb and both meanings.
+        for pos,form,base,rd in finite:
+            verb=owner if finite_owner else Token(owner.surface,'動詞',base,rd,owner.start,owner.end,True,'自立',form)
+            prefix=tuple(before+[verb]);head=text[:cut]
+            if _native_subject_kana_verb_nominal(head,(owner.surface,('が',)),nouns,source_parts=prefix,subject_face=subject_face):
+                return cut,tuple(nouns),owner.start,owner.end,prefix
+    # A separate parse of an unchanged completed prefix may expose the
+    # verb inside an original unknown owner. Every known token stays whole,
+    # and this remains conditional on one subject and one verb meaning.
+    for cut in native_relative_nominal_cuts(text,parts):
+        if not any(not t.has_reading and t.start<cut<t.end for t in parts):continue
+        tail=text[cut:]
+        nouns=native_nominal_phrase_faces(tail) if kana(tail) else _native_written_nominal_faces(tail)
+        if not nouns:continue
+        head=text[:cut];prefix=tuple(tokenize(head))
+        if not _native_unknown_relative_prefix(text,parts,cut,prefix):continue
+        verb=prefix[-1]
+        if _native_subject_kana_verb_nominal(head,(verb.surface,('が',)),nouns,
+                source_parts=prefix,subject_face=subject_face):
+            return cut,tuple(nouns),verb.start,verb.end,prefix
+    return ()
+
+
+def native_dictionary_subject_spelling(text,start,end,face):
+    """A subject spelling conditionally proves the same complete source frame.
+
+    Each unchanged source token and both predicates keep their own evidence.
+    The subject's own inner meaning cannot certify another homophone or a
+    global normal range. Candidate parsing is checked separately, never
+    substituted for original positions, readings or the actual outer case.
+    """
+    from morphology import tokenize,dictionary_inflections,COLUMN_SEPARATOR,Token
+    from contextual_repair import _finite_written_predicate
+    from semantic_roles import candidate_nominal_spelling_evidence
+    if (start!=0 or not 2<=end<len(text)<=80 or text[end:end+1]!='が'
+            or COLUMN_SEPARATOR.search(text) or any(c in text for c in '\r\n')):return None
+    if not all('ぁ'<=c<='ゖ' or c=='ー' for c in text[:end]):return None
+    parts=tokenize(text)
+    subject=next((t for t in parts if t.start==0 and t.end==end),None)
+    if not (subject and subject.has_reading and subject.surface==subject.reading==text[:end]
+            and subject.pos=='名詞' and not any(k in subject.pos_sub for k in ('固有名詞','接尾','非自立'))
+            and any(pos.startswith('名詞,'+subject.pos_sub.replace(':',',')+',')
+                and base==subject.base_form and (form if form!='*' else '')==subject.infl_form
+                and rd==subject.reading for pos,form,base,rd in dictionary_inflections(subject.surface) or ())):return None
+    fields=('surface','reading','pos','pos_sub','base_form','infl_form','start','end','has_reading')
+    def identity(tokens,offset=0):
+        return [tuple(getattr(t,k)+offset if k in ('start','end') else getattr(t,k) for k in fields) for t in tokens]
+    for cut in native_case_positions(text,parts,('を',)):
+        if not end<cut<cut+1<len(text):continue
+        case=next((t for t in parts if t.start==cut and t.end==cut+1),None)
+        unknown_case=case is None
+        if unknown_case:
+            # The projected case keeps a literal source position inside
+            # one unknown owner; it is not an actual whole-text token.
+            if not any(not t.has_reading and t.start<cut and t.end==cut+1 for t in parts):continue
+            if text[cut:cut+1]!='を' or not any(pos.startswith('助詞,格助詞,')
+                    and rd==base=='を' and form=='*'
+                    for pos,form,base,rd in dictionary_inflections('を') or ()):continue
+            case=Token('を','助詞','を','を',cut,cut+1,True,'格助詞:一般','')
+        elif not (text[case.start:case.end]==case.surface=='を'
+                and case.has_reading and case.reading=='を' and case.pos=='助詞' and case.pos_sub.startswith('格助詞')
+                and any(pos.startswith('助詞,格助詞,') and rd==case.reading and base==case.base_form
+                    and (form if form!='*' else '')==case.infl_form
+                    for pos,form,base,rd in dictionary_inflections(case.surface) or ())):continue
+        inner=native_dictionary_relative_nominal_parts(text[:case.start],subject_face=face)
+        if not inner or not end+1<inner[2]<inner[3]==inner[0]<case.start:continue
+        # Independent prefix analysis must preserve every preceding source
+        # token; only the attested whole adverb/verb has a separate identity.
+        unknown_prefix=_native_unknown_relative_prefix(text,parts,inner[0],inner[4])
+        if not unknown_prefix:
+            if identity([t for t in parts if t.end<=inner[2]])!=identity(inner[4][:-1]):continue
+            owner=next((t for t in parts if t.start==inner[2] and t.end==inner[3]),None)
+            if owner is None or owner.surface!=text[inner[2]:inner[3]]:continue
+            original_inner=tokenize(text[:case.start])
+            original_owner=next((t for t in original_inner if t.start==inner[2] and t.end==inner[3]),None)
+            if original_owner is None or identity([owner])!=identity([original_owner]):continue
+        if unknown_case and not unknown_prefix:continue
+        if native_nominal_case_boundary(text,parts,case.start,'を',inner[1]) is None:continue
+        tail=text[case.end:];core=tail[:-1] if tail[-1:] in '。！？.!?' else tail
+        if not core or not _finite_written_predicate(core):continue
+        if identity([t for t in parts if t.start>=case.end])!=identity(tokenize(tail),case.end):continue
+        action=native_written_relative_action(core,allow_finite=True)
+        if not action or action[1]:continue
+        proofs=[candidate_nominal_spelling_evidence('',noun,text[case.start:]) for noun in inner[1]]
+        if not all(p and p.get('predicate')==action[0] and p.get('case')=='を'
+                   and p.get('shared_roles') for p in proofs):continue
+        # This is an additional candidate-side check of the entire frame,
+        # not a replacement of the conditional original evidence above.
+        changed=face+text[end:];delta=len(face)-end
+        if not all(native_object_predicate_proof(changed,case.end+delta,(noun,),return_action=True)==action[0]
+                   for noun in inner[1]):continue
+        return dict(source='conditional_original_relative_subject',subject=face,case='が',
+            source_span=(start,end),verb_span=inner[2:4],noun_span=(inner[0],case.start),
+            noun_faces=inner[1],outer_case=(case.start,case.end),outer_predicate=action[0])
+    return None
+
+
+def native_adverbial_stem_spelling(text,start,end,face):
+    """The same whole na-stem in an attested original modifier sequence.
+
+    This proves a modifier boundary, not a noun argument or normal clause.
+    Each spelling owns its dictionary and token evidence; the common usage,
+    candidate checks and original partial-frame retention still apply.
+    """
+    from morphology import tokenize,dictionary_inflections,COLUMN_SEPARATOR,native_spelling_only
+    if (not 0<start<end<len(text)<=80 or COLUMN_SEPARATOR.search(text)
+            or any(c in text for c in '\r\n') or not face):return False
+    parts=tokenize(text)
+    stem=next((t for t in parts if t.start==start and t.end==end),None)
+    particle=next((t for t in parts if t.start==end),None)
+    def attested(t,line):
+        return bool(t and t.has_reading and t.end==t.start+len(t.surface)
+            and line[t.start:t.end]==t.surface
+            and any(pos.startswith(t.pos+',')
+                and ':'.join(p for p in pos.split(',')[1:] if p!='*')==t.pos_sub
+                and base==t.base_form and (form if form!='*' else '')==t.infl_form
+                and rd==t.reading for pos,form,base,rd in dictionary_inflections(t.surface) or ()))
+    def manner(stem,particle,line):
+        return bool(attested(stem,line) and stem.pos=='名詞' and stem.pos_sub=='形容動詞語幹'
+            and attested(particle,line) and particle.start==stem.end and particle.surface=='に'
+            and (particle.pos=='助詞' and particle.pos_sub=='副詞化'
+                or particle.pos=='助動詞' and particle.base_form=='だ' and particle.infl_form=='連用形'))
+    if not manner(stem,particle,text):return False
+    changed=text[:start]+face+text[end:];delta=len(face)-(end-start)
+    if not native_spelling_only(text,changed):return False
+    own=tokenize(changed)
+    written=next((t for t in own if t.start==start and t.end==start+len(face)),None)
+    following=next((t for t in own if t.start==start+len(face)),None)
+    if not manner(written,following,changed) or written.reading!=stem.reading:return False
+    fields=('surface','reading','has_reading','pos','pos_sub','base_form','infl_form','start','end')
+    def identities(tokens,offset=0):
+        return [tuple(getattr(t,k)+offset if k in ('start','end') else getattr(t,k) for k in fields) for t in tokens]
+    if identities([t for t in parts if t.end<=start])!=identities([t for t in own if t.end<=start]):return False
+    if identities([t for t in parts if t.start>=end],delta)!=identities([t for t in own if t.start>=start+len(face)]):return False
+    # Use a real original subject-case edge, never a guessed noun start.
+    # Every intervening modifier and the candidate's own cumulative edge
+    # must be proved independently by the shared whole-token grammar.
+    for case in parts:
+        if not (case.end<start and case.surface=='が' and case.pos=='助詞'
+                and case.pos_sub.startswith('格助詞') and attested(case,text)):continue
+        if (particle.end-case.end in native_adverbial_reading_cuts(text[case.end:])
+                and following.end-case.end in native_adverbial_reading_cuts(changed[case.end:])):return True
+    return False
+
+
+def native_dictionary_relative_retention(text,changes,start,end,face):
+    """Recheck each later spelling under an already accepted subject choice.
+
+    The original conditional frame is never added to normal ranges. All
+    changes retain its exact source spans/readings, one verb sense and both
+    cases. Candidate parsing checks only the candidate's own outer frame.
+    """
+    from morphology import native_spelling_only
+    from contextual_repair import _apply
+    if not changes:return False
+    chosen={(a,b):word for a,b,word in changes}
+    if len(chosen)!=len(changes) or (start,end) in chosen:return False
+    subjects=[(a,b,word) for a,b,word in changes if a==0]
+    if len(subjects)!=1:return False
+    lo,subject_end,subject=subjects[0]
+    proof=native_dictionary_subject_spelling(text,lo,subject_end,subject)
+    if not proof:return False
+    verb_span=proof['verb_span'];noun_span=proof['noun_span']
+    from morphology import tokenize
+    modifiers={(t.start,t.end) for t in tokenize(text)
+        if t.pos=='名詞' and t.pos_sub=='形容動詞語幹' and subject_end<t.start<t.end<=verb_span[0]}
+    if (start,end) not in {verb_span,noun_span}|modifiers:return False
+    chosen[start,end]=face
+    allowed={(0,subject_end),verb_span,noun_span}|modifiers
+    if any(not native_adverbial_stem_spelling(text,a,b,word)
+           for (a,b),word in chosen.items() if (a,b) in modifiers):return False
+    if any(span not in allowed or not native_spelling_only(text[span[0]:span[1]],word)
+           for span,word in chosen.items()):return False
+    noun=chosen.get(noun_span)
+    if noun is not None and noun not in proof['noun_faces']:return False
+    inner=native_dictionary_relative_nominal_parts(text[:proof['outer_case'][0]],subject_face=subject)
+    if not inner or inner[2:4]!=verb_span or inner[0]!=noun_span[0]:return False
+    verb=chosen.get(verb_span)
+    nouns=(noun,) if noun is not None else inner[1]
+    if not _native_subject_kana_verb_nominal(text[:inner[0]],
+            (text[verb_span[0]:verb_span[1]],('が',)),inner[1],
+            source_parts=inner[4],candidate_face=verb,subject_face=subject):return False
+    edits=sorted((a,b,word) for (a,b),word in chosen.items())
+    if any(a[1]>b[0] for a,b in zip(edits,edits[1:])):return False
+    changed=_apply(text,edits)
+    case_end=proof['outer_case'][1]+sum(len(word)-(b-a) for a,b,word in edits)
+    return all(native_object_predicate_proof(changed,case_end,(n,),return_action=True)
+               ==proof['outer_predicate'] for n in nouns)
+
+
+def native_written_action_nominal_parts(text):
+    """Keep an actual completed action and its entire kana nominal tail.
+
+    Native token ends expose possible seams, never output spellings. Every
+    whole noun must fit the same written predicate's still-open object slot;
+    neither a grammatical suffix nor another homophone supplies its meaning.
+    """
+    if (not text or not 4<=len(text)<=80 or not any('一'<=c<='鿿' for c in text)
+            or any(c in text for c in '\r\n')):return ()
+    from morphology import tokenize,dictionary_inflections,COLUMN_SEPARATOR
+    if COLUMN_SEPARATOR.search(text):return ()
+    from semantic_roles import candidate_evidence
+    parts=tokenize(text)
+    for cut in native_relative_nominal_cuts(text,parts):
+        nominal=text[cut:]
+        if not all('ぁ'<=c<='ゖ' or c=='ー' for c in nominal):continue
+        # A whole original auxiliary/particle keeps its functional identity.
+        # Whole-noun evidence may explain an internal seam, not rename
+        # a single unchanged function word as a different lexical noun.
+        if any(t.start==cut and t.end==len(text) and t.has_reading
+               and t.pos in ('助詞','助動詞') for t in parts):continue
+        faces=native_nominal_phrase_faces(nominal)
+        if not faces:continue
+        head=text[:cut];relative=native_written_relative_action(head)
+        if not relative or 'を' in relative[1] or not native_attributive_predicate_end(head):continue
+        action=relative[0]
+        sahen=any(t.has_reading and t.pos=='名詞' and t.pos_sub=='サ変接続'
+            and t.surface==t.base_form==action and t.end==t.start+len(action)
+            and text[t.start:t.end]==action and t.end<cut
+            and any(pos.startswith('名詞,サ変接続,') and base==action and rd==t.reading
+                    for pos,form,base,rd in dictionary_inflections(action) or ())
+            for t in parts)
+        # A written ordinary verb retains its actual inflection and entire
+        # relative tail. The whole head above already proved each occupied
+        # case; a stripped tail cannot supply a missing subject relation.
+        verb=any(t.has_reading and t.pos=='動詞' and t.pos_sub=='自立'
+            and any('一'<=ch<='鿿' for ch in t.surface)
+            and t.end==t.start+len(t.surface) and text[t.start:t.end]==t.surface
+            and t.end<=cut and head[t.start:]==action
+            and any(pos.startswith('動詞,自立,') and base==t.base_form
+                    and form==t.infl_form and rd==t.reading
+                    for pos,form,base,rd in dictionary_inflections(t.surface) or ())
+            for t in parts)
+        if not (sahen or verb):
+            if _native_subject_kana_verb_nominal(head,relative,faces):return cut,tuple(faces)
+            continue
+        proofs=[candidate_evidence(face,action,'') if verb else
+                native_argument_relative_object_evidence(head,face) if relative[1]
+                else candidate_evidence(face,head,'') for face in faces]
+        if all(proof and proof.get('predicate')==action and proof.get('case')=='を'
+               and proof.get('shared_roles') for proof in proofs):return cut,tuple(faces)
+    bound=native_bound_relative_nominal_parts(text) or native_progressive_bound_relative_nominal_parts(text) or native_dictionary_relative_nominal_parts(text)
+    return bound[:2] if bound else ()
+
+
 @lru_cache(maxsize=4096)
 def native_written_relative_nominal_heads(text):
     """Native relative clause plus its exact, semantically fitting head."""
@@ -4684,6 +5722,12 @@ def native_written_relative_nominal_heads(text):
     from semantic_roles import relative_action_support
     preference=native_written_preference_nominal_heads(text)
     if preference:return preference
+    nominal=native_written_action_nominal_parts(text)
+    if nominal:return nominal[1]
+    # Reuse the same original occupied case, completed predicate and
+    # every whole nominal face; this supplies grammar, not output spelling.
+    argument_nominal=native_argument_relative_nominal_parts(text)
+    if argument_nominal:return argument_nominal[1]
     out=[]
     for noun in tokenize(text):
         if noun.start<2 or noun.pos!='名詞' or not noun.has_reading:continue
@@ -4733,27 +5777,25 @@ def native_mixed_nominal_heads(text):
 
 
 @lru_cache(maxsize=4096)
-def native_surface_nominal_heads(text):
-    """48-ALT: the same nominal head in kana, written, or mixed genitives.
+def native_focused_nominal_parts(text):
+    """Original noun/focus boundary with the same complete nominal proof."""
+    from morphology import tokenize,dictionary_inflections
+    for focus in ('だけ','ばかり','など'):
+        if not text.endswith(focus) or len(text)<=len(focus):continue
+        if not any(pos.startswith('助詞,副助詞,') and rd==focus
+                   for pos,form,base,rd in dictionary_inflections(focus) or ()):continue
+        boundary=len(text)-len(focus)
+        faces=native_nominal_phrase_faces(text[:boundary])
+        for face in faces:
+            parts=tokenize(face+focus)
+            if (parts and parts[-1].start==len(face) and parts[-1].has_reading
+                    and parts[-1].surface==focus and parts[-1].pos=='助詞'
+                    and parts[-1].pos_sub=='副助詞'):return (boundary,faces)
+    return None
 
-    Keep the exact written noun's meaning. Native の and both established
-    nouns supply a phrase boundary; no reading of a different kanji is used.
-    """
-    if not text:return ()
-    if all('ぁ'<=c<='ゖ' or c=='ー' for c in text):
-        return native_nominal_phrase_faces(text)
-    direct=_native_written_nominal_faces(text)
-    if direct:return direct
-    # A written personal plural retains the same nominal boundary as kana.
-    if native_plural_nominal_heads(text):return (text,)
-    linked=native_coordinated_nominal_heads(text)
-    if linked:return linked
-    te_nominal=native_te_nominal_heads(text)
-    if te_nominal:return te_nominal
-    mixed=native_mixed_nominal_heads(text)
-    if mixed:return mixed
-    relative=native_written_relative_nominal_heads(text)
-    if relative:return relative
+
+def _native_written_compound_nominal_heads(text):
+    """The existing whole compound proof, shared without genitive recursion."""
     from morphology import tokenize,dictionary_inflections
     from semantic_roles import nominal_compound_support,nominal_roles
     parts=tokenize(text)
@@ -4769,16 +5811,48 @@ def native_surface_nominal_heads(text):
             if (not tail.pos_sub.startswith('接尾') and (nominal_roles(left) or _native_written_nominal_faces(left))
                     and _native_written_nominal_faces(right) and nominal_compound_support(left,right)):
                 return (text,)
-    return tuple(dict.fromkeys(face for cut,left,right in native_genitive_nominal_splits(text)
-                               for face in right))
+    return ()
 
 
 @lru_cache(maxsize=4096)
-def native_preposed_object_parts(text,allow_written_predicate=False):
+def native_surface_nominal_heads(text, original_context=None):
+    """48-ALT: the same nominal head in kana, written, or mixed genitives.
+
+    Keep the exact written noun's meaning. Native の and both established
+    nouns supply a phrase boundary; no reading of a different kanji is used.
+    """
+    if not text:return ()
+    if original_context is not None and not original_context.startswith(text):return ()
+    if all('ぁ'<=c<='ゖ' or c=='ー' for c in text):
+        return native_nominal_phrase_faces(text)
+    direct=_native_written_nominal_faces(text)
+    if direct:return direct
+    modified=native_written_adnominal_parts(text)
+    if modified:return (modified[-1][0],)
+    # A written personal plural retains the same nominal boundary as kana.
+    if native_plural_nominal_heads(text):return (text,)
+    linked=native_coordinated_nominal_heads(text)
+    if linked:return linked
+    te_nominal=native_te_nominal_heads(text)
+    if te_nominal:return te_nominal
+    mixed=native_mixed_nominal_heads(text)
+    if mixed:return mixed
+    relative=native_written_relative_nominal_heads(text)
+    if relative:return relative
+    compound=_native_written_compound_nominal_heads(text)
+    if compound:return compound
+    return tuple(dict.fromkeys(face for cut,left,right in native_genitive_nominal_splits(
+        text,original_context=original_context) for face in right))
+
+
+@lru_cache(maxsize=4096)
+def native_preposed_object_parts(text,allow_written_predicate=False,*,object_start=None):
     """48-AKW: retain an earlier nominal case with the same content object.
 
     These are source ranges, not anomaly or action evidence. The final
     proof must fit both unchanged nouns to the very same finite action.
+    A supplied object_start must follow an independently proved native
+    adjunct; the returned first edge stays the original case-marker end.
     """
     if text and text[-1:] in '。！？.!?':text=text[:-1]
     # Both nominal arguments may each be one written character. Their
@@ -4788,8 +5862,15 @@ def native_preposed_object_parts(text,allow_written_predicate=False):
     if not text or 'を' not in text or not minimum<=len(text)<=80:return ()
     from morphology import tokenize
     parts=tokenize(text);out=[]
-    for case in (i for i in range(1,len(text)) if text[i] in 'にへでと'):
+    for case in (i for i in range(1,len(text)) if text[i] in 'がにへでとはも'):
         edge=case+1
+        # A topic with a separate accusative object may fill the subject
+        # role only with its own full predicate proof below. Do not infer
+        # a topic boundary inside a longer native word such as momo.
+        if text[case] in ('は','も') and not any(t.start==case and t.end==edge
+                and t.surface==text[case] and t.reading==text[case]
+                and t.has_reading and t.pos=='助詞' and t.pos_sub=='係助詞'
+                for t in parts):continue
         prefix=text[:case]
         if (not prefix or native_nominal_temporal_prefix(text[:edge])
                 or native_reflexive_manner_prefix(text[:edge])
@@ -4797,12 +5878,29 @@ def native_preposed_object_parts(text,allow_written_predicate=False):
         faces=native_surface_nominal_heads(prefix)
         if not faces or native_nominal_case_boundary(text,parts,case,text[case],faces,
                 allow_known_noun=True,allow_compound_case=True) is None:continue
-        for cut,objects in native_object_predicate_frames(text[edge:],allow_written_predicate):
+        begin=edge
+        if object_start is not None:
+            if not edge<object_start<len(text):continue
+            from semantic_roles import _argument_prefix
+            legacy=[(t.surface,t.pos+':'+t.pos_sub,t.reading,t.start,t.end,
+                     t.has_reading,t.infl_form) for t in parts]
+            if _argument_prefix(text,object_start,lambda _:legacy)[1]!=edge:continue
+            begin=object_start
+        for cut,objects in native_object_predicate_frames(text[begin:],allow_written_predicate):
             # A fully proved modified noun already owns an earlier case
             # (library-de borrowed-book). Do not attach that case again
             # to the main verb just because its kana can be sliced there.
-            if native_nominal_phrase_faces(text[:edge+cut-1]):continue
-            out.append((edge,text[case],tuple(faces),edge+cut,objects))
+            if native_nominal_phrase_faces(text[:begin+cut-1]):continue
+            # A nominative clause is not itself an object nominal. Only
+            # its positively proved full predicate and both arguments can
+            # supply this new whole-clause scope to boundary-only callers.
+            # Missing meaning does not create an error in the source.
+            if text[case] in ('が','は','も'):
+                from semantic_roles import proved_action_case_support
+                action=native_object_predicate_proof(text[begin:],cut,objects,return_action=True)
+                if not action or not any(proved_action_case_support(noun,'が',action,
+                        context=text[begin:]) for noun in faces):continue
+            out.append((edge,text[case],tuple(faces),begin+cut,objects))
     return tuple(out)
 
 
@@ -5285,6 +6383,51 @@ def native_adverbial_reading_cuts(text):
     # A short homophonic adverb cannot erase a longer proved action head.
     action_ends=native_polite_action_prefixes(text)
     counter_cuts=_native_counter_prefixes(text,original)
+    # Adjacent actual modifiers keep their own dictionary identities.
+    # Their cumulative edge proves no clause or candidate spelling.
+    def attested_modifier_token(token):
+        return (token.has_reading and token.end==token.start+len(token.surface)
+            and text[token.start:token.end]==token.surface
+            and (token.surface==token.reading
+                or token.pos=='名詞' and token.pos_sub=='形容動詞語幹')
+            and all('ぁ'<=c<='ゖ' or c=='ー' for c in token.reading)
+            and any(pos.startswith(token.pos+',')
+                and ':'.join(p for p in pos.split(',')[1:] if p!='*')==token.pos_sub
+                and base==token.base_form and (form if form!='*' else '')==token.infl_form
+                and rd==token.reading for pos,form,base,rd in dictionary_inflections(token.surface) or ()))
+    sequence_cuts=set();edge=0;members=0;index=0
+    while index<len(original):
+        token=original[index]
+        if token.start!=edge or not attested_modifier_token(token):break
+        count=1;end=token.end
+        if token.pos=='副詞':
+            if token.surface not in _native_adverbial_faces(token.reading):break
+        elif token.pos=='形容詞':
+            if not (token.infl_form=='連用テ接続' and token.surface.endswith('く')):break
+            # The existing manner proof uses an unchanged suffix. Bind its
+            # first token back to this whole original adjective explicitly.
+            suffix=text[token.start:];parts=tokenize(suffix)
+            if not (parts and parts[0].start==0 and parts[0].end==len(token.surface)
+                    and all(getattr(parts[0],k)==getattr(token,k) for k in
+                            ('surface','reading','has_reading','pos','pos_sub','base_form','infl_form'))
+                    and native_adjective_adverbial_prefix(suffix,len(token.surface))):break
+        elif token.pos=='名詞' and token.pos_sub=='形容動詞語幹' and index+1<len(original):
+            # Keep the entire original na-stem and its real adverbial ni.
+            # A same-reading general noun or case particle owns no such edge.
+            particle=original[index+1]
+            if not (particle.start==token.end and particle.surface=='に'
+                    and attested_modifier_token(particle)
+                    and (particle.pos=='助詞' and particle.pos_sub=='副詞化'
+                        or particle.pos=='助動詞' and particle.base_form=='だ'
+                            and particle.infl_form=='連用形')):break
+            count=2;end=particle.end
+        else:break
+        edge=end;members+=1;index+=count
+        if members>=2:sequence_cuts.add(edge)
+    # A single attested na-stem plus adverbial ni owns a whole modifier
+    # boundary too. Keep the existing cumulative cuts when more modifiers
+    # follow; do not add a new intermediate written-stem cut to that chain.
+    if members==1 and index==2:sequence_cuts.add(edge)
     # A written bound particle/auxiliary cannot become a free adverb
     # through a homophonic kanji entry (ほど / 程 before 貸します).
     # Unknown segmentation still has the existing dictionary fallback.
@@ -5304,6 +6447,11 @@ def native_adverbial_reading_cuts(text):
         # 48-ANR: the unchanged adverb can precede a written noun.
         # Its own prefix still needs exact kana-reading evidence; the
         # following script neither proves nor disqualifies this boundary.
+        # A written na-stem has its own full dictionary reading/POS.
+        # Reuse only the attested whole sequence, never a kana projection
+        # or another spelling's token evidence. Other paths stay kana-only.
+        if cut in sequence_cuts:
+            cuts.append(cut);continue
         if not all('ぁ'<=c<='ゖ' or c=='ー' for c in reading):continue
         # An attested native counter may quantify an independently proved
         # object/predicate, using the same unchanged adverbial projection.
@@ -5379,8 +6527,37 @@ def native_predicate_link_boundaries(text,predicate_start):
         if heads and completed_sahen_reading(text[predicate_start:end+2],
                 allow_nonpolite=True,return_action=True) in heads:
             boundaries.append(end+2)
-    for link in tokenize(text):
+    source_parts=tokenize(text)
+    for link in source_parts:
         if not (link.has_reading and predicate_start<link.end):continue
+        # A conditional auxiliary already closes this verb's own scope.
+        # Keep the original verb/auxiliary parse: cutting the string can
+        # turn the actual suru into an unrelated lexical head. This is
+        # grammatical boundary evidence, not a proof of either clause's
+        # arguments or meaning. Every intervening token must be a native
+        # auxiliary in the same contiguous source range.
+        from contextual_repair import _self_contained_conditional,_allows_grammatical_tail
+        conditional=_self_contained_conditional((link.surface,
+            link.pos+(':'+link.pos_sub if link.pos_sub else ''),link.reading,
+            link.start,link.end,link.has_reading,link.infl_form))
+        if conditional:
+            native=[part for part in source_parts
+                    if predicate_start<=part.start and part.end<=link.end]
+            if (len(native)>=2 and native[0].start==predicate_start
+                    and native[0].pos=='動詞' and native[0].pos_sub=='自立'
+                    and native[-1].end==link.end
+                    and all(part.has_reading for part in native)
+                    and all(part.pos=='助動詞' for part in native[1:])
+                    and ''.join(part.surface for part in native)==text[predicate_start:link.end]):
+                from morphology import dictionary_inflections
+                head=native[0]
+                forms=tuple(row for row in dictionary_inflections(head.surface) or ()
+                    if row[0].startswith('動詞,自立,') and row[1]==head.infl_form
+                    and row[2]==head.base_form and row[3]==head.reading)
+                if forms and _allows_grammatical_tail(forms,text[head.end:link.end],
+                                                      head.reading,head.surface):
+                    boundaries.append(link.end)
+            continue
         parts=tokenize(text[predicate_start:link.end]);readings=[]
         original_link=link.pos=='助詞' and link.pos_sub=='接続助詞'
         # A following noun can absorb the past/aspect kana in the full parse.
@@ -5522,6 +6699,47 @@ def native_adverbial_predicate_reading(text, allow_open_tail=True, finite_only=F
     return False
 
 
+def _native_genitive_nominal_neighbor(text,parts,index,before=False):
+    """An original adnominal particle and an unchanged whole native noun.
+
+    The neighboring noun supplies only its own boundary, never meaning
+    for the anomalous compound on the other side of the particle.
+    """
+    from morphology import dictionary_inflections
+    link=parts[index]
+    if (not link.has_reading or link.surface!='の' or link.reading!='の'
+            or link.pos!='助詞' or link.pos_sub!='連体化'
+            or link.end!=link.start+1 or text[link.start:link.end]!='の'
+            or not any(pos.startswith('助詞,連体化,') and rd==link.reading
+                       for pos,form,base,rd in dictionary_inflections(link.surface) or ())):return False
+    if before:
+        nouns=parts[:index]
+        if not nouns or nouns[0].start!=0 or nouns[-1].end!=link.start:return False
+    else:
+        end=index+1
+        while end<len(parts) and parts[end].pos=='名詞':end+=1
+        nouns=parts[index+1:end]
+        if not nouns or nouns[0].start!=link.end:return False
+        if end<len(parts):
+            tail=parts[end]
+            if (not tail.has_reading or tail.start!=nouns[-1].end
+                    or not (tail.pos=='助詞' and tail.pos_sub.startswith(('格助詞:','係助詞'))
+                            or tail.pos=='助動詞' and tail.base_form in ('だ','です')
+                            or tail.pos=='記号' and tail.surface in '。！？.!?')):return False
+    if (any(a.end!=b.start for a,b in zip(nouns,nouns[1:]))
+            or any(not t.has_reading or t.pos!='名詞'
+                   or any(kind in t.pos_sub for kind in ('固有名詞','非自立'))
+                   or text[t.start:t.end]!=t.surface
+                   or not any(pos.startswith('名詞,')
+                       and ':'.join(x for x in pos.split(',')[1:] if x!='*')==t.pos_sub
+                       and base==t.base_form and rd==t.reading
+                       and (form or '*')==(t.infl_form or '*')
+                       for pos,form,base,rd in dictionary_inflections(t.surface) or ())
+                   for t in nouns)):return False
+    raw=text[nouns[0].start:nouns[-1].end]
+    return bool(raw and native_surface_nominal_heads(raw))
+
+
 def native_nominal_verb_prefix_ranges(text):
     """Keep a native continuative before an actual nominal-prefix boundary.
 
@@ -5535,8 +6753,12 @@ def native_nominal_verb_prefix_ranges(text):
         for index,head in enumerate(parts[:-2]):
             if head.start:
                 previous=parts[index-1] if index else None
-                if not (previous and previous.end==head.start and previous.has_reading
-                        and previous.pos=='助詞' and previous.pos_sub.startswith('格助詞:')):continue
+                case=(previous and previous.end==head.start and previous.has_reading
+                      and previous.pos=='助詞' and previous.pos_sub.startswith('格助詞:'))
+                genitive=(previous and previous.end==head.start and previous.surface=='の'
+                          and head.surface in native_deverbal_nominal_faces(head.reading)
+                          and _native_genitive_nominal_neighbor(clause,parts,index-1,True))
+                if not (case or genitive):continue
             following=parts[index+1:]
             if (not head.has_reading or head.pos!='動詞' or head.pos_sub!='自立'
                     or head.infl_form!='連用形' or not 2<=len(head.surface)<=8
@@ -5546,7 +6768,7 @@ def native_nominal_verb_prefix_ranges(text):
             if not any(pos.startswith('動詞,自立,') and form==head.infl_form and rd==head.reading
                        for pos,form,base,rd in dictionary_inflections(head.surface) or ()):continue
             end=head.end;nominal=False
-            for token in following:
+            for position,token in enumerate(following,index+1):
                 if token.start!=end:break
                 if token.pos=='名詞' or token.pos=='接頭詞' and token.pos_sub=='名詞接続':
                     nominal=nominal or token.pos=='名詞';end=token.end;continue
@@ -5556,7 +6778,10 @@ def native_nominal_verb_prefix_ranges(text):
                         and native_suru_form(token.surface,token.infl_form,token.reading,False))
                 copula=(token.has_reading and token.pos=='助動詞'
                         and token.base_form in ('だ','です'))
-                if nominal and (case or action or copula):out.append((offset+head.start,offset+head.end))
+                genitive=(token.surface=='の' and head.surface in native_deverbal_nominal_faces(head.reading)
+                          and _native_genitive_nominal_neighbor(clause,parts,position))
+                if nominal and (case or action or copula or genitive):
+                    out.append((offset+head.start,offset+head.end))
                 break
             else:
                 if nominal:out.append((offset+head.start,offset+head.end))
@@ -5601,6 +6826,43 @@ def preserves_native_nominal_verb_prefix(original,changed):
     blocks=SequenceMatcher(None,original,changed,autojunk=False).get_matching_blocks()
     return all(any(block.a<=start and end<=block.a+block.size for block in blocks)
                for start,end in spans)
+
+
+
+@lru_cache(maxsize=4096)
+def native_pronoun_case_ranges(text):
+    """An actual pronoun owns its native case/topic, despite an unknown tail.
+
+    This is original grammatical evidence, not a guess about the next noun.
+    In particular a malformed initial small kana cannot lend the preceding
+    pronoun's particle to a different lexical reading.
+    """
+    from morphology import tokenize,dictionary_inflections
+    parts=tokenize(text);out=[]
+    for noun in parts:
+        if not (noun.has_reading and noun.pos=='名詞' and noun.pos_sub.startswith('代名詞')):continue
+        if not any(pos.startswith('名詞,代名詞,') and reading==noun.reading
+                   for pos,form,base,reading in dictionary_inflections(noun.surface) or ()):continue
+        # The next malformed onset can make the best parse swallow the
+        # particle into a noun. The unchanged pronoun and native particle
+        # entries establish the same source boundary independently.
+        for end in range(noun.end+1,min(len(text),noun.end+3)+1):
+            raw=text[noun.end:end]
+            if any(pos.startswith(('助詞,格助詞,一般,','助詞,係助詞,','助詞,連体化,'))
+                   and reading==raw for pos,form,base,reading in dictionary_inflections(raw) or ()):
+                out.append((noun.end,end))
+    return tuple(out)
+
+
+def preserves_native_pronoun_case(original,changed):
+    spans=native_pronoun_case_ranges(original)
+    if not spans:return True
+    from difflib import SequenceMatcher
+    # A missing next onset may be inserted at the right edge. Preserve the
+    # actual particle; do not freeze either neighbor or its written spelling.
+    return not any(a<end and start<b or a==b and start<a<end
+        for tag,a,b,c,d in SequenceMatcher(None,original,changed,autojunk=False).get_opcodes()
+        if tag!='equal' for start,end in spans)
 
 
 def preserves_native_word_onset(line,start,end,surface):
@@ -5721,6 +6983,34 @@ def native_literal_argument_chain(prefix):
     return solutions[0] if len(solutions)==1 else ()
 
 
+def _native_written_modifier_nominal_heads(text,parts):
+    """Retain an actual modifier and the following noun's own whole proof.
+
+    The modifier supplies no nominal meaning. Its original tokens must
+    match the same dictionary forms before the existing nominal/compound
+    proof is applied to the strictly shorter, unchanged remainder.
+    """
+    if (len(parts)<3 or parts[0].start!=0 or parts[-1].end!=len(text)
+            or not all(t.has_reading for t in parts)
+            or any(a.end!=b.start for a,b in zip(parts,parts[1:]))):return ()
+    from semantic_roles import nominal_roles
+    for index in range(1,len(parts)-1):
+        cut=parts[index].start;prefix=text[:cut]
+        if not any('一'<=c<='鿿' for c in prefix):continue
+        proof=native_adnominal_modifier_parts(prefix,allow_written=True)
+        original=parts[:index]
+        if (not proof or len(proof)!=len(original)
+                or ''.join(t.surface for t in original)!=prefix
+                or any(row[0]!=t.surface or row[4]!=t.reading
+                       or row[1].split(',')[0]!=t.pos or row[3]!=t.base_form
+                       or (row[2] or '*')!=(t.infl_form or '*')
+                       for row,t in zip(proof,original))):continue
+        heads=native_surface_nominal_heads(text[cut:])
+        supported=tuple(face for face in heads if nominal_roles(face))
+        if supported:return supported
+    return ()
+
+
 @lru_cache(maxsize=4096)
 def _native_written_nominal_faces(text):
     """An attested nominal head, retaining the written word's own senses.
@@ -5771,6 +7061,8 @@ def _native_written_nominal_faces(text):
         heads=native_surface_nominal_heads(text[cut:])
         supported=tuple(face for face in heads if nominal_roles(face))
         if supported:return supported
+    modified=_native_written_modifier_nominal_heads(text,parts)
+    if modified:return modified
     if (len(parts)==2 and parts[0].start==0 and parts[0].end==parts[1].start
             and parts[1].end==len(text) and all(t.has_reading for t in parts)
             and parts[0].pos in ('連体詞','接頭詞') and nominal(parts[1].surface)):
@@ -6335,7 +7627,19 @@ def native_polite_auxiliary_chains(text, include_open=False):
 @lru_cache(maxsize=2048)
 def native_independent_object_reading(text,start,end):
     """A complete source noun owns its actual case and fitting predicate."""
-    if text[end:end+1]!='を' or start not in (0,)+native_completed_clause_boundaries(text):return False
+    if text[end:end+1]!='を':return False
+    if start not in (0,)+native_completed_clause_boundaries(text):
+        # A proved earlier argument supplies the same original object seam.
+        # Both complete nouns must fit that one action, not another sense
+        # or a nominal guessed from only the ending of the source reading.
+        from semantic_roles import proved_action_case_support
+        for edge,case,nouns,predicate,objects in native_preposed_object_parts(text,True):
+            if edge!=start or predicate!=end+1:continue
+            action=native_object_predicate_proof(text[edge:],predicate-edge,objects,
+                return_action=True)
+            if action and any(proved_action_case_support(noun,case,action,
+                    context=text[edge:]) for noun in nouns):break
+        else:return False
     from morphology import tokenize
     original=text[start:];cut=end-start;faces=native_surface_nominal_heads(original[:cut])
     return bool(faces and native_nominal_case_boundary(original,tokenize(original),cut,'を',faces) is not None
@@ -6356,6 +7660,15 @@ def native_negative_auxiliary_chains(text):
         if host.infl_form=='未然ウ接続':continue
         if not any(p.startswith('動詞,') and f==host.infl_form and b==host.base_form
                    and r==host.reading for p,f,b,r in dictionary_inflections(host.surface) or ()):continue
+        # A real irrealis/negative pair still needs its original host
+        # attachment. Share the same native te/de-auxiliary mismatch used
+        # in source grammar and candidate completion. An impossible bound
+        # verb connection cannot turn a following noun reading into a
+        # protected negation. Actual te/de links and dictionary compounds
+        # retain their own proof; no candidate supplies this decision.
+        if index:
+            from morphology import native_te_auxiliary_attachment_mismatch
+            if native_te_auxiliary_attachment_mismatch(parts[index-1],host):continue
         # An explicitly reviewed rare kana lemma alone cannot establish a
         # normal negative phrase against an independent source anomaly.
         # Unknown usage is not rare. A written host or an actual preceding
@@ -6370,8 +7683,28 @@ def native_negative_auxiliary_chains(text):
         # A best-path irrealis + n may be the inside of one attested noun.
         # Its unchanged complete reading and following nominal case own
         # the boundary; the lexical ending is not a negative auxiliary.
+        # A proved original te/de + auxiliary + negative chain owns its
+        # ending even before a case-like connective. A homophonous noun
+        # reading of only the auxiliary/negative pair cannot erase that
+        # actual connection. Reuse the native tail proof from completion;
+        # unrelated preceding text supplies no bound-verb evidence.
+        linked_negative=False
+        if index>=2 and host.pos_sub.startswith('非自立'):
+            verb,link=parts[index-2:index]
+            if (verb.has_reading and verb.pos=='動詞' and verb.end==link.start
+                    and link.has_reading and link.pos=='助詞' and link.pos_sub=='接続助詞'
+                    and link.surface in ('て','で') and link.end==host.start):
+                from contextual_repair import _native_te_auxiliary_tail
+                linked_negative=_native_te_auxiliary_tail(
+                    dictionary_inflections(verb.surface) or (),text[verb.end:aux.end],
+                    verb.reading,verb.surface)
+        # A complete original noun after its actual written relative
+        # action owns its internal nasal too. Share the same whole-word
+        # boundary used by spelling, without borrowing a candidate face.
+        if (not linked_negative and any(edge<=host.start and aux.end<=len(text)
+                for head,edge,faces in native_written_sahen_nominal_parts(text))):continue
         following=parts[index+2] if index+2<len(parts) else None
-        if (following is not None and following.start==aux.end and following.has_reading
+        if (not linked_negative and following is not None and following.start==aux.end and following.has_reading
                 and following.pos=='助詞' and following.pos_sub.startswith('格助詞')
                 and _native_nominal_reading_faces(text[host.start:aux.end])):continue
         # The same completed native action-noun reading can contain a
@@ -6498,10 +7831,15 @@ def native_written_nominal_ranges(text):
     from morphology import tokenize,native_suru_form,dictionary_inflections
     parts=tokenize(text);groups=[];current=[]
     for part in parts:
-        if part.pos=='名詞' and (not current or current[-1].end==part.start):
+        # The original nominal prefix is part of the same maximal run.
+        # Proving only its following noun cannot freeze that fragment while
+        # hiding an unproved attachment on the left. The whole run must
+        # still have the ordinary complete nominal evidence below.
+        nominal=(part.pos=='名詞' or part.pos=='接頭詞' and part.pos_sub=='名詞接続')
+        if nominal and (not current or current[-1].end==part.start):
             current.append(part);continue
         if current:groups.append(current);current=[]
-        if part.pos=='名詞':current=[part]
+        if nominal:current=[part]
     if current:groups.append(current)
     # A native sahen noun followed by suru is the lexical head of a
     # predicate here. Bare noun identity alone cannot certify its argument
@@ -6887,19 +8225,21 @@ def attested_source_expression_ranges(text):
 
 
 @lru_cache(maxsize=4096)
-def native_adnominal_modifier_parts(reading, allow_predicative=False):
+def native_adnominal_modifier_parts(reading, allow_predicative=False, allow_written=False):
     """Exact modifier proof, independent of the identity of its right noun.
 
     Only the modifier is certified. An unknown following token stays unknown;
     it cannot turn a complete source word into an erroneous verb inflection.
     """
-    if not reading or not all('ぁ'<=ch<='ゖ' or ch=='ー' for ch in reading):return ()
+    written=allow_written and any('一'<=ch<='龥' for ch in reading)
+    if not reading or not all('ぁ'<=ch<='ゖ' or ch=='ー'
+            or written and '一'<=ch<='龥' for ch in reading):return ()
     from corrector import table_surfaces_for_reading
     from morphology import dictionary_inflections,native_independent_adjective
     def entries(value):
         for face in dict.fromkeys((value,*table_surfaces_for_reading(value,limit=12))):
             for pos,form,base,rd in dictionary_inflections(face) or ():
-                if rd==value:yield face,pos,form,base,rd
+                if rd==value or written and face==value:yield face,pos,form,base,rd
     rows=tuple(entries(reading))
     finite=any(row[1].startswith(('動詞,','助動詞,')) and row[2]=='基本形' for row in rows)
     for row in rows:
@@ -6974,6 +8314,8 @@ def _native_non_nominal_modifier_tail(text):
 @lru_cache(maxsize=2048)
 def native_adnominal_modifier_ranges(text):
     from morphology import tokenize
+    from pos_grammar import native_object_functional_tail_frames
+    predicate_heads=native_object_functional_tail_frames(text)
     out=[]
     for offset,clause in _native_source_clauses(text):
         tokens=tokenize(clause)
@@ -7000,10 +8342,21 @@ def native_adnominal_modifier_ranges(text):
         starts={0}|{t.start for t in tokens}
         for start in sorted(starts):
             if any(begin<start<end for begin,end in quantities):continue
+            # A previously attested source modifier owns its whole prefix.
+            # A best-path fragment beginning inside it cannot start a second
+            # overlapping modifier and freeze a key in the following noun.
+            if any(begin<offset+start<finish for begin,finish in out):continue
             for end in range(start+2,len(clause)):
                 head=clause[start:end]
-                if not all('ぁ'<=ch<='ゖ' or ch=='ー' for ch in head):break
-                if not native_adnominal_modifier_parts(head):continue
+                if not all('ぁ'<=ch<='ゖ' or ch=='ー' or '一'<=ch<='龥' for ch in head):break
+                # Use the same exact native modifier proof as candidate
+                # boundaries, including the original written spelling.
+                # Only its range is retained; the right noun stays unknown.
+                if not native_adnominal_modifier_parts(head,allow_written=True):continue
+                # An exact original continuative owns this same range when
+                # its object and actual functional prefix establish a verb.
+                if any(a==offset+start and cut==offset+end
+                       for a,b,cut,reading in predicate_heads):continue
                 if _native_non_nominal_modifier_tail(clause[end:]):continue
                 # Do not split a longer original dictionary token. Parser
                 # fragments within a proved modifier are not new word edges.
@@ -7133,6 +8486,14 @@ def native_context_ranges(text):
         return tuple(out)
     from morphology import tokenize
     for start,clause in _native_source_clauses(text):
+        # The unchanged action sequence has the same lexical boundaries
+        # before and after same-reading spelling. An actual open polite
+        # tail supplies source evidence, never completed-candidate evidence.
+        # As with a bare action note below, separate valid actions may occur
+        # in temporal order. Meaning-based spelling selection stays stricter.
+        if (8<=len(clause)<=80
+                and _native_action_note_heads(clause,require_link=False,allow_predicate=True)):
+            out.append((start,start+len(clause)))
         if native_case_adnominal_parts(clause) or native_te_nominal_heads(clause):
             out.append((start,start+len(clause)))
         # Share the unchanged adjunct itself, without declaring the following
@@ -7535,10 +8896,31 @@ def native_object_predicate_proof(text, predicate_start, faces, allow_link=False
     # first te/de action with the same source ownership proof, then validate
     # that first action's own object and grammar, including its actual link.
     from semantic_roles import _motion_tail_cannot_take_object
-    for link in tokenize(text):
-        if (link.start>predicate_start and link.pos=='助詞'
-                and link.pos_sub=='接続助詞' and link.surface in ('て','で')
-                and faces and all(_motion_tail_cannot_take_object(text[link.end:],face) for face in faces)):
+    source_parts=tokenize(text)
+    for index,link in enumerate(source_parts):
+        if not (link.start>predicate_start and link.pos=='助詞'
+                and link.pos_sub=='接続助詞' and link.surface in ('て','で')):continue
+        ends=[link.end]
+        # A temporal te/de + kara belongs to this same native action.
+        # Retain the full original tokens and prove the complete link;
+        # the following motion lends neither its object nor its meaning.
+        following=source_parts[index+1] if index+1<len(source_parts) else None
+        if (link.has_reading and following and following.has_reading
+                and following.start==link.end and following.pos=='助詞'
+                and following.surface==following.reading=='から'):
+            native=[part for part in source_parts
+                    if predicate_start<=part.start and part.end<=following.end]
+            if (native and native[0].start==predicate_start
+                    and all(part.has_reading for part in native)
+                    and all(a.end==b.start for a,b in zip(native,native[1:]))
+                    and ''.join(part.surface for part in native)==text[predicate_start:following.end]):
+                reading=''.join(part.surface if all('ぁ'<=c<='ゖ' or c=='ー' for c in part.surface)
+                                else part.reading for part in native)
+                if (_written_predicate_reading_preserved(native,predicate_start,reading)
+                        and completed_native_reading_link(reading,allow_unclassified=True)):
+                    ends.append(following.end)
+        if faces and any(all(_motion_tail_cannot_take_object(text[end:],face)
+                             for face in faces) for end in ends):
             action=native_object_predicate_proof(text[:link.end],predicate_start,faces,
                                                  allow_link=True,return_action=True)
             if action:return action if return_action else True

@@ -258,6 +258,12 @@ class Token:
         return f'<{self.surface}({self.pos}) {self.start}:{self.end}>'
 
 
+def compound_voiced_reading(reading):
+    voiced=dict(zip('かきくけこさしすせそたちつてとはひふへほ',
+                    'がぎぐげござじずぜぞだぢづでどばびぶべぼ'))
+    return voiced[reading[0]]+reading[1:] if reading and reading[0] in voiced else None
+
+
 def katakana_to_hiragana(text):
     out = []
     for ch in text:
@@ -655,7 +661,9 @@ def preserves_native_adverbial_word(original,changed):
     # including any shorter temporal noun found by the best-path split.
     action_edges=native_predicate_link_boundaries(original,0)
     from pos_grammar import unexplained_shifted_predicate_tails
-    original_predicates=unexplained_shifted_predicate_tails(original)
+    from pos_grammar import native_object_functional_tail_frames
+    original_predicates=(unexplained_shifted_predicate_tails(original)
+                         +native_object_functional_tail_frames(original))
     def inside_original_action(token):
         # A native original continuative plus its intact functional prefix
         # owns an inner best-parse adverb. The final broken small vowel is
@@ -1210,6 +1218,23 @@ TE_AUXILIARY_BASES=frozenset(('いる','居る','おる','居る','ある','有�
     'みる','見る','みせる','見せる','もらう','貰う','いただく','頂く',
     'あげる','上げる','さしあげる','差し上げる','やる','くれる','呉れる',
     'くださる','下さる'))
+
+
+def native_te_auxiliary_attachment_mismatch(previous,auxiliary):
+    """Share the existing native bound-verb connection at its source span.
+
+    A te/de auxiliary cannot attach directly to another verb. The same
+    independently attested compound spelling, form, and reading retains
+    its lexical connection. Unknown tokens and other attachment types
+    supply no negative evidence here.
+    """
+    a,b=previous,auxiliary
+    return bool(a.has_reading and b.has_reading and a.end==b.start
+        and a.pos=='動詞' and b.pos=='動詞' and b.pos_sub.startswith('非自立')
+        and b.base_form in TE_AUXILIARY_BASES
+        and not any(p.startswith('動詞,') and f==b.infl_form
+                    and r==a.reading+b.reading for p,f,base,r in
+                    dictionary_inflections(a.surface+b.surface) or ()))
 
 
 @lru_cache(maxsize=8192)
@@ -2398,6 +2423,12 @@ def native_spelling_only(original,changed):
         following=set()
         readings={rd for pos,form,base,rd in dictionary_inflections(token.surface) or ()
                   if pos.startswith(token.pos+',') and rd and all('ぁ'<=c<='ゖ' or c=='ー' for c in rd)} if token.has_reading else set()
+        # The tokenizer already restores independently proved sahen
+        # compounds as one noun. Preserve that same whole reading here;
+        # dictionary_inflections deliberately remains native-only.
+        if token.has_reading and token.pos=='名詞' and token.pos_sub=='サ変接続':
+            compound_reading=native_sahen_compound_reading(token.surface)
+            if compound_reading:readings.add(compound_reading)
         # Exact externally sourced nouns share the same reading proof;
         # the native dictionary API remains unchanged. No substring proof.
         from general_words import sourced_common_noun_evidence

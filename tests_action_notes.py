@@ -9,6 +9,170 @@ import semantic_roles as S
 
 
 class ActionNoteTests(unittest.TestCase):
+    @unittest.skipUnless(M.HAS_JANOME,'native action endings and horizontal-key evidence')
+    def test_action_endings_keep_horizontal_completed_expectations(self):
+        import app,contextual_repair as Q
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        cases=(('しい','して','かくにんしいほぞんしてしゅうりょう','確認して保存して終了'),
+               ('しくす','します','ぶんしょうをにゅうりょくしくす。','文章を入力します。'))
+        try:
+            for typed,reading,source,expected in cases:
+                with self.subTest(source=source):
+                    self.assertTrue(any(row.reading==reading and row.operation=='adjacent_substitution'
+                                        for row in Q.key_repairs(typed)))
+                    a=initial();r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                        decisions=a.decisions,context_vec=None)
+                    self.assertEqual(r['corrected'],expected)
+                    self.assertEqual(r['odd_spans'],[])
+                    self.assertEqual(r['analysis_status'],'complete')
+        finally:set_active(None)
+
+    @unittest.skipUnless(M.HAS_JANOME,'excluded directions, literal input and common final gate')
+    def test_action_endings_preserve_old_negatives_quotes_and_common_gate(self):
+        import app,corrector as C,contextual_repair as Q
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        cases=(('しあ','して','かくにんしあほぞんしてしゅうりょう','かくにんしあほぞんしてしゅうりょう'),
+               ('しんす','します','ぶんしょうをにゅうりょくしんす。','文章をにゅうりょくしんす。'))
+        try:
+            for typed,reading,source,expected in cases:
+                with self.subTest(source=source):
+                    for generator in (Q.key_repairs,Q.nonadjacent_key_repairs,
+                                      Q.adjacent_shift_key_repairs,Q.neighbor_shift_key_repairs):
+                        self.assertNotIn(reading,{row.reading for row in generator(typed)})
+                    a=initial();r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                        decisions=a.decisions,context_vec=None)
+                    self.assertEqual(r['corrected'],expected)
+                    self.assertTrue(r['odd_spans'])
+                    self.assertEqual(r['analysis_status'],'complete')
+            for text,normal in (('かくにんしいほぞんしてしゅうりょう','確認して保存して終了'),
+                                ('ぶんしょうをにゅうりょくしくす。','文章を入力します。')):
+                for source in ('「'+text+'」と入力します。',normal):
+                    a=initial();r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                        decisions=a.decisions,context_vec=None)
+                    self.assertEqual(r['corrected'],source)
+                    self.assertEqual(r['odd_spans'],[])
+                    self.assertEqual(r['analysis_status'],'complete')
+                a=initial()
+                with patch.object(C,'_check_replacement',return_value=(None,'test_common_gate')):
+                    r=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
+                        decisions=a.decisions,context_vec=None)
+                self.assertEqual(r['corrected'],text)
+                self.assertTrue(r['odd_spans'])
+                self.assertEqual(r['analysis_status'],'complete')
+        finally:set_active(None)
+
+    @unittest.skipUnless(M.HAS_JANOME,'native action and horizontal-key evidence')
+    def test_object_action_fixtures_keep_complete_horizontal_repairs(self):
+        import app,contextual_repair as Q
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        cases=(('せすり','せいり','しりょうをせすりしてください。','資料を整理してください。'),
+               ('せいれ','せいり','しりょうをせいれしてください。','資料を整理してください。'),
+               ('かきにん','かくにん','きろくをかきにんしてほぞんします。','記録を確認して保存します。'))
+        try:
+            for typed,reading,source,expected in cases:
+                with self.subTest(source=source):
+                    self.assertTrue(any(r.reading==reading and r.operation=='adjacent_substitution'
+                                        for r in Q.key_repairs(typed)))
+                    a=initial();r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                        decisions=a.decisions,context_vec=None)
+                    self.assertEqual(r['corrected'],expected)
+                    self.assertEqual(r['odd_spans'],[])
+                    self.assertEqual(r['analysis_status'],'complete')
+        finally:set_active(None)
+
+    @unittest.skipUnless(M.HAS_JANOME,'native action and excluded original directions')
+    def test_object_action_fixtures_keep_old_direction_negatives(self):
+        import app,contextual_repair as Q
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        cases=(('せあり','せいり','しりょうをせありしてください。'),
+               ('せいる','せいり','しりょうをせいるしてください。'),
+               ('かんにん','かくにん','きろくをかんにんしてほぞんします。'))
+        try:
+            for typed,reading,source in cases:
+                with self.subTest(source=source):
+                    for generator in (Q.key_repairs,Q.nonadjacent_key_repairs,
+                                      Q.adjacent_shift_key_repairs,Q.neighbor_shift_key_repairs):
+                        self.assertNotIn(reading,{r.reading for r in generator(typed)})
+                    a=initial();r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                        decisions=a.decisions,context_vec=None)
+                    unchanged_action={
+                        'しりょうをせありしてください。':'資料をせありしてください。',
+                        'しりょうをせいるしてください。':'しりょうをせいるしてください。',
+                        'きろくをかんにんしてほぞんします。':'記録をかんにんしてほぞんします。'}
+                    self.assertEqual(r['corrected'],unchanged_action[source])
+                    self.assertTrue(r['odd_spans'])
+                    self.assertEqual(r['analysis_status'],'complete')
+        finally:set_active(None)
+
+    @unittest.skipUnless(M.HAS_JANOME,'literal input and common final gate')
+    def test_object_action_horizontal_fixtures_keep_quotes_and_final_gate(self):
+        import app,corrector as C
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        try:
+            for text in ('しりょうをせすりしてください。','しりょうをせいれしてください。',
+                         'きろくをかきにんしてほぞんします。'):
+                source='「'+text+'」と入力します。';a=initial()
+                r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                    decisions=a.decisions,context_vec=None)
+                self.assertEqual(r['corrected'],source)
+                self.assertEqual(r['odd_spans'],[])
+                a=initial()
+                with patch.object(C,'_check_replacement',return_value=(None,'test_common_gate')):
+                    r=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
+                        decisions=a.decisions,context_vec=None)
+                self.assertEqual(r['corrected'],text)
+        finally:set_active(None)
+
+    @unittest.skipUnless(M.HAS_JANOME,'native action and physical-key evidence')
+    def test_action_comparison_uses_horizontal_inputs_and_preserves_old_exclusions(self):
+        import app,contextual_repair as Q,kana_layout as L
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        positives=(('かくなん','かくにん','確認して保存'),('かくせん','かくらん','撹乱して保存'))
+        try:
+            for typed,reading,expected in positives:
+                with self.subTest(source=typed):
+                    self.assertEqual(L.kana_key_distance(typed[2],reading[2]),1)
+                    self.assertTrue(any(r.reading==reading and r.operation=='adjacent_substitution' for r in Q.key_repairs(typed)))
+                    a=initial();source=typed+'してほぞん'
+                    r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+                    self.assertEqual(r['corrected'],expected)
+                    self.assertEqual(r['odd_spans'],[])
+                    self.assertEqual(r['analysis_status'],'complete')
+            for typed in ('かくゆん','かくよん','かくのん','かくわん','かくりん'):
+                with self.subTest(source=typed):
+                    for generator in (Q.key_repairs,Q.nonadjacent_key_repairs,Q.adjacent_shift_key_repairs,Q.neighbor_shift_key_repairs):
+                        self.assertFalse({'かくにん','かくらん'} & {r.reading for r in generator(typed)})
+                    a=initial();source=typed+'してほぞん'
+                    r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+                    self.assertEqual(r['corrected'],source)
+                    self.assertTrue(r['odd_spans'])
+                    self.assertEqual(r['analysis_status'],'complete')
+        finally:set_active(None)
+
+    @unittest.skipUnless(M.HAS_JANOME,'native action and common candidate validation')
+    def test_horizontal_action_keeps_literal_input_and_shared_candidate_rejection(self):
+        import app,corrector as C
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        try:
+            for source in ('「かくなんしてほぞん」と入力します。','「かくせんしてほぞん」と入力します。'):
+                a=initial();r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+                self.assertEqual(r['corrected'],source)
+                self.assertEqual(r['odd_spans'],[])
+            for source in ('かくなんしてほぞん','かくせんしてほぞん'):
+                a=initial()
+                with patch.object(C,'_check_replacement',return_value=(None,'test_reject')):
+                    r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+                self.assertEqual(r['corrected'],source)
+                self.assertTrue(r['odd_spans'])
+        finally:set_active(None)
+
     @unittest.skipUnless(M.HAS_JANOME,'native comparative meaning')
     def test_blocked_comparative_action_keeps_source_and_unresolved_mark(self):
         import app

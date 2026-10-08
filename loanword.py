@@ -435,7 +435,7 @@ def typo_explains_seed_word(typed, reading):
             if near == ca:
                 from vocabulary import dup_repair_enabled
                 return dup_repair_enabled()  # 48-VL: カタカナも同じ設定
-            if is_kana(near) and kana_key_distance(ca, near) < FAR:
+            if is_kana(near) and kana_key_distance(ca, near, intrusion=True) < FAR:
                 return True             # 隣接キーが入り込んだ
         return False
     return True                         # 脱字・入替は形そのものが証拠
@@ -1651,7 +1651,14 @@ def _qwerty_near(a, b):
     pa, pb = _QWERTY_POS.get(a), _QWERTY_POS.get(b)
     if pa is None or pb is None or a == b:
         return False
-    return abs(pa[0] - pb[0]) <= 1 and abs(pa[1] - pb[1]) <= 1
+    return pa[0]==pb[0] and abs(pa[1]-pb[1])==1
+
+
+def _qwerty_intrusion_near(a,b):
+    """Keep the existing English extra-key neighbourhood independently."""
+    pa,pb=_QWERTY_POS.get(a),_QWERTY_POS.get(b)
+    return bool(pa is not None and pb is not None and a!=b
+                and abs(pa[0]-pb[0])<=1 and abs(pa[1]-pb[1])<=1)
 
 
 def typo_explains_seed_english(typed, known):
@@ -1699,7 +1706,7 @@ def typo_explains_seed_english(typed, known):
             if typed[k] == ca:
                 from vocabulary import dup_repair_enabled
                 return dup_repair_enabled()
-            if _qwerty_near(ca, typed[k]):
+            if _qwerty_intrusion_near(ca, typed[k]):
                 return True
         return False
     return True                         # 脱字・入替は形そのものが証拠

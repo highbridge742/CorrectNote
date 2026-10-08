@@ -183,12 +183,12 @@ def intrusion_key_distance(pressed, neighbor):
     Modifier evidence is directional and only for deletion. It must not make
     distant kana substitutions adjacent or change the cost of surviving keys.
     """
-    distance = kana_key_distance(pressed, neighbor)
+    distance = kana_key_distance(pressed, neighbor, intrusion=True)
     # Deletion removes a source key without changing any surviving Shift.
     # The extra key may have been hit just before or after Shift was pressed;
     # only its physical adjacency matters here, unlike substitution.
     if pressed in KANA_POSITIONS and neighbor in KANA_POSITIONS:
-        distance = min(distance, _base_distance(pressed, neighbor))
+        distance = min(distance, _intrusion_base_distance(pressed, neighbor))
     if neighbor in _SHIFT_KANA and any(pressed in keys for keys in _SHIFT_NEIGHBORS.values()):
         distance = min(distance, 1.0)
     return distance
@@ -416,7 +416,7 @@ def _euclid(p1, p2):
     return math.hypot(p1[0] - p2[0], x1 - x2)
 
 
-def physical_keys_adjacent(p1, p2):
+def physical_intrusion_keys_adjacent(p1, p2):
     """JIS neighbours: exclude upper-left/lower-right and middle-row diagonals.
 
     Rows include the number row. The QWERTY/ASDF pair has only vertical
@@ -430,12 +430,26 @@ def physical_keys_adjacent(p1, p2):
     return lower[1] == upper[1] or (upper[0] != 1 and lower[1] == upper[1]-1)
 
 
+def physical_keys_adjacent(p1, p2):
+    """Substitution uses only the immediately left/right key on one row."""
+    return bool(p1 is not None and p2 is not None
+                and p1[0]==p2[0] and abs(p1[1]-p2[1])==1)
+
+
 @functools.lru_cache(maxsize=None)
 def _base_distance(c1, c2):
+    """Substitution distance; a different keyboard row is excluded."""
+    p1,p2=KANA_POSITIONS.get(c1),KANA_POSITIONS.get(c2)
+    if p1 is None or p2 is None or p1[0]!=p2[0]:return FAR
+    return _intrusion_base_distance(c1,c2)
+
+
+@functools.lru_cache(maxsize=None)
+def _intrusion_base_distance(c1, c2):
     """
     清音同士のキー距離。
 
-    隣接はphysical_keys_adjacentで定める。除外方向を距離の近さだけで
+    巻き込みの隣接はphysical_intrusion_keys_adjacentで定める。除外方向を距離の近さだけで
     隣接へ戻さない。非隣接の距離は候補比較用であり、隣接の証明ではない。
 
     戻り値: 隣接なら 1.0 前後、2つ隣なら 2.0 前後、それ以上は FAR
@@ -464,7 +478,7 @@ def _base_distance(c1, c2):
 
     # Only the explicitly permitted physical directions count as adjacent.
     if row_diff == 1:
-        if physical_keys_adjacent(p1, p2):
+        if physical_intrusion_keys_adjacent(p1, p2):
             return 1.0
         if col_diff <= 2.55:
             return 1.8          # やや離れた斜め
@@ -480,12 +494,14 @@ def _base_distance(c1, c2):
 
 
 @functools.lru_cache(maxsize=None)
-def kana_key_distance(c1, c2):
+def kana_key_distance(c1, c2, *, intrusion=False):
     """
     2つのかな文字の「押し間違えやすさ」を距離で返す。
     0 に近いほど間違えやすい。FAR(99) は無関係。
 
-    **かな2文字だけで決まる純粋な計算**なので、まるごと控える。
+    置換は同じ段の左右だけを隣接とする。intrusion=True は巻き込み専用で、
+    従来の上下・斜めを含む距離を使う。同一キーのShift・印は別扱い。
+    **かな2文字と用途だけで決まる純粋な計算**なので、まるごと控える。
     組み合わせはかなの種類ぶんしか無い（数千通り）ので、
     上限を設けずに持ってよい。
     1000行のタブの解析では、この関数が**55万回**呼ばれていた
@@ -493,6 +509,7 @@ def kana_key_distance(c1, c2):
     解析が体感で変わる（2026-08-11・うにさんから
     「1000行あると待ち時間が長い」の指摘）。
     """
+    base_distance=_intrusion_base_distance if intrusion else _base_distance
     if c1 == c2:
         return 0.0
 
@@ -500,8 +517,9 @@ def kana_key_distance(c1, c2):
     if same_physical_key(c1,c2):
         return 0.3
 
-    # A different base key plus a Shift change is two operations, not an
-    # adjacent substitution. Same-key Shift repairs are handled above.
+    # A different base key may not also change Shift state. The user
+    # excludes small ゅ -> large よ; composing Shift and a neighbor slip
+    # must not bring it back. Same-key Shift repairs are handled above.
     if (c1 in _SHIFT_KANA) != (c2 in _SHIFT_KANA):
         return FAR
 
@@ -522,7 +540,7 @@ def kana_key_distance(c1, c2):
     # （項目48-FX）。以前はここが素通りして FAR になっていた。
     if (_MARK_KEY_ADJ and base1 == base2
             and has_mark1 and has_mark2 and mark1 != mark2):
-        return _base_distance('゛', '゜')
+        return base_distance('゛', '゜')
 
     # ベースキーが違う場合
     if base1 != base2:
@@ -544,7 +562,7 @@ def kana_key_distance(c1, c2):
         # **1回の打ち損ねで説明が付かないものは、隣接ではない。**
         if _MARK_TWO_STROKE and (has_mark1 != has_mark2 or mark1 != mark2):
             return FAR
-        d = _base_distance(base1, base2)
+        d = base_distance(base1, base2)
         if d >= FAR:
             return FAR
         if not _MARK_TWO_STROKE and has_mark1 != has_mark2:
@@ -552,7 +570,7 @@ def kana_key_distance(c1, c2):
         # 濁点が両方に付いている場合のわずかな上乗せ（従来どおり）。
         return d + (0.1 if has_mark1 else 0.0)
 
-    return _base_distance(c1, c2)
+    return base_distance(c1, c2)
 
 
 # ============================================================
@@ -795,8 +813,8 @@ def mark_key_neighbors(mark='゛', max_dist=1.05):
     2打鍵めで `@` の隣の `^`(へ) を叩くと **さへいりょう** になる。
     ここで返すのは、その「叩いてしまった側」の一覧。
 
-    ゛(@) の隣: わ ほ へ せ れ け む ゜
-    ゜([) の隣: へ ー ゛ む  （実測）
+    現行の打ち間違いは同じ段の左右だけ。゛の左はせ、右は゜。
+    ゜の左は゛。上下・斜めは巻き込み専用の範囲を使う。
 
     **並べ直して返す**（集合を経由しても順序が動かないように。
     項目48-DR「起動ごとに答えが変わる」の再発防止）。

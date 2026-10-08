@@ -1600,7 +1600,7 @@ def _lu_compose_odd_run(run, store, input_method=None, tokenize_fn=None,
                 else:
                     try:
                         if adjacent_slip(run[j], run[i],
-                                         input_method or 'kana'):
+                                         input_method or 'kana', intrusion=True):
                             nb = True
                     except Exception:
                         pass
@@ -2239,12 +2239,20 @@ _QWERTY_POS = {ch: (row_i, col_i)
 
 # Share physical directions with kana, after resolving the input method
 # to its own keys. Cache pairs once rather than comparing positions per edit.
-from kana_layout import physical_keys_adjacent
+from kana_layout import physical_keys_adjacent, physical_intrusion_keys_adjacent
 _QWERTY_NEAR = frozenset(
     (a, b)
     for a, pa in _QWERTY_POS.items()
     for b, pb in _QWERTY_POS.items()
     if physical_keys_adjacent(pa, pb))
+
+_QWERTY_INTRUSION_NEAR = frozenset(
+    (a,b) for a,pa in _QWERTY_POS.items() for b,pb in _QWERTY_POS.items()
+    if physical_intrusion_keys_adjacent(pa,pb))
+
+
+def _qwerty_intrusion_adjacent(a,b):
+    return (a,b) in _QWERTY_INTRUSION_NEAR
 
 
 def _qwerty_adjacent(a, b):
@@ -2283,7 +2291,7 @@ _ADJ_KANA_MAX = 1.6      # `nearby_candidates` の既定と同じ「隣」の広
 _SMALL_YOON = frozenset('ゃゅょ')
 
 
-def adjacent_slip(a, b, input_method='kana'):
+def adjacent_slip(a, b, input_method='kana', *, intrusion=False):
     """
     その1文字の違いは、**隣のキーを押した1回の誤り**で説明が付くか。
 
@@ -2336,7 +2344,7 @@ def adjacent_slip(a, b, input_method='kana'):
         if len(ra) == len(rb):
             diff = [(x, y) for x, y in zip(ra, rb) if x != y]
             return (len(diff) == 1
-                    and _qwerty_adjacent(diff[0][0], diff[0][1]))
+                    and (_qwerty_intrusion_adjacent if intrusion else _qwerty_adjacent)(diff[0][0], diff[0][1]))
         # **ローマ字では「かな1文字の違い」が脱字のことがある**
         # （項目48-FY・うにさんの指定・2026-08-19
         #   「つあがり、これはローマ字限定補正です。
@@ -2356,7 +2364,7 @@ def adjacent_slip(a, b, input_method='kana'):
         short, long_ = (ra, rb) if len(ra) < len(rb) else (rb, ra)
         return any(long_[:i] + long_[i + 1:] == short
                    for i in range(len(long_)))
-    return kana_key_distance(a, b) <= _ADJ_KANA_MAX
+    return kana_key_distance(a, b, intrusion=intrusion) <= _ADJ_KANA_MAX
 
 
 _ADJ_GATE = (os.environ.get('CN_ADJ_GATE', '1') != '0')
@@ -6544,9 +6552,9 @@ def _typo_repairs(core, extra_key=False, input_method='kana'):
             if not _deletion_allowed(core, i):
                 continue
             _nb = ((i > 0 and core[i - 1] != core[i]
-                    and adjacent_slip(core[i - 1], core[i], input_method))
+                    and adjacent_slip(core[i - 1], core[i], input_method, intrusion=True))
                    or (i + 1 < n and core[i] != core[i + 1]
-                       and adjacent_slip(core[i], core[i + 1], input_method)))
+                       and adjacent_slip(core[i], core[i + 1], input_method, intrusion=True)))
             if _nb:
                 push(core[:i] + core[i + 1:])
     # 脱字: 1字入れる（**いちばん数が多いので最後**）
@@ -7221,7 +7229,7 @@ def _intruded_keystroke(ch, left, right):
     # Legacy composition also calls this helper in romaji mode. Only
     # actual kana input supplies a Shift key from the source small kana.
     distance = (_kl.intrusion_key_distance if _CORRECTION_INPUT_METHOD.get() == 'kana'
-                else _kl.kana_key_distance)
+                else lambda a,b:_kl.kana_key_distance(a,b,intrusion=True))
     for other in (left, right):
         if not other or not is_hiragana(other):
             continue
@@ -22507,7 +22515,9 @@ def _with_literal_examples(fn):
                 chars[a:code]=line[a:code]
         masked=''.join(chars)
         _trace('原文の保持',f'明示された引用例またはユーザー保護の範囲 {ranges!r} は文字を保持する')
-        inner=fn(masked,*args,**kwargs)
+        from literal_examples import masked_case_scope
+        with masked_case_scope(line,ranges,masked,bound_cases):
+            inner=fn(masked,*args,**kwargs)
         result=dict(inner)
         corrected_mask=inner.get('corrected',masked)
         changes=[]
@@ -22787,6 +22797,77 @@ def _source_kana_deletion_pairs(line, start, end, replacement, tokenize_fn):
 
 
 
+def _changes_neighbor_and_shift_in_source(line, start, end, replacement, tokenize_fn):
+    """Reanalysis cannot compose a Shift change and another base key.
+
+    Inspect each exactly mapped source ancestor, just as the original-key
+    deletion checks do. A corrected intermediate is not a new typed key.
+    This is kana geometry only; it adds no semantic acceptance or reading.
+    """
+    if _CORRECTION_INPUT_METHOD.get()!='kana':return False
+    import kana_layout as K,difflib
+    from morphology import katakana_to_hiragana,native_spelling_only
+    def reading(text):
+        text=katakana_to_hiragana(text)
+        if all('ぁ'<=c<='ゖ' or c in 'ー゛゜' for c in text):return text
+        if tokenize_fn is None:return None
+        parts=list(tokenize_fn(text))
+        if not parts or ''.join(t[0] for t in parts)!=text:return None
+        from reading_segments import native_attested_prefix_noun_readings
+        out=[];i=0
+        while i<len(parts):
+            part=parts[i];last=i
+            # A complete attested nominal can cross tokenizer seams. Use
+            # its unique existing reading, without crossing a particle or
+            # treating arbitrary adjoining nouns as a new lexical unit.
+            while (last<len(parts) and parts[last][5]
+                    and parts[last][1].startswith(('名詞','接頭詞'))
+                    and (last==i or parts[last-1][4]==parts[last][3])):
+                last+=1
+            whole=None
+            for stop in range(last,i,-1):
+                face=''.join(p[0] for p in parts[i:stop])
+                readings=native_attested_prefix_noun_readings(face)
+                if len(readings)==1:
+                    whole=(stop,readings[0]);break
+            if whole is not None:
+                i,rd=whole;out.append(rd);continue
+            literal=katakana_to_hiragana(part[0])
+            if all('ぁ'<=c<='ゖ' or c in 'ー゛゜' for c in literal):out.append(literal)
+            elif part[5]:out.append(part[2])
+            else:return None
+            i+=1
+        return ''.join(out)
+    for source,a,b in _candidate_source_ranges(line,start,end):
+        original=source[a:b]
+        if native_spelling_only(original,replacement):continue
+        # Read the actual complete words before trimming equal glyphs.
+        # An unchanged written suffix can belong to a compound whose head
+        # has another reading in isolation. Inventing the isolated reading
+        # would turn a missing onset into a false Shift/key substitution.
+        typed=reading(original);changed=reading(replacement)
+        if typed is None or changed is None:
+            # Detached context which has no complete reading may still
+            # expose an exactly bounded pair, as in the existing check.
+            left=0
+            while left<min(len(original),len(replacement)) and original[left]==replacement[left]:left+=1
+            right=0
+            while (right<min(len(original)-left,len(replacement)-left)
+                   and original[-right-1]==replacement[-right-1]):right+=1
+            typed=reading(original[left:len(original)-right])
+            changed=reading(replacement[left:len(replacement)-right])
+        if typed is None or changed is None:continue
+        old=tuple(k for c in typed for k in K.keystrokes(c))
+        new=tuple(k for c in changed for k in K.keystrokes(c))
+        for tag,lo,hi,x,y in difflib.SequenceMatcher(None,old,new,autojunk=False).get_opcodes():
+            if tag!='replace' or hi-lo!=y-x:continue
+            if any((p in K._SHIFT_KANA)!=(q in K._SHIFT_KANA)
+                   and not K.same_physical_key(p,q)
+                   for p,q in zip(old[lo:hi],new[x:y])):
+                return True
+    return False
+
+
 def _nonadjacent_drop_in_source(line, start, end, replacement, tokenize_fn):
     """A legacy candidate cannot delete a remote original kana keystroke."""
     return any(not _adj_ok_one_char(typed,restored,'kana')
@@ -22897,6 +22978,8 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
         return None, 'unexplained_mark_deletion'
     if _repeat_repair_disabled_in_source(line, start, end, new_surface, tokenize_fn):
         return None, 'duplicate_repair_disabled'
+    if _changes_neighbor_and_shift_in_source(line,start,end,new_surface,tokenize_fn):
+        return None,'original_key_shift_state'
     if _nonadjacent_drop_in_source(line,start,end,new_surface,tokenize_fn):
         return None,'nonadjacent_original_key_deletion'
     # ユーザーが「この補正は不要」と判断した置換は行わない。
@@ -22957,6 +23040,9 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
     from reading_segments import preserves_native_nominal_verb_prefix
     if not preserves_native_nominal_verb_prefix(line,line[:start]+new_surface+line[end:]):
         return None,'native_nominal_verb_prefix'
+    from reading_segments import preserves_native_pronoun_case
+    if not preserves_native_pronoun_case(line,line[:start]+new_surface+line[end:]):
+        return None,'original_pronoun_case'
     from reading_segments import preserves_native_word_onset
     if not preserves_native_word_onset(line,start,end,new_surface):
         return None,'native_word_boundary'

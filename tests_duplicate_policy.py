@@ -49,7 +49,8 @@ class DuplicatePolicyTests(unittest.TestCase):
         with patch.object(C,'_ADJ_GATE',True):
             self.assertFalse(C._adj_ok_one_char('たたんご','らてんご','kana'))
             self.assertTrue(C._adj_ok_one_char('たごん','たんご','kana'))
-            self.assertTrue(C._adj_ok_one_char('たつ','ちつ','kana'))
+            self.assertFalse(C._adj_ok_one_char('たつ','ちつ','kana'))
+            self.assertTrue(C._adj_ok_one_char('たつ','てつ','kana'))
 
     def test_settings_are_part_of_both_reading_caches(self):
         import vocabulary as V

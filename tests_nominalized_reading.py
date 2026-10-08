@@ -44,11 +44,45 @@ class NominalizedReadingTests(unittest.TestCase):
             self.assertTrue(R.native_attributive_predicate_end(text),text)
         self.assertFalse(R.completed_native_reading_sequence('しゃしんをならべてかおきとをかえます'))
 
+    def test_nominal_attribute_keys_keep_excluded_direction_and_final_gate(self):
+        import app,corrector as C
+        from unittest.mock import patch
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        for generate in (CR.key_repairs,CR.nonadjacent_key_repairs,
+                         CR.adjacent_shift_key_repairs,CR.neighbor_shift_key_repairs):
+            self.assertNotIn('おおきさ',{r.reading for r in generate('おおきと')})
+        for reading in ('おおきそ','おおきつ'):
+            self.assertTrue(any(r.reading=='おおきさ' and r.operation=='adjacent_substitution'
+                                for r in CR.key_repairs(reading)))
+        source='しゃしんをならべておおきとをかえます。'
+        try:
+            a=initial();r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                context_vec=None,decisions=a.decisions)
+            self.assertEqual(r['corrected'],'写真をならべておおきとをかえます。')
+            self.assertTrue(r['odd_spans']);self.assertEqual(r['analysis_status'],'complete')
+            source='しゃしんをならべておおきつをかえます。'
+            a=initial();r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                context_vec=None,decisions=a.decisions)
+            self.assertEqual(r['corrected'],'写真を並べて大きさを変えます。')
+            self.assertEqual(r['odd_spans'],[]);self.assertEqual(r['analysis_status'],'complete')
+            source='しゃしんをならべておおきそをかえます。'
+            a=initial()
+            with patch.object(C,'_check_replacement',return_value=(None,'test_common_gate')):
+                r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                    context_vec=None,decisions=a.decisions)
+            self.assertEqual(r['corrected'],source)
+            for text in ('写真を並べて大きさを変えます。','「おおきと」「おおきそ」という文字列です。'):
+                a=initial();r=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
+                    context_vec=None,decisions=a.decisions)
+                self.assertEqual(r['corrected'],text)
+        finally:set_active(None)
+
     def test_application_repairs_and_preserves_native_expressions(self):
         import app
         from tests_analysis_async import initial
         a=initial()
-        rows=[('しゃしんをならべておおきとをかえます。','しゃしんをならべておおきさをかえます。')]
+        rows=[('しゃしんをならべておおきそをかえます。','しゃしんをならべておおきさをかえます。')]
         rows.extend((text,text) for text in (
             'しゃしんをならべておおきさをかえます。','ひものながさをはかります。',
             '温かさを感じます。','ありし日の写真を見ます。','本を買おう。',

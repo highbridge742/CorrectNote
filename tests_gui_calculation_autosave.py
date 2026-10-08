@@ -28,7 +28,7 @@ def child(phase,layout,automatic):
   try:
    a=app.CorrectNoteApp(root);until(done);w=a.editor
    if phase=='write':
-    for suffix,expected,full in (('1-2','-1','1-2'),('+3','2','1-2+3')):
+    for suffix,expected,full in (('1-2','-1','1-2'),('+3*1','2','1-2+3*1')):
      w.mark_set('insert','1.end');deliver_key(w,'<Control-c>','c',67,state=4)
      for ch in suffix:
       deliver_key(w,'<KeyPress>',ch,0,char=ch)
@@ -44,7 +44,7 @@ def child(phase,layout,automatic):
     with patch.object(a,'_save_session'),patch.object(a,'_save_analysis_cache'):
      a._on_close();a=None
    else:
-    assert a.editor_source_text().rstrip('\n')=='1-2+3'
+    assert a.editor_source_text().rstrip('\n')=='1-2+3*1'
     assert a.line_results[0]['corrected']=='2',a.line_results
     assert len(a._input_document.calculations)==1
    print('CALCULATION_AUTOSAVE_OK',phase,layout,automatic,flush=True)

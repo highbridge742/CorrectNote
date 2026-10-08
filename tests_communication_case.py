@@ -48,13 +48,19 @@ class CommunicationCaseTests(unittest.TestCase):
             context_vec=None,decisions=a.decisions)
         assert_repaired_spelling(self, result, 'かいぎのしりょうをめーるでおくります。')
         self.assertEqual(result.get('odd_spans'),[])
-        # 48-AZU admits one finite-distance nonadjacent substitution when
-        # the original object and channel positively support the action.
+        # The later horizontal-only policy excludes the old す -> く
+        # direction even when the object and channel fit the intended verb.
+        import contextual_repair as Q
+        for generator in (Q.key_repairs,Q.nonadjacent_key_repairs):
+            self.assertNotIn('おくります',{r.reading for r in generator('おすります')})
         text='かいぎのしりょうをめーるでおすります。'
         result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
             context_vec=None,decisions=a.decisions)
-        assert_repaired_spelling(self,result,'かいぎのしりょうをめーるでおくります。')
-        self.assertFalse(result['odd_spans'])
+        self.assertIn(result['corrected'],(
+            text,'会議の資料をめーるでおすります。','会議の資料をメールでおすります。'))
+        self.assertTrue(result['odd_spans'])
+        self.assertEqual(result['analysis_status'],'complete')
+
 
 
     def test_person_is_the_recipient_of_contact_or_transmission(self):

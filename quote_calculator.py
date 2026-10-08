@@ -187,5 +187,6 @@ def quote_enter_kind(expression):
     if not normalized or len(normalized)>256 or '\n' in normalized or '\r' in normalized:
         return None,None
     if re.fullmatch('[0-9]+',normalized):return 'line',int(normalized)
+    if re.fullmatch('[+-][0-9]+',normalized):return 'relative',int(normalized)
     if any(char in '+-*/' for char in normalized):return 'calculation',None
     return None,None

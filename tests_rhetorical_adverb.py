@@ -25,11 +25,14 @@ class RhetoricalAdverbTests(unittest.TestCase):
             dict_index=a.dict_index,context_vec=None,decisions=a.decisions)
         assert_reviewed_source_spelling(self, result['corrected'], ('しょっきをあらってたなにもどします。','食器を洗ってたなに戻します。'))
         self.assertEqual(result.get('odd_spans'),[])
-        # The shared two-operation search keeps both the adjacent key and Shift.
+        # User policy 2026-10-05 excludes さ -> っ: this changes both
+        # the base key and Shift at one original position. The same-key
+        # つ -> っ positive above remains a required correction.
         unresolved='しょっきをあらさてたなにもどします。'
         result=app.correct_line(unresolved,a.store,input_method='kana',dict_index=a.dict_index,context_vec=None,decisions=a.decisions)
-        assert_reviewed_source_spelling(self,result['corrected'],('しょっきを洗ってたなに戻します。','食器を洗ってたなに戻します。'))
-        self.assertFalse(result.get('odd_spans'))
+        self.assertNotIn('洗って',result['corrected'])
+        self.assertNotIn('あらって',result['corrected'])
+        self.assertEqual(result['analysis_status'],'complete')
         for text in ('しょっきをあらってたなにもどします。','さてほんをよみます。',
                      '豈図らんや。','あにはからんや。','「あに」と書きます。'):
             with self.subTest(text=text):

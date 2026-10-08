@@ -8,6 +8,75 @@ import morphology as M
 
 @unittest.skipUnless(M.HAS_JANOME,'requires native Janome dictionary')
 class NativeNominalTests(unittest.TestCase):
+    def test_deverbal_compound_role_keeps_independent_noun_and_argument_proof(self):
+        from unittest.mock import patch
+        import semantic_roles as S,reading_segments as R
+        try:
+            for text in ('読み入力','読み確認','読み保存'):
+                with self.subTest(text=text):
+                    self.assertEqual(S.nominal_roles(text),frozenset(('process',)))
+            for text in ('読み乳力','書き込み入力','読み食事','読ま入力','読む入力','読みぽね'):
+                with self.subTest(text=text):self.assertNotIn('process',S.nominal_roles(text))
+            with patch.object(R,'native_deverbal_nominal_faces',return_value=()):
+                S.nominal_roles.cache_clear()
+                self.assertNotIn('process',S.nominal_roles('読み入力'))
+            with patch.object(S,'support',return_value=False):
+                S.nominal_roles.cache_clear()
+                self.assertNotIn('process',S.nominal_roles('読み入力'))
+            with patch.object(S,'classified_nominal_action',return_value=False):
+                S.nominal_roles.cache_clear()
+                self.assertNotIn('process',S.nominal_roles('読み入力'))
+        finally:S.nominal_roles.cache_clear()
+
+    def test_original_nominal_prefix_shares_its_actual_noun_join(self):
+        from unittest.mock import patch
+        import corrector as C,oddness as O,reading_segments as R
+        from tests_analysis_async import initial
+        a=initial();tk=C.make_tokenizer(a.store);source='読み乳力を確認'
+        head,tail=list(tk(source))[:2]
+        self.assertTrue(O._native_nominal_prefix_join_mismatch(source,head,tail))
+        with patch.object(R,'native_nominal_verb_prefix_ranges',return_value=()):
+            self.assertFalse(O._native_nominal_prefix_join_mismatch(source,head,tail))
+        with patch.object(O,'can_join',return_value=None):
+            self.assertFalse(O._native_nominal_prefix_join_mismatch(source,head,tail))
+        with patch.object(M,'dictionary_inflections',return_value=()):
+            self.assertFalse(O._native_nominal_prefix_join_mismatch(source,head,tail))
+        self.assertFalse(O._native_nominal_prefix_join_mismatch(source,head[:2]+('よく',)+head[3:],tail))
+        self.assertFalse(O._native_nominal_prefix_join_mismatch(source,head,tail[:3]+(tail[3]+1,)+tail[4:]))
+        self.assertFalse(O.is_odd_run(source,tk,with_spans=True,store=a.store,
+            dict_index=a.dict_index,skip_join=True,complete_line=True))
+        for text in ('読み入力','読み間違い','読み手','飲み薬','飲み水','押し花',
+                     '伸ばし棒','飛び散り防止','読みの入力','よみ乳力','読みぽね'):
+            with self.subTest(text=text):
+                rows=list(tk(text))
+                self.assertFalse(any(O._native_nominal_prefix_join_mismatch(text,x,y)
+                                     for x,y in zip(rows,rows[1:])))
+
+    def test_original_nominal_prefix_repair_keeps_head_and_final_gate(self):
+        from unittest.mock import patch
+        import app,corrector as C
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        try:
+            for source in ('読み乳力','読み乳力を確認します。','読み乳力します'):
+                with self.subTest(source=source):
+                    a=initial();r=app.correct_line(source,a.store,input_method='kana',
+                        dict_index=a.dict_index,context_vec=None,decisions=a.decisions)
+                    self.assertEqual(r['corrected'],source.replace('乳力','入力'))
+                    self.assertEqual(r['odd_spans'],[])
+                    self.assertEqual(r['analysis_status'],'complete')
+            source='読み乳力';a=initial()
+            with patch.object(C,'_check_replacement',return_value=(None,'test_common_gate')):
+                r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                    context_vec=None,decisions=a.decisions)
+            self.assertEqual(r['corrected'],source)
+            for source in ('読み入力','飲み水を用意します。','伸ばし棒を使います。',
+                    '「読み乳力」という文字列です。','読み\t乳力を確認します。'):
+                a=initial();r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                    context_vec=None,decisions=a.decisions)
+                self.assertEqual(r['corrected'],source)
+        finally:set_active(None)
+
     def test_action_use_keeps_native_lexicon_honest(self):
         from semantic_roles import classified_nominal_action
         rows=M.dictionary_inflections('時短')
@@ -352,7 +421,11 @@ class NativeNominalTests(unittest.TestCase):
             for text in (reading,reading+'です。'):
                 result=app.correct_line(text,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                assert_reviewed_source_spelling(self, result['corrected'], text)
+                # The literal case pair above identifies the same host and
+                # ongoing suffix. Ordinary written spelling may complete it;
+                # the role, unknown-host and invalid-tail assertions remain.
+                written=word if text==reading else word+'です。'
+                self.assertIn(result['corrected'],(text,written))
                 self.assertFalse(result.get('odd_spans'),text)
             self.assertFalse(S.support(word,'食べる'))
             self.assertNotIn('place',S.nominal_roles(word))

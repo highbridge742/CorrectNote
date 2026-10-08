@@ -53,6 +53,38 @@ class PropertyPrefixTests(unittest.TestCase):
                 self.assertEqual(O.ranked_property_prefix_spans('主同調性',ts),[])
 
 
+    def test_whole_source_prefix_belongs_to_derived_nominal_range(self):
+        import morphology as M,reading_segments as R
+        if not M.HAS_JANOME:self.skipTest('native dictionary')
+        for source in ('主同調性','主同調性を変更する'):
+            self.assertNotIn((1,4),R.native_written_nominal_ranges(source))
+            self.assertTrue(R.preserves_native_written_derivation(source,source.replace('主同調性','手動調整')))
+        for word in ('同調性','補正付き','編集者'):
+            self.assertIn((0,len(word)),R.native_written_nominal_ranges(word))
+            self.assertFalse(R.preserves_native_written_derivation(word,word[1:]))
+            self.assertTrue(R.preserves_native_written_derivation(word+'を確認します',word+'を確認しました'))
+
+    def test_whole_property_repair_keeps_ci_source_and_common_gate(self):
+        import morphology as M,corrector as C
+        if not M.HAS_JANOME:self.skipTest('native dictionary')
+        from vocabulary import VocabularyStore,find_known_readings_flex
+        from seed_vocabulary import load_seed
+        from janome_import import import_from_janome
+        from dict_index import DictIndex
+        store=VocabularyStore();load_seed(store);import_from_janome(store)
+        tok=C.make_tokenizer(store);idx=DictIndex(cache_path=None);idx.ensure_built()
+        for source,expected in (('主同調性','手動調整'),('主同調性を変更する','手動調整を変更する'),
+                                ('副交感性','副交感性'),('主作用性','主作用性'),
+                                ('主従属性','主従属性'),('主導性','主導性')):
+            with self.subTest(source=source):
+                value=C.correct_line(source,store,tok,find_known_readings_flex,input_method='kana',dict_index=idx)
+                self.assertEqual(value['corrected'],expected)
+                self.assertEqual(value['odd_spans'],[])
+        with patch.object(C,'_check_replacement',return_value=(None,'test_reject')):
+            value=C.correct_line('主同調性',store,tok,find_known_readings_flex,input_method='kana',dict_index=idx)
+        self.assertEqual(value['corrected'],'主同調性')
+        self.assertTrue(value['odd_spans'])
+
     def test_native_compound_merge_retains_original_affix_witnesses(self):
         import morphology as M
         if not M.HAS_JANOME:self.skipTest('native dictionary')

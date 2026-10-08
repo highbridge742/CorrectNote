@@ -971,7 +971,7 @@ def _has_kanji(s):
     return any('一' <= c <= '鿿' for c in s or '')
 
 
-def _adjacent(a, b, input_method):
+def _adjacent(a, b, input_method, *, intrusion=False):
     """その1文字の違いが、隣のキーで説明が付くか。"""
     try:
         from kana_layout import kana_key_distance
@@ -979,16 +979,16 @@ def _adjacent(a, b, input_method):
         return False
     if input_method == 'romaji':
         try:
-            from corrector import _KANA_TO_ROMAJI, _qwerty_adjacent
+            from corrector import _KANA_TO_ROMAJI, _qwerty_adjacent, _qwerty_intrusion_adjacent
         except Exception:
             return False
         ra, rb = _KANA_TO_ROMAJI.get(a), _KANA_TO_ROMAJI.get(b)
         if ra and rb and len(ra) == len(rb):
             diff = [(x, y) for x, y in zip(ra, rb) if x != y]
-            return len(diff) == 1 and _qwerty_adjacent(diff[0][0], diff[0][1])
+            return len(diff) == 1 and (_qwerty_intrusion_adjacent if intrusion else _qwerty_adjacent)(diff[0][0], diff[0][1])
         return False
     try:
-        return kana_key_distance(a, b) <= 1.6
+        return kana_key_distance(a, b, intrusion=intrusion) <= 1.6
     except Exception:
         return False
 
@@ -1153,8 +1153,8 @@ def hand_labels(typed, fixed, input_method='kana'):
             after = typed[i + 1] if i + 1 < len(typed) else ''
             if ch == before or ch == after:
                 push(_DUP_LABEL)
-            elif ((before and _adjacent(ch, before, input_method))
-                    or (after and _adjacent(ch, after, input_method))):
+            elif ((before and _adjacent(ch, before, input_method, intrusion=True))
+                    or (after and _adjacent(ch, after, input_method, intrusion=True))):
                 push(_ROLL_LABEL)
             else:
                 push(_EXTRA_LABEL)

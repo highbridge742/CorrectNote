@@ -31,7 +31,7 @@ AI の判断で焼く**（うにさんの指定 2026-08-24「AI の判断を、�
     版1  2026-08-25  実機メモの誤爆5語＋AI の判断で現代の一般語を選定
 """
 
-VERSION = 16  # 2026-10-04; exact externally attested processing noun
+VERSION = 17  # 2026-10-04; shared externally attested action POS
 
 # 実機メモで実際に誤爆した5語（2026-08-25・probe_odd_fragments）
 _FROM_MEMO = (
@@ -60,6 +60,7 @@ _AI_PICKED = (
 # lexical judgment (SOKENBICHA / AYATAKA / IYEMON / TOKUCHA also appear in the
 # manufacturers' brand names/URLs). These are not native IPAdic entries.
 SOURCES = {
+    'click_microsoft': 'https://learn.microsoft.com/ja-jp/windows/win32/uxguide/inter-mouse',
     'roast_agf': 'https://agf.ajinomoto.co.jp/support/faq_detail.html?category=4&id=231&page=1',
     'hake_asahipen': 'https://asahipen.jp/howto/tosou_how.html',
     'betsugo_dictionary': 'https://kotobank.jp/word/別語-379122',
@@ -107,6 +108,9 @@ EXACT_NOUNS = {
 # Semantic roles remain in semantic_roles; existing product facts stay
 # in EXACT_NOUNS. Only unambiguous whole unread nouns use this map in analysis.
 SOURCED_COMMON_NOUNS = {
+    # Microsoft names the mouse action and explicitly uses クリックする.
+    # Same native reading; a lexical POS fact, not a malformed input pair.
+    'クリック': (('くりっく','click_microsoft','サ変接続'),),
     # AGF's technical description attests the complete action noun and
     # 焙煎する. Reading is ordinary lexical knowledge, not an input pair.
     '焙煎': (('ばいせん','roast_agf','サ変接続'),),

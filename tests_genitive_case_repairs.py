@@ -47,18 +47,29 @@ class GenitiveCaseRepairTests(unittest.TestCase):
     def test_existing_anomaly_and_shared_application_repair(self):
         import app
         from tests_analysis_async import initial
-        a=initial();source='あしたのかうぎでしりょうをくばります。'
-        self.assertEqual(K.kana_key_distance('う','い'),1.0)
+        a=initial();source='あしたのかてぎでしりょうをくばります。'
+        self.assertEqual(K.kana_key_distance('て','い'),1.0)
         result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
             context_vec=None,decisions=a.decisions)
         assert_repaired_spelling(self, result, ('あしたのかいぎでしりょうをくばります。',
                                           'あしたの会議でしりょうをくばります。'))
         self.assertEqual(result.get('odd_spans'),[])
-        source='へやのいこにほんをいれます。'
+        self.assertEqual(K.kana_key_distance('き','は'),1.0)
+        source='へやのきこにほんをいれます。'
         result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
             context_vec=None,decisions=a.decisions)
         assert_repaired_spelling(self, result, ('へやのはこにほんをいれます。','へやの箱にほんをいれます。'))
         self.assertEqual(result.get('odd_spans'),[])
+        # Former vertical/diagonal substitutions are negative controls.
+        # Keep positive case/meaning checks above on same-row slips.
+        for pressed,intended in (('う','い'),('い','は')):
+            self.assertEqual(K.kana_key_distance(pressed,intended),99.0)
+        for source in ('あしたのかうぎでしりょうをくばります。','へやのいこにほんをいれます。'):
+            with self.subTest(excluded=source):
+                result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                    context_vec=None,decisions=a.decisions)
+                self.assertEqual(result['corrected'],source)
+                self.assertTrue(result['odd_spans'])
         # Initial-state 199 already selects these native same-reading
         # spellings. Preserve the grammatical source, not one IME surface.
         observed_spellings={

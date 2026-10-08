@@ -29,7 +29,7 @@ class NominalInflectionBoundaryTests(unittest.TestCase):
         a=self.a
         for phase in ('seed','fresh'):
             if phase=='fresh':import_from_janome(a.store)
-            for text,expected in (('まとがい','間違い'),('まとがいをたべます。','マテガイをたべます。'),
+            for text,expected in (('まとがい','間違い'),('まてがすをたべます。','マテガイをたべます。'),
                     ('まとがいをなおします。','間違いをなおします。'),
                     ('マテガイを食べます。','マテガイを食べます。'),
                     ('まてがいをたべます。','まてがいをたべます。'),

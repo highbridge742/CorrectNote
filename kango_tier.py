@@ -26,7 +26,7 @@
 
     段 1  日常語（メモ・会話・仕事の連絡でごく普通に使う）  課題・効率・参考・移動
     段 2  一般語（書籍・新聞で普通に見るが、日常の頻度は低い） 過大・異動・端午
-    段 3  それ以外（専門・法令・文語・稀語）。**表に載せない**   参向・鑽孔・馘首
+    段 3  それ以外（専門・法令・文語・稀語）。**元の評価対象内だけ収録**   参向・鑽孔・馘首
 
 使う所:
   ・`dict_index` が、同じ読みの表記を **段 → コスト** の順に並べる
@@ -47,6 +47,8 @@
 
 旧tier()の未収録=3は旧順位の互換用。known_usage_tier()は未評価をNoneと
 返す。明示的な稀語の判断と、旧表に収録されていないだけの語を混同しない。
+2026-10-05: 公開済みの入力範囲と元の判定から、省略されていた段3を復元。
+後の評価と意味名簿の肯定根拠を優先し、入力範囲外を評価済みにしない。
 """
 from functools import lru_cache
 import json
@@ -138,6 +140,11 @@ def known_usage_tier(surface):
     from semantic_roles import NOUN_ROLES
     if surface in NOUN_ROLES:
         return 2
+    # The old export omitted tier 3 even for words explicitly covered by
+    # its original judgment task. Only restored in-scope entries carry
+    # that evidence; tier()'s compatibility default is still not evidence.
+    if (_TABLE or {}).get(surface)==3:
+        return 3
     return None
 
 
@@ -178,11 +185,13 @@ def _explicit_reading_faces():
     # A cost-filtered spelling table can omit even 優先 while retaining 有線.
     # Derive readings from the same judged roster and native dictionary,
     # rather than copying missing words into a second positive word list.
+    # Restored negative judgments supply their exact native readings too;
+    # they do not become positive ordinary-word evidence through this index.
     # 48-AII: the ordinary semantic roster already supplies usage evidence.
     # Its exact native readings must also reach this same shared index.
     from semantic_roles import NOUN_ROLES
     judged=(set(_USAGE)|{word for word,reading in _READING_USAGE}
-            |{word for word,value in (_TABLE or {}).items() if value in (1,2)})
+            |{word for word,value in (_TABLE or {}).items() if value in (1,2,3)})
     for word in judged | set(NOUN_ROLES):
         for pos,form,lemma,reading in dictionary_inflections(word) or ():
             # 48-AIN: a semantic role alone does not promote a one-kana
@@ -268,6 +277,102 @@ def prefer_predicate_spelling(reading, preferred, tail):
         _table_cost(word) if _table_cost(word) is not None else 10**9,word)) if ordinary else preferred
 
 
+def native_inflection_usage_tier(surface,pos,form,base,reading):
+    """Keep affirmative usage across an independently attested potential.
+
+    The exact native inflection and its complete godan/ichidan pair prove
+    the lexical relation. Preserve a judgment of the observed lemma first;
+    missing or conflicting origin judgments stay unknown. No general
+    derivation, homophone, or dictionary cost supplies a usage judgment.
+    """
+    from morphology import dictionary_inflections,native_potential_origins
+    if (pos,form,base,reading) not in (dictionary_inflections(surface) or ()):
+        return None
+    tier=usage_tier_for_reading(base,reading)
+    if tier is not None:return tier
+    if not pos.startswith('動詞,自立,'):return None
+    origins=native_potential_origins(surface,form,reading)
+    tiers={usage_tier_for_reading(word,rd) for word,rd in origins}
+    return next(iter(tiers)) if len(tiers)==1 and tiers.issubset({1,2}) else None
+
+
+def shared_prefixed_sahen_usage(surfaces,reading):
+    """Compare judged heads only within the same proved nominal prefix.
+
+    This does not assign usage to the whole compound. Callers must first
+    validate each candidate in the same source scope and context. A direct
+    whole judgment, an unjudged head or a different prefix leaves the usual
+    comparison unchanged. The prefix itself is not an extra positive vote.
+    """
+    from morphology import (_tokenize_janome,dictionary_inflections,
+                            native_sahen_compound_reading)
+    surfaces=set(surfaces)
+    if len(surfaces)<2:return {}
+    shared=None;tiers={}
+    for surface in surfaces:
+        if known_usage_tier(surface) is not None:return {}
+        if native_sahen_compound_reading(surface)!=reading:return {}
+        parts=_tokenize_janome(surface)
+        if not parts:return {}
+        prefix=parts[0]
+        if (prefix.start!=0 or not prefix.has_reading or prefix.pos!='接頭詞'
+                or prefix.pos_sub!='名詞接続'):return {}
+        head=surface[prefix.end:];head_reading=reading[len(prefix.reading):]
+        identity=(prefix.surface,prefix.reading,len(prefix.reading))
+        if not reading.startswith(prefix.reading):return {}
+        if shared is not None and shared!=identity:return {}
+        if not any(pos.startswith('名詞,サ変接続,') and base==head and rd==head_reading
+                   for pos,form,base,rd in dictionary_inflections(head) or ()):return {}
+        tier=usage_tier_for_reading(head,head_reading)
+        if tier is None:return {}
+        shared=identity;tiers[surface]=tier
+    return tiers if min(tiers.values()) in (1,2) else {}
+
+
+def _aligned_candidate_usage_tier(parts,reading):
+    """Keep exact native token readings inside an already validated candidate.
+
+    Every possible complete alignment must give the same explicit judgment.
+    An unknown or conflicting path remains unknown; a dictionary row's order
+    or a cheaper parse cannot choose that path. No token boundary is changed.
+    """
+    from morphology import dictionary_inflections
+    states={0:{0}}
+    for token in parts:
+        functional=token.pos in ('助詞','助動詞')
+        if (not functional and (token.pos not in ('名詞','動詞','形容詞','副詞')
+                or token.pos_sub.startswith('固有名詞'))):return None
+        # The parser's preferred noun subtype cannot select a different
+        # reading. Share native_spelling_only's exact coarse-POS evidence;
+        # proper-name entries cannot lend a reading to an ordinary token.
+        forms=tuple(row for row in dictionary_inflections(token.surface) or ()
+                    if row[0].startswith(token.pos+',') and '固有名詞' not in row[0]
+                    and row[1]==(token.infl_form or '*'))
+        # Literal kana keeps its actual keys. Written tokens retain their
+        # observed native reading and exact same-POS/form alternatives.
+        literal=all('ぁ'<=char<='ゖ' or char=='ー' for char in token.surface)
+        readings=({token.surface} if literal else
+                  {token.reading}|{row[3] for row in forms})
+        following={}
+        for rd in readings:
+            if not rd or not all('ぁ'<=char<='ゖ' or char=='ー' for char in rd):continue
+            matching=[offset for offset in states if reading.startswith(rd,offset)]
+            if not matching:continue
+            tier=0 if functional else usage_tier_for_reading(token.surface,rd)
+            if tier is None and token.pos in ('動詞','形容詞'):
+                values=[native_inflection_usage_tier(token.surface,pos,form,base,native_rd)
+                        for pos,form,base,native_rd in forms if native_rd==rd]
+                if values and all(value is not None for value in values):tier=min(values)
+            for offset in matching:
+                following.setdefault(offset+len(rd),set()).update(
+                    None if value is None or tier is None else max(value,tier)
+                    for value in states[offset])
+        if not following:return None
+        states=following
+    tiers=states.get(len(reading),set())
+    return next(iter(tiers)) if len(tiers)==1 and tiers.issubset({1,2,3}) else None
+
+
 @lru_cache(maxsize=8192)
 def candidate_usage_tier(surface,reading=None):
     """A native inflection retains the explicit usage judgment of its lemma.
@@ -275,14 +380,18 @@ def candidate_usage_tier(surface,reading=None):
     Missing lexical judgments remain unknown. Another same-reading spelling
     supplies neither rarity nor everyday status for the written candidate.
     """
-    direct=known_usage_tier(surface)
+    # An already proved exact reading retains its own explicit judgment.
+    # The same spelling's other readings cannot supply or erase that fact.
+    # Without a supplied reading, preserve the ordinary surface-only API.
+    direct=(usage_tier_for_reading(surface,reading) if reading is not None
+            else known_usage_tier(surface))
     if direct is not None:return direct
     from morphology import dictionary_inflections
     forms=[row for row in dictionary_inflections(surface) or ()
            if row[0].startswith(('動詞,自立,','形容詞,自立,'))
            and (reading is None or row[3]==reading)]
     if forms:
-        tiers=[known_usage_tier(base) for pos,form,base,rd in forms]
+        tiers=[native_inflection_usage_tier(surface,pos,form,base,rd) for pos,form,base,rd in forms]
         return min(tiers) if all(t is not None for t in tiers) else None
     # A validated candidate can contain several lexical units. Do not make
     # all their known familiarity disappear merely because the editing
@@ -293,13 +402,14 @@ def candidate_usage_tier(surface,reading=None):
     parts=tokenize(surface)
     if (len(parts)<2 or ''.join(t.surface for t in parts)!=surface
         or any(not t.has_reading for t in parts)):return None
+    if reading is not None:return _aligned_candidate_usage_tier(parts,reading)
     tiers=[]
     for t in parts:
         if t.pos in ('助詞','助動詞'):continue
         if t.pos not in ('名詞','動詞','形容詞','副詞') or t.pos_sub.startswith('固有名詞'):return None
         tier=known_usage_tier(t.surface)
         if tier is None and t.pos in ('動詞','形容詞'):
-            matching=[known_usage_tier(base) for pos,form,base,rd in dictionary_inflections(t.surface) or ()
+            matching=[native_inflection_usage_tier(t.surface,pos,form,base,rd) for pos,form,base,rd in dictionary_inflections(t.surface) or ()
                 if pos.startswith(t.pos+',') and form==t.infl_form and rd==t.reading]
             if matching and all(value is not None for value in matching):tier=min(matching)
         if tier is None:return None

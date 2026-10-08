@@ -52,6 +52,13 @@ _INSCRIPTION_AFTER = re.compile(r'\s*と\s*書いて(?:あります|ありまし
 _PAIRS = {'「':'」','『':'』','“':'”','‘':'’','"':'"'}
 _CLOSE = frozenset(_PAIRS.values())
 
+# A closed quote can be the value asserted for an actual input/output
+# label. Require the adjacent native subject/topic and a complete copula;
+# labels in another field and ordinary quotative actions provide no scope.
+_IO_VALUE_BEFORE = re.compile(r'(?P<label>入力|出力)[ 　]*(?P<case>は|が)[ 　]*$')
+_IO_VALUE_AFTER = re.compile(r'[ 　]*(?:ではありませんでした|ではありません|ではなかった|ではない|であった|である|でした|です|だった|だ)'
+    r'(?=$|[ 　、。，．:：;；!?！？がとねよか])')
+
 # SP-MENTION / GPT-6 / 2026-09-13: the written form is being named or described.
 # 48-AOX / GPT-6 Astra: an immediately preceding written-form label
 # identifies the quoted spelling itself, as does the existing following label.
@@ -254,14 +261,44 @@ def _unquoted_error_ranges(line,quoted):
     quotes also names an unquoted example. Sentence/quotation punctuation
     bounds it; unrelated error vocabulary elsewhere supplies no protection.
     """
+    return _unquoted_label_ranges(line,quoted,_AFTER)
+
+
+def _unquoted_label_ranges(line,quoted,pattern,field_bound=False):
+    # The explicit original label names written characters as data. Share
+    # the existing sentence/quote boundary; a spelling label also stops at
+    # the source field edge. No dictionary word or repair supplies a span.
     out=[]
-    for marker in _AFTER.finditer(line):
+    separators='。！？!?、,;；:：\n\r「」『』“”‘’"()（）'+('\t⇒' if field_bound else '')
+    for marker in pattern.finditer(line):
+        if field_bound and any(c in marker.group(0) for c in '\t\n\r⇒'):continue
         end=len(line[:marker.start()].rstrip())
         start=end
-        while start and line[start-1] not in '。！？!?、,;；:：\n\r「」『』“”‘’"()（）':start-=1
+        while start and line[start-1] not in separators:start-=1
         while start<end and line[start].isspace():start+=1
         if start<end and not overlaps(start,end,quoted):out.append((start,end))
     return out
+
+
+def _input_output_value_report(line,start,end):
+    """Prove a local value report; the quoted characters are never parsed."""
+    if not 0<=start<end<len(line) or _PAIRS.get(line[start])!=line[end]:return False
+    label=_IO_VALUE_BEFORE.search(line[:start])
+    if not label or not _IO_VALUE_AFTER.match(line,end+1):return False
+    from morphology import tokenize,dictionary_inflections
+    parts=tokenize(line[:start])
+    matched=[]
+    for name in ('label','case'):
+        a,b=label.span(name);surface=label.group(name)
+        part=next((t for t in parts if t.start==a and t.end==b),None)
+        if not part or not part.has_reading or part.surface!=surface or part.base_form!=surface:return False
+        if name=='label' and part.pos!='名詞':return False
+        if name=='case' and not (part.pos=='助詞' and part.pos_sub in ('係助詞','格助詞:一般')):return False
+        if not any(':'.join(x for x in pos.split(',') if x!='*')==part.pos+(':'+part.pos_sub if part.pos_sub else '')
+                   and rd==part.reading and base==part.base_form and ('' if form=='*' else form)==part.infl_form
+                   for pos,form,base,rd in dictionary_inflections(surface) or ()):return False
+        matched.append(part)
+    return all(c in ' 　' for c in line[matched[0].end:matched[1].start]+line[matched[1].end:start])
 
 
 def protected_ranges(line):
@@ -281,6 +318,7 @@ def protected_ranges(line):
             if (_AFTER.match(line,pos+1) or _CLASSIFIED_AFTER.match(line,pos+1) or _TYPED_AFTER.match(line,pos+1) or
                     _EXPRESSION_ASSERTION_AFTER.match(line,pos+1) or _INSCRIPTION_AFTER.match(line,pos+1) or
                     _SEARCH_QUERY_AFTER.match(line,pos+1) or
+                    _input_output_value_report(line,start,pos) or
                     (_FORM_AFTER.match(line,pos+1) and _native_inflected_form(line[start+1:pos])) or
                     _SPELLING_AFTER.match(line,pos+1) or _SPELLING_BEFORE.search(line[:start]) or
                     _NAMING_AFTER.match(line,pos+1) or
@@ -301,6 +339,7 @@ def protected_ranges(line):
         for match in pattern.finditer(line):
             found.extend((match.span(1),match.span(2)))
     found.extend(_unquoted_error_ranges(line,quoted))
+    found.extend(_unquoted_label_ranges(line,quoted,_SPELLING_AFTER,field_bound=True))
     found.extend(_unquoted_form_ranges(line,quoted))
     found.extend(_unquoted_word_ranges(line,quoted))
     found.extend(named_identifier_ranges(line))
@@ -370,6 +409,54 @@ def masked_case_ranges(line,ranges):
                     for case in role_cases)
         if valid:result.append((t.start,t.end))
     return result
+
+
+# The protected lexical atom has no invented reading or semantic class.
+# Its independently proved case/head edge lives only for this analysis.
+from contextvars import ContextVar
+from contextlib import contextmanager
+_MASKED_CASE_CONTEXT=ContextVar('correctnote_masked_case_context',default=None)
+
+
+@contextmanager
+def masked_case_scope(source,ranges,masked,bound_cases):
+    """Share the original case/head proof, never the entire predicate."""
+    from morphology import tokenize
+    proofs=[]
+    if len(source)==len(masked):
+        for start,end in bound_cases:
+            if not 0<=start<end<=len(source):continue
+            following=tokenize(source[end:])
+            if not following or following[0].start!=0:continue
+            stop=end+following[0].end
+            if source[start:stop]==masked[start:stop]:
+                proofs.append((start,end,stop))
+    token=_MASKED_CASE_CONTEXT.set((masked,tuple(proofs)))
+    try:yield
+    finally:_MASKED_CASE_CONTEXT.reset(token)
+
+
+@contextmanager
+def masked_case_view(source,start,end):
+    """Translate only an explicitly located source context into its view."""
+    context=_MASKED_CASE_CONTEXT.get();proofs=[]
+    if context is not None and 0<=start<=end<=len(source):
+        original,bounds=context
+        for a,b,stop in bounds:
+            if start<=a<b<stop<=end and source[:stop]==original[:stop]:
+                proofs.append((a-start,b-start,stop-start))
+    token=_MASKED_CASE_CONTEXT.set((source[start:end],tuple(proofs)))
+    try:yield
+    finally:_MASKED_CASE_CONTEXT.reset(token)
+
+
+def masked_case_head_bound(text,start,end,head_end):
+    """A candidate keeps the same proved source edge and whole head."""
+    context=_MASKED_CASE_CONTEXT.get()
+    if context is None:return False
+    original,bounds=context
+    return ((start,end,head_end) in bounds
+            and text[:head_end]==original[:head_end])
 
 
 def proved_masked_word_ranges(line,ranges):

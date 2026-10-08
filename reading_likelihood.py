@@ -130,6 +130,30 @@ def context_reading_length(text,tokens):
     return total if cursor==len(text) and total else None
 
 
+def _native_okurigana_before(text,tokens,position):
+    """Retain source keys at an exact native word's literal okurigana edge.
+
+    The original inflected word supplies one complete reading. Its written
+    kana suffix fixes the internal offset; kanji glyphs are never divided
+    proportionally or read in isolation. No candidate spelling participates.
+    """
+    parts=[t for t in tokens if t[3]<position<t[4]]
+    if len(parts)!=1:return ''
+    token=parts[0];word=token[0]
+    if (not token[5] or not token[1].startswith(('動詞:自立','形容詞:自立'))
+            or text[token[3]:token[4]]!=word):return ''
+    edge=len(word)
+    while edge and _reading(_kana(word[edge-1])):edge-=1
+    if (not 0<edge<len(word) or position<token[3]+edge
+            or not any('一'<=c<='鿿' for c in word[:edge])):return ''
+    choices,_=_options(token,native_boundaries=True)
+    if len(choices)!=1:return ''
+    reading=choices[0];tail=_kana(word[edge:])
+    if not reading.endswith(tail) or len(reading)<=len(tail):return ''
+    rest=token[4]-position
+    return reading[:-rest][-2:]
+
+
 def adjacent_readings(text, tokens, start, end, native_boundaries=False):
     """編集範囲外の読み。明示されたかなは原文座標、漢字は語の根拠を使う。"""
     before = ''; after = ''; cursor = start
@@ -147,6 +171,8 @@ def adjacent_readings(text, tokens, start, end, native_boundaries=False):
         if len(options) != 1: break
         after += options[0]; cursor = t[4]
         if len(after) >= 2: break
+    if not before and native_boundaries:
+        before=_native_okurigana_before(text,tokens,start)
     # An unknown token can swallow an independently validated edit edge.
     # Literal kana still specify the original neighboring keys exactly;
     # no guessed kanji reading or gap crossing is needed for that evidence.
@@ -183,8 +209,14 @@ def native_joined_word_neighbors(text,tokens,start,end):
             if pos.startswith('名詞,') and base==word and _reading(rd)}
     if not native:return '',''
     first,_=_options(left,native_boundaries=True)
-    last,_=_options(right,native_boundaries=True)
-    pairs={(a,b) for a in first for b in last if a+b in native}
+    last,last_source=_options(right,native_boundaries=True)
+    from morphology import compound_voiced_reading
+    # The joined native noun can attest rendaku at this exact unchanged
+    # glyph boundary. An explicit IME reading remains the source authority.
+    pairs={(a,tail) for a in first for b in last
+           for tail in ((b,) if last_source=='saved_ime_pair'
+                        else (b,compound_voiced_reading(b)))
+           if tail and a+tail in native}
     if len(pairs)!=1:return '',''
     a,b=next(iter(pairs))
     return a[-2:],b[:2]

@@ -20,6 +20,55 @@ def entries(surface):
 
 
 class NativeNominalContextTests(unittest.TestCase):
+    def test_written_modifier_retains_the_same_supported_compound_head(self):
+        import semantic_roles as S
+        for modifier in ('新しい','古い','正しい','小さな'):
+            text=modifier+'読み入力'
+            with self.subTest(text=text):
+                self.assertEqual(R.native_surface_nominal_heads(text),('読み入力',))
+                self.assertEqual(S.nominal_roles('読み入力'),frozenset({'process'}))
+                self.assertTrue(R.native_object_predicate_proof(text+'を確認します',len(text)+1,('読み入力',)))
+        source='新しい読み入力';parts=M.tokenize(source)
+        self.assertEqual(R._native_written_modifier_nominal_heads(source,parts),('読み入力',))
+        with patch.object(R,'native_adnominal_modifier_parts',return_value=()):
+            self.assertFalse(R._native_written_modifier_nominal_heads(source,parts))
+        with patch.object(S,'nominal_roles',return_value=frozenset()):
+            self.assertFalse(R._native_written_modifier_nominal_heads(source,parts))
+        def altered(**changes):
+            values={key:getattr(parts[0],key) for key in M.Token.__slots__}
+            values.update(changes)
+            return M.Token(**values)
+        for first in (altered(reading='ふるい'),altered(start=1),altered(infl_form='連用形')):
+            with self.subTest(first=first):
+                self.assertFalse(R._native_written_modifier_nominal_heads(source,[first,*parts[1:]]))
+        for text in ('新しい読み処方','新しい読みぽね','ぽねな読み入力',
+                     '新しい太郎','新しい読みにゅう','新しい読み\t入力'):
+            with self.subTest(unproved=text):self.assertFalse(R.native_surface_nominal_heads(text))
+        self.assertFalse(R.native_object_predicate_proof('新しい読み入力を使います',8,('読み入力',)))
+
+    def test_modified_compound_repair_keeps_its_own_meaning_and_common_gate(self):
+        import app
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        def run(source):
+            a=initial()
+            return app.correct_line(source,a.store,dict_index=a.dict_index,decisions=a.decisions,
+                                    context_vec=None,input_method='kana')
+        try:
+            for source in ('古い読み乳力を確認します。','正しい読み乳力を調べます。'):
+                with self.subTest(source=source):
+                    result=run(source)
+                    self.assertEqual(result['corrected'],source.replace('乳力','入力'))
+                    self.assertFalse(result['odd_spans'])
+                    self.assertEqual(result['analysis_status'],'complete')
+            source='古い読み乳力を確認します。'
+            with patch.object(C,'_check_replacement',return_value=(None,'forced_common_gate')):
+                self.assertEqual(run(source)['corrected'],source)
+            for source in ('古い読み入力を確認します。','新しい読み手を紹介します。',
+                           '「古い読み乳力」と入力します。','新しい読み\t乳力を確認します。'):
+                with self.subTest(control=source):self.assertEqual(run(source)['corrected'],source)
+        finally:set_active(None)
+
     def setUp(self):
         M._native_nominal_case_entry.cache_clear()
 

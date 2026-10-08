@@ -299,7 +299,7 @@ APP_TITLE = 'CorrectNote'
 # 「判断に迷った箇所」から**「不自然な文字列」**へ入れ替え（既定オン・
 # 補正が入った範囲には付けない）、**かな書きのアルファベット読みを
 # 英字に直す**（`エフ2 → F2`）、スクロール後の反映（項目48-IZ〜）。
-APP_VERSION = '1.10.0'
+APP_VERSION = '1.11.4'
 
 # 同梱する説明書のファイル名。exe の中に入れて持ち歩き、
 # 初回起動時に exe と同じフォルダへ書き出す
@@ -1864,6 +1864,10 @@ class CorrectNoteApp:
         # 置けないため、どちらの場合も末尾に空行を足しておく
         # （起動直後から好きな行をクリックして書き始められるように）。
         self._restore_session()
+        from word_book import WordBook
+        self._word_book = WordBook(self, os.path.join(app_dir(), 'word_book.json'),
+            lambda: (PANEL, INK, ACCENT), self._word_book_initial_width, monitor_work_area)
+        self._word_book.restore()
         # ★★ **本文に残っていない打鍵の記録を、起動時にも落とす**
         # （項目48-QM・2026-09-05）。古いファイルに溜まった対は
         # ここで消える＝**移行を兼ねる**（`ime_readings.json` は
@@ -2923,8 +2927,15 @@ class CorrectNoteApp:
         ir.keep_only_in(texts)
 
     def _on_close(self):
+        book = getattr(self, '_word_book', None)
+        if book is not None:
+            book.shutdown()
         self._forget_bracket_cycle()
         self._closing = True
+        fit_job = getattr(self, '_toolbar_fit_job', None)
+        if fit_job is not None:
+            self.root.after_cancel(fit_job)
+            self._toolbar_fit_job = None
         native = getattr(self, '_native_f5', None)
         if native is not None:native.close()
         job = getattr(self, '_native_f5_job', None)
@@ -4938,6 +4949,7 @@ class CorrectNoteApp:
         # 最中にテーマを切り替えても、そのまま塗り直される。
         self.editor.tag_configure('quick_sent_a', background=QUICK_SENT_BG_A)
         self.editor.tag_configure('quick_sent_b', background=QUICK_SENT_BG_B)
+        self._refresh_list_button()
         # 目に見えない空白の印（項目48-IF）。テーマを切り替えても
         # そのまま塗り直される。
         try:
@@ -5062,10 +5074,12 @@ class CorrectNoteApp:
                 self._quick_source = source or getattr(
                     self, '_quick_source', None)
                 self._refresh_quick_hint()
-                # 呼び直したときも、いま見ている場所（マウスの近く）へ
-                # 出し直し、確実に打てる状態にする
-                self._place_quick_window(win)
-                self._focus_quick_window(win, self._quick_text)
+                if win.state() == 'iconic':
+                    self._focus_quick_window(win, self._quick_text)
+                    self.status.config(text='簡易入力ウィンドウの最小化を解除しました')
+                else:
+                    win.iconify()
+                    self.status.config(text='簡易入力ウィンドウを最小化しました')
                 return
             except Exception:
                 # 前の窓はもう触れない。**ドロップの差し替えを外して
@@ -5194,6 +5208,8 @@ class CorrectNoteApp:
                                  ('<Insert>',self._on_insert_quote)):
             text.bind(sequence,handler)
         text.bind('<F5>',self._on_f5_brackets)
+        for key in ('F6','F7','F8','F9'):
+            text.bind('<'+key+'>',self._on_selection_transform)
         # 中身が変わったことを確実に捉える経路。
         # IMEの確定・貼り付け・差し込みは KeyRelease では
         # 取りこぼすことがあり、枠が伸びずに右へ見切れていた。
@@ -5361,7 +5377,7 @@ class CorrectNoteApp:
         # 一拍おいてもう一度だけ焦点を取りに行く。
         def _again():
             try:
-                if self._quick_win is win:
+                if self._quick_win is win and win.state() != 'iconic':
                     win.focus_force()
                     text.focus_set()
             except Exception:
@@ -5549,6 +5565,8 @@ class CorrectNoteApp:
             tag = 'quick_sent_b' if flip else 'quick_sent_a'
             bg = QUICK_SENT_BG_B if flip else QUICK_SENT_BG_A
             self.editor.tag_configure(tag, background=bg)
+            for old_tag in ('quick_sent_a', 'quick_sent_b'):
+                self.editor.tag_remove(old_tag, start, f'{start}+{length}c')
             self.editor.tag_add(tag, start, f'{start}+{length}c')
             # 網掛け（補正の候補あり）より**下**に置く。送った文字の
             # 中に誤字があれば、そちらの色を隠さずに見せたい。
@@ -5557,6 +5575,7 @@ class CorrectNoteApp:
             except Exception:
                 pass
             self.editor.tag_raise('sel')
+            self._refresh_list_button()
         except Exception:
             pass
 
@@ -5569,6 +5588,7 @@ class CorrectNoteApp:
                 pass
         # 次に送るときは、また1色目（緑）から始める。
         self._quick_sent_flip = 1
+        self._refresh_list_button()
 
     def _on_editor_typed(self, event=None):
         """
@@ -7201,6 +7221,18 @@ class CorrectNoteApp:
                            accelerator='Ctrl+Insert',
                            command=lambda: self._open_quick_capture(None))
         m_edit.add_separator()
+        self._word_book_set_var = tk.IntVar(value=0)
+        m_word_sets = tk.Menu(m_edit, tearoff=0, postcommand=lambda:
+            self._word_book_set_var.set(self._word_book.active_set))
+        self._word_book_set_menu = m_word_sets
+        for index in range(4):
+            m_word_sets.add_radiobutton(label='セット%d' % (index + 1),
+                value=index, variable=self._word_book_set_var, selectcolor=ACCENT,
+                command=lambda i=index: self._word_book.select_set(i))
+        m_edit.add_cascade(label='単語帳セットを切り替える', menu=m_word_sets)
+        m_edit.add_command(label='現在の単語帳をリセットする',
+                           command=lambda: self._word_book.reset_current())
+        m_edit.add_separator()
         self.capslock_backspace_var = tk.BooleanVar(
             value=self.settings.get('capslock_backspace_enabled'))
         self.insert_quote_var = tk.BooleanVar(
@@ -7409,7 +7441,7 @@ class CorrectNoteApp:
                             command=self.rebuild_dict_index)
         m_learn.add_cascade(label='辞書と語彙の管理', menu=m_maint)
 
-        self._menus = [m_file, m_encoding, m_edit, m_view, m_font, m_font_size,
+        self._menus = [m_file, m_encoding, m_edit, m_word_sets, m_view, m_font, m_font_size,
                        m_about, m_learn, m_maint]
         # A posted native Windows menu can capture Motion/Enter events before
         # the adjacent Menubutton sees them.  Watch the pointer only while a
@@ -7417,10 +7449,47 @@ class CorrectNoteApp:
         self._menu_hover_after_id = None
         self._menu_hover_idle_polls = 0
         for button in self._menu_buttons:
-            button.bind('<ButtonPress-1>', self._start_menu_hover_watch, add='+')
+            if os.name == 'nt':
+                button.bind('<ButtonPress-1>', self._post_menu_bar)
+                button.bind('<space>', self._post_menu_bar)
+                button.bind('<<Invoke>>', self._post_menu_bar)
+            else:
+                button.bind('<ButtonPress-1>', self._start_menu_hover_watch, add='+')
             button.bind('<ButtonRelease-1>', self._start_menu_hover_watch, add='+')
             button.bind('<Enter>', self._on_menu_bar_motion, add='+')
             button.bind('<Motion>', self._on_menu_bar_motion, add='+')
+
+    def _post_menu_bar(self, event):
+        """Switch top menus only after the current native menu loop returns."""
+        from menu_hover import NativeMenuHover
+        button = event.widget
+        if getattr(self, '_native_menu_active', False):
+            return 'break'
+        self._native_menu_active = True
+        original_focus = self.root.focus_get()
+        try:
+            while button is not None and not getattr(self, '_closing', False):
+                bounds = [(str(b), b.winfo_rootx(), b.winfo_rooty(),
+                    b.winfo_rootx() + b.winfo_width(), b.winfo_rooty() + b.winfo_height())
+                    for b in self._menu_buttons]
+                native = NativeMenuHover(bounds, str(button))
+                self._native_menu_hover = native
+                for item in self._menu_buttons:
+                    item.configure(state='active' if item is button else 'normal')
+                try:
+                    self.root.tk.call('tk::MbPost', str(button))
+                finally:
+                    native.close()
+                    self.root.tk.call('tk::MenuUnpost', '')
+                button = next((b for b in self._menu_buttons if str(b) == native.pending), None)
+        finally:
+            self._native_menu_hover = None
+            self._native_menu_active = False
+            for item in self._menu_buttons:
+                item.configure(state='normal')
+            if original_focus is not None and original_focus.winfo_exists():
+                original_focus.focus_set()
+        return 'break'
 
     def _start_menu_hover_watch(self,event=None):
         if self._menu_hover_after_id is None:
@@ -7447,6 +7516,7 @@ class CorrectNoteApp:
         self._switch_menu_under_pointer(event.x_root,event.y_root)
 
     def _switch_menu_under_pointer(self,x,y):
+        if getattr(self, '_native_menu_active', False):return
         try:
             posted=str(self.root.tk.globalgetvar('tk::Priv(postedMb)'))
             if posted not in {str(b) for b in self._menu_buttons}:return
@@ -7777,10 +7847,75 @@ class CorrectNoteApp:
         self._toolbar_hover_hint(event, active,
             '行番号のダブルクリックでブックマークを作成・解除。Alt+↑で前、Alt+↓で次へ移動します')
 
+    _QUOTE_START_HINT = '【引用モード】無選択でF1で引用モードを開始します（選択してF1はコピー）'
+    _QUOTE_PICK_HINT = '【引用モード】クリック、またはドラッグした単語をカーソル位置に複製します'
+    _LIST_PICK_HINT = '【箇条書き】クリック、またはドラッグした単語を新しい行に複製します'
+    _LIST_MOVE_HINT = '【箇条書き】簡易入力した文字を新しい行に移します'
+
     def _quote_hover_hint(self, event, active):
         self._toolbar_hover_hint(event, active,
-            '無選択でF1、または ＝ で引用モード。選択してF1はコピー。'
-            'クリック、または範囲選択後にEnterで引用します。Escで中断します')
+            self._QUOTE_PICK_HINT if getattr(self, '_pick_mode', None) in ('f1', 'equals')
+            else self._QUOTE_START_HINT)
+
+    def _list_quick_sent_plan(self):
+        editor = self.editor
+        chunks = []
+        for tag in ('quick_sent_a', 'quick_sent_b'):
+            ranges = editor.tag_ranges(tag)
+            for start, end in zip(ranges[::2], ranges[1::2]):
+                first, last = _stable_text_index(editor, start), _stable_text_index(editor, end)
+                chunks.append((len(editor.get('1.0', first)), first, last, editor.get(first, last), tag))
+        chunks.sort()
+        if not chunks:
+            return None, []
+        if editor.compare(chunks[0][1], '==', f'{chunks[0][1]} linestart'):
+            contiguous = chunks[:1]
+            for chunk in chunks[1:]:
+                if not (editor.compare(contiguous[-1][2], '==', chunk[1])
+                        and contiguous[-1][4] != chunk[4]):
+                    break
+                contiguous.append(chunk)
+            return ('split', contiguous) if len(contiguous) > 1 else (None, [])
+        return 'move', chunks
+
+    def _has_quick_sent(self):
+        return bool(self._list_quick_sent_plan()[1])
+
+    def _list_hint(self):
+        return self._LIST_MOVE_HINT if self._has_quick_sent() else self._LIST_PICK_HINT
+
+    def _refresh_list_button(self):
+        button = getattr(self, 'list_mode_btn', None)
+        if button is None or not hasattr(self, 'editor'):
+            return
+        ready = self._has_quick_sent()
+        active = getattr(self, '_pick_mode', None) == 'list'
+        button.config(relief='sunken' if active else 'flat',
+            fg=ACCENT if active else INK, bg=QUICK_SENT_BG_A if ready else PANEL)
+        if getattr(self, '_toolbar_hover_widget', None) is button:
+            self._toolbar_hover_text = self._list_hint()
+            self._update_header_visibility(self.editor.yview()[0])
+
+    def _word_book_initial_width(self):
+        font = self._quick_font()
+        unit = max(1, font.measure('0')) if font is not None else 8
+        return max(80, round((unit * self.QUICK_MIN_WIDTH + 20) / 2))
+
+    def _toggle_word_book(self):
+        self._word_book.toggle()
+
+    def _start_word_book_add(self):
+        if getattr(self, '_pick_mode', None):
+            self._end_pick_mode(keep_equals=True)
+        self._start_pick_mode(via_equals=False, calculate=False)
+        self._pick_mode = 'wordbook'
+        self._pick_had_selection = False
+        self.pick_mode_btn.config(relief='flat', fg=INK)
+        self._pick_hint = '【単語帳】クリック、またはドラッグした単語を追加します'
+        self._pick_header.config(text=self._pick_hint, fg=ACCENT)
+        self._word_book.add_button.config(relief='sunken')
+        self.status.config(text=self._pick_hint)
+        self.editor.focus_set()
 
     def _toolbar_hover_hint(self, event, active, text):
         if active:
@@ -7798,6 +7933,46 @@ class CorrectNoteApp:
             else:
                 self.editor_header.config(fg=MUTED)
         self._update_header_visibility(self.editor.yview()[0])
+
+    def _queue_toolbar_fit(self, event=None):
+        if getattr(self, '_closing', False):
+            return
+        if self._toolbar_fit_job is None:
+            self._toolbar_fit_job = self.root.after_idle(self._fit_toolbar_labels)
+
+    def _fit_toolbar_labels(self):
+        """Keep the requested shortening order and restore names on widening."""
+        import tkinter.font as tkfont
+        self._toolbar_fit_job = None
+        if getattr(self, '_closing', False):
+            return
+        variants = (
+            (self.bookmark_prev_btn, '▲ 前のブックマーク', '▲', 1),
+            (self.bookmark_next_btn, '▼ 次のブックマーク', '▼', 1),
+            (self.layout_split_btn, '左右に並べる', '分割', 2),
+            (self.layout_unified_btn, '1つにまとめる', '統合', 2),
+            (self.pick_mode_btn, 'クリックして引用', '引用', 3))
+        full_width = 0
+        for widget in self._toolbar.pack_slaves():
+            pad = widget.pack_info().get('padx', 0)
+            values = (pad,) if isinstance(pad, int) else pad if isinstance(pad, (tuple, list)) else self.root.tk.splitlist(pad)
+            full_width += widget.winfo_reqwidth() + sum(widget.winfo_pixels(v) for v in values) * (2 if len(values) == 1 else 1)
+        savings = [0, 0, 0, 0]
+        for button, full, short, stage in variants:
+            font = tkfont.Font(root=self.root, font=button.cget('font'))
+            full_width += font.measure(full) - font.measure(button.cget('text'))
+            savings[stage] += font.measure(full) - font.measure(short)
+        available = self._toolbar.winfo_width()
+        stage = 0
+        needed = full_width
+        while stage < 3 and needed > available:
+            stage += 1
+            needed -= savings[stage]
+        for button, full, short, threshold in variants:
+            label = short if stage >= threshold else full
+            if button.cget('text') != label:
+                button.config(text=label)
+        self._toolbar_label_stage = stage
 
     def _build_ui(self):
         import analysis_work_app as input_work
@@ -7850,6 +8025,25 @@ class CorrectNoteApp:
         # （）は括弧群の左端。選択範囲に全角文字が1つでもあれば
         # 全角の（）、全角が無ければ半角の () で括る
         # （実機からの指定・2026-08-09）。
+        self.list_mode_btn = tk.Button(
+            toolbar, text='箇条書き', command=self.toggle_list_mode,
+            bg=PANEL, fg=INK, relief='flat', bd=1,
+            font=('Yu Gothic UI', 9), padx=8, pady=4, cursor='hand2')
+        self.list_mode_btn.pack(side='left', padx=(4, 0))
+        self.list_mode_btn.bind('<Enter>', lambda e: self._toolbar_hover_hint(e, True, self._list_hint()))
+        self.list_mode_btn.bind('<Leave>', lambda e: self._toolbar_hover_hint(e, False, self._list_hint()))
+        for name, label, command, hint in (
+                ('quick_input_btn', '簡易入力', self._open_quick_capture,
+                 '【簡易入力】別ウインドウを開き、エスケープキーで閉じると入力していた文字列をコピーしてカーソル位置に移します'),
+                ('word_book_btn', '単語帳', self._toggle_word_book,
+                 '【単語帳】追加ボタンから登録した単語をクリックするとコピー状態になり、ペーストすることができます')):
+            button = tk.Button(toolbar, text=label, command=command,
+                bg=PANEL, fg=INK, relief='flat', bd=1,
+                font=('Yu Gothic UI', 9), padx=8, pady=4, cursor='hand2')
+            button.pack(side='left', padx=(4, 0))
+            button.bind('<Enter>', lambda e, h=hint: self._toolbar_hover_hint(e, True, h))
+            button.bind('<Leave>', lambda e, h=hint: self._toolbar_hover_hint(e, False, h))
+            setattr(self, name, button)
         self._bracket_buttons = []
         button = tk.Button(
             toolbar, text='（）', command=self._wrap_with_parens,
@@ -7870,6 +8064,12 @@ class CorrectNoteApp:
             button.pack(side='left', padx=(4, 0))
             self._bracket_buttons.append(button)
 
+        for count, button in enumerate(self._bracket_buttons, 1):
+            hint = ('選択中の文字や、変換中の文字を括弧で包みます。ショートカットキー：F5'
+                    + (f'を{count}回' if count > 1 else ''))
+            button.bind('<Enter>', lambda e, h=hint: self._toolbar_hover_hint(e, True, h))
+            button.bind('<Leave>', lambda e, h=hint: self._toolbar_hover_hint(e, False, h))
+
         # 右側: レイアウト切り替え。
         self.layout_split_btn = tk.Button(
             toolbar, text='左右に並べる', command=self._set_layout_split,
@@ -7881,6 +8081,11 @@ class CorrectNoteApp:
             font=('Yu Gothic UI', 9), padx=10, pady=4, cursor='hand2')
         self.layout_unified_btn.pack(side='right', padx=3)
         self.layout_split_btn.pack(side='right', padx=3)
+        self._toolbar = toolbar
+        self._toolbar_fit_job = None
+        toolbar.bind('<Configure>', self._queue_toolbar_fit, add=True)
+        self._queue_toolbar_fit()
+
 
         # 補正の判断は使用頻度が低いため、メニューだけに残す
         # （ボタンは書きながら頻繁に押すものに絞る）。
@@ -8461,6 +8666,8 @@ class CorrectNoteApp:
             self.editor.bind(sequence,handler)
         self.root.bind_all('<F5>',self._on_f5_brackets)
         self.editor.bind('<F5>',self._on_f5_brackets)
+        for key in ('F6','F7','F8','F9'):
+            self.editor.bind('<'+key+'>',self._on_selection_transform)
         # Only an uninterrupted bracket gesture can be replaced or cancelled.
         self.root.bind_all('<KeyPress>', self._on_bracket_other_key, add=True)
         for sequence in ('<ButtonPress-1>', '<ButtonPress-2>', '<ButtonPress-3>'):
@@ -9685,6 +9892,7 @@ class CorrectNoteApp:
             pass
 
     def _on_change(self, event=None):
+        self._refresh_list_button()
         # 検索ダイアログの誤爆防止（_open_find_dialog_guarded）用に、
         # メモ欄で何か入力があった時刻を控えておく。
         import time
@@ -14633,6 +14841,8 @@ class CorrectNoteApp:
                     selected = self.editor.get('sel.first', 'sel.last')
             except Exception:
                 selected = ''
+            if self._end_list_on_whitespace(event, self.editor, selected):
+                return 'break'
             unit_text = ''
             hit = self._editor_unit_under_pointer(event)
             if hit is not None:
@@ -14733,6 +14943,8 @@ class CorrectNoteApp:
 
     def _after_ime_char_insert(self, widget):
         """Confirmed characters need analysis even without a release event."""
+        if getattr(self, "_pick_mode", None) in ("list", "wordbook"):
+            self._end_pick_mode(keep_equals=True)
         if widget is self.editor:
             self._on_change()
         elif widget is getattr(self, '_quick_text', None):
@@ -14861,13 +15073,13 @@ class CorrectNoteApp:
         if self._live_bracket_cycle(widget) is not None:
             self._cycle_brackets(widget)
         elif alt and not (control or shift):
-            self._wrap_with_brackets('【','】',widget=widget)
+            self._wrap_with_brackets('【','】',from_cycle=True,widget=widget)
         elif control and shift and not alt:
-            self._wrap_with_brackets('“','”',widget=widget)
+            self._wrap_with_brackets('“','”',from_cycle=True,widget=widget)
         elif control and not alt:
-            self._wrap_with_parens(widget=widget)
+            self._wrap_with_parens(from_cycle=True,widget=widget)
         elif shift and not alt:
-            self._wrap_with_brackets('『','』',widget=widget)
+            self._wrap_with_brackets('『','』',from_cycle=True,widget=widget)
         elif not alt:
             self._cycle_brackets(widget)
         return 'break'
@@ -15041,40 +15253,44 @@ class CorrectNoteApp:
         editor = state.get('widget',self.editor)
         start = state['start']
         content = state['content']
-        old_open_end = editor.index(f"{start}+{len(state['open'])}c")
-        content_end = editor.index(f'{old_open_end}+{len(content)}c')
-        close_end = editor.index(f"{content_end}+{len(state['close'])}c")
+        old_open_end = _stable_text_index(editor, f"{start}+{len(state['open'])}c")
+        content_end = _stable_text_index(editor, f'{old_open_end}+{len(content)}c')
+        close_end = _stable_text_index(editor, f"{content_end}+{len(state['close'])}c")
         self._clear_bracket_exit()
-        self._bracket_undo_separator(editor)
-        editor.delete(content_end, close_end)
-        editor.delete(start, old_open_end)
-        if replacement is not None:
-            kind, open_ch, close_ch = replacement
-            end = editor.index(f'{start}+{len(content)}c')
-            editor.insert(end, close_ch)
-            editor.insert(start, open_ch)
-            if state['mode'] == 'range':
-                editor.mark_set(
-                    'insert', f'{start}+{len(open_ch)+len(content)+len(close_ch)}c')
-                self._arm_bracket_exit(close_ch,editor)
+        with undo_group(editor):
+            editor.delete(content_end, close_end)
+            editor.delete(start, old_open_end)
+            if replacement is not None:
+                kind, open_ch, close_ch = replacement
+                end = _stable_text_index(editor, f'{start}+{len(content)}c')
+                editor.insert(end, close_ch)
+                editor.insert(start, open_ch)
+                if state['mode'] == 'range':
+                    editor.mark_set(
+                        'insert', f'{start}+{len(open_ch)+len(content)+len(close_ch)}c')
+                    self._arm_bracket_exit(close_ch,editor)
+                else:
+                    editor.mark_set('insert', f'{start}+{len(open_ch)}c')
+                editor.tag_remove('sel', '1.0', 'end')
+                editor.focus_set()
+                self._after_ime_char_insert(editor)
+                self._record_bracket_cycle(
+                    kind, start, content, open_ch, close_ch,
+                    state['cursor_before'], state['selection_before'], state['mode'],editor)
+                if state.get('original_pair'):
+                    self._bracket_cycle['original_pair'] = state['original_pair']
             else:
-                editor.mark_set('insert', f'{start}+{len(open_ch)}c')
-            editor.tag_remove('sel', '1.0', 'end')
-            editor.edit_separator()
-            editor.focus_set()
-            self._after_ime_char_insert(editor)
-            self._record_bracket_cycle(
-                kind, start, content, open_ch, close_ch,
-                state['cursor_before'], state['selection_before'], state['mode'],editor)
-        else:
-            editor.edit_separator()
-            editor.tag_remove('sel', '1.0', 'end')
-            if state['selection_before']:
-                editor.tag_add('sel', *state['selection_before'])
-            editor.mark_set('insert', state['cursor_before'])
-            self._forget_bracket_cycle()
-            editor.focus_set()
-            self._after_ime_char_insert(editor)
+                if state.get('original_pair'):
+                    opening, closing = state['original_pair']
+                    editor.insert(f'{start}+{len(content)}c', closing)
+                    editor.insert(start, opening)
+                editor.tag_remove('sel', '1.0', 'end')
+                if state['selection_before']:
+                    editor.tag_add('sel', *state['selection_before'])
+                editor.mark_set('insert', state['cursor_before'])
+                self._forget_bracket_cycle()
+                editor.focus_set()
+                self._after_ime_char_insert(editor)
 
     def _cancel_bracket_cycle(self, widget=None):
         widget=self._bracket_widget(widget)
@@ -15108,59 +15324,72 @@ class CorrectNoteApp:
                 self.BRACKET_STYLES.index(pair))
         active = self._live_bracket_cycle(widget)
         if active is not None:
-            if not from_cycle and kind == active['kind']:
-                self._remove_bracket_cycle(active)
-            else:
-                self._remove_bracket_cycle(active, (kind, open_ch, close_ch))
+            self._remove_bracket_cycle(active, (kind, open_ch, close_ch))
             return
 
         if not getattr(self, '_finishing_bracket_composition', False):
             if self._complete_bracket_composition(kind, pair,editor):return
-        cursor_before = editor.index('insert')
+        cursor_before = _stable_text_index(editor, 'insert')
         selected = editor.tag_ranges('sel')
-        selection_before = ((str(selected[0]), str(selected[1]))
+        selection_before = ((_stable_text_index(editor,selected[0]), _stable_text_index(editor,selected[1]))
                             if selected else None)
         f2_range = self._f2_bracket_range(editor)
         if f2_range is not None:
-            start, end = (editor.index(value) for value in f2_range)
+            start, end = (_stable_text_index(editor, value) for value in f2_range)
             mode = 'range'
             selection_before = None
             self._close_dropdown()
             self._clear_f2_target()
         elif selected:
-            start, end = str(selected[0]), str(selected[1])
+            start, end = _stable_text_index(editor,selected[0]), _stable_text_index(editor,selected[1])
             while (editor.compare(end, '>', start)
                    and editor.get(f'{end}-1c', end) == '\n'):
-                end = editor.index(f'{end}-1c')
+                end = _stable_text_index(editor, f'{end}-1c')
             mode = 'range'
         else:
             start = end = cursor_before
             mode = 'caret'
         content = editor.get(start, end)
-        self._clear_bracket_exit()
-        self._bracket_undo_separator(editor)
+        original_pair = None
         if mode == 'range':
-            editor.insert(end, close_ch)
-            editor.insert(start, open_ch)
-            editor.mark_set(
-                'insert', f'{start}+{len(open_ch)+len(content)+len(close_ch)}c')
-            self._arm_bracket_exit(close_ch,editor)
-        else:
-            editor.insert(start, open_ch + close_ch)
-            editor.mark_set('insert', f'{start}+{len(open_ch)}c')
-            try:
-                import ime_watch
-                if ime_watch.composition_active(editor.winfo_id()):
-                    self._arm_bracket_exit(close_ch,editor)
-            except Exception:
-                pass
-        editor.edit_separator()
-        editor.tag_remove('sel', '1.0', 'end')
-        editor.focus_set()
-        self._after_ime_char_insert(editor)
-        self._record_bracket_cycle(
-            kind, start, content, open_ch, close_ch,
-            cursor_before, selection_before, mode,editor)
+            from editor_transforms import selected_brackets
+            enclosed = selected_brackets(editor, start, end, self.BRACKET_STYLES)
+            if enclosed:
+                start, end, content, old_open, old_close = enclosed
+                original_pair = (old_open, old_close)
+                old_kind = 0 if old_open == '(' else self.BRACKET_STYLES.index(original_pair)
+                if from_cycle and old_kind == kind:
+                    kind = (kind + 1) % len(self.BRACKET_STYLES)
+                    open_ch, close_ch = self.BRACKET_STYLES[kind]
+        self._clear_bracket_exit()
+        with undo_group(editor):
+            if original_pair:
+                editor.delete(f'{end}-1c', end)
+                editor.delete(start, f'{start}+1c')
+                end = _stable_text_index(editor, f'{start}+{len(content)}c')
+            if mode == 'range':
+                editor.insert(end, close_ch)
+                editor.insert(start, open_ch)
+                editor.mark_set(
+                    'insert', f'{start}+{len(open_ch)+len(content)+len(close_ch)}c')
+                self._arm_bracket_exit(close_ch,editor)
+            else:
+                editor.insert(start, open_ch + close_ch)
+                editor.mark_set('insert', f'{start}+{len(open_ch)}c')
+                try:
+                    import ime_watch
+                    if ime_watch.composition_active(editor.winfo_id()):
+                        self._arm_bracket_exit(close_ch,editor)
+                except Exception:
+                    pass
+            editor.tag_remove('sel', '1.0', 'end')
+            editor.focus_set()
+            self._after_ime_char_insert(editor)
+            self._record_bracket_cycle(
+                kind, start, content, open_ch, close_ch,
+                cursor_before, selection_before, mode,editor)
+            if original_pair:
+                self._bracket_cycle['original_pair'] = original_pair
 
     def _clear_pending_bracket_composition(self):
         pending=getattr(self,'_pending_bracket_composition',None) or {}
@@ -15424,6 +15653,145 @@ class CorrectNoteApp:
         pair = ('(', ')') if text and not has_fullwidth(text) else ('（', '）')
         self._wrap_with_brackets(*pair, from_cycle=from_cycle,widget=editor)
 
+    def _on_selection_transform(self, event):
+        if ime_confirmed_char_event(event) is not None:
+            return self._function_key_character(event)
+        widget = getattr(event, 'widget', None)
+        if widget not in (self.editor, getattr(self, '_quick_text', None)) or widget is None:
+            return None
+        import ime_watch
+        if ime_watch.composition_active(widget.winfo_id()):
+            return None
+        selected = widget.tag_ranges('sel')
+        if not selected:
+            return None
+        kinds = {'F6':'hiragana', 'F7':'katakana', 'F8':'halfwidth', 'F9':'keys'}
+        kind = kinds.get(getattr(event, 'keysym', ''))
+        if kind is None:
+            return None
+        from editor_transforms import transform_selection
+        start, end = (_stable_text_index(widget, value) for value in selected[:2])
+        converted = transform_selection(widget.get(start, end), kind)
+        self._forget_bracket_cycle()
+        if getattr(self, '_pick_mode', None):
+            self._end_pick_mode(keep_equals=True)
+        with undo_group(widget):
+            widget.replace(start, end, converted)
+            widget.tag_remove('sel', '1.0', 'end')
+            widget.tag_add('sel', start, f'{start}+{len(converted)}c')
+            widget.mark_set('insert', f'{start}+{len(converted)}c')
+        self._after_ime_char_insert(widget)
+        return 'break'
+
+    def toggle_list_mode(self):
+        if getattr(self, '_pick_mode', None) == 'list':
+            self._end_pick_mode(keep_equals=True)
+            self._list_from_quick_sent()
+            return
+        if getattr(self, '_pick_mode', None):
+            self._end_pick_mode(keep_equals=True)
+        self._forget_bracket_cycle()
+        if self._list_from_quick_sent():
+            return
+        anchor = self.editor.index('insert linestart')
+        self._start_pick_mode(via_equals=False, calculate=False)
+        self._pick_mode = 'list'
+        self._pick_had_selection = False
+        self._list_started = False
+        self.editor.mark_set(self._PICK_MARK, f'{anchor} lineend')
+        self.editor.mark_gravity(self._PICK_MARK, 'left')
+        self.editor.tag_remove('sel', '1.0', 'end')
+        self.pick_mode_btn.config(relief='flat', fg=INK)
+        self._refresh_list_button()
+        self._pick_hint = self._LIST_PICK_HINT
+        self._pick_header.config(text=self._pick_hint, fg=ACCENT)
+        self.status.config(text='箇条書きモードです')
+        self.editor.focus_set()
+
+    def _end_list_on_whitespace(self, event, widget, selected):
+        """Only a blank click cancels; a selection released over blank space is kept."""
+        if getattr(self, '_pick_mode', None) != 'list' or selected.strip():
+            return False
+        try:
+            index = widget.index(f'@{event.x},{event.y}')
+            box = widget.bbox(index)
+            if (widget.get(index).strip() and box
+                    and box[0] <= event.x < box[0] + box[2]
+                    and box[1] <= event.y < box[1] + box[3]):
+                return False
+        except tk.TclError:
+            return False
+        self._end_pick_mode(keep_equals=True)
+        return True
+
+    def _list_first_prefix(self, mark):
+        row = int(self.editor.index(mark).split('.')[0])
+        current = self.editor.get(f'{row}.0', f'{row}.end')
+        if current.strip():
+            return '\n\n'
+        if row == 1 or not self.editor.get(f'{row-1}.0', f'{row-1}.end').strip():
+            return ''
+        return '\n'
+
+    def _list_insert(self, text):
+        if not text or not self._return_to_pick_origin():
+            return
+        editor = self.editor
+        prefix = '\n' if getattr(self, '_list_started', False) else self._list_first_prefix(self._PICK_MARK)
+        value = prefix + text.rstrip('\r\n')
+        with undo_group(editor):
+            start = _stable_text_index(editor, self._PICK_MARK)
+            editor.insert(start, value)
+            editor.mark_set(self._PICK_MARK, f'{start}+{len(value)}c')
+            editor.mark_set('insert', self._PICK_MARK)
+            editor.tag_remove('sel', '1.0', 'end')
+        self._list_started = True
+        editor.see('insert')
+        editor.focus_set()
+        self._on_change()
+
+    def _list_from_quick_sent(self):
+        editor = self.editor
+        mode, chunks = self._list_quick_sent_plan()
+        if not chunks:
+            return False
+        mark = '_list_batch_anchor'
+        if mode == 'split':
+            # The first line-start chunk stays exactly where it was. Only
+            # its contiguous alternating-colour neighbours move below it.
+            editor.mark_set(mark, chunks[-1][2])
+            editor.mark_gravity(mark, 'right')
+            with undo_group(editor):
+                for _, start, end, text, tag in reversed(chunks[1:]):
+                    if editor.get(f'{start}-1c', start) != '\n':
+                        editor.insert(start, '\n')
+                editor.mark_set('insert', mark)
+                editor.tag_remove('sel', '1.0', 'end')
+        else:
+            # Keep the original cursor-row rule for mid-sentence input.
+            editor.mark_set(mark, 'insert lineend')
+            editor.mark_gravity(mark, 'left')
+            prefix = self._list_first_prefix(mark)
+            with undo_group(editor):
+                for _, start, end, text, tag in reversed(chunks):
+                    editor.delete(start, end)
+                start = _stable_text_index(editor, f'{mark} lineend')
+                value = prefix + '\n'.join(item[3].rstrip('\r\n') for item in chunks)
+                editor.insert(start, value)
+                editor.mark_set('insert', f'{start}+{len(value)}c')
+                editor.tag_remove('sel', '1.0', 'end')
+        editor.mark_unset(mark)
+        self._clear_quick_sent()
+        editor.see('insert')
+        editor.focus_set()
+        self._on_change()
+        self.status.config(text=self._LIST_MOVE_HINT)
+        self._flash_editor_header(self._LIST_MOVE_HINT)
+        if getattr(self, '_toolbar_hover_widget', None) is self.list_mode_btn:
+            self._toolbar_hover_text = self._LIST_MOVE_HINT
+            self._update_header_visibility(editor.yview()[0])
+        return True
+
     def toggle_pick_mode(self, calculate=True):
         """
         F1（またはメニュー）でモードを切り替える。
@@ -15588,6 +15956,7 @@ class CorrectNoteApp:
         #   ウィジェットに置く必要がある（ウィジェットをまたいで
         #   マークは共有できないため）。
         self._pick_target = target
+        self._pick_reference_row = int(self.editor.index('insert').split('.')[0])
         session = getattr(self, 'session', None)
         self._pick_origin_tab = session.current() if session is not None else None
         self._pick_tab_marks = None
@@ -15637,12 +16006,7 @@ class CorrectNoteApp:
                   getattr(self, '_quick_text', None)):
             # 形を変える道は1か所に通す（`_set_pane_cursor`・学び22）
             self._set_pane_cursor(w, 'xterm')
-        hint = ('【引用モード】単語をクリック、または範囲を選択してEnterで引用します。'
-                '別タブも選べます。引用すると元のタブへ戻ります。Escで中断します')
-        if self._pick_calculate:
-            hint += ' 整数だけなら行番号引用、四則演算を含む式ならEnterで計算できます。'
-        if via_equals:
-            hint += '（何も拾わずに書き続けると「=」が残ります）'
+        hint = self._QUOTE_PICK_HINT
         # 統合レイアウトでは補正欄の見出しが見えないので、
         # メモ欄側の見出しに出す
         header = (self.editor_header if self._layout_is_unified()
@@ -15739,6 +16103,11 @@ class CorrectNoteApp:
         if not self._pick_mode:
             return None
         keysym = getattr(event, 'keysym', '')
+        if self._pick_mode in ('list', 'wordbook') and (ime_confirmed_char_event(event) is not None
+                or any(c.isprintable() for c in (getattr(event, 'char', '') or ''))
+                or keysym in ('Tab', 'BackSpace', 'Delete')):
+            self._end_pick_mode(keep_equals=True)
+            return None
 
         # 48-AKK: keyboard selection uses the same captured destination,
         # original-tab return, range replacement and undo as mouse quoting.
@@ -16233,6 +16602,8 @@ class CorrectNoteApp:
                 selected = text_widget.get('sel.first', 'sel.last')
         except Exception:
             selected = ''
+        if self._end_list_on_whitespace(event, text_widget, selected):
+            return 'break'
         unit_text = ''
         try:
             hit = self._quick_unit_under_pointer(event)
@@ -16387,6 +16758,14 @@ class CorrectNoteApp:
         was_equals = (self._pick_mode == 'equals')
         self._pick_mode = None
         self._pick_calculate = False
+        self._list_started = False
+        try:
+            self._refresh_list_button()
+            book = getattr(self, '_word_book', None)
+            if book is not None and book.window is not None:
+                book.add_button.config(relief='flat')
+        except (AttributeError, tk.TclError):
+            pass
         target = getattr(self, '_pick_target', 'editor')
         dest = (self._quick_text if target == 'quick'
                and getattr(self, '_quick_text', None) is not None
@@ -16491,7 +16870,7 @@ class CorrectNoteApp:
         # 見出しは戻しても状態欄が「語を拾うモードです」のままだと、
         # 実際の状態と表示が食い違って見える（実機で報告された）。
         try:
-            if self.status.cget('text') == '語を拾うモードです':
+            if self.status.cget('text') in ('語を拾うモードです', '箇条書きモードです'):
                 self.status.config(text='')
         except Exception:
             pass
@@ -16618,6 +16997,11 @@ class CorrectNoteApp:
             if not expression.strip():return
             from quote_calculator import calculate,quote_enter_kind
             kind,number=quote_enter_kind(expression)
+            if kind == 'relative':
+                row = (self._pick_reference_row if quick else
+                       int(dest.index(self._PICK_MARK).split('.')[0]))
+                number += row
+                kind = 'line'
             if kind=='line':
                 last_row=int(self.editor.index('end-1c').split('.')[0])
                 if not 1<=number<=last_row:
@@ -16673,6 +17057,16 @@ class CorrectNoteApp:
         簡易入力欄に差し込む。差し込み先を切り替えても、拾う操作
         （メモ欄・補正欄のクリック／ドラッグ）自体は変わらない。
         """
+        if getattr(self, '_pick_mode', None) == 'wordbook':
+            self._end_pick_mode(keep_equals=True)
+            self._word_book.add(text)
+            return
+        if getattr(self, '_pick_mode', None) == 'list':
+            if text:
+                self._list_insert(text)
+            else:
+                self._end_pick_mode(keep_equals=True)
+            return
         if not text and not typed_reference:
             self._end_pick_mode(keep_equals=True)
             return
@@ -19271,6 +19665,8 @@ class CorrectNoteApp:
                     selected = self.result_view.get('sel.first', 'sel.last')
             except Exception:
                 selected = ''
+            if self._end_list_on_whitespace(event, self.result_view, selected):
+                return 'break'
             hit = self._unit_under_pointer(event)
             unit_text = hit[1]['text'] if hit is not None else ''
             picked = resolve_pick_text(selected, unit_text)

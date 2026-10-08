@@ -54,6 +54,15 @@ import corrector as C
 from vocabulary import VocabularyStore, find_known_readings_flex
 from seed_vocabulary import load_seed
 
+# The legacy conversion API and TSF search are independent capabilities.
+# Report both before testing; availability is diagnostic, not a pass gate.
+from ime_language import JapaneseIME
+from ime_candidates import SearchCandidates
+for _api_name,_api_type in (('IFELanguage',JapaneseIME),('TSF search',SearchCandidates)):
+    with _api_type() as _api:
+        print('[ENV]',_api_name,'available=',_api.available,'error=',_api.error,flush=True)
+
+
 # (入力, 期待する補正結果, 説明)
 # 直ってほしい代表例。誤打の種類ごとに1件ずつ。
 FIX_CASES = [
@@ -417,7 +426,7 @@ for text in ('医師⇒意思','意思⇒医師','会議⇒懐疑'):
 if C._CORRECTION_SOURCE.get() is not None:
     failed+=1;_checks.failure('[NG] 48-VZ 最初の本文が残っている')
 # 接尾辞付きの候補だけが普通の一語を押しのけない。
-for text, expected in (('いゅうせい','修正'),('こょうじ','表示'),
+for text, expected in (('とゅうせい','修正'),('こょうじ','表示'),
                        ('だんだか','段々')):
     r=C.correct_line(text,initial_store,initial_tok,find_known_readings_flex,
                      input_method='kana',dict_index=idx)
@@ -816,8 +825,10 @@ if r['corrected']!='この場所に乗荷物を置きます。':
 print('[確認] IME変換後の巻き込みと自然な語・ユーザー保護')
 
 # 48-XW: 元の文脈を保持する補正。正解の並記もIME読みの注入も無し。
+# 実かく＋人にんの同読表記を主検査と共有。旧きくの禁止経路と原文保持は
+# tests_familiar_spellingの反例に残し、完成期待と明示保護を維持する。
 for text,expected in (
-        ('予定を聞く人しました。','予定を確認しました。'),
+        ('予定を書く人しました。','予定を確認しました。'),
         ('予定を書くな認しました。','予定を確認しました。'),
         ('画素背うを保存します。','画像を保存します。'),
         ('画添えウを保存します。','画像を保存します。'),
@@ -834,7 +845,7 @@ for text,expected in (
         ('窓を言閉めてから電気を消します。','窓を閉めてから電気を消します。'),
         ('ちゅうりくょを確認しました。','注力を確認しました。'),
         ('昨日ぴっぐるすを見ました。','昨日ぴっぐるすを見ました。'),
-        ('予定を聞く人して画素背うを保存します。','予定を確認して画像を保存します。'),
+        ('予定を書く人して画素背うを保存します。','予定を確認して画像を保存します。'),
         ('書く人も読む人もいます。','書く人も読む人もいます。'),
         ('読み直して確認する','読み直して確認する'),
         ('荷物を受け取って住所を確かめます。','荷物を受け取って住所を確かめます。'),
@@ -845,7 +856,7 @@ for text,expected in (
                      input_method='kana',dict_index=idx)
     if r['corrected'] not in (expected if isinstance(expected,tuple) else (expected,)):
         failed+=1;_checks.failure('[NG] 原文の範囲と接続の共有',text,r['corrected'])
-for text in ('予定を聞く人しました。','画添えウを保存します。'):
+for text in ('予定を書く人しました。','画添えウを保存します。'):
     protected=DecisionStore();protected.protect(text)
     r=C.correct_line(text,initial_store,initial_tok,find_known_readings_flex,
                      input_method='kana',dict_index=idx,decisions=protected)
@@ -1397,7 +1408,7 @@ print('[確認] 候補の外に残したて/た接続と、たら/ならの完�
 # 48-ZX: a narrower candidate must fit its retained original modifier.
 for text,expected in (
     ('こどもにえほんをよんであうげます。','子供に絵本を読んであげます。'),
-    ('とうろくしたたんごをいちらんあ゛かくにんできます。','とうろくしたたんごを一覧で確認できます。'),
+    ('とうろくしたたんごをいちらんい゛かくにんできます。','とうろくしたたんごを一覧で確認できます。'),
     ('とうろくしたたんごをいちらんてあ゛かくにんできます。','とうろくしたたんごを一覧で確認できます。'),
     ('とうろくしたたんごをいちらんてい゛かくにんできます。','とうろくしたたんごをいちらんでかくにんできます。'),
     ('小さい動くおもちゃがあります。','小さい動くおもちゃがあります。'),
@@ -1415,7 +1426,7 @@ print('[確認] 複数の修飾語が共有する名詞を保ち、完成形の�
 for text,expected in (
     # 48-ALU: keep the old full-kanji reference while accepting the same
     # repaired noun with the untouched original kana predicate. Both must have no purple.
-    ('がばうをほぞんします。',('画像を保存します。','画像をほぞんします。')),
+    ('がびうをほぞんします。',('画像を保存します。','画像をほぞんします。')),
     ('がそうをほぞんします。','画像を保存します。'),
     ('がぞいをほぞんします。',('画像を保存します。','画像をほぞんします。')),
     ('がぞいうをほぞんします。',('画像を保存します。','画像をほぞんします。')),
@@ -1491,8 +1502,8 @@ for word in ('いっけん','こうえん','こうそく','こしょう','しち
 # and an explicit matching reading of an authored fictitious kana name.
 for text,expected in (
     ('しゅうふくについて確認しました。','しゅうふくについて確認しました。'),
-    ('しりょうをせありしてください。',('資料を整理してください。', 'しりょうを整理してください。')),
-    ('しりょうをせいるしてください。',('資料を整理してください。', 'しりょうを整理してください。')),
+    ('しりょうをせすりしてください。',('資料を整理してください。', 'しりょうを整理してください。')),
+    ('しりょうをせいれしてください。',('資料を整理してください。', 'しりょうを整理してください。')),
     ('ミップの規則（みっぷのきそく、rule）について説明します。',
      'ミップの規則（みっぷのきそく、rule）について説明します。'),
     ('三浦按針（みうらあんじん）について調べます。','三浦按針（みうらあんじん）について調べます。'),
@@ -1505,6 +1516,22 @@ for text,expected in (
     if not reviewed_ci_spelling_matches(r['corrected'], accepted) or (isinstance(expected,tuple) and r['odd_spans']):
         failed+=1;_checks.failure('[NG] 読みの注記・複合格・候補の述語接続',text,r['corrected'],expected)
 
+
+
+# Horizontal/same-Shift policy: the former vertical/diagonal action
+# fixtures remain exclusions; ordinary spelling of untouched nouns is separate.
+import contextual_repair as horizontal_action_policy
+for typed,reading in (('せあり','せいり'),('せいる','せいり'),('かんにん','かくにん')):
+    for generator in (horizontal_action_policy.key_repairs,horizontal_action_policy.nonadjacent_key_repairs,
+                      horizontal_action_policy.adjacent_shift_key_repairs,horizontal_action_policy.neighbor_shift_key_repairs):
+        if any(r.reading==reading for r in generator(typed)):
+            failed+=1;_checks.failure('[NG] 除外した上下・斜めの動作読みを復活させない',typed,reading)
+for text,expected in (('しりょうをせありしてください。','資料をせありしてください。'),
+                      ('しりょうをせいるしてください。','しりょうをせいるしてください。'),
+                      ('きろくをかんにんしてほぞんします。','記録をかんにんしてほぞんします。')):
+    r=C.correct_line(text,initial_store,initial_tok,find_known_readings_flex,input_method='kana',dict_index=idx)
+    if r['corrected']!=expected or not r['odd_spans'] or r.get('analysis_status')!='complete':
+        failed+=1;_checks.failure('[NG] 対象外の旧方向は原文の動作と紫を残す',text,r['corrected'],r['odd_spans'])
 
 
 # 48-ABG/ABJ/ABL: exact native auxiliary chains, including their
@@ -1780,11 +1807,23 @@ for text in ('かくらんしてほぞん','かくらんしてほぞんしてし
 for text in ('かくにんしかほぞんしてしゅうりょう','がぞうにほぞんしてしゅうりょう'):
     if note_readings.completed_native_action_note(text):
         failed+=1;_checks.failure('[NG] 助詞と述語の関係にも肯定証拠を要求',text)
-# te <- a is adjacent under the user's revised layout; te <- u is not.
-r=C.correct_line('かくにんしあほぞんしてしゅうりょう',initial_store,initial_tok,
+# Horizontal, same-Shift action endings keep the completed original expectations.
+r=C.correct_line('かくにんしいほぞんしてしゅうりょう',initial_store,initial_tok,
                  find_known_readings_flex,input_method='kana',dict_index=idx)
-if r['corrected']!='確認して保存して終了':
-    failed+=1;_checks.failure('[NG] しかを作る副作用を解消',r['corrected'])
+if r['corrected']!='確認して保存して終了' or r['odd_spans'] or r['analysis_status']!='complete':
+    failed+=1;_checks.failure('[NG] 左右の接続修復で完成本文を保持',r['corrected'],r['odd_spans'])
+# Excluded vertical/diagonal directions remain negative physical and final cases.
+import contextual_repair as native_repair
+for typed,reading,text,expected in (
+    ('しあ','して','かくにんしあほぞんしてしゅうりょう','かくにんしあほぞんしてしゅうりょう'),
+    ('しんす','します','ぶんしょうをにゅうりょくしんす。','文章をにゅうりょくしんす。')):
+    for generator in (native_repair.key_repairs,native_repair.nonadjacent_key_repairs,
+                      native_repair.adjacent_shift_key_repairs,native_repair.neighbor_shift_key_repairs):
+        if any(row.reading==reading for row in generator(typed)):
+            failed+=1;_checks.failure('[NG] 対象外の方向を別生成へ戻さない',typed,reading)
+    r=C.correct_line(text,initial_store,initial_tok,find_known_readings_flex,input_method='kana',dict_index=idx)
+    if r['corrected']!=expected or not r['odd_spans'] or r['analysis_status']!='complete':
+        failed+=1;_checks.failure('[NG] 対象外の動作と未解決印を保持',text,r['corrected'],r['odd_spans'])
 
 
 # 48-ACG: 長音と実際の「の」、結果/履歴の中心語を名詞句として共有。
@@ -1802,15 +1841,21 @@ for text in ('ぺーじがをひらきます','もくてきのをぺーじをひ
 
 
 # 48-ACH: 肯定した動作の一般性で比較し、単独解析の断片で採点しない。
-# wa/ri -> ni are no longer neighbours. Their adjacent ra alternative
-# expresses the already accepted original action (撹乱), not 確認.
-for text,expected in (('かくゆんしてほぞん','確認して保存'),
-        ('かくよんしてほぞん','確認して保存'),('かくのんしてほぞん','確認して保存'),
-        ('かくわんしてほぞん','撹乱して保存'),('かくりんしてほぞん','撹乱して保存')):
+# Horizontal substitution keeps the original Shift state. The old vertical
+# or diagonal fixtures stay as forbidden inputs; real horizontal examples
+# retain the original positive action/meaning and completed-spelling check.
+for text,expected in (('かくなんしてほぞん','確認して保存'),
+        ('かくせんしてほぞん','撹乱して保存')):
     r=C.correct_line(text,initial_store,initial_tok,find_known_readings_flex,
                      input_method='kana',dict_index=idx)
-    if r['corrected']!=expected:
+    if r['corrected']!=expected or r['odd_spans'] or r.get('analysis_status')!='complete':
         failed+=1;_checks.failure('[NG] 許可された打鍵内で元の動作と一般性を比較',text,r['corrected'])
+for text in ('かくゆんしてほぞん','かくよんしてほぞん','かくのんしてほぞん',
+             'かくわんしてほぞん','かくりんしてほぞん'):
+    r=C.correct_line(text,initial_store,initial_tok,find_known_readings_flex,
+                     input_method='kana',dict_index=idx)
+    if r['corrected']!=text or r.get('analysis_status')!='complete':
+        failed+=1;_checks.failure('[NG] 上下・斜めの打ち間違えを別経路で復活させない',text,r['corrected'])
 
 
 # 48-ACI: 時刻と出所も同じ読み・格・活用の肯定証拠で扱う。
@@ -1962,7 +2007,7 @@ for text,expected in (
     ('ほんをよま','ほんをよま'),
     ('かくにんせんか。','かくにんせんか。'),
     ('ぶんしょうをにゅうりょくしんか。','ぶんしょうをにゅうりょくしんか。'),
-    ('ぶんしょうをにゅうりょくしんす。','文章を入力します。')):
+    ('ぶんしょうをにゅうりょくしくす。','文章を入力します。')):
     r=C.correct_line(text,initial_store,initial_tok,find_known_readings_flex,input_method='kana',dict_index=idx)
     if not reviewed_ci_spelling_matches(r['corrected'], expected if isinstance(expected,tuple) else (expected,)) or r['odd_spans']:
         failed+=1;_checks.failure('[NG] 元の活用・目的語・解決済み接続を共有',text,r['corrected'],r['odd_spans'])
@@ -1974,11 +2019,17 @@ for text in ('もんせだいがかいけつしたのでさぎょうをつづけ
         failed+=1;_checks.failure('[NG] 非隣接の1打鍵を旧経路でも削除しない',text,r['corrected'])
 
 # Native adverbs, alternate homophone readings, and source-retained connectives.
-for text in ('なくしたかぎをもういちどさがします。','もういちどかくにんします。',
-             'へんこうするないようをかくにんします。','りれきをつかいますし',
-             'りれきをつかいますけれど','ほんをよめば'):
+# Development145 proves the finite relative action and its full noun.
+# Require its completed spelling while retaining every other source contract.
+for text,expected in (
+        ('なくしたかぎをもういちどさがします。','なくしたかぎをもういちどさがします。'),
+        ('もういちどかくにんします。','もういちどかくにんします。'),
+        ('へんこうするないようをかくにんします。','変更する内容を確認します。'),
+        ('りれきをつかいますし','りれきをつかいますし'),
+        ('りれきをつかいますけれど','りれきをつかいますけれど'),
+        ('ほんをよめば','ほんをよめば')):
     r=C.correct_line(text,initial_store,initial_tok,find_known_readings_flex,input_method='kana',dict_index=idx)
-    if not reviewed_ci_spelling_matches(r['corrected'], text) or r['odd_spans']:
+    if not reviewed_ci_spelling_matches(r['corrected'], expected) or r['odd_spans']:
         failed+=1;_checks.failure('[NG] 読み全体と原文の接続を保護',text,r['corrected'],r['odd_spans'])
 for text,expected in (('いかすとーる','インストール'),
                       ('りれきをっかいますが',('りれきを使いますが', '履歴を使いますが'))):
@@ -1994,10 +2045,10 @@ for suffix in ('て','ば','ながら','つつ'):
 
 # A later predicate and a repaired object retain the completed first clause.
 for text,expected in (
-    ('まどをしめてからほんをよみまぇ。',('まどをしめてからほんを読みます。', '窓をしめてから本を読みます。')),
+    ('まどをしめてからほんをよみまか。',('まどをしめてからほんを読みます。', '窓をしめてから本を読みます。')),
     ('まどをしめてからほんをよみまもす。',('まどをしめてからほんを読みます。', '窓をしめてから本を読みます。')),
-    ('まどをしめてから゛んをよみます。',('まどをしめてから本を読みます。', '窓をしめてから本を読みます。')),
-    ('てがみをかいてから゛んをよみます。',('てがみをかいてから本を読みます。', '手紙をかいてから本を読みます。')),
+    ('まどをしめてからほへんをよみます。',('まどをしめてから本を読みます。', '窓をしめてから本を読みます。')),
+    ('てがみをかいてからほへんをよみます。',('てがみをかいてから本を読みます。', '手紙をかいてから本を読みます。')),
     ('せつめいをよんでからそうちをうごかします。','せつめいをよんでからそうちをうごかします。'),
     ('ほんをよんでからまどをしめます。','ほんをよんでからまどをしめます。'),
     ('まどをしめてからいものをたべます。','まどをしめてからいものをたべます。'),
@@ -2025,7 +2076,7 @@ for text,expected in (
     ('本をもどしはます。','本を戻します。'),
     ('本をももどします。','本をももどします。'),
     ('荷物をはこびます。','荷物をはこびます。'),
-    ('きろくをかんにんしてほぞんします。',('きろくをかくにんして保存します。', '記録を確認して保存します。')),
+    ('きろくをかきにんしてほぞんします。',('きろくをかくにんして保存します。', '記録を確認して保存します。')),
 ):
     r=C.correct_line(text,initial_store,initial_tok,find_known_readings_flex,input_method='kana',dict_index=idx)
     if not reviewed_ci_spelling_matches(r['corrected'], expected if isinstance(expected,tuple) else (expected,)) or r['odd_spans']:
@@ -2305,8 +2356,8 @@ for text in ('このぶんしょうをよんでいただけますか。',
         failed+=1;_checks.failure('[NG] native lemma / auxiliary potential / spatial cleanup:',text,result['corrected'],result['odd_spans'])
 for text,expected in (
     ('このぶんしょうをよんでいただけますう。',('このぶんしょうをよんでいただけますか。', 'このぶんしょうを読んでいただけますか。', 'このぶんしょうをよんで頂けますか。', 'このぶんしょうをよんでいただけます。', 'このぶんしょうを読んでいただけます。', 'このぶんしょうをよんで頂けます。')),
-    ('このぶんしょうをよんでいただけますき。',('このぶんしょうをよんでいただけますか。', 'このぶんしょうを読んでいただけますか。', 'このぶんしょうをよんで頂けますか。')),
-    ('つくえのうえをかたづめておきます。','つくえのうえを片付けておきます。')):
+    ('このぶんしょうをよんでいただけますす。',('このぶんしょうをよんでいただけますか。', 'このぶんしょうを読んでいただけますか。', 'このぶんしょうをよんで頂けますか。')),
+    ('つくえのうえをかたづれておきます。','つくえのうえを片付けておきます。')):
     result=C.correct_line(text,initial_store,initial_tok,find_known_readings_flex,input_method='kana',dict_index=idx)
     if not reviewed_ci_spelling_matches(result['corrected'], expected if isinstance(expected,tuple) else (expected,)) or result['odd_spans']:
         failed+=1;_checks.failure('[NG] contextual auxiliary / cleanup repair:',text,result['corrected'],result['odd_spans'])
@@ -2424,8 +2475,9 @@ for source,expected in (('ものだけをおくます。','ものだけを置き
 # it to negative/volitional mai loses that original meaning; bu->bi and
 # mu->mi cannot instead be claimed as adjacent strokes. The remaining
 # non-adjacent host stays visibly unresolved (review recorded 2026-09-24).
-# 48-APK: mu->me IS adjacent and 読める is an attested potential of 読む;
-# it keeps the original politeness and object, unlike a guessed mai ending.
+# 2026-10-05: the user's horizontal-only substitution policy excludes
+# mu->me. Keep the broken predicate and its mark; independent 本 spelling
+# does not turn this formerly positive fixture into a successful repair.
 for source in ('しりょうだけをえらぶます。',):
     result=C.correct_line(source,initial_store,initial_tok,find_known_readings_flex,
                           input_method='kana',dict_index=idx)
@@ -2434,8 +2486,9 @@ for source in ('しりょうだけをえらぶます。',):
 source='このほんだけをよむます。'
 result=C.correct_line(source,initial_store,initial_tok,find_known_readings_flex,
                       input_method='kana',dict_index=idx)
-if not reviewed_ci_spelling_matches(result['corrected'],'このほんだけを読めます。') or result['odd_spans']:
-    failed+=1;_checks.failure('[NG] adjacent potential keeps masu and object:',source,result['corrected'],result['odd_spans'])
+if (result['corrected'] not in (source,'この本だけをよむます。') or not result['odd_spans']
+        or C.adjacent_slip('む','め','kana')):
+    failed+=1;_checks.failure('[NG] excluded vertical potential keeps source and mark:',source,result['corrected'],result['odd_spans'])
 
 # Native genitive boundaries and complete case-bearing relative clauses.
 for text in ('まどのそと','まどのそとをみます。',
@@ -2634,9 +2687,10 @@ from tests_ime_watch import IMMReadingTests, IMMResultClauseTests
 from tests_context_meaning import ContextMeaningTests
 from tests_natural_default import NaturalDefaultTests
 from tests_familiar_spelling import FamiliarSpellingTests
+from tests_literal_examples import LiteralExampleTests,MaskedCaseTests
 from tests_mark_clusters import MarkClusterTests
 _cache_suite=unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(case)
-    for case in (ContextMeaningTests,NaturalDefaultTests,FamiliarSpellingTests,MarkClusterTests,IMESessionTests,NativeIMESessionTests,TokenizationScopeTests,SourceContextIMEContractTests,IMMReadingTests,IMMResultClauseTests,IMECommitRangeTests,AdjacentActualReadingTests,LiteralActualReadingTests,SeparatedFieldRepairTests,KanaSpellingCoordinateTests,KanaSpellingNativeTests,UnclosedNativeSpellingTests,InputFieldRepairTests,RepairedSpellingFrameTests,RepairedSpellingNativeTests,SavedCalculationTests,TemporalModifierPhraseTests,MixedKanaSpellingTests,InterruptedComparisonTests,NominalInflectionBoundaryTests,OrphanFiniteBoundaryTests,SourceSuffixBoundaryTests,ClosedNominalVolitionalTests,ActionValueNominalTests,ClauseColumnTests,SourceShiftIntrusionTests,NominalTemporalTests,AdjectiveMannerTests,AdjectiveHostBoundaryTests,SahenParticleContextTests,RhetoricalAdverbTests,SourceMannerTests,MovedWordEvidenceTests,ActionAttachmentTests,GenitiveObjectRepairTests,NominalizedReadingTests,ImeNativeStemTests,CollectionRoleTests,ConflictRepairFitTests,MultipleKeyDeletionTests,EventArgumentRoleTests,GenitiveCaseRepairTests,WritingSystemConversionTests,RepresentationFormatTests,ComitativeActivityTests,CommunicationCaseTests,CookingRoleTests,NativeRelativeRepairTests,CommaKanaContextTests,IndependentObjectClauseTests,ReleaseRoleTests,ProcessingRoleTests,UnadornedPrefixTests,SuruParadigmTests, SahenOmissionTests, NominalFieldRepairTests, PoliteSourceTailTests,ConsultationRoleTests,ConflictExplanationTests,ChangedNominalCaseTests,CandidateCaseRoleTests,ClassifiedNominalReadingTests,CountedNominalRepairTests,AttestedNominalCandidateTests,DeviceArrangementTests,ConjunctiveCaseTests,UnclassifiedNativeTests,FiniteCopulaTests,SourceSequenceRangeTests,AvoidanceRoleTests,QuantityObjectValidationTests,FileFormatTests,NativeVerbPrefixTests,CountedNominalTests,AdverbialHostTests,BiologicalCaseTests,LegacyCoverageTests,NativeLegacyCoverageTests,FocusedSequenceTests,OriginalCaseStyleTests,CounterReadingTests,NominalSourceRangeTests,ShortCausativeTests,FloatingQuantityTests,OrdinaryQuantityMeaningTests,ProlongedClauseTests,SearchBoundaryTests,FocusedRequestContextTests,SpatialNominalContextTests,NegativeDegreeContextTests,ActionNominalContextTests,AsyncIdentityTests,CompletedTabTests,ReadingDependencyTests,BackgroundOwnershipTests,ApplicationCacheTests,BackgroundDisplayTests,InitialSetupTests,ReadingRowsTests,NativeReadingExtensionsTests,PrepareReuseTests,NativeNominalTests,ParticleCandidateTests,ParticleChoiceTkTests,AutomaticParticleTests,KanaRequestTests,QuestionParticleTests,NominalParticleSourceTests,NominalIMECompoundTests,CachedIMEKeyNeighborTests,NativeCandidateMeaningTests,IMEUnshiftedContextTests,NativeReadingDataTests,NativeCoordinationTests,NativeVerbGrammarTests,NativeConditionalTests,NativePhaseNominalTests,NominalCopulaTests,NominalComparisonTests,NominalSourcePeopleTests,AdjunctBoundaryTests,NativePreposedArgumentTests,NativeChangedPoliteTests,NativeCandidateSeamTests,NativePastAttachmentTests,SpellingSenseEvidenceTests,OpaqueSourceObjectTests,SourceKeyScopeTests,NativeBaConditionalTests,OpaquePreposedTests,OpaqueCaseRolesTests,OpaqueGenitiveTests,OpaqueSubjectTests,OpaqueTopicTests,KnownSubjectOpaqueObjectTests))
+    for case in (ContextMeaningTests,NaturalDefaultTests,FamiliarSpellingTests,LiteralExampleTests,MaskedCaseTests,MarkClusterTests,IMESessionTests,NativeIMESessionTests,TokenizationScopeTests,SourceContextIMEContractTests,IMMReadingTests,IMMResultClauseTests,IMECommitRangeTests,AdjacentActualReadingTests,LiteralActualReadingTests,SeparatedFieldRepairTests,KanaSpellingCoordinateTests,KanaSpellingNativeTests,UnclosedNativeSpellingTests,InputFieldRepairTests,RepairedSpellingFrameTests,RepairedSpellingNativeTests,SavedCalculationTests,TemporalModifierPhraseTests,MixedKanaSpellingTests,InterruptedComparisonTests,NominalInflectionBoundaryTests,OrphanFiniteBoundaryTests,SourceSuffixBoundaryTests,ClosedNominalVolitionalTests,ActionValueNominalTests,ClauseColumnTests,SourceShiftIntrusionTests,NominalTemporalTests,AdjectiveMannerTests,AdjectiveHostBoundaryTests,SahenParticleContextTests,RhetoricalAdverbTests,SourceMannerTests,MovedWordEvidenceTests,ActionAttachmentTests,GenitiveObjectRepairTests,NominalizedReadingTests,ImeNativeStemTests,CollectionRoleTests,ConflictRepairFitTests,MultipleKeyDeletionTests,EventArgumentRoleTests,GenitiveCaseRepairTests,WritingSystemConversionTests,RepresentationFormatTests,ComitativeActivityTests,CommunicationCaseTests,CookingRoleTests,NativeRelativeRepairTests,CommaKanaContextTests,IndependentObjectClauseTests,ReleaseRoleTests,ProcessingRoleTests,UnadornedPrefixTests,SuruParadigmTests, SahenOmissionTests, NominalFieldRepairTests, PoliteSourceTailTests,ConsultationRoleTests,ConflictExplanationTests,ChangedNominalCaseTests,CandidateCaseRoleTests,ClassifiedNominalReadingTests,CountedNominalRepairTests,AttestedNominalCandidateTests,DeviceArrangementTests,ConjunctiveCaseTests,UnclassifiedNativeTests,FiniteCopulaTests,SourceSequenceRangeTests,AvoidanceRoleTests,QuantityObjectValidationTests,FileFormatTests,NativeVerbPrefixTests,CountedNominalTests,AdverbialHostTests,BiologicalCaseTests,LegacyCoverageTests,NativeLegacyCoverageTests,FocusedSequenceTests,OriginalCaseStyleTests,CounterReadingTests,NominalSourceRangeTests,ShortCausativeTests,FloatingQuantityTests,OrdinaryQuantityMeaningTests,ProlongedClauseTests,SearchBoundaryTests,FocusedRequestContextTests,SpatialNominalContextTests,NegativeDegreeContextTests,ActionNominalContextTests,AsyncIdentityTests,CompletedTabTests,ReadingDependencyTests,BackgroundOwnershipTests,ApplicationCacheTests,BackgroundDisplayTests,InitialSetupTests,ReadingRowsTests,NativeReadingExtensionsTests,PrepareReuseTests,NativeNominalTests,ParticleCandidateTests,ParticleChoiceTkTests,AutomaticParticleTests,KanaRequestTests,QuestionParticleTests,NominalParticleSourceTests,NominalIMECompoundTests,CachedIMEKeyNeighborTests,NativeCandidateMeaningTests,IMEUnshiftedContextTests,NativeReadingDataTests,NativeCoordinationTests,NativeVerbGrammarTests,NativeConditionalTests,NativePhaseNominalTests,NominalCopulaTests,NominalComparisonTests,NominalSourcePeopleTests,AdjunctBoundaryTests,NativePreposedArgumentTests,NativeChangedPoliteTests,NativeCandidateSeamTests,NativePastAttachmentTests,SpellingSenseEvidenceTests,OpaqueSourceObjectTests,SourceKeyScopeTests,NativeBaConditionalTests,OpaquePreposedTests,OpaqueCaseRolesTests,OpaqueGenitiveTests,OpaqueSubjectTests,OpaqueTopicTests,KnownSubjectOpaqueObjectTests))
 if not _checks.run_suite(_cache_suite).wasSuccessful():failed+=1
 
 # 48-ACO: the engine contracts do not exercise Tk's actual startup boundary.
@@ -2663,6 +2717,8 @@ if sys.platform == 'win32':
     from tests_gui_all_tabs_search import AllTabsSearchTkTests
     from tests_gui_file_format import FileFormatApplicationTests
     from tests_gui_features import FeaturesApplicationTests
+    from tests_toolbar_wordbook import ToolbarWordBookTests
+    from tests_editor_operations import EditorOperationsApplicationTests
     from tests_unicode_undo import UnicodeUndoTkTests
     from tests_gui_analysis import AnalysisGuiTests
     from tests_gui_interaction import InteractionTkTests
@@ -2679,7 +2735,7 @@ if sys.platform == 'win32':
     from tests_gui_prefetch_lifecycle import PrefetchLifecycleTests
     _startup_suite = unittest.TestSuite(
         unittest.defaultTestLoader.loadTestsFromTestCase(case)
-        for case in (ShortcutsMenuGuiTests,CalculationAutosaveGuiTests,CalculationRestartGuiTests,TabWheelTkTests,QuoteContinuationGuiTests,PrefetchLifecycleTests,NavigationDetailsTests,FontDialogDetailsTests,SharedGutterTests,SavedStateTests,PrefetchResumeTests,PrefetchGuiTests,CachedPrefetchGuiTests,ImePrefetchGuiTests,BookmarkTrackingTkTests,BookmarkLifecycleGuiTests,IMECommitEvidenceTkTests,MorphologyBufferTests,MorphologyContractTests,NativeMorphologyTests,IMEResultEventsTkTests,IMEResultEventsGuiTests,FontSettingsTests,FontTkTests,GutterTkTests,TypingPointerTests,AllTabsSearchTkTests,FileFormatApplicationTests,FeaturesApplicationTests,CrossTabQuoteTests,TextObserverTkTests, FixtureCollectionTkTests, StartupTkTests, EditingTkTests, HalfwidthAutofixTkTests, UnicodeUndoTkTests, AnalysisGuiTests,
+        for case in (ToolbarWordBookTests,EditorOperationsApplicationTests,ShortcutsMenuGuiTests,CalculationAutosaveGuiTests,CalculationRestartGuiTests,TabWheelTkTests,QuoteContinuationGuiTests,PrefetchLifecycleTests,NavigationDetailsTests,FontDialogDetailsTests,SharedGutterTests,SavedStateTests,PrefetchResumeTests,PrefetchGuiTests,CachedPrefetchGuiTests,ImePrefetchGuiTests,BookmarkTrackingTkTests,BookmarkLifecycleGuiTests,IMECommitEvidenceTkTests,MorphologyBufferTests,MorphologyContractTests,NativeMorphologyTests,IMEResultEventsTkTests,IMEResultEventsGuiTests,FontSettingsTests,FontTkTests,GutterTkTests,TypingPointerTests,AllTabsSearchTkTests,FileFormatApplicationTests,FeaturesApplicationTests,CrossTabQuoteTests,TextObserverTkTests, FixtureCollectionTkTests, StartupTkTests, EditingTkTests, HalfwidthAutofixTkTests, UnicodeUndoTkTests, AnalysisGuiTests,
                      InteractionTkTests, BlockNavigationTests, NavigationTkTests, WindowIconTests, ResultSelectionTkTests, TabLifecycleTkTests, InitialSetupTkTests, PendingColorTkTests, RefreshApplicationTkTests))
     _startup_result = _checks.run_suite(_startup_suite)
     if not _startup_result.wasSuccessful():

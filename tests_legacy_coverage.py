@@ -115,7 +115,7 @@ class NativeLegacyCoverageTests(unittest.TestCase):
             ('あぐせすもにたに行きます。','アクセスモニタに行きます。'),
             ('アクセスモニタに行きます。','アクセスモニタに行きます。'),
             ('アクセスも確認します。','アクセスも確認します。'),
-            ('まどをしめてからほんをよみまぇ。','まどをしめてからほんを読みます。'),
+            ('まどをしめてからほんをよみまか。','まどをしめてからほんを読みます。'),
             ('おくます。','置きます。')):
             with self.subTest(text=text):
                 r=app.correct_line(text,a.store,dict_index=a.dict_index,

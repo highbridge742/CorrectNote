@@ -393,9 +393,8 @@ from functools import lru_cache
 
 @lru_cache(maxsize=512)
 def _native_action_noun(surface,reading):
-    from morphology import dictionary_inflections
-    if any(p.startswith('名詞,サ変接続,') and rd==reading
-           for p,f,b,rd in dictionary_inflections(surface) or ()):return True
+    from reading_segments import native_action_noun_reading
+    if native_action_noun_reading(surface,reading):return True
     try:
         from ime_language import JapaneseIME
         with JapaneseIME() as ime:
@@ -505,6 +504,59 @@ def converted_connective_nominal_frames(source):
     return tuple(out)
 
 
+def _native_nominal_terminal_te(source,noun,terminal,link):
+    """Retain an original written noun across one actual final particle.
+
+    This proves only source members and their open connective. The caller
+    still requires its own accusative and a proved independent following clause;
+    candidate readings, meaning and final validation are unchanged.
+    """
+    from morphology import dictionary_inflections,source_column_bounds
+    members=(noun,terminal,link)
+    if (noun.pos!='名詞' or not any('一'<=c<='鿿' for c in noun.surface)
+            or terminal.pos!='助詞' or terminal.pos_sub!='終助詞'
+            or link.surface!='て' or link.pos!='助詞' or link.pos_sub!='接続助詞'
+            or not all(t.has_reading for t in members)
+            or terminal.surface!=terminal.reading or link.surface!=link.reading
+            or noun.end!=terminal.start or terminal.end!=link.start
+            or any(source[t.start:t.end]!=t.surface or t.end-t.start!=len(t.surface)
+                   for t in members)
+            or not source_column_bounds(source,noun.start,link.end)):return False
+    for token in members:
+        if not any(pos.startswith(token.pos+','+token.pos_sub.replace(':',',')+',')
+                   and ('' if form=='*' else form)==token.infl_form
+                   and base==token.base_form and reading==token.reading
+                   for pos,form,base,reading in dictionary_inflections(token.surface) or ()):
+            return False
+    if dictionary_inflections(source[noun.start:link.end]):return False
+    return True
+
+
+def _native_te_kara_end(source,link,parts):
+    """Locate only the unchanged native te/de + kara particle sequence.
+
+    The caller separately proves the earlier anomaly and later clause.
+    This boundary supplies neither predicate meaning nor a repaired reading.
+    """
+    from morphology import dictionary_inflections,source_column_bounds
+    after=next((t for t in parts if t.start==link.end),None)
+    if (link.surface not in ('て','で') or link.pos!='助詞'
+            or link.pos_sub!='接続助詞' or after is None
+            or after.surface!='から' or after.pos!='助詞'
+            or after.pos_sub not in ('格助詞:一般','接続助詞')
+            or not source_column_bounds(source,link.start,after.end)):return None
+    for token in (link,after):
+        if (not token.has_reading or token.surface!=token.reading
+                or source[token.start:token.end]!=token.surface
+                or token.end-token.start!=len(token.surface)
+                or not any(pos.startswith(token.pos+','+token.pos_sub.replace(':',',')+',')
+                           and ('' if form=='*' else form)==token.infl_form
+                           and base==token.base_form and rd==token.reading
+                           for pos,form,base,rd in dictionary_inflections(token.surface) or ())):
+            return None
+    return after.end
+
+
 def broken_nominal_te_frames(source):
     """A noun + quotative て does not establish the expected verbal link.
 
@@ -520,11 +572,18 @@ def broken_nominal_te_frames(source):
     from literal_examples import protected_ranges,overlaps
     parts=tokenize(source);out=[];protected=None
     for i,(case,noun,link,verb) in enumerate(zip(parts,parts[1:],parts[2:],parts[3:])):
+        terminal=None
+        if link.pos=='助詞' and link.pos_sub=='終助詞':
+            if i+4>=len(parts):continue
+            terminal,link,verb=link,verb,parts[i+4]
+            if not _native_nominal_terminal_te(source,noun,terminal,link):continue
+        edges=((case,noun),(noun,link),(link,verb)) if terminal is None else (
+            (case,noun),(noun,terminal),(terminal,link),(link,verb))
         if (case.surface!='を' or case.pos!='助詞' or not case.pos_sub.startswith('格助詞')
                 or noun.pos!='名詞' or not (noun.pos_sub in ('一般','サ変接続') or noun.pos_sub.startswith('固有名詞'))
                 or not noun.has_reading
                 or link.surface!='て' or link.pos!='助詞' or link.pos_sub not in ('格助詞:連語','接続助詞')
-                or not all(a.end==b.start for a,b in ((case,noun),(noun,link),(link,verb)))):continue
+                or not all(a.end==b.start for a,b in edges)):continue
         # Written names remain names in ordinary naming/quoting clauses.
         # A real following movement (possibly with its destination) proves
         # the missing action at this accusative, independently of a repair.
@@ -537,7 +596,21 @@ def broken_nominal_te_frames(source):
             and verb.pos_sub=='非自立' and verb.has_reading
             and any(pos.startswith('動詞,非自立,') and form==verb.infl_form and rd==verb.reading
                     for pos,form,base,rd in dictionary_inflections(verb.surface) or ()))
-        if not (ordinary_kana or auxiliary or _following_native_motion(source[link.end:])):continue
+        motion=_following_native_motion(source[link.end:])
+        following_clause=False
+        if terminal is not None and not motion:
+            from morphology import source_column_bounds
+            from oddness import native_original_following_clause
+            field=source_column_bounds(source,noun.start,link.end)
+            original=[(t.surface,t.pos+(':'+t.pos_sub if t.pos_sub else ''),t.reading,
+                       t.start,t.end,t.has_reading,t.infl_form) for t in parts]
+            following_start=link.end
+            if verb.surface=='から':
+                following_start=_native_te_kara_end(source,link,parts)
+            following_clause=bool(field and following_start is not None
+                and native_original_following_clause(source,following_start,field[1],original))
+        if terminal is not None and not (motion or following_clause):continue
+        if not (ordinary_kana or auxiliary or motion or following_clause):continue
         # The actual accusative needs its independently written/read noun;
         # a stray を at the beginning cannot create this interpretation.
         if i==0 or parts[i-1].end!=case.start or parts[i-1].pos!='名詞' or not parts[i-1].has_reading:continue
@@ -707,6 +780,12 @@ def unlinked_past_predicate_frames(source):
         lo,hi=_source_clause_bounds(source,head.start,verb.end)
         tail=source[verb.start:hi].rstrip(' 。！？!?')
         if not _finite_written_predicate(tail):continue
+        # The unchanged whole tail can be an attested noun reading even
+        # when the best parse cuts it into a verb and auxiliary. A past
+        # predicate may modify that complete noun; no spelling or substring
+        # of an unknown tail supplies the alternative source boundary.
+        from reading_segments import _native_nominal_reading_faces
+        if _native_nominal_reading_faces(tail):continue
         # Repeating the same completed utterance is ordinary emphasis or
         # acknowledgement. Its actual trailing final particles stay valid.
         first=source[head.start:past.end]

@@ -87,14 +87,16 @@ def main(exe_path):
     pyz = archive.open_embedded_archive('PYZ.pyz')
     assert engine_stamp in strings(pyz.extract('analysis_cache')), (
         'ENGINE_STAMP missing from EXE', engine_stamp)
-    for module in ('contextual_repair', 'ime_colloquial', 'seed_japanese'):
+    for module in ('contextual_repair', 'ime_colloquial', 'seed_japanese',
+                   'word_book', 'menu_hover'):
         assert module in pyz.toc, ('module missing from EXE', module)
     assert 'seed_japanese.txt.gz' in archive.toc, (
         'seed lexicon missing from EXE', exe)
     private = {'vocabulary.json', 'session.json', 'last_choice.json',
                'ime_readings.json', 'analysis_cache.json', 'context_vec.json',
-               'charngram.json', 'decisions.json', 'settings.json', 'setup.json'}
-    assert not any(name.replace('\\', '/').rsplit('/', 1)[-1] in private
+               'charngram.json', 'decisions.json', 'settings.json', 'setup.json',
+               'word_book.json', 'word_book.json.tmp'}
+    assert not any(name.replace('\\', '/').rsplit('/', 1)[-1].casefold() in private
                    for name in archive.toc), (
         'personal data included in EXE', exe)
     modules = sorted({'app'} | {path.stem for path in root.glob('*.py')

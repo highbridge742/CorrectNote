@@ -460,6 +460,70 @@ class ContextualRepairTests(unittest.TestCase):
         self.assertEqual(kept,[(4,5,'丙')])
         self.assertEqual(R._apply(source,kept+selected),'甲べて、丙')
 
+    def test_semantic_abstention_removes_only_overlapping_legacy_operations(self):
+        target=R.RepairTarget('甲、対象、乙',2,4,0,6,(),True,'、乙')
+        old=[(0,1,'丙'),(2,4,'答え'),(5,6,'丁')]
+        diagnostics=[dict(status='unresolved_semantic_competitor')]
+        self.assertEqual(R._retain_independent_changes(old,[],[target],diagnostics),
+                         [(0,1,'丙'),(5,6,'丁')])
+        self.assertEqual(R._apply(target.source,R._retain_independent_changes(
+            old,[],[target],diagnostics)),'丙、対象、丁')
+
+    def test_semantic_abstention_removes_whole_prior_operation_not_a_slice(self):
+        target=R.RepairTarget('甲、対象、乙',2,4,0,6,(),True,'、乙')
+        self.assertEqual(R._retain_independent_changes([(0,4,'完成句'),(5,6,'丁')],[],
+            [target],[dict(status='unresolved_semantic_competitor')]),[(5,6,'丁')])
+
+    def test_semantic_abstention_does_not_reinterpret_other_search_statuses(self):
+        target=R.RepairTarget('甲、対象、乙',2,4,0,6,(),True,'、乙')
+        old=[(2,4,'答え')]
+        for status in ('no_candidate','no_joint_candidate','selected','truncated'):
+            with self.subTest(status=status):
+                self.assertEqual(R._retain_independent_changes(old,[],[target],
+                    [dict(status=status)]),old)
+        self.assertEqual(R._retain_independent_changes(old,[],[target]),old)
+
+    def test_semantic_abstention_keeps_original_coordinates_with_repeated_text(self):
+        source='対象、対象';left=R.RepairTarget(source,0,2,0,5,(),True,'、対象')
+        right=R.RepairTarget(source,3,5,0,5,(),True,'')
+        self.assertEqual(R._retain_independent_changes([(0,2,'第一'),(3,5,'第二')],[],
+            [left,right],[dict(status='selected'),dict(status='unresolved_semantic_competitor')]),
+            [(0,2,'第一')])
+
+    def test_semantic_abstention_reaches_final_wrapper_without_gate_override(self):
+        from copy import deepcopy
+        import corrector as C,ime_candidates
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        # Inject only the resolver's verdict. The earlier proposal is a
+        # native accepted spelling, and the real final validator stays active.
+        # This is a composition contract, not a claim that the live resolver
+        # already abstains on this source.
+        source='タフ毛';state=initial();tk=C.make_tokenizer(state.store)
+        target=R.RepairTarget(source,0,3,0,3,(('タフ','毛',0,3),),True,'')
+        proposal=(0,3,'タケ','かな入力')
+        accepted,_=C._check_replacement(source,proposal,state.store,tk,state.dict_index,state.decisions,
+                                      conv_taken=((0,3),))
+        self.assertIsNotNone(accepted)
+        legacy_result=dict(original=source,corrected='タケ',changed=True,
+            details=[('タフ毛','タケ','かな入力')],original_spans=[(0,3)],spans=[(0,2)],
+            odd_spans=[],odd_reasons=[],unsure_spans=[],analysis_status='complete')
+        def legacy(line,*args,**kwargs):return deepcopy(legacy_result)
+        legacy.__module__='corrector'
+        diag=dict(start=0,end=3,text=source,anomalies=target.anomalies,candidates=[],
+                  status='unresolved_semantic_competitor')
+        token=C._CORRECTION_PATH.set((source,))
+        try:
+            with patch.object(ime_candidates.SearchCandidates,'__enter__',lambda self:self), \
+                 patch.object(R,'targets_for_line',return_value=[target]), \
+                 patch.object(R,'resolve',side_effect=lambda *a,**kw:(None,deepcopy(diag))):
+                result=R.with_contextual_repair(legacy)(source,store=state.store,tokenize_fn=tk,
+                    dict_index=state.dict_index,decisions=state.decisions,input_method='kana')
+            self.assertEqual(result['corrected'],source)
+            self.assertTrue(result['odd_spans'])
+            self.assertEqual(result['analysis_status'],'complete')
+        finally:C._CORRECTION_PATH.reset(token);set_active(None)
+
     def test_no_new_candidate_keeps_independent_legacy_changes(self):
         target=self.target('対象')
         old=[(0,1,'甲')]

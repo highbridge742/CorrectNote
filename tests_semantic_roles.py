@@ -7,6 +7,265 @@ import semantic_roles as S
 
 
 class SemanticRoleTests(unittest.TestCase):
+    def test_topic_subject_keeps_its_original_pre_object_adjunct(self):
+        import reading_segments as R
+        def tok(text):
+            return [(t.surface,t.pos+':'+t.pos_sub,t.reading,t.start,t.end,t.has_reading,t.infl_form) for t in M.tokenize(text)]
+        for text,head in (('学生はすぐ文字をかきます','学生'),('学生達もゆっくり文字をかきます','学生達'),
+                          ('教師は静かに文字をかきます','教師')):
+            self.assertEqual(S.subject_before(text,text.index('かき'),tok),head,text)
+        text='学生はすぐ文字をかきます'
+        self.assertFalse(R.native_preposed_object_parts(text,True))
+        self.assertEqual(R.native_preposed_object_parts(text,True,object_start=5),((3,'は',('学生',),8,('文字',)),))
+
+    def test_topic_adjunct_frame_retains_native_boundary_and_whole_proofs(self):
+        import reading_segments as R
+        text='学生はすぐ文字をかきます'
+        for begin in (3,4,6,8,len(text)):
+            self.assertFalse(R.native_preposed_object_parts(text,True,object_start=begin),begin)
+        for source,begin in (('学生はすぐ\t文字をかきます',6),('学生は読み文字をかきます',5),
+                             ('学生はぷねら文字をかきます',6),('学生はすぐ文字をかきま',5)):
+            self.assertFalse(R.native_preposed_object_parts(source,True,object_start=begin),source)
+        R.native_preposed_object_parts.cache_clear()
+        try:
+            with patch.object(S,'_argument_prefix',return_value=([],4)):
+                self.assertFalse(R.native_preposed_object_parts(text,True,object_start=5))
+        finally:R.native_preposed_object_parts.cache_clear()
+        R.native_preposed_object_parts.cache_clear()
+        try:
+            with patch.object(R,'native_object_predicate_proof',return_value=False):
+                self.assertFalse(R.native_preposed_object_parts(text,True,object_start=5))
+        finally:R.native_preposed_object_parts.cache_clear()
+        R.native_preposed_object_parts.cache_clear()
+        try:
+            with patch.object(S,'proved_action_case_support',return_value=False):
+                self.assertFalse(R.native_preposed_object_parts(text,True,object_start=5))
+        finally:R.native_preposed_object_parts.cache_clear()
+
+    def test_topic_pre_object_adjunct_spelling_keeps_common_gate(self):
+        import app,corrector as C
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        source='学生はすぐ文字をかきます。';seen=[];check=C._check_replacement
+        def observed(line,replacement,*args,**kwargs):
+            result=check(line,replacement,*args,**kwargs);seen.append((replacement[2],result[0] is not None));return result
+        try:
+            a=initial()
+            with patch.object(C,'_check_replacement',side_effect=observed):
+                result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+            self.assertEqual(result['corrected'],'学生はすぐ文字を書きます。')
+            self.assertEqual(result['odd_spans'],[]);self.assertEqual(result['analysis_status'],'complete')
+            self.assertIn(('書き',True),seen)
+            a=initial()
+            with patch.object(C,'_check_replacement',return_value=(None,'test_common_gate')):
+                result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+            self.assertEqual(result['corrected'],source)
+            quote='入力は「学生はすぐ文字をかきます」です。';a=initial()
+            result=app.correct_line(quote,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+            self.assertEqual(result['corrected'],quote)
+        finally:set_active(None)
+
+    def test_topic_subject_shares_only_same_positive_object_frame(self):
+        def tok(text):
+            return [(t.surface,t.pos+':'+t.pos_sub,t.reading,t.start,t.end,t.has_reading,t.infl_form) for t in M.tokenize(text)]
+        for text,head in (('学生は文字をかきます','学生'),('学生達も文字をかきます','学生達')):
+            self.assertEqual(S.subject_before(text,text.index('かき'),tok),head,text)
+        text='文字は学生がかきます'
+        self.assertEqual(S.subject_before(text,text.index('かき'),tok),'学生')
+        for text in ('学生はかきます','ぷねらは文字をかきます',
+                     '学生は文字をかきま','学生は文字にかきます','学生は文字を食べてかきます',
+                     '学生は文字を\tかきます','学生の文字をかきます'):
+            self.assertNotEqual(S.subject_before(text,text.index('かき'),tok),'学生',text)
+
+    def test_topic_subject_retains_actual_token_and_positive_whole_frame(self):
+        import reading_segments as R
+        text='学生は文字をかきます';start=text.index('かき')
+        def tok(source):
+            return [(t.surface,t.pos+':'+t.pos_sub,t.reading,t.start,t.end,t.has_reading,t.infl_form) for t in M.tokenize(source)]
+        original=tok(text)
+        for slot,value in ((1,'助詞:格助詞'),(2,''),(3,1),(4,4),(5,False)):
+            changed=list(original);particle=list(changed[1]);particle[slot]=value;changed[1]=tuple(particle)
+            self.assertFalse(S.subject_before(text,start,lambda _:changed),(slot,value))
+        for frames in ((),((3,'は',('学生',),5,('文字',)),),((3,'も',('学生',),6,('文字',)),),((3,'は',('教師',),6,('文字',)),)):
+            with patch.object(R,'native_preposed_object_parts',return_value=frames):
+                self.assertFalse(S.subject_before(text,start,tok),frames)
+
+    def test_topic_subject_spelling_keeps_positive_ranking_and_common_gate(self):
+        import app,corrector as C
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        source='学生は文字をかきます。';seen=[];check=C._check_replacement
+        def observed(line,replacement,*args,**kwargs):
+            result=check(line,replacement,*args,**kwargs);seen.append((replacement[2],result[0] is not None));return result
+        try:
+            a=initial()
+            with patch.object(C,'_check_replacement',side_effect=observed):
+                result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+            self.assertEqual(result['corrected'],'学生は文字を書きます。')
+            self.assertEqual(result['odd_spans'],[]);self.assertEqual(result['analysis_status'],'complete')
+            self.assertIn(('書き',True),seen)
+            self.assertEqual(S.subject_candidate_evidence('学生','描き','ます')['shared_roles'],[])
+            self.assertTrue(S.candidate_evidence('文字','描き','ます')['shared_roles'])
+            a=initial()
+            with patch.object(C,'_check_replacement',return_value=(None,'test_common_gate')):
+                result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+            self.assertEqual(result['corrected'],source)
+            quote='入力は「学生は文字をかきます」です。';a=initial()
+            result=app.correct_line(quote,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+            self.assertEqual(result['corrected'],quote)
+        finally:set_active(None)
+
+    def test_subject_uses_the_existing_whole_object_seam(self):
+        def tok(text):
+            return [(t.surface,t.pos+':'+t.pos_sub,t.reading,t.start,t.end,t.has_reading,t.infl_form) for t in M.tokenize(text)]
+        for text,head in (('学生が文字をかきます','学生'),('学生達が文字をかきます','学生達'),
+                          ('教師がゆっくり文字をかきます','教師'),('先生が文字をゆっくりかきます','先生')):
+            self.assertEqual(S.subject_before(text,text.index('かき'),tok),head,text)
+        text='箱に本を入れます'
+        self.assertEqual(S.case_argument_before(text,4,tok,through_object=True),('箱','に'))
+        self.assertIsNone(S.case_argument_before(text,4,tok))
+
+    def test_subject_object_seam_keeps_source_tokens_and_clause_limits(self):
+        def tok(text):
+            return [(t.surface,t.pos+':'+t.pos_sub,t.reading,t.start,t.end,t.has_reading,t.infl_form) for t in M.tokenize(text)]
+        for text in ('学生が文字を食べてかきます','学生が文字を読み、文字をかきます',
+                     '学生が文字を\tかきます','学生を文字をかきます','ぷねら先生が文字をかきます'):
+            self.assertFalse(S.subject_before(text,text.index('かき'),tok),text)
+        text='学生達が文字をかきます';parts=tok(text)
+        for index in (0,1,3,4):
+            altered=list(parts);t=altered[index];altered[index]=t[:5]+(False,)+t[6:]
+            self.assertFalse(S.subject_before(text,text.index('かき'),lambda _:altered),index)
+        with patch.object(S,'_classified_argument_head',return_value=None):
+            self.assertFalse(S.subject_before(text,text.index('かき'),tok))
+
+    def test_subject_object_spelling_keeps_both_positive_proofs_and_common_gate(self):
+        import app,corrector as C
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        source='学生がもじをかきます。';seen=[];check=C._check_replacement
+        def observed(line,replacement,*args,**kwargs):
+            result=check(line,replacement,*args,**kwargs);seen.append((replacement[2],result[0] is not None));return result
+        try:
+            a=initial()
+            with patch.object(C,'_check_replacement',side_effect=observed):
+                result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+            self.assertEqual(result['corrected'],'学生が文字を書きます。')
+            self.assertEqual(result['odd_spans'],[]);self.assertEqual(result['analysis_status'],'complete')
+            self.assertIn(('文字',True),seen);self.assertIn(('書き',True),seen)
+            # Missing draw-subject evidence stays unknown; object evidence survives.
+            self.assertEqual(S.subject_candidate_evidence('学生','描き','ます')['shared_roles'],[])
+            self.assertTrue(S.candidate_evidence('文字','描き','ます')['shared_roles'])
+            a=initial()
+            with patch.object(C,'_check_replacement',return_value=(None,'test_common_gate')):
+                result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+            self.assertEqual(result['corrected'],source)
+            quote='入力は「学生がもじをかきます」です。';a=initial()
+            result=app.correct_line(quote,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+            self.assertEqual(result['corrected'],quote)
+        finally:set_active(None)
+
+    def test_proved_complete_action_uses_its_actual_native_head_and_tail(self):
+        for context,action in (('文章をよみます','よみます'),('文章を読みました','読みました')):
+            self.assertTrue(S.proved_action_case_support('私達','が',action,context=context))
+            self.assertFalse(S.proved_action_case_support('箱','が',action,context=context))
+            self.assertFalse(S.proved_action_case_support('りんご','を',action,context=context))
+        with patch.object(S,'native_verb_roles',return_value=frozenset()):
+            self.assertFalse(S.proved_action_case_support('私達','が','よみます',context='文章をよみます'))
+
+    def test_proved_complete_action_does_not_borrow_another_context(self):
+        for context in ('','文章をよみました','文章をかきます','文章をよみます。',
+                        'よみますという文字列'):
+            self.assertFalse(S.proved_action_case_support('私達','が','よみます',context=context),context)
+        self.assertFalse(S.proved_action_case_support('未知','が','よみます',context='文章をよみます'))
+
+
+    @unittest.skipUnless(M.HAS_JANOME,'whole native subject and shared nominal meaning')
+    def test_whole_plural_subject_keeps_its_case_across_an_adverb(self):
+        def tok(text):
+            return [(t.surface,t.pos+':'+t.pos_sub,t.reading,t.start,t.end,t.has_reading,t.infl_form) for t in M.tokenize(text)]
+        for subject in ('学生達','学生たち','教師達','私達'):
+            text=subject+'がよくかいた内容を保存します'
+            self.assertEqual(S.subject_before(text,text.index('かいた'),tok),subject)
+        for subject in ('機械達','ぷねら達','学生 達','学生\t達'):
+            text=subject+'がよくかいた内容を保存します'
+            self.assertFalse(S.subject_before(text,text.index('かいた'),tok))
+        text='学生達がよくかいた内容を保存します';parts=tok(text)
+        for index in (0,1):
+            changed=list(parts);t=changed[index];changed[index]=t[:5]+(False,)+t[6:]
+            self.assertFalse(S.subject_before(text,text.index('かいた'),lambda _:changed))
+        self.assertFalse(S.subject_before('学生達をよくかいた',6,tok))
+
+    @unittest.skipUnless(M.HAS_JANOME,'derived subject keeps its own positive roles')
+    def test_plural_subject_evidence_uses_the_whole_existing_person_meaning(self):
+        for noun in ('学生達','学生たち','教師達','私達'):
+            proof=S.subject_candidate_evidence(noun,'書い','た内容を保存します')
+            self.assertTrue(proof);self.assertEqual(proof['subject'],noun)
+            self.assertEqual(proof['predicate'],'書い');self.assertEqual(proof['shared_roles'],['person'])
+        self.assertIsNone(S.subject_candidate_evidence('ぷねら達','書い','た'))
+        self.assertIsNone(S.subject_candidate_evidence('機械達','書い','た'))
+        # Unknown predicate meaning is still empty evidence, not a negative label.
+        proof=S.subject_candidate_evidence('学生達','描い','た')
+        self.assertTrue(proof);self.assertEqual(proof['shared_roles'],[])
+        with patch.object(S,'_subject_predicate_roles',side_effect=AssertionError('unknown noun queried a predicate')):
+            self.assertIsNone(S.subject_candidate_evidence('ぷねら達','書い','た'))
+
+    @unittest.skipUnless(M.HAS_JANOME,'same classified compound proof across cases')
+    def test_common_subject_does_not_shorten_unclassified_compounds(self):
+        def tok(text):
+            return [(t.surface,t.pos+':'+t.pos_sub,t.reading,t.start,t.end,t.has_reading,t.infl_form) for t in M.tokenize(text)]
+        text='資料確認が始まります'
+        self.assertEqual(S.subject_before(text,5,tok),'資料確認')
+        for noun in ('ぷねら確認','機械先生'):
+            text=noun+'が始まります'
+            self.assertFalse(S.subject_before(text,len(noun)+1,tok))
+        self.assertFalse(S.subject_before('学生達が食べて書きます',7,tok))
+
+
+    @unittest.skipUnless(M.HAS_JANOME,'native person plural spellings')
+    def test_both_attested_plural_spellings_keep_the_same_person_meaning(self):
+        for head in ('先生','教師','私'):
+            for suffix in ('たち','達'):
+                with self.subTest(head=head,suffix=suffix):
+                    self.assertEqual(S.nominal_roles(head+suffix),frozenset(('person',)))
+        for head in ('機械','文章','ぷねら'):
+            for suffix in ('たち','達'):
+                self.assertNotIn('person',S.nominal_roles(head+suffix))
+
+    @unittest.skipUnless(M.HAS_JANOME,'whole plural argument meanings')
+    def test_plural_arguments_share_only_the_heads_existing_case_meaning(self):
+        for head in ('先生','教師','私'):
+            for suffix in ('たち','達'):
+                whole=head+suffix
+                for case,action in (('に','相談'),('に','質問'),('が','読む')):
+                    self.assertTrue(S.case_action_support(whole,case,action),(whole,case,action))
+                self.assertFalse(S.case_action_support(whole,'を','食べる'))
+                self.assertFalse(S.case_action_support(whole,'で','保存'))
+        self.assertFalse(S.case_action_support('機械達','に','相談'))
+        self.assertFalse(S.case_action_support('ぷねら達','が','読む'))
+
+    @unittest.skipUnless(M.HAS_JANOME,'native plural proof is required')
+    def test_plural_person_meaning_requires_the_whole_native_proof(self):
+        import reading_segments as R
+        for whole in ('先生たち','先生達','私たち','私達'):
+            self.assertIn('person',S.nominal_roles(whole))
+            with patch.object(R,'native_plural_nominal_heads',return_value=()) as proof:
+                self.assertNotIn('person',S.nominal_roles.__wrapped__(whole))
+                proof.assert_called_once_with(whole)
+
+
+    def test_insertion_and_removal_have_their_own_lexical_arguments(self):
+        for noun in ('人','者','子供','物','資料'):
+            self.assertTrue(S.support(noun,'入れる'),noun)
+        self.assertFalse(S.support('天気','入れる'))
+        for action in ('取り出す','取出す'):
+            for noun in ('物','資料','もの'):
+                self.assertTrue(S.support(noun,action),(noun,action))
+            self.assertTrue(S.case_action_support('箱','から',action))
+            self.assertFalse(S.case_action_support('箱','に',action))
+            self.assertFalse(S.support('天気',action))
+            self.assertFalse(S.support('者',action))
+
+
     @unittest.skipUnless(M.HAS_JANOME,'native lexical and potential meanings')
     def test_lexical_ichidan_meaning_precedes_possible_godan_derivation(self):
         for surface in ('あけ','開け'):

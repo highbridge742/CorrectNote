@@ -120,3 +120,7 @@ tools_local/*
 
 # Claude Code のこの PC 用の設定（個人のフォルダ構成と許可が出る）
 .claude/
+
+# Explicitly collected personal phrases and floating-window state.
+word_book.json
+word_book.json.tmp

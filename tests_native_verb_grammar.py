@@ -221,6 +221,18 @@ class NativeVerbGrammarTests(unittest.TestCase):
         self.assertEqual(result['corrected'],source)
         self.assertFalse(result.get('odd_spans'))
 
+    def test_unchanged_adnominal_boundary_is_not_a_broken_auxiliary(self):
+        import oddness as O
+        for head in ('大きな','小さな'):
+            source=head+'しはょ類を送信します。'
+            changed=head+'書類を送信します。'
+            self.assertTrue(O.changed_auxiliary_chain_allowed(changed,3,5,original=source))
+            self.assertTrue(O.changed_auxiliary_chain_allowed(changed,0,len(changed),original=source))
+            malformed=head+'書類を読むます。'
+            self.assertFalse(O.changed_auxiliary_chain_allowed(malformed,0,len(malformed),original=source))
+        for source,changed in (('高いない。','棚がない。'),('広いない。','風呂がない。')):
+            self.assertFalse(O.changed_auxiliary_chain_allowed(changed,0,len(changed),original=source))
+
     def test_final_auxiliary_check_keeps_independent_word_boundaries(self):
         import oddness as O
         pairs=(('昨日せれぐしょんを見ました。','昨日せれくしょんを見ました。'),
@@ -559,11 +571,17 @@ class NativeVerbGrammarTests(unittest.TestCase):
         import app,corrector as C,contextual_repair as Q
         from tests_analysis_async import initial
         a=initial();tok=C.make_tokenizer(a.store);revision=a.store.revision()
-        for source,expected in (('このほんだけをよむます。','この本だけを読めます。'),
-                                ('しりょうだけをよむます。','資料だけを読めます。')):
+        # 2026-10-05 user policy: む/め are on different rows, so the
+        # former 読めます expectation is outside adjacent substitution.
+        # A noun may retain its source spelling when the predicate is unresolved;
+        # the invalid verb remains marked, not a successful repair.
+        self.assertFalse(C.adjacent_slip('む','め','kana'))
+        self.assertFalse(any(r.reading=='よめます' for r in Q.key_repairs('よむます')))
+        for source,expected in (('このほんだけをよむます。','この本だけをよむます。'),
+                                ('しりょうだけをよむます。','しりょうだけをよむます。')):
             result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions)
             self.assertEqual(result['corrected'],expected)
-            self.assertFalse(result['odd_spans'])
+            self.assertTrue(result['odd_spans'])
             for target in Q.targets_for_line(source,tok,a.store,a.dict_index):
                 if target.text=='よむます':
                     self.assertFalse(Q.validate(target,'分けます',C,tok,a.store,a.dict_index,a.decisions,
@@ -633,3 +651,69 @@ class DefiniteNegativeSourceTests(unittest.TestCase):
         self.assertNotEqual(r['corrected'],'荷物を娘んでから休みます。')
         self.assertEqual(r['analysis_status'],'complete')
 
+
+
+class NativeObjectFunctionalTailTests(unittest.TestCase):
+    def test_original_case_and_native_stem_supply_functional_boundary(self):
+        import reading_segments as R
+        for source,start,cut in (('筆をあらいまか。',2,5),
+                                 ('あしたまでに文章をなおしまか。',9,12)):
+            with self.subTest(source=source):
+                self.assertIn((start,len(source)-1,cut,source[start:-1]),
+                              P.native_object_functional_tail_frames(source))
+                self.assertNotIn((start,cut),R.native_adnominal_modifier_ranges(source))
+        for source in ('あらいまか','ぷねらをあらいまか','筆をぷねらまか',
+                       '粗いまか','筆をあらいものに','筆をあらいところへ',
+                       '筆をあらい','筆をあらいま','筆をあらいまし','筆をあらいますか',
+                       '資料をなおしましょう','「筆をあらいまか」と入力します。'):
+            self.assertFalse(P.native_object_functional_tail_frames(source),source)
+
+    def test_adverb_guard_reuses_only_the_original_functional_prefix(self):
+        self.assertTrue(M.preserves_native_adverbial_word('筆をあらいまか。','筆を洗います。'))
+        self.assertFalse(M.preserves_native_adverbial_word('今は筆をあらいまか。','昼間は筆を洗います。'))
+        self.assertFalse(M.preserves_native_adverbial_word('今は洗います。','昼間は洗います。'))
+        self.assertFalse(M.preserves_native_adverbial_word('筆をあらいまか。今は休む。','筆を洗います。昼間は休む。'))
+
+    def test_original_predicate_reaches_the_same_final_validator(self):
+        import app,corrector as C
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        try:
+            a=initial();revision=a.store.revision()
+            for source,expected in (('筆をあらいまか。','筆を洗います。'),
+                                    ('ふでをあらいまか。','筆を洗います。'),
+                                    ('あしたまでに文章をなおしまか。','あしたまでに文章を直します。')):
+                r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                                   decisions=a.decisions,context_vec=None)
+                self.assertEqual(r['corrected'],expected)
+                self.assertFalse(r['odd_spans'])
+                self.assertEqual(r['analysis_status'],'complete')
+            # Deny every proposed replacement at the real shared gate.
+            # Spelling and physical repair can be composed from distinct
+            # subranges, so rejecting one whole-string shape is insufficient.
+            seen=[]
+            def reject(line,item,*args,**kwargs):
+                seen.append((line,item));return None,'test_reject_shared_gate'
+            with patch.object(C,'_check_replacement',side_effect=reject):
+                r=app.correct_line('筆をあらいまか。',a.store,input_method='kana',
+                                  dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+            self.assertTrue(seen)
+            self.assertEqual(r['corrected'],'筆をあらいまか。')
+            self.assertTrue(r['odd_spans'])
+            self.assertEqual(a.store.revision(),revision)
+        finally:set_active(None)
+
+    def test_open_literal_and_nominal_continuations_remain_intact(self):
+        import app
+        from tests_analysis_async import initial
+        from last_choice import set_active
+        try:
+            a=initial()
+            for source in ('筆をあらい','筆をあらいま','筆をあらいまし',
+                           '筆をあらいものに','筆をあらいところへ',
+                           '筆をあらい布で拭きます。','「筆をあらいまか」と入力します。'):
+                r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
+                                   decisions=a.decisions,context_vec=None)
+                self.assertEqual(r['corrected'],source)
+                self.assertFalse(r['odd_spans'])
+        finally:set_active(None)

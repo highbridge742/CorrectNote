@@ -138,7 +138,10 @@ class NativeReadingExtensionsTests(unittest.TestCase):
                      'こどもにほんをよんでもらいます'):
             with self.subTest(text=text):
                 self.assertTrue(R.completed_native_reading_clause(text,True,True,True))
-        self.assertFalse(R.completed_native_reading_clause('ものにほんをよんでもらいます',True,True,True))
+        # mono can denote a person: the receiving agent supplies that sense.
+        self.assertTrue(R.completed_native_reading_clause('ものにほんをよんでもらいます',True,True,True))
+        # Keep the non-agent counterexample explicit, not a kana homograph.
+        self.assertFalse(R.completed_native_reading_clause('いすにほんをよんでもらいます',True,True,True))
 
     @unittest.skipUnless(NATIVE,'requires the native dictionary')
     def test_reflexive_manner_is_a_boundary_not_a_free_case_or_completed_tail(self):
@@ -197,7 +200,7 @@ class NativeReadingExtensionsTests(unittest.TestCase):
         a=initial();a.context_vec=None
         cases=[('あついおちゃをさましてからのみます。','あついおちゃをさましてからのみます。'),
                ('ともだちににもつをはこんでもらいました。','ともだちににもつをはこんでもらいました。'),
-               ('あついおちゃをはましてからのみます。','あついおちゃをさましてからのみます。'),
+               ('あついおちゃをそましてからのみます。','あついおちゃをさましてからのみます。'),
                ('あついおちゃをさのましてからのみます。','あついおちゃをさましてからのみます。')]
         for text,expected in cases:
             with self.subTest(text=text):

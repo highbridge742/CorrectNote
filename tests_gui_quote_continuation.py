@@ -39,9 +39,9 @@ def child():
                 deliver_key(w,'<KeyPress>',keysym,0,char=char)
                 deliver_key(w,'<KeyRelease>',keysym,0,event_type=3,char=char)
         deliver_key(w,'<KeyPress>','Return',13,char='\r')
-    sequence=(('1/2','0.5'),('*4','2'),('+0.5','2.5')) if '--replace' in sys.argv else (('1-2','-1'),('+3','2'),('*4','11'))
+    sequence=(('1/2','0.5'),('*4','2'),('+0.5','2.5')) if '--replace' in sys.argv else (('1-2','-1'),('+3*1','2'),('*4','11'))
     if '--spaced' in sys.argv:
-        sequence=(('1-2','-1'),(' +3','2'),('　×4' if '--paste' in sys.argv else ' *4','11'))
+        sequence=(('1-2','-1'),(' +3*1','2'),('　×4' if '--paste' in sys.argv else ' *4','11'))
     with patch.object(app.CorrectNoteApp,'_learn_now',new=lambda *args:None),patch.object(app,'GlobalHotkeys',return_value=Mock()):
         try:
             a=app.CorrectNoteApp(root);until(done)
@@ -50,7 +50,7 @@ def child():
                 a.settings.set('unified_autofix',True);a._choose_layout('unified');until(done)
                 labels=('甲','乙','丙','丁');prefix='注1-2｜'
                 identity='--identity' in sys.argv
-                def operand(i):return ('-2','-2') if identity and i==1 else ('1-2','-1')
+                def operand(i):return ('-2*1','-2') if identity and i==1 else ('1-2','-1')
                 def value(i,extended=False):return ('10' if extended else '1') if identity and i==1 else ('11' if extended else '2')
                 a._replace_editor_text(prefix+'｜'.join(labels));until(done)
                 w=a.editor;expressions=['']*4;values=['']*4
@@ -66,7 +66,7 @@ def child():
                     assert a.editor_source_text().rstrip('\n')==original,(index,suffix,a.editor_source_text(),original)
                     assert a.line_results[0]['corrected']==rendered,(index,suffix,a.line_results[0],rendered)
                 for i in range(4):apply(i,*operand(i))
-                for i in (2,0,3,1):apply(i,'+3',value(i))
+                for i in (2,0,3,1):apply(i,'+3*1',value(i))
                 for i in (1,3,0,2):apply(i,'*4',value(i,True))
                 assert len(a._input_document.calculations)==4
                 a._switch_tab(1);until(done);a._switch_tab(0);until(done)
@@ -86,7 +86,7 @@ def child():
                     rec=a._autofix_record_for_row(1,w=q)
                     assert rec['original']==prefix+'｜'.join(k+v for k,v in zip(labels,expressions)),rec
                 for i in range(4):apply_quick(i,*operand(i))
-                for i in (2,0,3,1):apply_quick(i,'+3',value(i))
+                for i in (2,0,3,1):apply_quick(i,'+3*1',value(i))
                 for i in (1,3,0,2):apply_quick(i,'*4',value(i,True))
                 print('QUOTE_CONTINUATION_APP_PASSED',flush=True)
                 return
@@ -97,12 +97,12 @@ def child():
                 type_formula(w,'1-2');until(done)
                 w.mark_set('insert','1.end');type_formula(w,'1-2');until(done)
                 assert a.line_results[0]['corrected']=='甲-1｜乙-1'
-                type_formula(w,'+3');until(done)
-                assert a.editor_source_text().rstrip('\n')=='甲1-2｜乙1-2+3', (a.editor_source_text(),w.get('1.0','1.end'),a.line_results[0],a._input_document.calculations,a._autofix_record_for_row(1,w=w))
+                type_formula(w,'+3*1');until(done)
+                assert a.editor_source_text().rstrip('\n')=='甲1-2｜乙1-2+3*1', (a.editor_source_text(),w.get('1.0','1.end'),a.line_results[0],a._input_document.calculations,a._autofix_record_for_row(1,w=w))
                 assert a.line_results[0]['corrected']=='甲-1｜乙2'
                 w.mark_set('insert',w.search('｜','1.0'))
-                type_formula(w,'+3');until(done)
-                assert a.editor_source_text().rstrip('\n')=='甲1-2+3｜乙1-2+3'
+                type_formula(w,'+3*1');until(done)
+                assert a.editor_source_text().rstrip('\n')=='甲1-2+3*1｜乙1-2+3*1'
                 assert a.line_results[0]['corrected']=='甲2｜乙2'
                 assert len(a._input_document.calculations)==2
                 with patch.object(a,'_set_window_icons_win32',side_effect=lambda win:win.withdraw()), \
@@ -115,10 +115,10 @@ def child():
                           and q.get('1.0','end-1c')==expected)
                 type_formula(q,'1-2');quick_result('甲-1｜乙')
                 q.mark_set('insert','1.end');type_formula(q,'1-2');quick_result('甲-1｜乙-1')
-                type_formula(q,'+3');quick_result('甲-1｜乙2')
-                q.mark_set('insert',q.search('｜','1.0'));type_formula(q,'+3');quick_result('甲2｜乙2')
+                type_formula(q,'+3*1');quick_result('甲-1｜乙2')
+                q.mark_set('insert',q.search('｜','1.0'));type_formula(q,'+3*1');quick_result('甲2｜乙2')
                 rec=a._autofix_record_for_row(1,w=q)
-                assert rec['original']=='甲1-2+3｜乙1-2+3',rec
+                assert rec['original']=='甲1-2+3*1｜乙1-2+3*1',rec
                 print('QUOTE_CONTINUATION_APP_PASSED',flush=True)
                 return
             for layout,automatic in (('split',False),('unified',False),('unified',True)):

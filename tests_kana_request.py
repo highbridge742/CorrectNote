@@ -58,25 +58,24 @@ class KanaRequestTests(unittest.TestCase):
         self.assertEqual(result['corrected'],'歩いてください。\t歩いてください。')
         self.assertEqual(self.correct(result['corrected'])['corrected'],result['corrected'])
 
-    def test_explicit_shift_release_and_neighbor_retains_two_operations(self):
+    def test_shift_and_neighbor_cannot_share_an_original_position(self):
         import contextual_repair as cr
         from types import SimpleNamespace
         for source,expected in (('なおしまぇ','なおします'),('よみまぇ','よみます'),('あけまぇ','あけます')):
             target=SimpleNamespace(boundary_kind='kana_predicate',text=source)
             rows=[r for r in cr.request_shift_key_repairs(target,source) if r.reading==expected]
-            self.assertEqual(len(rows),1)
-            first,second=rows[0].steps
-            self.assertEqual((first.operation,first.pressed,first.intended),('shift','ぇ','え'))
-            self.assertEqual((second.operation,second.pressed,second.intended),('adjacent_substitution','え','す'))
-            self.assertEqual(first.position,second.position)
-            self.assertAlmostEqual(rows[0].cost,1.4)
+            # The requested same-position Shift + different base key is
+            # excluded even if the resulting verb would fit the sentence.
+            self.assertEqual(rows,[])
         for source in ('すきにん','かくにん','なおしまえ','なおしまぇながら'):
             target=SimpleNamespace(boundary_kind='kana_predicate',text=source)
             self.assertFalse(tuple(cr.request_shift_key_repairs(target,source)))
         for source,expected in (('ほんをよみまぇ。','本を読みます。'),('まどをあけまぇ。','窓を開けます。')):
             result=self.correct(source)
-            self.assertEqual(result['corrected'],expected)
-            self.assertFalse(result['odd_spans'])
+            self.assertNotEqual(result['corrected'],expected)
+            self.assertIn('まぇ',result['corrected'])
+            self.assertTrue(result['odd_spans'])
+            self.assertEqual(result['analysis_status'],'complete')
             self.assertEqual(self.correct(expected)['corrected'],expected)
         for source in ('ほんをよみます。','くださぃ。','「ほんをよみまぇ」と書きました。'):
             assert_reviewed_source_spelling(self, self.correct(source)['corrected'], source)
@@ -84,7 +83,7 @@ class KanaRequestTests(unittest.TestCase):
         ledger=DecisionStore();ledger.protect('よみまぇ')
         assert_reviewed_source_spelling(self, self.correct('ほんをよみまぇ。',decisions=ledger)['corrected'], 'ほんをよみまぇ。')
 
-    def test_written_shifted_tail_keeps_native_stem_and_both_physical_steps(self):
+    def test_written_shifted_tail_keeps_native_stem_without_same_position_composition(self):
         import pos_grammar as P,contextual_repair as R
         from types import SimpleNamespace
         for source,reading,expected in (('読みまぇ','よみまぇ','読みます'),('書きまぇ','かきまぇ','書きます'),
@@ -93,17 +92,11 @@ class KanaRequestTests(unittest.TestCase):
             self.assertEqual(frames,((0,len(source),len(source)-2,reading),))
             target=SimpleNamespace(boundary_kind='auxiliary_connection',text=source)
             repairs=[r for r in R.request_shift_key_repairs(target,reading) if r.reading==reading[:-1]+'す']
-            self.assertEqual(len(repairs),1)
-            self.assertEqual([step.operation for step in repairs[0].steps],['shift','adjacent_substitution'])
+            self.assertEqual(repairs,[])
             result=self.correct(source+'。')
-            if source=='確認しまぇ':
-                # Native しまい is a valid negative-volition alternative;
-                # it cannot be banned to force the synthetic intended ます.
-                # NHK research: https://www.jstage.jst.go.jp/article/bunken/68/12/68_46/_article/-char/ja
-                self.assertIn(result['corrected'],(expected+'。','確認しまい。'))
-            else:
-                self.assertEqual(result['corrected'],expected+'。')
-            self.assertFalse(result['odd_spans'])
+            self.assertEqual(result['corrected'],source+'。')
+            self.assertTrue(result['odd_spans'])
+            self.assertEqual(result['analysis_status'],'complete')
         import corrector as C
         tokenize=C.make_tokenizer(self.a.store)
         original='確認しまぇ。'

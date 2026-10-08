@@ -144,14 +144,25 @@ class NominalCopulaTests(unittest.TestCase):
             result=self.correct(text)
             self.assertEqual(result['corrected'],wanted)
             self.assertFalse(result['odd_spans'])
-        # This is two events at one position, never a one-key neighbor slip.
+        # The user now limits substitutions to horizontal neighbors.
+        # Old に -> ゆ is vertical: Shift must not bring it back as a repair.
         from contextual_repair import key_repairs,neighbor_shift_key_repairs
         self.assertNotIn('しゅうせい',{r.reading for r in key_repairs('しにうせい')})
-        pair=next(r for r in neighbor_shift_key_repairs('しにうせい') if r.reading=='しゅうせい')
-        self.assertEqual(len(pair.steps),2)
-        result=self.correct('しにうせい')
-        self.assertEqual(result['corrected'],'修正')
+        self.assertNotIn('しゅうせい',{r.reading for r in neighbor_shift_key_repairs('しにうせい')})
+        self.assertNotEqual(self.correct('しにうせい')['corrected'],'修正')
+        # User clarification: one position may not combine a different
+        # base key with a different Shift state. Keep both exclusion and
+        # the same-state horizontal positive through final spelling.
+        self.assertNotIn('りょうり',{r.reading for r in key_repairs('りゆうり')})
+        self.assertNotIn('りょうり',{r.reading for r in neighbor_shift_key_repairs('りゆうり')})
+        self.assertNotEqual(self.correct('りゆうり')['corrected'],'料理')
+        pair=next(r for r in key_repairs('りゅうり') if r.reading=='りょうり')
+        self.assertEqual((pair.operation,pair.pressed,pair.intended,pair.position),
+                         ('adjacent_substitution','ゅ','ょ',1))
+        result=self.correct('りゅうり')
+        self.assertEqual(result['corrected'],'料理')
         self.assertFalse(result['odd_spans'])
+        self.assertEqual(result['analysis_status'],'complete')
         import reading_segments as R
         for text in ('かくにんだぞん','にゅうりょくまちですん','にゅうりょくまちですかん'):
             self.assertFalse(R.completed_native_nominal_predicate(text),text)
