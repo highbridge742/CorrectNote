@@ -45,8 +45,15 @@ def child():
     user32=ctypes.WinDLL('user32',use_last_error=True)
     user32.PostMessageW.argtypes=(ctypes.c_void_p,ctypes.c_uint,ctypes.c_size_t,ctypes.c_ssize_t)
     user32.PostMessageW.restype=ctypes.c_int
-    def native_key(vk):
-        hwnd=a.editor.winfo_id()
+    def native_key(vk,widget=None):
+        target=widget if widget is not None else a.editor
+        # Tk routes native key messages to its focused widget, even when the
+        # posted HWND belongs to another widget. focus_get is mocked below,
+        # so verify the real Tcl focus before sending a Windows key message.
+        target.focus_force()
+        until(lambda:str(root.tk.call('focus'))==str(target),seconds=2)
+        assert target.winfo_viewable(),str(target)
+        hwnd=target.winfo_id()
         assert user32.PostMessageW(hwnd,0x100,vk,1)
         assert user32.PostMessageW(hwnd,0x101,vk,0xC0000001)
         for _ in range(4):root.update();time.sleep(.005)
@@ -123,9 +130,20 @@ def child():
             # The menu invokes the same bookmark toggle and native edit path.
             menu.invoke(labels['ブックマーク切替']);assert 1 not in a.bookmarks
             root.geometry('1x1+10000+10000');root.deiconify();root.update()
+            # A newly mapped CI window may focus the toplevel instead of the
+            # editor. Deliberately start there to exercise native_key's setup.
+            root.focus_force();root.update()
+            assert str(root.tk.call('focus'))==str(root)
             native_key(0x13)  # WM_KEYDOWN(VK_PAUSE), including Tk's state bit 8
             assert 1 in a.bookmarks,a.bookmarks
             native_key(0x03)  # VK_CANCEL is another Windows Break form
+            assert 1 not in a.bookmarks,a.bookmarks
+            # Native routing also reaches the correction pane, not only editor.
+            a.result_view.tag_remove('sel','1.0','end')
+            a.result_view.mark_set('insert','1.0')
+            native_key(0x13,a.result_view)
+            assert 1 in a.bookmarks,a.bookmarks
+            native_key(0x03,a.result_view)
             assert 1 not in a.bookmarks,a.bookmarks
             assert a.editor.bind('<F5>')
             assert len(a._bracket_buttons)==5
