@@ -47,7 +47,12 @@ class WordBookFocusTests(unittest.TestCase):
             hwnd=native.user.GetAncestor(peer.winfo_id(),2)
             native.user.SendMessageW.argtypes=[T.HWND,T.UINT,c.c_size_t,c.c_ssize_t]
             native.user.SendMessageW.restype=c.c_ssize_t
-            native.user.SendMessageW(native.hwnd,6,2,hwnd)
+            # This synthetic activation tests our fallback, not Windows'
+            # default activation (which may synchronously activate another
+            # window and send a second WM_ACTIVATE on the CI desktop).
+            with patch.object(native.comctl,'DefSubclassProc',return_value=0) as forward:
+                native.user.SendMessageW(native.hwnd,6,2,hwnd)
+            forward.assert_called_once_with(native.hwnd,6,2,hwnd)
             self.assertEqual(native.previous[0],hwnd)
         finally:peer.destroy()
 

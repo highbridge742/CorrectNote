@@ -117,6 +117,9 @@ class TextLinks:
         self._bindtag='CorrectNoteLinks_'+str(id(self))
         widget.bindtags((self._bindtag,)+widget.bindtags())
         self._bindings={}
+        # Class bindings are owned by root in current Tkinter. Use the same
+        # owner for registration and deletion on older versions as well.
+        self._binding_owner=widget._root()
         for event,handler in (
                 ('<ButtonPress-1>',self.press),('<ButtonRelease-1>',self.release),
                 ('<B1-Motion>',self.motion),('<Double-Button-1>',self.cancel),
@@ -126,7 +129,7 @@ class TextLinks:
                 ('<Button-5>',self.cancel),('<Configure>',self._display_configured),
                 ('<Destroy>',self.destroy)):
             if not links and event not in ('<Configure>','<Destroy>'):continue
-            self._bindings[event]=widget.bind_class(self._bindtag,event,handler)
+            self._bindings[event]=self._binding_owner.bind_class(self._bindtag,event,handler)
         widget.tag_configure(self.UNWRAPPED_TAG,wrap='none')
         widget.tag_configure(self.ELIDED_TAG,elide=True)
         self.set_dark(dark);self.changed()
@@ -360,8 +363,8 @@ class TextLinks:
         viewed=self.widget._correctnote_observers.get('viewed',[])
         if self.view_changed in viewed:viewed.remove(self.view_changed)
         for event,command in self._bindings.items():
-            self.widget.unbind_class(self._bindtag,event)
-            self.widget.deletecommand(command)
+            self._binding_owner.unbind_class(self._bindtag,event)
+            self._binding_owner.deletecommand(command)
 
 
 def install(app):

@@ -229,8 +229,16 @@ r.after(30,tick);r.mainloop()
                         book.buttons[0].invoke(); until(lambda: book._focus_job is None)
                         transfer.assert_not_called()
                     (here/'focus_peer_stop').touch(); peer.wait(timeout=15); root.update()
-                    with patch.object(native.user,'GetForegroundWindow',return_value=hwnd), patch.object(native.user,'SetForegroundWindow',return_value=1) as transfer:
+                    # Closing a foreground window can legitimately update the
+                    # hook to another live window. Supply the closed target at
+                    # the callback boundary so this checks stale-target safety.
+                    restore=native.restore_previous
+                    def restore_closed_target():
+                        native.previous=(peer_hwnd,peer.pid)
+                        return restore()
+                    with patch.object(native,'restore_previous',side_effect=restore_closed_target) as restore_call, patch.object(native.user,'GetForegroundWindow',return_value=hwnd), patch.object(native.user,'SetForegroundWindow',return_value=1) as transfer:
                         book.buttons[0].invoke(); until(lambda: book._focus_job is None)
+                        restore_call.assert_called_once_with()
                         transfer.assert_not_called()
                     assert clipboard == ['コピー検査😀']
                 finally:

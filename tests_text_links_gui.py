@@ -155,4 +155,40 @@ class TextLinksGuiTests(unittest.TestCase):
         self.assertEqual(self.links._rows[row][0][2].target,self.text.get(f'{row}.0',f'{row}.end'))
 
 
+
+class TextLinksLifecycleTests(unittest.TestCase):
+    def test_bind_class_cleanup_across_tkinter_ownership_versions(self):
+        # CPython 3.9 did not track class commands; 3.11 tracks them on root.
+        # Exercise both registration contracts with real Tcl commands and
+        # destruction, including the links=False long-line display lifecycle.
+        for tracked in (False,True):
+            with self.subTest(root_tracks_class_commands=tracked):
+                def bind_class(widget,tag,sequence=None,func=None,add=None):
+                    owner=widget._root() if tracked else widget
+                    return owner._bind(('bind',tag),sequence,func,add,tracked)
+                root=tk.Tk();root.withdraw();errors=[]
+                root.report_callback_exception=lambda *exc:errors.append(exc)
+                try:
+                    with patch.object(tk.Misc,'bind_class',bind_class):
+                        survivor=tk.Text(root);survivor.pack();root.deiconify();survived=Mock()
+                        survivor.bind('<<StillAlive>>',lambda event:survived())
+                        root.update()
+                        for enabled in (True,False,True):
+                            top=tk.Toplevel(root);text=tk.Text(top)
+                            controller=TextLinks(text,links=enabled,opener=Mock())
+                            commands=tuple(controller._bindings.values())
+                            text.insert('1.0','https://example.test/')
+                            top.destroy()
+                            controller.destroy(SimpleNamespace(widget=text))
+                            self.assertTrue(controller._destroyed)
+                            for command in commands:
+                                self.assertFalse(root.tk.call('info','commands',command))
+                                self.assertNotIn(command,root._tclCommands or ())
+                        survivor.event_generate('<<StillAlive>>')
+                        self.assertEqual(survived.call_count,1)
+                        self.assertEqual(errors,[])
+                finally:
+                    root.destroy()
+
+
 if __name__=='__main__':unittest.main()
