@@ -8,7 +8,7 @@ that alternative, and the caller still runs the common final validator.
 """
 
 
-def positive_predicate_alternatives(source, first, reading, tokenize, ime):
+def positive_predicate_alternatives(source, first, reading, tokenize, ime, *, supplied=()):
     """Return (whole surface, original object, positive role proof) tuples."""
     from morphology import native_spelling_only, tokenize as native_tokenize
     from semantic_roles import object_before, case_argument_before, candidate_evidence
@@ -50,18 +50,25 @@ def positive_predicate_alternatives(source, first, reading, tokenize, ime):
     # its spelling from the search interface's independently ranked results.
     if original_role_proof(first[verb.start:]):
         return ()
+    hits=()
     try:
         from ime_candidates import SearchCandidates
         with SearchCandidates() as search:
-            if not search.available:
-                return ()
-            hits=search.candidates(suffix_reading)
+            if search.available:
+                hits=search.candidates(suffix_reading) or ()
     except (ImportError,OSError,AttributeError):
-        return ()
-    if not hits:
-        return ()
+        pass
+    suffixes=list(dict.fromkeys(hits))
+    # A candidate already supplied by native spelling uses the same source
+    # boundary and positive proof even when optional TSF search is absent.
+    # Preserve search order; new spellings still pass every check below.
+    prefix=first[:verb.start]
+    for surface in supplied:
+        if surface.startswith(prefix):
+            suffix=surface[verb.start:]
+            if suffix not in suffixes:suffixes.append(suffix)
     alternatives=[]
-    for suffix in dict.fromkeys(hits):
+    for suffix in suffixes:
         if suffix==first[verb.start:]:
             continue
         proof=original_role_proof(suffix)

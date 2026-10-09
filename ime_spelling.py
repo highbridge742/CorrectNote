@@ -7,6 +7,12 @@ validator. No result is committed to the IME or to a personal dictionary.
 """
 
 
+import re
+
+# Every eligible changed reading contains at least two adjacent kana.
+# This is only a necessary character-range condition, not a word roster.
+_FOCUSED_READING_PAIR=re.compile(r'[ぁ-ゖー]{2}')
+
 def _crosses_negative_attachment(text,start,end):
     """Keep a proved verb + negative auxiliary + dependent noun in source."""
     from morphology import tokenize as native_tokenize
@@ -64,15 +70,91 @@ def _crosses_negative_attachment(text,start,end):
             return True
     return False
 
+def _crosses_genitive_attachment(text,start,end,face):
+    """A nominal spelling cannot swallow the original noun's adnominal no.
+
+    A best parse can join no to a following continuative verb. At a nominal
+    boundary, independently attested nouns on both sides still establish
+    the unchanged genitive reading. A finite verbal tail owns its own stem.
+    """
+    if not 0<start<end<=len(text) or text[start]!='の' or (face or '').startswith('の'):
+        return False
+    from morphology import tokenize,dictionary_inflections
+    from reading_segments import native_nominal_phrase_faces,_native_written_nominal_faces
+    parts=tokenize(text)
+    previous=next((t for t in parts if t.end==start),None)
+    if (previous is None or not previous.has_reading or previous.pos!='名詞'
+            or previous.pos_sub.startswith(('非自立','接尾'))
+            or text[previous.start:previous.end]!=previous.surface
+            or not any(p.startswith('名詞,') and r==previous.reading and b==previous.base_form
+                for p,f,b,r in dictionary_inflections(previous.surface) or ())):return False
+    following=next((t for t in parts if t.start==end),None)
+    nominal_end=(end==len(text) or text[end].isspace()
+        or following is not None and following.has_reading and (
+            following.pos=='記号' or following.pos=='助詞' and (
+                following.pos_sub.startswith(('格助詞','係助詞','並立助詞')) or following.pos_sub=='連体化')))
+    if not nominal_end and (following is None or following.pos!='助動詞'):return False
+    # Retain complete source-word ownership. Only an actual genitive or
+    # the ambiguous, complete continuative token can provide this seam.
+    head=next((t for t in parts if t.start==start),None)
+    if (head is None or not head.has_reading
+            or not (head.surface=='の' and head.end==start+1 and head.pos=='助詞'
+                    and head.pos_sub=='連体化'
+                or head.end==end and head.pos=='動詞' and head.pos_sub=='自立'
+                    and head.infl_form=='連用形')):return False
+    suffix=text[start+1:end]
+    faces=(native_nominal_phrase_faces(suffix)
+        if suffix and all('ぁ'<=c<='ゖ' or c=='ー' for c in suffix)
+        else _native_written_nominal_faces(suffix))
+    if not nominal_end:
+        # This proves only the noun's attachment, not completion of the
+        # whole predicate. The actual nominal copula owns this boundary
+        # even before an intervening wa in a negative or connective tail.
+        # Verbal masu/tai/ta cannot supply this nominal attachment.
+        if (not following.has_reading or following.base_form not in ('だ','です')
+                or not any(p.startswith('助動詞,') and b==following.base_form
+                    and r==following.reading and f==following.infl_form
+                    for p,f,b,r in dictionary_inflections(following.surface) or ())):return False
+    for noun in faces:
+        evidence=tokenize(previous.surface+'の'+noun)
+        cut=len(previous.surface)
+        if any(t.start==cut and t.end==cut+1 and t.surface=='の' and t.has_reading
+                and t.pos=='助詞' and t.pos_sub=='連体化' for t in evidence):return True
+    return False
+
+
 def _reinterprets_function_attachment(text,start,end,face=None,nominal_context=None):
-    """Keep source grammatical roles from becoming homographic lexical words.
+    """Keep source grammar and ambiguous short-noun spelling choices.
 
     The whole malformed field can have an unknown best parse. A source suffix
     ending at the IME word can still prove an attached auxiliary or particle.
+    A focused short noun also retains its native, unresolved sense boundary.
     """
     from morphology import tokenize as native_tokenize, FUNCTION_WORDS, dictionary_inflections
     source=text[start:end]
+    # A first-conversion word owns a reading, not the short focused noun's
+    # meaning. Use the native projector's same alternatives and actual tail
+    # before either narrow or whole-field IME spelling reaches the common gate.
+    if face and source!=face and _FOCUSED_READING_PAIR.search(source):
+        from kana_spelling import _unresolved_focused_source_nominal
+        from last_choice import surface_for_reading,active
+        from morphology import native_spelling_only
+        from difflib import SequenceMatcher
+        # Map the actual changed noun even when a caller owns the whole field.
+        # Equal outer words/particles cannot lend it another noun's evidence.
+        for tag,a,b,c,d in SequenceMatcher(None,source,face,autojunk=False).get_opcodes():
+            reading=source[a:b];written=face[c:d]
+            if (tag=='equal' or not 2<=len(reading)<=3
+                    or not all('ぁ'<=ch<='ゖ' or ch=='ー' for ch in reading)
+                    or not native_spelling_only(reading,written)):continue
+            remembered=surface_for_reading(reading)
+            if not remembered:
+                chosen=active().lookup(reading) if active() is not None else None
+                if chosen and native_spelling_only(reading,chosen):remembered=chosen
+            if (written!=remembered and _unresolved_focused_source_nominal(
+                    text,start+a,start+b)):return True
     if _crosses_negative_attachment(text,start,end):return True
+    if _crosses_genitive_attachment(text,start,end,face):return True
     # A spelling cannot detach only the head of an original function word.
     # Recovering a larger nominal from a bad parse is handled separately.
     if any(t.has_reading and t.start==start and end<t.end

@@ -299,6 +299,12 @@ def complete_field(source, approved, store, dictionary, decisions, tokenize):
     if (not source or not approved or not dictionary
             or any(not ('ぁ'<=c<='ゖ' or c=='ー') for c in source)):
         return None
+    # Both Shift generators need at least one full-size source key:
+    # trial_missing_shift replaces it directly; known_shift_reading can
+    # match a changed dictionary reading only after small-to-full mapping.
+    # Without one, neither path can produce a candidate to validate.
+    if not any(c in _FULL_TO_SMALL for c in source):
+        return None
     source_odd=odd_kana_spans(source+'\t',dictionary,store)
     with JapaneseIME() as ime:
         if not ime.available:

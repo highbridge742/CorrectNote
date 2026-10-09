@@ -10,6 +10,11 @@ import traceback
 import unittest
 
 
+def normal_window_width(win, requested):
+    # Tk updates its minimum after Windows has mapped the normal caption.
+    return max(requested,win.minsize()[0])
+
+
 def child(phase):
     import tkinter as tk
     from types import SimpleNamespace as Event
@@ -160,15 +165,11 @@ def child(phase):
                 root.focus_force(); root.update()
                 main_hwnd = u.GetAncestor(root.winfo_id(), 2)
                 book.open(); root.update(); win = book.window; native = book._native
-                # Keep testing the real window/restore path when the desktop
-                # has no Explorer taskbar. Never report that as shell success.
-                assert (native.taskbar is not None) != bool(native.taskbar_error)
-                if native.taskbar_error:
-                    print('TASKBAR_REGISTRATION_UNAVAILABLE: '+native.taskbar_error,flush=True)
                 hwnd = native.hwnd; style = u.GetWindowLongW(hwnd, -20)
-                assert style & 0x80, hex(style)  # compact caption, explicit shell button
+                assert not style & 0x80, hex(style)  # normal window, visible to taskbar/Alt+Tab
+                assert u.GetWindowLongW(hwnd,-16)&0x20000  # WS_MINIMIZEBOX, like Quick Input
                 assert not u.GetWindow(hwnd, 4), 'word book must be unowned'
-                assert win.winfo_width() == a._word_book_initial_width(), win.geometry()
+                assert win.winfo_width() == normal_window_width(win,a._word_book_initial_width()), win.geometry()
                 book.add('コピー検査😀')
                 book.minimize_button.invoke(); until(lambda: win.state() == 'iconic')
                 assert root.state() == 'normal'
@@ -181,11 +182,18 @@ def child(phase):
                 main_hwnd = u.GetAncestor(root.winfo_id(), 2)
                 u.SendMessageW.argtypes = [W.HWND, W.UINT, c.c_size_t, c.c_ssize_t]
                 u.SendMessageW.restype = c.c_ssize_t
-                # The execution desktop refuses SetForegroundWindow even for
-                # this test's root (raw failure retained). Deliver the native
-                # activation message to the real wrapper, then observe the
-                # requested OS transfer without touching the user's foreground.
-                u.SendMessageW(hwnd, 0x0006, 1, main_hwnd)
+                # Deliver ordered foreground events through the real OS hook.
+                # This owned desktop cannot activate the user's foreground;
+                # the transfer call is observed, not reported as physical focus.
+                assert native.event_hook, native.hook_error
+                u.NotifyWinEvent.argtypes=[W.DWORD,W.HWND,W.LONG,W.LONG]
+                u.NotifyWinEvent.restype=None
+                def foreground(handle):
+                    u.NotifyWinEvent(3,handle,0,0)
+                    until(lambda:native.previous and native.previous[0]==handle)
+                foreground(main_hwnd)
+                u.NotifyWinEvent(3,hwnd,0,0);root.update()
+                u.SendMessageW(hwnd, 0x0006, 1, 0)
                 assert native.previous[0] == main_hwnd, native.previous
                 with patch.object(native.user,'GetForegroundWindow',return_value=hwnd), patch.object(native.user,'SetForegroundWindow',return_value=1) as transfer:
                     book.buttons[0].invoke(); until(lambda: book._focus_job is None)
@@ -207,7 +215,11 @@ r.after(30,tick);r.mainloop()
                 try:
                     until(lambda: (here/'focus_peer.json').exists())
                     peer_hwnd = json.loads((here/'focus_peer.json').read_text(encoding='utf8'))['hwnd']
-                    u.SendMessageW(hwnd,0x0006,2,peer_hwnd)
+                    foreground(peer_hwnd)
+                    u.NotifyWinEvent(3,hwnd,0,0);root.update()
+                    # A delayed Tk activation naming CorrectNote must not
+                    # replace the actual preceding app with the main window.
+                    u.SendMessageW(hwnd,0x0006,2,main_hwnd)
                     assert native.previous[0] == peer_hwnd and native.previous[1] == peer.pid, native.previous
                     with patch.object(native.user,'GetForegroundWindow',return_value=hwnd), patch.object(native.user,'SetForegroundWindow',return_value=1) as transfer:
                         book.buttons[0].invoke(); until(lambda: book._focus_job is None)
@@ -226,8 +238,8 @@ r.after(30,tick);r.mainloop()
                     peer.wait(timeout=15)
                 book.close(); assert native.hwnd is None and book._focus_job is None
                 book.open(); root.update()
-                assert (book._native.taskbar is not None) != bool(book._native.taskbar_error)
-                assert book._native.hwnd and book.window.winfo_width() == a._word_book_initial_width()
+                assert not u.GetWindowLongW(book._native.hwnd,-20)&0x80
+                assert book._native.hwnd and book.window.winfo_width() == normal_window_width(book.window,a._word_book_initial_width())
                 print('WORD_BOOK_TASKBAR_AND_PREVIOUS_WINDOW_PASSED',flush=True)
                 return
 
@@ -287,7 +299,8 @@ r.after(30,tick);r.mainloop()
                     (a.bookmark_next_btn,'▼ 次のブックマーク','▼',1),
                     (a.layout_split_btn,'左右に並べる','分割',2),
                     (a.layout_unified_btn,'1つにまとめる','統合',2),
-                    (a.pick_mode_btn,'クリックして引用','引用',3)]
+                    (a.pick_mode_btn,'クリックして引用','引用',3),
+                    (a.bulk_insert_btn,'一括挿入','挿入',3)]
                 widgets=a._toolbar.pack_slaves();full=0;savings=[0,0,0,0]
                 for widget in widgets:
                     raw_pad=widget.pack_info()['padx']
@@ -323,7 +336,7 @@ r.after(30,tick);r.mainloop()
                 a.layout_split_btn.invoke();root.update();assert not a._layout_is_unified()
                 a.pick_mode_btn.invoke();assert a._pick_mode=='f1';a._end_pick_mode()
                 root.minsize(900,480);root.geometry('900x520');root.update();until(lambda:a._toolbar_fit_job is None)
-                assert all(button.winfo_ismapped() and button.winfo_width()==button.winfo_reqwidth() for button in widgets)
+                assert all(button.winfo_ismapped() and button.winfo_width()==button.winfo_reqwidth() for button in widgets), [(b.cget('text'),b.winfo_width(),b.winfo_reqwidth(),b.winfo_ismapped()) for b in widgets]
                 print(json.dumps(dict(overlap=overlap_geometry,stage_widths=widths,independent_minimize=True),ensure_ascii=False),flush=True)
                 print('WORD_BOOK_RESPONSIVE_PASSED',flush=True)
                 return
@@ -345,7 +358,7 @@ r.after(30,tick);r.mainloop()
                 border = max(0, win.winfo_rootx() - win.winfo_x())
                 assert win.winfo_x() + win.winfo_width() + 2 * border <= root.winfo_x(), (win.geometry(), root.geometry())
                 assert win.winfo_x() >= area[0]
-                assert win.winfo_width() == a._word_book_initial_width()
+                assert win.winfo_width() == normal_window_width(win,a._word_book_initial_width())
                 assert book.buttons[2].winfo_reqwidth() > book.buttons[2].winfo_width()
                 font = tkfont.Font(root=root, font=a._editor_font())
                 old = tk.Button(root, text='単語', relief='flat', font=a._editor_font(), padx=8, pady=3)
@@ -521,7 +534,7 @@ r.after(30,tick);r.mainloop()
             set_text('資料😀\n別の資料')
             a.word_book_btn.invoke(); until(lambda: book.window.winfo_ismapped())
             first_width = book.window.winfo_width()
-            assert first_width == a._word_book_initial_width(), (first_width, a._word_book_initial_width())
+            assert first_width == normal_window_width(book.window,a._word_book_initial_width()), (first_width,a._word_book_initial_width())
             first_height = book.window.winfo_height()
             before = content(); book.add_button.invoke()
             assert a._pick_mode == 'wordbook'

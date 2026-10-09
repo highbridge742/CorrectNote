@@ -113,14 +113,7 @@ def is_katakana_char(ch):
     return bool(_KATAKANA_RE.match(ch))
 
 
-def katakana_to_hiragana(text):
-    out = []
-    for ch in text:
-        if 'ァ' <= ch <= 'ヶ':
-            out.append(chr(ord(ch) - 0x60))
-        else:
-            out.append(ch)
-    return ''.join(out)
+from kana_text import katakana_to_hiragana
 
 
 def hiragana_to_katakana(text):
@@ -1428,17 +1421,14 @@ def learn_english_words(text, store, category='英語'):
     """
     if not text:
         return 0
-    try:
-        known = set(_english_vocabulary(store))
-    except Exception:
-        known = set()
+    # 語彙の取得は、登録を検討する英単語が見つかってから行う。
+    # 日本語だけ／短い英字／識別子だけの本文では使わない。
+    known = None
     added = 0
     for m in _ENGLISH_RE.finditer(text):
         word = m.group(0)
         if len(word) < MIN_ENGLISH_LENGTH:
             continue
-        if word.lower() in known:
-            continue        # 既に覚えている。数え直さない
         # 前後に数字や記号がくっついている（Python3・utf8）なら
         # 識別子とみなして覚えない
         s, e = m.start(), m.end()
@@ -1446,6 +1436,13 @@ def learn_english_words(text, store, category='英語'):
             continue
         if e < len(text) and (text[e].isdigit() or text[e] in _GLUED_SYMBOLS):
             continue
+        if known is None:
+            try:
+                known = set(_english_vocabulary(store))
+            except Exception:
+                known = set()
+        if word.lower() in known:
+            continue        # 既に覚えている。数え直さない
         # **打ち間違いを覚えない。**
         # 覚えてしまうと「知っている語＝正しい」と見なして
         # 二度と直せなくなる（実機で Pplanetarium が覚えられ、
@@ -2047,6 +2044,9 @@ def find_miskeyed_acronym(line, store):
     if _ACRONYM_RE is None:
         import re as _re
         _ACRONYM_RE = _re.compile(r'[A-Z]{3,5}')
+    # No match reaches the loop below, so its English tables are unused.
+    # Keep their construction lazy until an actual acronym-shaped run.
+    if _ACRONYM_RE.search(line) is None:return []
     out = []
     vocab = _english_targets(store)
     if not vocab:

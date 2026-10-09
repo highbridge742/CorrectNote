@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 # CorrectNote — Copyright (C) 2026 Takahashi Yuu; GPL-3.0-or-later.
-"""Native window remains usable if the optional shell registration fails."""
+"""Native foreground tracking has a bounded lifetime and safe fallback."""
 import sys,unittest
 from unittest.mock import patch
 
 @unittest.skipUnless(sys.platform=='win32','Windows native window contract')
-class WordBookTaskbarFailureTests(unittest.TestCase):
+class WordBookFocusTests(unittest.TestCase):
     def setUp(self):
         import tkinter as tk
         self.root=tk.Tk();self.root.withdraw();self.root.update_idletasks()
@@ -15,39 +15,40 @@ class WordBookTaskbarFailureTests(unittest.TestCase):
         self.root.destroy()
         from tests_tk_keys import release_tk_fixture
         release_tk_fixture(self,'root')
-    def test_missing_shell_keeps_native_window_and_cleanup(self):
+    def test_unhook_on_detach_and_destroy(self):
         import word_book as W
-        with patch.object(W,'_TaskbarButton',side_effect=OSError('no shell')):
-            self.native=W._WordBookNative(self.root)
-        native=self.native
-        self.assertTrue(native.hwnd);self.assertIsNone(native.taskbar)
-        self.assertEqual(native.taskbar_error,'no shell')
-        native.show_taskbar();native.detach()
-        self.assertIsNone(native.hwnd)
-    def test_failed_addtab_releases_shell_and_keeps_window_hook(self):
+        self.native=W._WordBookNative(self.root)
+        native=self.native;hook=native.event_hook
+        self.assertTrue(hook,native.hook_error)
+        with patch.object(native.user,'UnhookWinEvent',wraps=native.user.UnhookWinEvent) as unhook:
+            native.detach();native.detach()
+            unhook.assert_called_once_with(hook)
+        import tkinter as tk
+        win=tk.Toplevel(self.root);win.update_idletasks()
+        other=W._WordBookNative(win);hook=other.event_hook
+        self.assertTrue(hook)
+        with patch.object(other.user,'UnhookWinEvent',wraps=other.user.UnhookWinEvent) as unhook:
+            win.destroy();other.detach()
+            unhook.assert_called_once_with(hook)
+        self.assertIsNone(other.event_hook);self.assertIsNone(other.hwnd)
+
+    def test_unavailable_event_hook_retains_window_message_fallback(self):
         import word_book as W
-        calls=[];closed=[]
-        class Shell:
-            def call(self,slot,hwnd=None):calls.append(slot);return -1 if slot==4 else 0
-            def close(self):closed.append(True)
-        with patch.object(W,'_TaskbarButton',Shell):self.native=W._WordBookNative(self.root)
-        native=self.native;hwnd=native.hwnd
-        native.show_taskbar();native.show_taskbar()
-        self.assertEqual(calls,[4,5]);self.assertEqual(closed,[True])
-        self.assertEqual(native.hwnd,hwnd);self.assertIsNone(native.taskbar)
-        self.assertEqual(native.taskbar_error,'Cannot add word book to taskbar')
-        native.detach();native.detach();self.assertEqual(closed,[True])
-    def test_successful_shell_add_and_remove_are_preserved(self):
-        import word_book as W
-        calls=[];closed=[]
-        class Shell:
-            def call(self,slot,hwnd=None):calls.append((slot,hwnd));return 0
-            def close(self):closed.append(True)
-        with patch.object(W,'_TaskbarButton',Shell):self.native=W._WordBookNative(self.root)
-        native=self.native;hwnd=native.hwnd
-        native.show_taskbar()
-        self.assertIsNone(native.taskbar_error);self.assertIsNotNone(native.taskbar)
-        native.detach()
-        self.assertEqual(calls,[(4,hwnd),(5,hwnd)]);self.assertEqual(closed,[True])
+        import ctypes as c
+        from ctypes import wintypes as T
+        import tkinter as tk
+        self.native=W._WordBookNative(self.root)
+        native=self.native;native._remove_foreground_hook()
+        with patch.object(native.user,'SetWinEventHook',return_value=0):
+            native._install_foreground_hook()
+        self.assertFalse(native.event_hook)
+        peer=tk.Toplevel(self.root);peer.update_idletasks()
+        try:
+            hwnd=native.user.GetAncestor(peer.winfo_id(),2)
+            native.user.SendMessageW.argtypes=[T.HWND,T.UINT,c.c_size_t,c.c_ssize_t]
+            native.user.SendMessageW.restype=c.c_ssize_t
+            native.user.SendMessageW(native.hwnd,6,2,hwnd)
+            self.assertEqual(native.previous[0],hwnd)
+        finally:peer.destroy()
 
 if __name__=='__main__':unittest.main()

@@ -3702,7 +3702,7 @@ def test_refit_broken_units_48pv():
           "'<ButtonPress-3>', '<B3-Motion>', '<Double-Button-3>'," in _asrc6
           and "if getattr(self, '_overview', None) is not None:" in _asrc6
           and "if _d and _d.get('mode') == 'scroll':" in _asrc6
-          and 'if self._analyze_yields <= self.ANALYZE_MAX_YIELD or _held:' in _asrc6, True)
+          and 'if held:' in _asrc6, True)
     import app as _A9
     check("48-SZ' 非 ASCII の字を伴う KeyPress は、キー名が何であれ IME の確定（映＝space・さ＝U）",
           _A9.ime_confirmed_char('space', '映') == '映'
@@ -4906,7 +4906,7 @@ def run_view_latency_48vv():
         def dlineinfo(self,i):calls.append(i);return (0,0,20,20,15)
         def tag_names(self,index):return ()
     class Gutter:
-        target=Target();bookmarks={70010};font='font';active_row=None
+        target=Target();bookmarks={70010};font='font';active_row=None;row_status=None
         def _number_font(self,number,width):return self.font
         def __getitem__(self,k):return 60
         def delete(self,*a):pass
@@ -5005,7 +5005,7 @@ def run_window_drag_48vx():
     h=Harness();h._begin_native_window_drag()
     h._view_change_until=0;h._last_interaction=0;h._analyze_units_only=True
     for _ in range(100):
-        h._analyze_yields=1000;h._analyze_chunk();h._poll_window_drag()
+        h._analyze_chunk();h._poll_window_drag()
     ok=h._view_changing() and h._interacting() and h.paints==0
     h._finish_resize();h._paint_whitespace();h._after_view_moved();h._bg=None;h._bg_step()
     ok=ok and h.paints==0

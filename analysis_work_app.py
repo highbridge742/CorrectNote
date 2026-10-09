@@ -121,6 +121,9 @@ def install(app):
             edit and not discard and doc is not None and doc.owner==owner(app)) else None
         cancel_ime=discard or bool(getattr(app.editor,'_correctnote_replay_depth',0))
         _observe_ime_edit(app,edit,inserted,cancel_ime)
+        # Only the current edit's row and generation; no text/history is kept.
+        # A tab switch or a later edit invalidates this priority automatically.
+        app._priority_input_row=(token(app),source.count('\n',0,edit[0])) if edit else None
         if doc is None or doc.owner!=owner(app):
             app._input_document=Document(owner(app),source)
         else:
@@ -138,6 +141,14 @@ def install(app):
     observe_text(app.editor,edited,on_before_edit=(
         lambda args:prepare(app.editor,args)) if prepare is not None else None,
         track_change=lambda:during_edit(app))
+
+
+def edited_first(app,todo):
+    priority=getattr(app,'_priority_input_row',None)
+    if priority is None or priority[0]!=token(app) or priority[1] not in todo:
+        return todo,False
+    row=priority[1]
+    return [row]+[i for i in todo if i!=row],True
 
 
 def has_readings(app):
@@ -161,7 +172,11 @@ def quick_document(app,text):
     widget=getattr(app,'_quick_text',None)
     if doc is None or doc.owner is not widget:
         doc=Document(widget,text);app._quick_calculation_document=doc
-    else:doc.update(text)
+    else:
+        if doc.text!=text:
+            from quick_row_reuse import invalidate
+            invalidate(app,doc.text,text)
+        doc.update(text)
     return doc
 
 
@@ -169,6 +184,8 @@ def quick_edited(app,text,discard,edit):
     doc=getattr(app,'_quick_calculation_document',None)
     widget=getattr(app,'_quick_text',None)
     if doc is not None and doc.owner is widget:
+        from quick_row_reuse import invalidate
+        invalidate(app,doc.text,text,discard,edit)
         inserted=(edit[0],edit[1]+len(text)-len(doc.text)) if edit and not discard else None
         cancel=discard or bool(getattr(widget,'_correctnote_replay_depth',0))
         events=getattr(app,'_quick_ime_result_events',None)
@@ -241,7 +258,7 @@ def remember(app,surface,reading,since=None):
     if hasattr(app,'editor_source_text'):
         source=app.editor_source_text().split('\n')
         row=shown.count('\n');col=len(shown.rsplit('\n',1)[-1])
-        from app import map_column
+        from text_positions import map_column
         current=app.editor.get(f'{row+1}.0',f'{row+1}.end')
         if row<len(source):end=sum(len(line)+1 for line in source[:row])+map_column(current,source[row],col)
     if since is not None:

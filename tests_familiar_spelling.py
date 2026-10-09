@@ -2,9 +2,31 @@
 from tests_spelling_reference import assert_reviewed_source_spelling
 import unittest
 from unittest.mock import patch
+from contextlib import contextmanager
 
 
 from morphology import HAS_JANOME
+
+
+@contextmanager
+def _native_reading_queries():
+    # These regressions exercise native lattice bounds and weak native
+    # provenance. Exact live-IME proofs can legitimately finish that search
+    # earlier or become the representative of the same complete reading.
+    # Only reading generation is isolated; targets and final validators
+    # continue to use the real source and the normal application path.
+    import contextual_repair as Q
+    from ime_inverse_gate import _CORRECTION_CACHE
+    original=Q.reading_evidence
+    def native(*args,**kwargs):
+        token=_CORRECTION_CACHE.set(None)
+        try:
+            with patch('ime_language.JapaneseIME') as ime:
+                ime.return_value.__enter__.return_value.available=False
+                return original(*args,**kwargs)
+        finally:_CORRECTION_CACHE.reset(token)
+    with patch.object(Q,'reading_evidence',side_effect=native):
+        yield
 
 @unittest.skipUnless(HAS_JANOME, "Requires real Janome; run with the native integration suite")
 class FamiliarSpellingTests(unittest.TestCase):
@@ -414,8 +436,9 @@ class FamiliarSpellingTests(unittest.TestCase):
         source='文章を乳りらょくして内容を確認します。'
         target=next(t for t in Q.targets_for_line(source,tk,s.store,s.dict_index)
                     if (t.start,t.end)==(3,10))
-        reading=next(r for r in Q.reading_evidence(target,tk,s.dict_index)
-                     if r.text=='にゅうりらょくして')
+        with _native_reading_queries():
+            reading=next(r for r in Q.reading_evidence(target,tk,s.dict_index)
+                         if r.text=='にゅうりらょくして')
         self.assertTrue(Q.needs_source_argument_proof(reading))
         self.assertTrue(Q._retained_action_before_owned_object(target,'入力して',reading,'にゅうりょくして'))
         for face,rd in (('食べて','たべて'),('入力しで','にゅうりょくしで'),
@@ -464,6 +487,7 @@ class FamiliarSpellingTests(unittest.TestCase):
                     self.assertEqual(r['analysis_status'],'complete')
         finally:set_active(None)
 
+    @_native_reading_queries()
     def test_malformed_noun_run_retains_existing_native_hidden_stems(self):
         import contextual_repair as Q,corrector as C
         from dataclasses import replace
@@ -570,6 +594,7 @@ class FamiliarSpellingTests(unittest.TestCase):
                 self.assertEqual(r['analysis_status'],'complete')
         finally:set_active(None)
 
+    @_native_reading_queries()
     def test_bound_stem_readings_preserve_generic_hypotheses_and_weak_provenance(self):
         import contextual_repair as Q,corrector as C
         from dataclasses import replace
@@ -598,13 +623,15 @@ class FamiliarSpellingTests(unittest.TestCase):
         from last_choice import set_active
         source='説明を纏路手資料にしました。'
         try:
-            a=initial();r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+            a=initial()
+            with _native_reading_queries():
+                r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
             self.assertEqual(r['corrected'],'説明をまとめて資料にしました。')
             self.assertEqual(r['odd_spans'],[])
             self.assertEqual(r['analysis_status'],'limited')
             self.assertTrue(any(x.get('state')=='truncated' for x in r.get('search_reports',())))
             a=initial()
-            with patch.object(C,'_check_replacement',return_value=(None,'test_common_gate')):
+            with _native_reading_queries(), patch.object(C,'_check_replacement',return_value=(None,'test_common_gate')):
                 r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
             self.assertEqual(r['corrected'],source)
             for text in ('説明をまとめて資料にしました。','道路の資料を読みます。',
@@ -622,7 +649,8 @@ class FamiliarSpellingTests(unittest.TestCase):
             targets=Q.targets_for_line(source,tok,a.store,a.dict_index)
             owner=next(t for t in targets if t.text=='詰名')
             wide=next(t for t in targets if t.text=='詰名し')
-            surface,diagnostic=Q.resolve(owner,C,tok,a.store,a.dict_index,a.decisions)
+            with _native_reading_queries():
+                surface,diagnostic=Q.resolve(owner,C,tok,a.store,a.dict_index,a.decisions)
             self.assertEqual(surface,'説明')
             complete=[(owner,surface,diagnostic)];proof=[]
             self.assertIsNone(Q._contained_scope_resolution(wide,complete,C,tok,a.store,a.dict_index,a.decisions))
@@ -1288,7 +1316,8 @@ class FamiliarSpellingTests(unittest.TestCase):
         targets=Q.targets_for_line(old,tk,a.store,a.dict_index)
         target=next(t for t in targets if (t.start,t.end)==(6,8))
         self.assertEqual(old[target.start:target.end],'貸さ')
-        readings=Q.reading_evidence(target,tk,a.dict_index)
+        with _native_reading_queries():
+            readings=Q.reading_evidence(target,tk,a.dict_index)
         self.assertEqual({r.text for r in readings},{'かさ'})
         self.assertTrue(all(r.segments==((0,2,'かさ','analyzed_word'),) for r in readings))
         for generator in (Q.key_repairs,Q.nonadjacent_key_repairs,
@@ -2131,7 +2160,8 @@ class FamiliarSpellingTests(unittest.TestCase):
         target=found[0]
         self.assertEqual(target.text,'箱館で')
         self.assertTrue(target.following.startswith('から'))
-        readings=Q.reading_evidence(target,tok,state.dict_index)
+        with _native_reading_queries():
+            readings=Q.reading_evidence(target,tok,state.dict_index)
         original=next(r for r in readings if r.text=='はこかんで')
         self.assertFalse(any(origin.startswith('ime_') or origin=='current_ime_occurrence'
             for origin,rank,segments in original.provenance))

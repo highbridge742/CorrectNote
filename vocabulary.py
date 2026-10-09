@@ -274,6 +274,7 @@ class VocabularyStore:
         # 使用回数は変わる**（回数が敷居に届いた瞬間・同じ読みの
         # 表記が入れ替わった瞬間が、件数の変わらない変化）。
         self._revision = 0
+        self._search_cache_token = object()  # Identity only; never saved.
         # **語の顔ぶれが変わった回数**（項目48-BV）。上とは別に持つ。
         # 使用回数で答えが変わらない控え（文脈語彙）は、こちらを見る。
         # `revision` を見せると**打鍵のたびに作り直す**ことになり、
@@ -769,6 +770,15 @@ _FLEX_CACHE = {}
 _FLEX_CACHE_LIMIT = 4000
 
 
+def _search_cache_identity(store):
+    """Do not retain stores or share cached answers across model snapshots."""
+    try:
+        return store._search_cache_token, store.revision()
+    except (AttributeError, TypeError):
+        # Older adapters without a revision contract still use the full search.
+        return None
+
+
 def find_known_readings_flex(typed, store, max_dist=1.6, max_edits=2,
                              beam_width=600, input_method=None):
     """
@@ -781,20 +791,17 @@ def find_known_readings_flex(typed, store, max_dist=1.6, max_edits=2,
     同じ読みに対する探索は語彙が変わらない限り同じ結果になるので、
     結果を控えて使い回す。
 
-    （キャッシュ本体は _find_known_readings_flex_uncached。
-      語彙の件数を鍵に含めることで、語を覚えたあとは
-      自動的に作り直される。）
+    （探索本体は _find_known_readings_flex_uncached。
+      語彙の識別と revision を鍵に含める。件数が同じでも、
+      別の語彙や削除・追加・solid 更新とは混ぜない。）
     """
-    try:
-        vocab_size = len(store._by_reading)
-    except Exception:
-        vocab_size = -1
+    identity = _search_cache_identity(store)
     # **入力方式も鍵に入れる**（項目48-NJ）。同じ読みでも、
     # かな入力とローマ字入力では「近いキー」が違う。
     from kana_layout import mark_slip_enabled
-    key = (typed, vocab_size, max_dist, max_edits, beam_width,
+    key = (typed, identity, max_dist, max_edits, beam_width,
            mark_slip_enabled(), input_method, dup_repair_enabled())
-    cached = _FLEX_CACHE.get(key)
+    cached = _FLEX_CACHE.get(key) if identity is not None else None
     if cached is not None:
         return cached
 
@@ -802,9 +809,10 @@ def find_known_readings_flex(typed, store, max_dist=1.6, max_edits=2,
         typed, store, max_dist=max_dist, max_edits=max_edits,
         beam_width=beam_width, input_method=input_method)
 
-    if len(_FLEX_CACHE) >= _FLEX_CACHE_LIMIT:
-        _FLEX_CACHE.clear()
-    _FLEX_CACHE[key] = result
+    if identity is not None:
+        if len(_FLEX_CACHE) >= _FLEX_CACHE_LIMIT:
+            _FLEX_CACHE.clear()
+        _FLEX_CACHE[key] = result
     return result
 
 
@@ -853,6 +861,7 @@ def _find_known_readings_flex_uncached(typed, store, max_dist=1.6,
     trie = store.reading_trie()
     children = trie.children
     word = trie.word
+    insertion_steps = {}  # Reused only inside this search; no new vocabulary.
 
     # 状態: (読みの木の節, 消費した入力の位置) -> (費用, 訂正数)
     beam = {(0, 0): (0.0, 0)}
@@ -920,29 +929,42 @@ def _find_known_readings_flex_uncached(typed, store, max_dist=1.6,
             # 直前2字→次字を最優先し、材料が無いときは直前1字→次字へ
             # 戻る。これは異様判定後の復元にだけ使い、予測そのものを
             # 異様判定には使わない。個人履歴も使わない。
-            try:
-                import ngram_yomi
-                prefix_text = trie.tail2[node]
-                ordered = ngram_yomi.order_next(prefix_text, kids.keys())
-            except Exception:
-                ordered = [(ch, 0, 0) for ch in kids]
-            strongest = max((count for _ch, count, _ctx in ordered),
-                            default=0)
-            for cand_char, count, context_len in ordered:
-                nxt = kids[cand_char]
-                # 同じ「1打の脱字」の中でだけ、日本語として続きやすい枝を
-                # 最大0.45だけ先にする。2字文脈を1字文脈より優先する。
-                prediction_cost = 0.45
-                if strongest and count:
-                    prediction_cost = min(
-                        0.45,
-                        0.12 * math.log(strongest / float(count)))
-                    if context_len == 1:
-                        prediction_cost += 0.08
-                _relax((nxt, pos),
-                       cost + INSERT_COST + prediction_cost,
-                       edits + 1)
-                progressed = True
+            # The existing _relax rejects every insertion beyond the edit
+            # budget. Do not build prediction costs for those dead branches.
+            # Preserve the loop's old progressed flag and all valid ordering.
+            if edits + 1 > max_edits:
+                if kids:progressed = True
+            else:
+                steps = insertion_steps.get(node)
+                if steps is None:
+                    try:
+                        import ngram_yomi
+                        prefix_text = trie.tail2[node]
+                        ordered = ngram_yomi.order_next(prefix_text, kids.keys())
+                        reusable = True
+                    except Exception:
+                        ordered = [(ch, 0, 0) for ch in kids]
+                        reusable = False
+                    strongest = max((count for _ch, count, _ctx in ordered),
+                                    default=0)
+                    steps = []
+                    for cand_char, count, context_len in ordered:
+                        prediction_cost = 0.45
+                        if strongest and count:
+                            prediction_cost = min(
+                                0.45,
+                                0.12 * math.log(strongest / float(count)))
+                            if context_len == 1:
+                                prediction_cost += 0.08
+                        steps.append((kids[cand_char], prediction_cost))
+                    if reusable:insertion_steps[node] = steps
+                for nxt, prediction_cost in steps:
+                    # Keep the original addition order, including floating-point
+                    # rounding, and the same ordered beam transitions.
+                    _relax((nxt, pos),
+                           cost + INSERT_COST + prediction_cost,
+                           edits + 1)
+                    progressed = True
 
             # --- 重複打鍵: 入力側だけ1文字進める（＝入力の余分な1文字を捨てる） ---
             if pos < n and deletion_respects_dup_setting(typed, pos):
@@ -1057,7 +1079,7 @@ def build_context_vocab(all_lines, store):
 _CTX_CACHE_LIMIT = 8000
 
 
-def build_context_vocab_cached(all_lines, store, cache, attested_out=None):
+def build_context_vocab_cached(all_lines, store, cache, attested_out=None, tokenize_fn=None):
     """
     build_context_vocab の差分版。行ごとの抽出結果を控えて使い回す。
 
@@ -1087,6 +1109,9 @@ def build_context_vocab_cached(all_lines, store, cache, attested_out=None):
     ここが見ているのは読み・表記・分類だけで、回数は見ていない。
     """
     from morphology import tokenize, HAS_JANOME
+    # A caller may share this native parse with its other current-row work.
+    # The callback must return the same native Token format as tokenize().
+    if tokenize_fn is not None:tokenize = tokenize_fn
     if not HAS_JANOME:
         return {}
 
@@ -1152,7 +1177,9 @@ def build_context_vocab_cached(all_lines, store, cache, attested_out=None):
     context = {}
     seen = {'_store_size'}
     want_attested = attested_out is not None
+    from analysis_context import check_current_request
     for line in all_lines:
+        check_current_request()
         if not line.strip():
             continue
         got = cache.get(line)
@@ -1931,12 +1958,9 @@ def find_similar_readings(typed, store, max_cost=4.0, max_len_diff=3,
     """
     if not typed:
         return []
-    try:
-        vocab_size = len(store._by_reading)
-    except Exception:
-        vocab_size = -1
-    key = (typed, vocab_size, max_cost, max_len_diff, limit, min_count, dup_repair_enabled())
-    cached = _SIM_CACHE.get(key)
+    identity = _search_cache_identity(store)
+    key = (typed, identity, max_cost, max_len_diff, limit, min_count, dup_repair_enabled())
+    cached = _SIM_CACHE.get(key) if identity is not None else None
     if cached is not None:
         return cached
 
@@ -2200,7 +2224,8 @@ def find_similar_readings(typed, store, max_cost=4.0, max_len_diff=3,
                               -len(rce[0]), rce[0]))
     out = out[:limit]
 
-    if len(_SIM_CACHE) >= _SIM_CACHE_LIMIT:
-        _SIM_CACHE.clear()
-    _SIM_CACHE[key] = out
+    if identity is not None:
+        if len(_SIM_CACHE) >= _SIM_CACHE_LIMIT:
+            _SIM_CACHE.clear()
+        _SIM_CACHE[key] = out
     return out

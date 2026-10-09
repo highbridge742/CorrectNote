@@ -63,7 +63,7 @@ class UnicodeUndoCommand:
         return str(row)+'.'+str(len(line)) if column>=units else value
 
     def __call__(self,*args):
-        if not self.enabled:return self.widget.tk.call(self.original,*args)
+        if not self.enabled:return self._invoke(args)
         if self.depth and args:
             values=list(args)
             if args[0]=='insert':indices=(1,)
@@ -76,5 +76,10 @@ class UnicodeUndoCommand:
             args=tuple(values)
         replay=args[:2] in (('edit','undo'),('edit','redo'))
         self.depth+=bool(replay)
-        try:return self.widget.tk.call(self.original,*args)
+        try:return self._invoke(args)
         finally:self.depth-=bool(replay)
+
+    def _invoke(self,args):
+        feedback=getattr(self.widget,'_correctnote_undo_feedback',None)
+        if feedback is None:return self.widget.tk.call(self.original,*args)
+        return feedback.invoke(args,lambda:self.widget.tk.call(self.original,*args))

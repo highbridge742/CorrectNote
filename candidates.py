@@ -1124,7 +1124,7 @@ def _project_contextual_choices(result, shown, choice_store=None):
             for a,b,face in sorted(accepted,reverse=True):rendered=rendered[:a]+face+rendered[b:]
             if rendered==shown:matched=True;break
         if not matched:return []
-    from app import selection_correction_pair
+    from text_positions import selection_correction_pair
     out=[];seen=set()
     for candidate in proof.get('candidates',()):
         a=candidate.get('start');b=candidate.get('end');base=candidate.get('base')

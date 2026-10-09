@@ -501,9 +501,9 @@ def _counted_object_contexts(source):
     """An exact native quantity owns its noun, even if のき is parsed as 軒."""
     if 'の' not in source:return ()
     import morphology as M
-    from reading_segments import native_counted_nominal_evidence
+    from semantic_roles import counted_genitive_roles
     from literal_examples import protected_ranges,overlaps
-    parts=M.tokenize(source);out=[];protected=None;roles={'枚':'sheet_object','台':'device'}
+    parts=M.tokenize(source);out=[];protected=None
     for case in (i for i,c in enumerate(source) if c=='の'):
         start=case+1
         if start>=len(source):continue
@@ -515,15 +515,14 @@ def _counted_object_contexts(source):
             if following and (following.surface=='の' or following.pos=='名詞'):continue
         for before in reversed([t for t in parts if case-12<=t.start<case]):
             quantity=source[before.start:case]
-            proof=native_counted_nominal_evidence(quantity)
-            units={unit for unit,ordinal in proof or () if not ordinal}
-            if len(units)!=1 or not units<=roles.keys():continue
+            roles=counted_genitive_roles(quantity)
+            if not roles:continue
             if protected is None:protected=protected_ranges(source)
             end=start+1 if reading_head else noun.end
             if overlaps(before.start,end,protected):continue
             frame=dict(start=start,end=end,surface=source[start:end],
                 reading=source[start:end] if reading_head else noun.reading,
-                kind='counted_object',expected_role=roles[next(iter(units))],
+                kind='counted_object',expected_role=next(iter(roles)),
                 evidence_start=before.start,evidence_end=end,
                 reason='助数詞が数える物と同じ読みの名詞の意味を比較しています')
             if not reading_head:out.append(frame)

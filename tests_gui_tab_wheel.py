@@ -11,7 +11,7 @@ def child():
     assert (Path.cwd()/'.ui-test-isolated').is_file()
     sources=['最初の資料です。','次の資料です。','最後の資料です。']
     Path('session.json').write_text(json.dumps(dict(version=1,active=0,tabs=[new_tab(text=s) for s in sources]),ensure_ascii=False),encoding='utf-8')
-    Path('settings.json').write_text(json.dumps(dict(layout='split',input_method='kana',input_method_auto=False)),encoding='utf-8')
+    Path('settings.json').write_text(json.dumps(dict(layout='split',input_method='kana',input_method_auto=False,wheel_inertia=False)),encoding='utf-8')
     root=tk.Tk();root.withdraw();root.attributes('-alpha',0);a=None;errors=[];cases=[]
     root.report_callback_exception=lambda *exc:errors.append(''.join(traceback.format_exception(*exc)))
     def until(predicate,seconds=120):

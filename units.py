@@ -198,8 +198,9 @@ def build_suspect_units(result, tokenize_fn, choice_store=None,
         'plain'。'fixed' は使わない（自動では直さないため）。
     """
     text = result.get('original', '')
-    if not text:
-        return text, []
+    from literal_lines import literal_only,units as literal_units
+    if literal_only(text):
+        return literal_units(text)
 
     suspect_spans = result.get('original_spans', []) or []
     details = result.get('details', []) or []
@@ -1559,8 +1560,9 @@ def build_line_units(result, tokenize_fn, choice_store=None,
     戻り値: (表示するテキスト, [単位, ...])
     """
     text = result.get('corrected', '')
-    if not text:
-        return text, []
+    from literal_lines import literal_only,units as literal_units
+    if literal_only(text):
+        return literal_units(text)
 
     fixed_spans = result.get('spans', []) or []
     details = result.get('details', []) or []

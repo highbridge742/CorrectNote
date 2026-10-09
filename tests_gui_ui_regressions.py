@@ -175,7 +175,11 @@ class SharedGutterTests(unittest.TestCase):
 
 
 class SavedStateTests(unittest.TestCase):
-    setUp=tests_gui_file_format.FileFormatApplicationTests.setUp
+    def setUp(self):
+        tests_gui_file_format.FileFormatApplicationTests.setUp(self)
+        # Key-release scheduling uses the normally initialized input mode.
+        self.a.settings={'input_method':'kana'}
+
     tearDown=tests_gui_file_format.FileFormatApplicationTests.tearDown
     def test_closing_inactive_tab_releases_only_its_analysis(self):
         import analysis_work_app as work

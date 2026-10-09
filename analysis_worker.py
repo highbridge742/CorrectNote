@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Each Worker owns one isolated correction process. State and text stay in memory; no store saves.
 
-The child calls app.correct_line, the same entry used by synchronous checks.
+The child calls correction_entry.correct_line, also exported by app.correct_line.
 A queue feeder serializes requests outside Tk; newer requests supersede queued
 work. Results carry request ids and are accepted by the UI's document checks.
 """
@@ -78,8 +78,24 @@ class Runtime:
         self.content_words={}
         self.index_key=None
         self.index=None
+        self._state_identity=None
 
     def set_state(self,data):
+        identity=data.get('_state_identity')
+        if identity is not None and same_model_state(self._state_identity,identity):
+            # Saved input readings affect correction evidence, not the native
+            # document context extractors. Keep those unchanged rows while
+            # applying the complete latest reading map before the next task.
+            import kanji_guess
+            from last_choice import set_active
+            set_active(self.choices)
+            self.ime._pairs=data['ime']
+            kanji_guess.set_ime_readings_provider(self._read_ime)
+            self._state_identity=identity
+            return
+        # Untagged callers and every other model change retain a full reset.
+        # A failed reset must never authorize later partial state reuse.
+        self._state_identity=None
         from vocabulary import VocabularyStore
         from dict_index import DictIndex
         from decisions import DecisionStore
@@ -133,19 +149,41 @@ class Runtime:
         self.prepared.clear()
         self.context_lines.clear()
         self.content_words.clear()
+        self._state_identity=identity
 
     def prepare(self,lines):
         key=tuple(lines)
         if key in self.prepared:return self.prepared[key]
+        from literal_lines import literal_only,prepared
+        if all(literal_only(line) for line in lines):return prepared(lines)
         from vocabulary import build_context_vocab_cached
         from context_vec import extract_content_words
         # Keep line extraction across local edits. The vocabulary helper checks
         # the store shape and prunes deleted lines; set_state clears both maps.
-        attested={}
-        context=build_context_vocab_cached(lines,self.store,self.context_lines,attested_out=attested)
-        words={line:(self.content_words[line] if line in self.content_words else
-                     extract_content_words(self.tokenize,line))
-               for line in set(lines) if line.strip()}
+        attested={};words={}
+        from morphology import tokenize,tokenization_scope
+        def parse_context_line(line):
+            # Both context vocab and content words use the same native parse,
+            # through their original extractors. Release raw tokens per row.
+            with tokenization_scope():
+                tokens=tokenize(line)
+                if line not in self.content_words:
+                    words[line]=extract_content_words(self.tokenize,line)
+                return tokens
+        from literal_lines import literal_only
+        ordinary=[]
+        for line in lines:
+            if literal_only(line):
+                if line.strip():words[line]=[]
+            else:ordinary.append(line)
+        context=build_context_vocab_cached(ordinary,self.store,self.context_lines,
+                    attested_out=attested,tokenize_fn=parse_context_line)
+        from analysis_context import check_current_request
+        for line in dict.fromkeys(lines):
+            check_current_request()
+            if line.strip() and line not in words:
+                words[line]=(self.content_words[line] if line in self.content_words else
+                             extract_content_words(self.tokenize,line))
         self.content_words=words
         value=dict(context=context,attested=attested,words=words)
         self.prepared[key]=value
@@ -165,6 +203,7 @@ class Runtime:
         from vocabulary import find_known_readings_flex
         from ime_session import resource_scope
         from ime_colloquial import source_tokenizer
+        from morphology import tokenization_scope
         from quote_calculator import apply_to_result
         from units import build_line_units,build_suspect_units
         known=set(task.get('attested',()))
@@ -174,12 +213,22 @@ class Runtime:
         from analysis_work import current_input
         results=[];original_units=[];corrected_units=[]
         from analysis_context import check_current_request
+        from quick_row_reuse import restored
         for index,line in enumerate(task['lines']):
             check_current_request()
+            reused=restored(task,index)
+            if reused is not None:
+                result,units,corrected=reused
+                results.append(result);original_units.append(units);corrected_units.append(corrected)
+                continue
             if not line:
                 results.append(None);original_units.append([]);corrected_units.append(None)
                 continue
-            with resource_scope(), current_input(line,task.get('readings',{}).get(index,())):
+            from literal_lines import literal_only,result as literal_result,units as literal_units
+            if literal_only(line):
+                results.append(literal_result(line));original_units.append([]);corrected_units.append(literal_units(line))
+                continue
+            with tokenization_scope(),resource_scope(),current_input(line,task.get('readings',{}).get(index,())):
                 # The same source-local native lemma/inflection proof as the
                 # main entry. It never changes tokenization of trial outputs.
                 tokenize=source_tokenizer(line,self.tokenize)
@@ -196,25 +245,72 @@ class Runtime:
                 results.append(result)
         return dict(results=results,units=original_units,corrected_units=corrected_units)
 
+    def prepare_tables(self):
+        if getattr(self,'tables_ready',False):return
+        from analysis_context import check_current_request
+        from corrector import _table_readings_for_surface
+        from familiar_nominal import families
+        import oddness,seed_japanese,loanword,reading_likelihood
+        # The same immutable bundled resources used by ordinary correction.
+        # Each completed stage can be reused if a newer request interrupts us.
+        for load in (families,lambda:_table_readings_for_surface(''),
+                     seed_japanese.available,oddness._load,
+                     loanword._english_seed,reading_likelihood._distributions):
+            check_current_request()
+            load()
+        self.tables_ready=True
+
     def execute(self,task):
         kind=task['kind']
         if kind=='quick':return self.quick(task)
         if kind=='quick_prepare':
+            from analysis_context import check_current_request
             from familiar_nominal import families
             import oddness
+            check_current_request()
             families()
             from corrector import _table_readings_for_surface
+            check_current_request()
             _table_readings_for_surface('')
+            check_current_request()
             oddness._load()
             return None
         if kind=='initial_dictionary':
             from janome_import import collect_import_entries
             return collect_import_entries()
-        if kind=='prepare':return self.prepare(task['lines'])
+        if kind=='warmup':
+            try:
+                self.prepare_tables()
+                # This optional public index runs only in prewarm. A real
+                # request interrupts its dictionary walk; normal preparation
+                # never waits for an index the current text may not need.
+                from analysis_context import check_current_request
+                check_current_request()
+                from contextual_repair import _native_written_nominal_readings,_seed_context
+                from ngram_yomi import _bigram_counts
+                _native_written_nominal_readings()
+                for load in (_bigram_counts,_seed_context):
+                    check_current_request()
+                    load()
+            except Exception:traceback.print_exc()  # Real preparation retries and reports failures.
+            return dict(ready=getattr(self,'tables_ready',False))
+        if kind=='prepare':
+            from literal_lines import literal_only
+            if any(not literal_only(line) for line in task['lines']):self.prepare_tables()
+            return self.prepare(task['lines'])
+        from morphology import tokenization_scope
+        from ime_session import resource_scope
+        # The same input row produces correction and display units. Reuse
+        # read-only resources through both phases, then release them together.
+        with tokenization_scope(),resource_scope():
+            return self._line_task(task)
+
+    def _line_task(self,task):
+        kind=task['kind']
         prepared=self.prepare(task['lines']) if kind=='units' and task.get('lines') is not None else None
         tracked=None;ime_evidence=None
         if kind=='line':
-            from app import correct_line
+            from correction_entry import correct_line
             from analysis_context import Reads
             tracked=Reads(task['context'])
             self._ime_queries={}
@@ -274,10 +370,10 @@ def _serve(inbox,outbox):
         try:
             if pending_state is not None:runtime.set_state(pending_state)
             if request['task']['kind']=='cancel':continue
-            if request['task']['kind']=='quick':
+            if request['task']['kind'] in ('quick','quick_prepare','line','units','prepare','warmup'):
                 # Preserve the next request/state while the old read-only
                 # correction unwinds its owned resources and context scopes.
-                with request_scope(superseded):
+                with request_scope(superseded,poll_interval=.005):
                     result=runtime.execute(request['task'])
                     check_current_request()
             else:result=runtime.execute(request['task'])

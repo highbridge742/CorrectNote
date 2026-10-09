@@ -30,6 +30,7 @@ janome は辞書を sysdic/ 以下に Python モジュールとして持って�
 """
 
 import importlib
+import re
 import os
 
 try:
@@ -405,18 +406,20 @@ def _guess_category(pos, sub_pos, surface):
     return 'その他'
 
 
+_HIRAGANA_TRANSLATION = {code: code-0x60 for code in range(0x30a1,0x30f7)}
+
+
 def katakana_to_hiragana(text):
-    out = []
-    for ch in text:
-        if '\u30a1' <= ch <= '\u30f6':
-            out.append(chr(ord(ch) - 0x60))
-        else:
-            out.append(ch)
-    return ''.join(out)
+    # The exact same code-point range; long vowels and other marks stay as is.
+    return text.translate(_HIRAGANA_TRANSLATION)
+
+
+# The same character set as the previous per-character check.
+_KATAKANA_WORD = re.compile(r'[\u30a1-\u30f6ー]+')
 
 
 def _is_katakana_word(s):
-    return bool(s) and all('\u30a1' <= c <= '\u30f6' or c == 'ー' for c in s)
+    return bool(s) and _KATAKANA_WORD.fullmatch(s) is not None
 
 
 # ============================================================
@@ -495,7 +498,8 @@ def _parse_compact(item):
     """
     if (isinstance(item, (list, tuple)) and len(item) == 4
             and isinstance(item[0], str)
-            and all(isinstance(n, int) for n in item[1:])):
+            and isinstance(item[1],int) and isinstance(item[2],int)
+            and isinstance(item[3],int)):
         return item[0], '', item[3]
 
     surface, pos_full, cost = '', '', None
@@ -555,6 +559,14 @@ def _parse_extra(item):
     外来語は発音と読みが同じ（`コーヒー`）なので、2つめを採って
     困ることはない。2つめが無い版に当たっても1つめに落とす。
     """
+    # _extract_strings traverses containers from the end. When the last two
+    # fields are already katakana strings, its second match is known without
+    # allocating/traversing the remaining fields. Unusual layouts retain the
+    # generic traversal below; pronunciation is never substituted for reading.
+    if (isinstance(item,(list,tuple)) and len(item)>=2
+            and isinstance(item[-1],str) and isinstance(item[-2],str)
+            and _is_katakana_word(item[-1]) and _is_katakana_word(item[-2])):
+        return item[-2]
     got = [s for s in _extract_strings(item)
            if s and s != '*' and _is_katakana_word(s)]
     if len(got) >= 2:
@@ -598,7 +610,9 @@ def iter_janome_entries(min_len=2, max_len=12, pos_prefix=None):
     if not HAS_JANOME:
         return
 
+    from analysis_context import check_current_request
     for part in range(10):
+        check_current_request()
         try:
             compact = importlib.import_module(
                 f'janome.sysdic.entries_compact{part}')
@@ -612,7 +626,10 @@ def iter_janome_entries(min_len=2, max_len=12, pos_prefix=None):
         if compact_data is None:
             continue
 
-        for key, comp in _iter_items(compact_data):
+        for offset,(key,comp) in enumerate(_iter_items(compact_data)):
+            # A newer document must not wait for a whole dictionary scan.
+            # Cancellation propagates before any partial index can be cached.
+            if offset and offset % 512 == 0:check_current_request()
             surface, pos_full, cost = _parse_compact(comp)
             if not surface or not (min_len <= len(surface) <= max_len):
                 continue

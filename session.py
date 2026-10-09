@@ -55,8 +55,13 @@ import file_format as file_formats
 SESSION_VERSION = 1
 
 
+def clean_ruler_rows(rows):
+    if not isinstance(rows,(list,tuple,set,frozenset)):return []
+    return sorted({row for row in rows if type(row) is int and row>=1})
+
+
 def new_tab(text='', path=None, saved=True, cursor='1.0', scroll=0.0,
-            title=None, bookmarks=None, top=None, file_format=None, calculations=None):
+            title=None, bookmarks=None, top=None, file_format=None, calculations=None,ruler_rows=None):
     """タブ1つぶんの控えを作る。
 
     top: 画面のいちばん上に見えていた**行番号**（1始まり）。
@@ -74,6 +79,7 @@ def new_tab(text='', path=None, saved=True, cursor='1.0', scroll=0.0,
         'top': top,
         'title': title,
         'bookmarks': sorted(bookmarks) if bookmarks else [],
+        'ruler_rows': clean_ruler_rows(ruler_rows),
         'file_format': file_formats.clean(file_format, text),
     }
     from quote_calculator import clean_calculations
@@ -276,6 +282,7 @@ class SessionStore:
                 top=t.get('top'),  # 48-VI: 保存した表示行番号も復元する
                 file_format=metadata,
                 calculations=t.get('calculations'),
+                ruler_rows=t.get('ruler_rows'),
             ))
         if not clean:
             return False

@@ -70,6 +70,14 @@ def editor_font(family, size):
 
 
 DEFAULTS = {
+    'toolbar_order': [],
+    'toolbar_hidden': [],
+    'recent_files': [],
+    'wheel_inertia': True,
+    'right_drag_inertia': True,
+    'bulk_insert_text': '',
+    'bulk_insert_direction': 'start',
+    'bulk_insert_distance': '0',
     # Ctrl+Insert で簡易入力ウィンドウを開く
     'hotkey_insert_enabled': True,
     # Ctrl+Shift+- で簡易入力ウィンドウを開く
@@ -233,6 +241,12 @@ class Settings:
             if isinstance(default, bool):
                 if isinstance(value, bool):
                     self.values[key] = value
+            elif key in ('toolbar_order', 'toolbar_hidden'):
+                if isinstance(value, list):
+                    self.values[key] = [item for item in value if isinstance(item, str)][:100]
+            elif key == 'recent_files':
+                from recent_files import normalized
+                self.values[key] = normalized(value)
             elif key == 'editor_font_family':
                 self.values[key] = editor_font(value, DEFAULT_EDITOR_FONT[1])[0]
             elif key == 'editor_font_size':

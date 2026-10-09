@@ -1,4 +1,5 @@
 """Saved reading changes invalidate only rows whose observed lookup changed."""
+import correction_entry
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -68,10 +69,10 @@ class ReadingDependencyTests(unittest.TestCase):
             return dict(original=line,corrected=line)
         task=dict(kind='line',line='資料',context={},input_method='kana')
         try:
-            with patch.object(app,'correct_line',side_effect=correction),patch.object(units,'build_line_units',return_value=('',[])),patch.object(units,'build_suspect_units',return_value=('',[])):
+            with patch.object(correction_entry,'correct_line',side_effect=correction),patch.object(units,'build_line_units',return_value=('',[])),patch.object(units,'build_suspect_units',return_value=('',[])):
                 result=analysis_context.completed(runtime.execute(task))
             self.assertEqual(dict(result['_ime_evidence']),{'資料':('しりょう',),'校閲':()})
-            with patch.object(app,'correct_line',side_effect=ValueError('synthetic')):
+            with patch.object(correction_entry,'correct_line',side_effect=ValueError('synthetic')):
                 with self.assertRaises(ValueError):runtime.execute(task)
             self.assertIsNone(runtime._ime_queries)
         finally:kanji_guess.set_ime_readings_provider(original_provider)

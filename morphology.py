@@ -264,14 +264,7 @@ def compound_voiced_reading(reading):
     return voiced[reading[0]]+reading[1:] if reading and reading[0] in voiced else None
 
 
-def katakana_to_hiragana(text):
-    out = []
-    for ch in text:
-        if '\u30a1' <= ch <= '\u30f6':
-            out.append(chr(ord(ch) - 0x60))
-        else:
-            out.append(ch)
-    return ''.join(out)
+from kana_text import katakana_to_hiragana
 
 
 # 単独の濁点・半濁点（かな入力で「゛」キーだけが確定してしまった状態）
@@ -688,8 +681,10 @@ def preserves_native_adverbial_word(original,changed):
         return bool(len(following)>=2 and following[0].start==token.end
             and following[0].end==following[1].start
             and all(part.has_reading and part.pos=='助詞' for part in following[:2])
-            and case_particle_mismatch(following[0].surface,following[0].pos_sub,
-                                       following[1].surface,following[1].pos_sub))
+            and case_particle_mismatch(following[0].surface,
+                                       following[0].pos+':'+following[0].pos_sub,
+                                       following[1].surface,
+                                       following[1].pos+':'+following[1].pos_sub))
     def broken_past_attachment(token):
         from oddness import noun_past_aux_mismatch
         following=next((part for part in old_parts if part.start==token.end),None)
@@ -1848,6 +1843,8 @@ def _tokenize_janome(line):
 
 
 def _tokenize_janome_uncached(line):
+    from analysis_context import check_current_request
+    check_current_request(frequent=True)
     # 分割そのものは錠前の中で済ませ、結果を控えてから外で組み立てる
     # （錠前を握っている時間を最短にするため）。
     # tokenize() は生成器なので、**錠前の中で全部取り出す**こと。

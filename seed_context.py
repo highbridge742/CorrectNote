@@ -328,7 +328,7 @@ def _is_japanese(word):
     return False
 
 
-def load_seed_topics(context_vec, topics=None):
+def load_seed_topics(context_vec, topics=None, *, check=None):
     """
     初期の話題のまとまりを、文脈ベクトルに読み込ませる。
 
@@ -356,7 +356,11 @@ def load_seed_topics(context_vec, topics=None):
         # 均等に結び付ける。
         step = max(1, CO_WINDOW)
         for offset in range(0, len(words), step):
+            if check is not None:
+                check()
             rotated = words[offset:] + words[:offset]
             context_vec.observe_line(rotated)
         n += 1
+    if check is not None:
+        check()
     return n

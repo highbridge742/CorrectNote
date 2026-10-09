@@ -21,48 +21,8 @@ def word_book_position(app_bounds, window_size, work_area, gap=6, number_left=No
     return int(x), int(y)
 
 
-class _TaskbarButton:
-    """Explicit shell registration keeps a compact caption independently usable."""
-    def __init__(self):
-        import ctypes as c
-        import uuid
-        self.c = c
-        self.ole = ole = c.WinDLL('ole32')
-        ole.CoInitializeEx.argtypes = [c.c_void_p, c.c_ulong]
-        ole.CoInitializeEx.restype = c.c_long
-        ole.CoUninitialize.argtypes = []; ole.CoUninitialize.restype = None
-        ole.CoCreateInstance.argtypes = [c.c_void_p, c.c_void_p, c.c_ulong, c.c_void_p, c.POINTER(c.c_void_p)]
-        ole.CoCreateInstance.restype = c.c_long
-        self.initialized = ole.CoInitializeEx(None, 2) in (0, 1)
-        clsid = (c.c_byte * 16).from_buffer_copy(uuid.UUID('56FDF344-FD6D-11D0-958A-006097C9A090').bytes_le)
-        iid = (c.c_byte * 16).from_buffer_copy(uuid.UUID('56FDF342-FD6D-11D0-958A-006097C9A090').bytes_le)
-        self.pointer = c.c_void_p()
-        result = ole.CoCreateInstance(c.byref(clsid), None, 1, c.byref(iid), c.byref(self.pointer))
-        if result < 0:
-            self.close()
-            raise OSError('Taskbar registration unavailable: %x' % (result & 0xffffffff))
-        if self.call(3) < 0:  # HrInit
-            self.close()
-            raise OSError('Taskbar initialization failed')
-
-    def call(self, slot, hwnd=None):
-        c = self.c
-        table = c.cast(self.pointer, c.POINTER(c.POINTER(c.c_void_p))).contents
-        args = [c.c_void_p] + ([c.c_void_p] if hwnd is not None else [])
-        fn = c.WINFUNCTYPE(c.c_long, *args)(table[slot])
-        return fn(self.pointer, hwnd) if hwnd is not None else fn(self.pointer)
-
-    def close(self):
-        if self.pointer:
-            self.call(2)  # Release
-            self.pointer = self.c.c_void_p()
-        if self.initialized:
-            self.ole.CoUninitialize()
-            self.initialized = False
-
-
 class _WordBookNative:
-    """Window-local native messages; no polling, text inspection or Tk reentry."""
+    """Remember the preceding foreground window without polling or reading text."""
     def __init__(self, window, previous=None):
         import ctypes as c
         from ctypes import wintypes as W
@@ -74,6 +34,8 @@ class _WordBookNative:
         signatures = {
             'GetAncestor': ([W.HWND, W.UINT], W.HWND),
             'GetForegroundWindow': ([], W.HWND),
+            'ReleaseCapture': ([], W.BOOL),
+            'PostMessageW': ([W.HWND, W.UINT, c.c_size_t, c.c_ssize_t], W.BOOL),
             'GetWindowThreadProcessId': ([W.HWND, c.POINTER(W.DWORD)], W.DWORD),
             'IsWindow': ([W.HWND], W.BOOL), 'IsWindowVisible': ([W.HWND], W.BOOL),
             'IsIconic': ([W.HWND], W.BOOL), 'SetForegroundWindow': ([W.HWND], W.BOOL),
@@ -87,25 +49,20 @@ class _WordBookNative:
             fn = getattr(cc, name); fn.argtypes = args; fn.restype = result
         self.hwnd = u.GetAncestor(window.winfo_id(), 2)
         self.previous = None
-        self.taskbar = None
-        self.taskbar_error = None
-        try:
-            self.taskbar = _TaskbarButton()
-        except OSError as error:
-            # Explorer/taskbar can be absent (CI, another Windows desktop).
-            # The window and its activation tracking must still be usable.
-            self.taskbar_error = str(error)
+        self.event_hook = None
+        self.hook_error = None
         self._remember(previous)
 
         def message(hwnd, msg, wp, lp, uid, ref):
-            # WM_ACTIVATE supplies the actual window losing activation,
-            # including another application's window. Never call Tk here.
+            # Tk child controls need not forward WM_MOUSEACTIVATE here;
+            # WM_ACTIVATE can name a same-thread window instead of the app
+            # that was in front. Prefer the ordered foreground event stream.
             if msg == 0x0021:  # WM_MOUSEACTIVATE precedes a click activation.
                 self._remember(u.GetForegroundWindow())
-            if msg == 0x0006 and (wp & 0xffff) in (1, 2):
+            if not self.event_hook and msg == 0x0006 and (wp & 0xffff) in (1, 2):
                 self._remember(lp)
             if msg == 0x0082:
-                self._remove_taskbar()
+                self._remove_foreground_hook()
             result = cc.DefSubclassProc(hwnd, msg, wp, lp)
             if msg == 0x0082:  # WM_NCDESTROY
                 cc.RemoveWindowSubclass(hwnd, self.proc, id(self))
@@ -113,21 +70,33 @@ class _WordBookNative:
             return result
         self.proc = self.proc_type(message)
         if not cc.SetWindowSubclass(self.hwnd, self.proc, id(self), 0):
-            self._remove_taskbar()
             raise c.WinError(c.get_last_error())
+        self._install_foreground_hook()
 
-    def show_taskbar(self):
-        if self.hwnd and self.taskbar is not None:
-            if self.taskbar.call(4, self.hwnd) < 0:  # AddTab
-                self.taskbar_error = 'Cannot add word book to taskbar'
-                self._remove_taskbar()
+    def _install_foreground_hook(self):
+        from ctypes import wintypes as W
+        c, u = self.c, self.user
+        self.event_type = c.WINFUNCTYPE(None, W.HANDLE, W.DWORD, W.HWND,
+                                       W.LONG, W.LONG, W.DWORD, W.DWORD)
+        u.SetWinEventHook.argtypes = [W.DWORD, W.DWORD, W.HMODULE,
+                                     self.event_type, W.DWORD, W.DWORD, W.DWORD]
+        u.SetWinEventHook.restype = W.HANDLE
+        u.UnhookWinEvent.argtypes = [W.HANDLE]
+        u.UnhookWinEvent.restype = W.BOOL
+        def foreground(hook, event, hwnd, object_id, child_id, thread, tick):
+            # Out-of-context events arrive on this UI thread in order. Keep
+            # only a handle/PID pair; never enter Tk from a native callback.
+            if self.hwnd and self.event_hook and event == 3:
+                self._remember(hwnd)
+        self.foreground_proc = self.event_type(foreground)
+        self.event_hook = u.SetWinEventHook(3, 3, None, self.foreground_proc, 0, 0, 0)
+        if not self.event_hook:
+            self.hook_error = c.get_last_error()
 
-    def _remove_taskbar(self):
-        if self.taskbar is not None:
-            if self.hwnd:
-                self.taskbar.call(5, self.hwnd)  # DeleteTab
-            self.taskbar.close()
-            self.taskbar = None
+    def _remove_foreground_hook(self):
+        if self.event_hook:
+            hook, self.event_hook = self.event_hook, None
+            self.user.UnhookWinEvent(hook)
 
     def _remember(self, hwnd):
         if not hwnd or not self.user.IsWindow(hwnd):
@@ -139,6 +108,14 @@ class _WordBookNative:
         pid = W.DWORD()
         self.user.GetWindowThreadProcessId(hwnd, self.c.byref(pid))
         self.previous = (hwnd, pid.value)
+
+    def start_move(self):
+        if not self.hwnd or not self.user.IsWindow(self.hwnd):
+            return False
+        self.user.ReleaseCapture()
+        # Post, never Send: the native move loop must begin inside Tk's
+        # event loop, without ctypes releasing the GIL around callbacks.
+        return bool(self.user.PostMessageW(self.hwnd, 0x0112, 0xf012, 0))
 
     def restore_previous(self):
         u = self.user
@@ -153,7 +130,7 @@ class _WordBookNative:
         return bool(pid.value == owner and u.SetForegroundWindow(hwnd))
 
     def detach(self):
-        self._remove_taskbar()
+        self._remove_foreground_hook()
         if self.hwnd:
             self.comctl.RemoveWindowSubclass(self.hwnd, self.proc, id(self))
             self.hwnd = None
@@ -171,6 +148,7 @@ class WordBook:
         self._save_job = None
         self._native = None
         self._focus_job = None
+        self._drag_anchor = None
         try:
             value = json.loads(self.path.read_text(encoding='utf-8'))
             clean = lambda words: [s for s in words if isinstance(s, str) and s] if isinstance(words, list) else []
@@ -262,10 +240,9 @@ class WordBook:
         win.configure(bg=bg)
         # No transient owner: minimizing the editor must not hide this window.
         win.attributes('-topmost', True)
-        if os.name == 'nt':
-            # Preserve the compact frame and width; register its taskbar
-            # button explicitly rather than relying on the tool style.
-            win.attributes('-toolwindow', True)
+        # A normal unowned toplevel, like Quick Input, is independently
+        # eligible for the taskbar and Alt+Tab. A toolwindow is excluded by
+        # Windows even when separately registered with the shell.
         win.resizable(True, False)
         win.minsize(80, 1)
         win.protocol('WM_DELETE_WINDOW', self.close)
@@ -275,16 +252,17 @@ class WordBook:
         self.app._set_window_icons_win32(win)
         self.width = min(self.width or self.initial_width(), max(80, win.winfo_screenwidth() - 40))
         win.geometry('%dx1' % self.width)
-        self.header = tk.Frame(win, bg=bg)
+        self.header = tk.Frame(win, bg=bg, cursor='fleur')
         self.header.pack(side='top', fill='x')
+        self.header.bind('<ButtonPress-1>', self._start_drag)
+        self.header.bind('<B1-Motion>', self._drag)
+        self.header.bind('<ButtonRelease-1>', self._end_drag)
         self.minimize_button = tk.Button(self.header, text='－', command=self.minimize,
             bg=bg, fg=ink, relief='flat', bd=0, padx=6, pady=0,
             font=('Yu Gothic UI', 9), cursor='hand2', takefocus=True)
         self.minimize_button.pack(side='right')
         self.minimize_button.bind('<Enter>', lambda e: self.app.status.config(
-            text=('単語帳を最小化します（単語帳ボタンで元に戻せます）'
-                  if self._native is not None and self._native.taskbar_error else
-                  '単語帳を最小化します（タスクバーまたは単語帳ボタンで元に戻せます）')))
+            text='単語帳を最小化します（タスクバーまたは単語帳ボタンで元に戻せます）'))
         self.canvas = tk.Canvas(win, bg=bg, highlightthickness=0, width=1, height=1)
         self.scroll = tk.Scrollbar(win, command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=self.scroll.set)
@@ -298,8 +276,6 @@ class WordBook:
         self.render()
         win.deiconify()
         win.update_idletasks()
-        if self._native is not None:
-            self._native.show_taskbar()
         self._place()
         self.app.word_book_btn.config(relief='sunken', fg=accent)
         self.save()
@@ -325,7 +301,29 @@ class WordBook:
         x, y = word_book_position((left, top, right, bottom), size, area, number_left=number_left)
         win.geometry('+%d+%d' % (x, y))
 
+    def _start_drag(self, event):
+        self._drag_anchor = None
+        if self.window is None:
+            return 'break'
+        if self._native is None or not self._native.start_move():
+            self._drag_anchor = (event.x_root, event.y_root,
+                                 self.window.winfo_x(), self.window.winfo_y())
+        return 'break'
+
+    def _drag(self, event):
+        if self.window is not None and self._drag_anchor is not None:
+            px, py, x, y = self._drag_anchor
+            # Explicit + prefixes preserve negative virtual-screen positions.
+            self.window.geometry('+%d+%d' % (x + event.x_root - px,
+                                            y + event.y_root - py))
+        return 'break'
+
+    def _end_drag(self, event=None):
+        self._drag_anchor = None
+        return 'break'
+
     def minimize(self):
+        self._end_drag()
         if self.window is not None:
             self.window.iconify()
 
@@ -356,6 +354,12 @@ class WordBook:
             return
         self.window.title('単語帳 — セット%d' % (self.active_set + 1))
         bg, ink, accent = self.colors()
+        background, foreground = map(self.window.winfo_rgb, (bg, ink))
+        header_bg = '#' + ''.join('%02x' % round((b * .92 + f * .08) / 257)
+                                 for b, f in zip(background, foreground))
+        self.header.configure(bg=header_bg)
+        self.minimize_button.configure(bg=header_bg, fg=ink,
+                                       activebackground=header_bg, activeforeground=ink)
         for child in self.rows.winfo_children():
             child.destroy()
         self.buttons = []
@@ -444,6 +448,7 @@ class WordBook:
 
     def shutdown(self):
         # Application shutdown retains visibility for the next launch.
+        self._end_drag()
         if self._focus_job is not None:
             self.app.root.after_cancel(self._focus_job)
             self._focus_job = None

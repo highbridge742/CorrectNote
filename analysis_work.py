@@ -267,6 +267,11 @@ def observe_text(widget,on_edit=None,on_cursor=None,on_before_edit=None,track_ch
                 or args[0] in ('insert','delete','replace')
                 or args[:2] in (('edit','undo'),('edit','redo'))):
             callbacks['cursor']()
+        if args and (args[0] in ('insert','delete','replace')
+                or args[:2] in (('edit','undo'),('edit','redo'))):
+            for changed in tuple(callbacks.get('changed',())):changed(args)
+        if len(args)>1 and args[0] in ('xview','yview'):
+            for viewed in tuple(callbacks.get('viewed',())):viewed()
         return result
     # 48-ACO: native Tcl errors must return to Tcl without becoming an
     # uncaught Python callback error. Otherwise even a caller's handled cget

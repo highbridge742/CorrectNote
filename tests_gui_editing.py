@@ -15,6 +15,7 @@ class EditingTkTests(unittest.TestCase):
         a._after_id=None;a._dirty=False
         a._auto_detect_input_method=Mock();a._maybe_start_pick_from_equals=Mock()
         a._schedule_whitespace_paint=Mock();a._redraw_gutter_now=lambda:None
+        a._queue_status_visibility=Mock()  # Partial editor fixture has no footer.
         a.editor_source_text=lambda:self.text()
         w.bind('<<Paste>>',a._on_change)
         self.root.tk.setvar('::test_paste_text','あ\nい\nう')
@@ -534,6 +535,7 @@ class HalfwidthAutofixTkTests(unittest.TestCase):
         a._known_kana_word=lambda text:False;a._units_are_pending=lambda:False
         a._mark_dirty=Mock();a._schedule_whitespace_paint=Mock();a._sz_check_shrink=Mock()
         a._design33_watch=Mock();a._maybe_start_pick_from_equals=Mock();a._redraw_gutter_now=Mock()
+        a._queue_status_visibility=Mock()  # Footer is covered by the full-app GUI test.
         a._analyze=Mock();a._analyze_job=None;a._after_id=None;a._analyze_pos=1;a._analyze_todo=[0]
         a._analyze_text='fythw@';a._analyze_dependencies=analysis_async.state_key(a)
         a._analyze_work=analysis_work_app.token(a)

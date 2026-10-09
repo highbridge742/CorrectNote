@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Process transport matches the application entry on isolated initial stores."""
+import correction_entry
 import time,unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -98,7 +99,7 @@ class EngineProcessTests(unittest.TestCase):
         import app
         a=initial();runtime=analysis_worker.Runtime();runtime.set_state(analysis_worker.snapshot(a))
         result=app.correct_line('寒ぃ日だ。',a.store,dict_index=a.dict_index,decisions=a.decisions)
-        with patch.object(app,'correct_line',side_effect=AssertionError('Cache restore reran correction')):
+        with patch.object(correction_entry,'correct_line',side_effect=AssertionError('Cache restore reran correction')):
             value=runtime.execute(dict(kind='units',result=result,lines=['寒ぃ日だ。']))
         self.assertIs(value['result'],result)
         self.assertTrue(value['corrected_units'][1])
@@ -242,14 +243,35 @@ class QuickServeCancellationTests(unittest.TestCase):
         states,outputs,events=self.serve('quick',body)
         self.assertEqual(states,['A']);self.assertEqual(outputs,[]);self.assertEqual(events,['unwound'])
 
-    def test_nonquick_request_keeps_existing_execution_and_error_behavior(self):
+    def test_main_tasks_yield_to_new_input_without_publishing_old_results(self):
         import analysis_context as C
-        def body(runtime,task,inbox,events):
-            self.assertIsNone(C._REQUEST_CHECK.get())
-            if task['label']=='old':inbox.put(dict(id=2,task={'kind':'line','label':'latest'},state='B'))
-            C.check_current_request();return task['label']
-        states,outputs,events=self.serve('line',body)
-        self.assertEqual(states,['A','B']);self.assertEqual(outputs,[(1,'old',None),(2,'latest',None)])
+        import ime_session as P
+        for kind in ('line','units','prepare'):
+            with self.subTest(kind=kind):
+                closed=[]
+                class Resource:
+                    def close(self):closed.append(True)
+                def body(runtime,task,inbox,events):
+                    if task['label']=='old':
+                        inbox.put(dict(id=2,task={'kind':'prepare','label':'latest'},state='B'))
+                        with P.resource_scope():
+                            P.retain(Resource());C.check_current_request()
+                        self.fail('obsolete main analysis continued')
+                    self.assertEqual(closed,[True])
+                    return task['label']
+                states,outputs,events=self.serve(kind,body)
+                self.assertEqual(states,['A','B'])
+                self.assertEqual(outputs,[(2,'latest',None)])
+                self.assertIsNone(P._CURRENT.get())
+
+    def test_main_completed_but_obsolete_result_is_not_emitted(self):
+        for kind in ('line','units','prepare'):
+            with self.subTest(kind=kind):
+                def body(runtime,task,inbox,events):
+                    if task['label']=='old':inbox.put(dict(id=2,task={'kind':kind,'label':'latest'},state='B'))
+                    return task['label']
+                states,outputs,events=self.serve(kind,body)
+                self.assertEqual(outputs,[(2,'latest',None)])
 
     def test_request_arriving_after_result_preparation_is_preserved_before_emission(self):
         def body(runtime,task,inbox,events):

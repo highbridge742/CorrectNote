@@ -597,8 +597,19 @@ def anomalous_source_fields(line, tokenize, store, dictionary, source_marks=(), 
     found = []
     display_ranges={}
     aliases_complete=True
-    with JapaneseIME() as first, SearchCandidates() as search:
-        if not first.available and not search.available:
+    from contextlib import ExitStack
+    with ExitStack() as owned:
+        first=owned.enter_context(JapaneseIME())
+        search=None
+        def search_provider():
+            nonlocal search
+            from analysis_context import check_current_request
+            check_current_request()
+            # TSF activation can be expensive even when no candidate is used.
+            # Keep the same fallback, opening it only when it is needed.
+            if search is None:search=owned.enter_context(SearchCandidates())
+            return search
+        if not first.available and not search_provider().available:
             return ()
         for start, end, closed in fields:
             surface = line[start:end]
@@ -653,7 +664,7 @@ def anomalous_source_fields(line, tokenize, store, dictionary, source_marks=(), 
                 first_match=source_match
                 if cache is not None and reading==native_reading:
                     cache['first_match',surface]=source_match
-                if not source_match and search.available:
+                if not source_match and search_provider().available:
                     try:hits=search.candidates(reading)
                     except Exception:hits=None
                     source_match=bool(hits and surface in hits)

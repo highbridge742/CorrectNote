@@ -3248,9 +3248,23 @@ def _native_kana_targets(line,lo,hi,tokenize,store,dictionary,odd,grammar_spans=
                 if _kana_run_is_odd_by_grammar(clause[cut:],dictionary,store):
                     relevant=[(cut,len(clause))]
             if relevant:
-                result.append(RepairTarget(line,lo+cut,hi,lo,hi,
+                # A source-only malformed nominalization has an actual case
+                # and a separately proved finite predicate to its right.
+                # Search its damaged head, retaining that whole continuation
+                # for the same kana_predicate meaning and final checks.
+                end=hi
+                from particle_frames import unheaded_nominalizer_frames
+                from reading_segments import completed_native_verb_reading
+                for frame in unheaded_nominalizer_frames(clause):
+                    tail=clause[frame['case_end']:].rstrip('。！？.!?')
+                    if (frame['start']==cut
+                            and all(cut<=a<b<=frame['end'] for a,b in relevant)
+                            and completed_native_verb_reading(tail,allow_nonpolite=True,
+                                require_roles=False,finite_only=True)):
+                        end=lo+frame['end'];break
+                result.append(RepairTarget(line,lo+cut,end,lo,hi,
                     tuple(('品詞文法','未説明のかな述語',lo+s,lo+e) for s,e in relevant),
-                    True,'','kana_predicate'))
+                    True,line[end:hi],'kana_predicate'))
     # A proved following movement leaves this marked action as its own
     # original object/predicate scope. The full multi-clause text cannot
     # be passed to the single-predicate kana frame, but its first part can.
@@ -3471,6 +3485,8 @@ def _native_marked_nominal_member_targets(targets):
 def targets_for_line(line, tokenize, store, dictionary, _keep_completed=True,
                      input_method='kana'):
     """候補生成前に、異様を含む文節と、その接続を判断する文脈を固定する。"""
+    from analysis_context import check_current_request
+    check_current_request()
     import oddness
     from morphology import original_spelling_facts
     source_spelling=original_spelling_facts(line)
@@ -3576,6 +3592,7 @@ def targets_for_line(line, tokenize, store, dictionary, _keep_completed=True,
                 (('意味接続',frame['kind'],frame['evidence_start'],frame['evidence_end']),),
                 True,line[frame['end']:hi],'meaning_context',
                 candidate_surface=surface,candidate_reading=frame['reading']))
+    check_current_request()
     from ime_compound_contrast import frames as compound_frames
     for frame in compound_frames(line):
         lo,hi=_source_clause_bounds(line,frame['start'],frame['end'])
@@ -3652,6 +3669,7 @@ def targets_for_line(line, tokenize, store, dictionary, _keep_completed=True,
             candidate_surface=frame['surface'],candidate_reading=frame['reading']))
     source_odd=oddness.is_odd_run(line,tokenize,with_spans=True,
         store=store,dict_index=dictionary,complete_line=True, preserve_unknown_source=True)
+    check_current_request()
     targets.extend(_marked_detached_mark_action_targets(
         line,source_parts,source_odd))
     targets.extend(_marked_leading_mark_noun_targets(
@@ -5340,17 +5358,43 @@ def _reading_strength(reading):
             reading.segments, reading.source)
 
 
+def _reading_merge_strength(reading):
+    """Keep an original-bound weak proof when an opaque reverse read agrees.
+
+    This selects a representative only for the same complete reading. It
+    neither upgrades guessed evidence to native/committed input nor mixes
+    one branch's rank with another branch's segment constraints.
+    """
+    strength=_reading_strength(reading)
+    segments=reading.segments
+    native={'literal_kana','current_ime_occurrence','analyzed_word','dictionary_word'}
+    bound=(strength[0]==5 and reading.source in ('token_sequence','contextual_token_sequence')
+        and len(segments)>1 and segments[0][0]==0
+        and segments[-1][3]=='source_nominal_voicing'
+        and all(a<b and bool(rd) for a,b,rd,kind in segments)
+        and all(kind in native for a,b,rd,kind in segments[:-1])
+        and all(left[1]==right[0] for left,right in zip(segments,segments[1:]))
+        and ''.join(segment[2] for segment in segments)==reading.text)
+    return (strength[0],not bound)+strength[1:]
+
+
 def merge_readings(readings):
     """SR-C: evidence belongs to a reading, not the path that arrived first."""
-    merged={}
+    grouped={}
     for reading in readings:
-        old=merged.get(reading.text)
-        evidence=set(reading.provenance or ((reading.source,reading.rank,reading.segments),))
-        if old:
-            evidence.update(old.provenance)
-            reading=min((old,reading),key=_reading_strength)
-        merged[reading.text]=replace(reading,provenance=tuple(sorted(evidence)))
-    return sorted(merged.values(),key=_reading_strength)
+        evidence=reading.provenance or ((reading.source,reading.rank,reading.segments),)
+        grouped.setdefault(reading.text,set()).update(evidence)
+    merged=[]
+    for text,evidence in grouped.items():
+        proofs=[Reading(text,source,rank,segments) for source,rank,segments in evidence]
+        # Some dictionary-only proofs share the weak sort bucket but do not
+        # need guessed-argument evidence. Keep the original representative
+        # rule whenever any independent native/observed proof is present.
+        key=(_reading_merge_strength if all(needs_source_argument_proof(proof) for proof in proofs)
+             else _reading_strength)
+        reading=min(proofs,key=key)
+        merged.append(replace(reading,provenance=tuple(sorted(evidence))))
+    return sorted(merged,key=_reading_strength)
 
 
 def needs_ime_context_projection(reading):
@@ -6532,6 +6576,8 @@ def _late_shift_candidate_complete(target,surface,reading):
 def validate(target, surface, engine, tokenize, store, dictionary, decisions=None,
              expected_reading=None, companions=(), source_reading=None):
     """同じ原文範囲への候補。直接再構築・通常置換のいずれからも呼ぶ。"""
+    from analysis_context import check_current_request
+    check_current_request()
     import oddness
     if surface is None or surface == target.text:
         return False, 'unchanged'
@@ -7249,8 +7295,12 @@ def validate(target, surface, engine, tokenize, store, dictionary, decisions=Non
 def _seed_context():
     # 同梱の一般的な話題の関係だけを読む。使用回数も履歴も作らない。
     from context_vec import ContextVectorStore
+    from analysis_context import check_current_request
     context = ContextVectorStore()
-    context.ensure_seeded()
+    # Only this private, unsaved initial store is cancellable. The lru cache
+    # never sees a partially seeded object when a newer request interrupts.
+    context.ensure_seeded(check=check_current_request)
+    check_current_request()
     return context
 
 
@@ -7495,7 +7545,7 @@ def _native_written_nominal_readings():
     from janome_import import iter_janome_entries
     result={}
     for face,reading,pos,sub,sub2,cost in iter_janome_entries(
-            min_len=2,max_len=18,pos_prefix='名詞,'):
+            min_len=2,max_len=18,pos_prefix=('名詞,一般','名詞,サ変接続')):
         if sub not in ('一般','サ変接続') or not face or not '一'<=face[-1]<='鿿':continue
         result.setdefault(reading,set()).add(face)
     return {rd:tuple(sorted(faces)) for rd,faces in result.items()}
@@ -9204,7 +9254,7 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
                             if first not in surfaces:surfaces.insert(0,first)
                             from ime_homophone import positive_predicate_alternatives
                             for alternate,source_object,proof in positive_predicate_alternatives(
-                                    target.text,first,repair.reading,tokenize,ime):
+                                    target.text,first,repair.reading,tokenize,ime,supplied=surfaces):
                                 if alternate not in surfaces:surfaces.append(alternate)
                                 homophone_positive[alternate]=(source_object,proof)
                 except (ImportError,OSError,AttributeError):pass

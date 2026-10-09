@@ -1190,13 +1190,17 @@ def bare_katakana_modifier_spans(text,tokens):
 
 def case_particle_mismatch(a, ap, b, bp):
     """Existing consecutive-case restriction, using the actual source POS."""
-    return '格助詞' in ap and '格助詞' in bp and a not in ('から','へ')
+    from pos_grammar import is_quotative_particle
+    return ('格助詞' in ap and '格助詞' in bp and a not in ('から','へ')
+            and not is_quotative_particle(b,bp))
 
 
 def object_particle_mismatch(a, ap, b, bp):
     """Existing restriction after を, shared with explicit phrase choices."""
+    from pos_grammar import is_quotative_particle
     return (a == 'を' and ap.startswith('助詞')
-            and bp.startswith('助詞') and b not in ('も', 'ば'))
+            and bp.startswith('助詞') and b not in ('も', 'ば')
+            and not is_quotative_particle(b,bp))
 
 
 def _source_object_predicate_spans(text,source_tokens,tokenize_fn,store,dict_index):
@@ -1379,6 +1383,12 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         spelling_rows.append(row if with_spans else row[:2])
         if reading_reasons_out is not None:
             reading_reasons_out[start,end]='目的語に続くかなが名詞として分割され、て形の動詞を作れていません'
+    from particle_frames import unheaded_nominalizer_frames
+    for frame in unheaded_nominalizer_frames(text):
+        start,end=frame['start'],frame['end']
+        row=('名詞化の接続','節のない非自立名詞',start,end)
+        spelling_rows.append(row if with_spans else row[:2])
+        if reading_reasons_out is not None:reading_reasons_out[start,end]=frame['reason']
     from particle_frames import nominalized_existential_case_frames
     for frame in nominalized_existential_case_frames(text):
         start,end=frame['start'],frame['end']
@@ -1432,15 +1442,24 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
     # 48-ZM: a complete native reading of this whole kana clause precedes
     # anomaly judgments about a competing accidental token boundary.
     from reading_segments import intact_native_reading,native_context_ranges
-    source_ranges=native_context_ranges(text)
-    from morphology import mixed_kana_syllable_ranges
-    syllables=mixed_kana_syllable_ranges(text)
-    if preserve_unknown_source:
-        from reading_segments import source_opaque_object_ranges
-        source_ranges+=tuple((a,z) for a,cut,z in source_opaque_object_ranges(text))
-    source_adjunct_edges = None
+    # A proved whole reading returns only the source-specific spelling rows.
+    # Its unused pair-protection ranges need no separate enumeration.
     if intact_native_reading(text):
         return spelling_rows
+    source_ranges=None
+    def source_range_contains(start,end):
+        # Enumerate the same original protection ranges only when a proposed
+        # anomaly needs them. Empty anomaly paths have no range to protect.
+        nonlocal source_ranges
+        if source_ranges is None:
+            source_ranges=native_context_ranges(text)
+            if preserve_unknown_source:
+                from reading_segments import source_opaque_object_ranges
+                source_ranges+=tuple((a,z) for a,cut,z in source_opaque_object_ranges(text))
+        return any(lo<=start and end<=hi for lo,hi in source_ranges)
+    from morphology import mixed_kana_syllable_ranges
+    syllables=mixed_kana_syllable_ranges(text)
+    source_adjunct_edges = None
     try:
         toks = list(tokenize_fn(text))
     except Exception:
@@ -1553,8 +1572,6 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         b_s, b_e, b = spans[i + 1]
         if a_e != b_s:
             continue
-        if any(lo<=a_s and b_e<=hi for lo,hi in source_ranges):
-            continue
         if any(lo<a_e<hi for lo,hi in syllables):
             continue
         # **読みの注記の中では見ない**（項目48-NW）。括弧の中の
@@ -1596,14 +1613,12 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
             # **同じ対を二重に出さない**（項目48-NY）。語の対の表
             # （`_PAIR`）と構造の判定が同じ所を指すことがある
             # ——`号|し` は両方が言う。印は1つでよい。
-            if _one not in out:
+            if _one not in out and not source_range_contains(a_s,b_e):
                 out.append(_one)
     for i in range(len(spans) - 1):
         a_s, a_e, a = spans[i]
         b_s, b_e, b = spans[i + 1]
         if a_e != b_s:
-            continue
-        if any(lo<=a_s and b_e<=hi for lo,hi in source_ranges):
             continue
         if any(lo<a_e<hi for lo,hi in syllables):
             continue
@@ -1617,8 +1632,9 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         if (a_sf == 'ん' and ap.startswith('助詞')
                 and bp.startswith('名詞')
                 and b_sf and kanji(b_sf[0]) and b_sf[0] != '家'):
-            out.append((a_sf, b_sf, a_s, b_e) if with_spans
-                       else (a_sf, b_sf))
+            if not source_range_contains(a_s,b_e):
+                out.append((a_sf, b_sf, a_s, b_e) if with_spans
+                           else (a_sf, b_sf))
             continue
         # **行頭の1字助詞に、漢字始まりの名詞が直付き**は異様
         # （項目48-KX・2026-08-29。うにさんの一覧 `も水戸に戻ります`
@@ -1636,8 +1652,9 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
                 and b_sf and kanji(b_sf[0])
                 and not text[:a_s].strip(' \t　・')
                 and not masked_case_head_bound(text,a_s,a_e,b_e)):
-            out.append((a_sf, b_sf, a_s, b_e) if with_spans
-                       else (a_sf, b_sf))
+            if not source_range_contains(a_s,b_e):
+                out.append((a_sf, b_sf, a_s, b_e) if with_spans
+                           else (a_sf, b_sf))
             continue
         # **「を」の直後の助詞**は異様（項目48-KY・2026-08-29。
         # うにさんの指定「助詞が連続していたり」。を に続けてよい
@@ -1646,8 +1663,9 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         # 正しい助詞連続（ても・での・には・てから…）は
         # を を含まないので無傷）。
         if object_particle_mismatch(a_sf, ap, b_sf, bp):
-            out.append((a_sf, b_sf, a_s, b_e) if with_spans
-                       else (a_sf, b_sf))
+            if not source_range_contains(a_s,b_e):
+                out.append((a_sf, b_sf, a_s, b_e) if with_spans
+                           else (a_sf, b_sf))
             continue
         # === 項目48-KZ: 品詞対の規則の束（2026-08-29・うにさんの指定を
         # 実機メモ1,494行＋中立文8,400文で測って締めた形。的の見本は
@@ -1736,8 +1754,9 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
                 and not _run_is_word(text, a_s, b_e)):
             _kz = True
         if _kz:
-            out.append((a_sf, b_sf, a_s, b_e) if with_spans
-                       else (a_sf, b_sf))
+            if not source_range_contains(a_s,b_e):
+                out.append((a_sf, b_sf, a_s, b_e) if with_spans
+                           else (a_sf, b_sf))
             continue
         # (R3) **名詞＋終助詞1字＋名詞**（平ね仮名——48-KW の ん の
         #      一般化。両側とも漢字に接する形だけ。元気だね君 は
@@ -1748,8 +1767,9 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
             _n_s, _n_e, _nt = spans[i + 2]
             if (_n_s == b_e and (_nt[1] or '').startswith('名詞')
                     and _nt[0] and kanji(_nt[0][0])):
-                out.append((a_sf + b_sf, _nt[0], a_s, _n_e) if with_spans
-                           else (a_sf + b_sf, _nt[0]))
+                if not source_range_contains(a_s,b_e):
+                    out.append((a_sf + b_sf, _nt[0], a_s, _n_e) if with_spans
+                               else (a_sf + b_sf, _nt[0]))
                 continue
         # 助詞・助動詞・記号をはさむ形は「くっついて」いない
         if any(x in ap for x in ('助詞', '助動詞', '記号')):
@@ -1842,8 +1862,9 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
             # 活用・助詞接続の規則はこの分岐より前で検査済み。
             continue
         if _frag_hit:
-            out.append((a_sf, b_sf, a_s, b_e) if with_spans
-                       else (a_sf, b_sf))
+            if not source_range_contains(a_s,b_e):
+                out.append((a_sf, b_sf, a_s, b_e) if with_spans
+                           else (a_sf, b_sf))
             continue
         # **漢字の名詞＋「し／する」の直付き**は異様（項目48-IX・2026-08-23・
         # うにさんの指定「`田部井号して` が異様と判定できれば」）。
@@ -1869,8 +1890,9 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
                          and i > 0 and spans[i - 1][1] == a_s)
                 and text[a_s:b_e + 1] not in (_WORDS or ())
                 and text[a_s:b_e + 2] not in (_WORDS or ())):
-            out.append((a_sf, b_sf, a_s, b_e) if with_spans
-                       else (a_sf, b_sf))
+            if not source_range_contains(a_s,b_e):
+                out.append((a_sf, b_sf, a_s, b_e) if with_spans
+                           else (a_sf, b_sf))
             continue
         # (B) **動詞の言い切り（ウ段）に動詞は直接つながらない**
         # （項目48-KZ・うにさんの指定「動詞が連続しているときは、
@@ -1880,8 +1902,9 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         # 話し言葉なので見ない。
         if (ap == '動詞:自立' and a_sf and a_sf[-1] in _U_DAN_KZ
                 and bp == '動詞:自立' and a_sf != b_sf):
-            out.append((a_sf, b_sf, a_s, b_e) if with_spans
-                       else (a_sf, b_sf))
+            if not source_range_contains(a_s,b_e):
+                out.append((a_sf, b_sf, a_s, b_e) if with_spans
+                           else (a_sf, b_sf))
             continue
         if (a_sf and all(kanji(c) for c in a_sf)
                 and ap.startswith('名詞')
@@ -1901,7 +1924,8 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
                 # 中の切れ目。`号し` だけが表に在っても `田部井号し` は
                 # 無いので、漢字の連続ごと見る（48-IP と同じ `_run_is_word`）
                 and not _run_is_word(text, a_s, b_e)):
-            out.append((a_sf, b_sf, a_s, b_e) if with_spans else (a_sf, b_sf))
+            if not source_range_contains(a_s,b_e):
+                out.append((a_sf, b_sf, a_s, b_e) if with_spans else (a_sf, b_sf))
             continue
         # **ナ形容詞の語幹＋用言は、下の2枚の壁に当たって
         # `can_join` まで届いていなかった**（項目48-NM'・2026-09-01）:
@@ -1914,8 +1938,9 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         # 項目48-GN）、この形だけ先に聞きに行く。
         if naadj_stem_bare(a_sf, ap, b_sf, bp):
             if not _run_is_word(text, a_s, b_e):
-                out.append((a_sf, b_sf, a_s, b_e) if with_spans
-                           else (a_sf, b_sf))
+                if not source_range_contains(a_s,b_e):
+                    out.append((a_sf, b_sf, a_s, b_e) if with_spans
+                               else (a_sf, b_sf))
             continue
         # 右は漢字始まりであること（かなへ続く形は送り仮名・活用で
         # 別の話・項目48-HN）。
@@ -2039,7 +2064,8 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         # その直後のかな2字まで。
         if _run_is_word(text, a_s, b_e):
             continue
-        out.append((a_sf, b_sf, a_s, b_e) if with_spans else (a_sf, b_sf))
+        if not source_range_contains(a_s,b_e):
+            out.append((a_sf, b_sf, a_s, b_e) if with_spans else (a_sf, b_sf))
     if complete_line:
         # Reuse the original noun/copula boundary when an unknown best-parse
         # token swallowed the next clause. That boundary supplies no anomaly;
@@ -2068,11 +2094,11 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
     # **道を足すたびに崩れる**ので、出口でそろえる（学び22）。
     if with_spans:
         out.sort(key=lambda t: (t[2], t[3]))
-    if with_spans and source_ranges:
+    if with_spans and out:
         # Native grammar protects the written syntax, not an independently
         # established object/action meaning conflict at the same position.
         out=[row for row in out if row in meaning_conflict_rows
-             or not any(lo<=row[2] and row[3]<=hi for lo,hi in source_ranges)]
+             or not source_range_contains(row[2],row[3])]
     # Search-candidate membership is only a source-side clue. An independently
     # malformed kana reading must explain the exact written field as well;
     # accepted candidate spellings are still checked by the common validator.
@@ -2084,7 +2110,7 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
             from ime_inverse_gate import anomalous_source_fields
             marks=tuple((row[2],row[3]) for row in out) if with_spans else ()
             for start,end,reading in anomalous_source_fields(text,tokenize_fn,store,dict_index,marks,_ime_display_out):
-                if any(lo<=start and end<=hi for lo,hi in source_ranges):
+                if source_range_contains(start,end):
                     continue
                 row=('IME逆読み','原文候補と異様な読み',start,end)
                 out.append(row if with_spans else row[:2])
@@ -3158,6 +3184,10 @@ def changed_auxiliary_chain_allowed(changed,start,end,original=None):
                 if any(c<z and a<d or c==d and a<=c<z for c,d in edits):return False
     if any(a<frame['end'] and frame['start']<z or a==z and frame['start']<=a<frame['end']
            for frame in nominalized_existential_case_frames(changed) for a,z in edits):
+        return False
+    from particle_frames import unheaded_nominalizer_frames
+    if any(a<frame['end'] and frame['start']<z or a==z and frame['start']<=a<frame['end']
+           for frame in unheaded_nominalizer_frames(changed) for a,z in edits):
         return False
     mismatches=[]
     # Use each actual edit to locate its chain, not just the immediately

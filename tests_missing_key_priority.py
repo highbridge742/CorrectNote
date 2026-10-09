@@ -24,6 +24,45 @@ class MissingKeyPriorityTests(unittest.TestCase):
   store=Mock();store.all_readings.return_value={'うあ','あいう'};store.reading_trie.return_value=_ReadingTrie({'うあ','あいう'})
   results=_find_known_readings_flex_uncached('あう',store,max_edits=1,input_method='kana')
   self.assertEqual([r[0] for r in results],['うあ','あいう'])
+ def test_prediction_values_do_not_leak_into_a_later_search(self):
+  from unittest.mock import patch
+  import ngram_yomi
+  words={'あいう','あえう'};store=Mock();store.all_readings.return_value=words;store.reading_trie.return_value=_ReadingTrie(words)
+  def run(preferred):
+   def order(prefix,chars):
+    return sorted(((ch,10 if ch==preferred else 1,2) for ch in chars),key=lambda x:(-x[1],x[0]))
+   with patch.object(ngram_yomi,'order_next',side_effect=order):
+    return _find_known_readings_flex_uncached('あう',store,max_edits=1,input_method='kana')
+  first=run('い');second=run('え')
+  self.assertEqual(first[0][0],'あいう');self.assertEqual(second[0][0],'あえう')
+  self.assertEqual(first[0][1],2.8);self.assertEqual(second[0][1],2.8)
+  self.assertEqual({r for r,c,e in first},words);self.assertEqual({r for r,c,e in second},words)
+ def test_failed_prediction_keeps_all_fallback_branches_and_retries(self):
+  from unittest.mock import patch
+  import ngram_yomi
+  words={'あいう','あえう'};store=Mock();store.all_readings.return_value=words;store.reading_trie.return_value=_ReadingTrie(words)
+  calls=[]
+  def unavailable(prefix,chars):
+   calls.append((prefix,tuple(chars)));raise OSError('prediction unavailable')
+  with patch.object(ngram_yomi,'order_next',side_effect=unavailable):
+   results=_find_known_readings_flex_uncached('あう',store,max_edits=1,input_method='kana')
+  self.assertEqual({r for r,c,e in results},words)
+  self.assertTrue(all((c,e)==(3.25,1) for r,c,e in results),results)
+  # With one edit, later visits have no insertion budget. Exercise an
+  # actual eligible retry with two edits, preserving the same fallback result.
+  calls.clear()
+  with patch.object(ngram_yomi,'order_next',side_effect=unavailable):
+   retried=_find_known_readings_flex_uncached('あう',store,max_edits=2,input_method='kana')
+  self.assertEqual(retried,results)
+  self.assertGreater(len(calls),len(set(calls)))
+ def test_zero_edit_budget_does_not_request_insertion_predictions(self):
+  from unittest.mock import patch
+  import ngram_yomi
+  words={'あい','あう','あいう'};store=Mock();store.all_readings.return_value=words;store.reading_trie.return_value=_ReadingTrie(words)
+  with patch.object(ngram_yomi,'order_next',side_effect=AssertionError('insertion budget exhausted')) as predict:
+   results=_find_known_readings_flex_uncached('あい',store,max_edits=0,input_method='kana')
+  self.assertEqual(results,[('あい',0.0,0)])
+  predict.assert_not_called()
 class MarkSlipSearchTests(unittest.TestCase):
  def search(self,typed,words,method='kana',edits=1):
   store=Mock();store.all_readings.return_value=set(words);store.reading_trie.return_value=_ReadingTrie(set(words))

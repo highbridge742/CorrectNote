@@ -676,6 +676,10 @@ class ContextualRepairTests(unittest.TestCase):
 class Image16adSourceFlowTests(unittest.TestCase):
     """Source words, grammatical links and list spelling through the app entry."""
 
+    def tearDown(self):
+        from last_choice import set_active
+        set_active(None)
+
     def _correct(self, source):
         import app
         from tests_analysis_async import initial
@@ -716,6 +720,59 @@ class Image16adSourceFlowTests(unittest.TestCase):
         self.assertEqual(self._correct('肩のこり'),'肩のこり')
         self.assertIn(self._correct('肩のこりを感じる'),('肩のこりを感じる','肩の凝りを感じる'))
         self.assertEqual(self._correct('本の残り'),'本の残り')
+
+    def test_genitive_spelling_survives_prepared_runtime_and_dictionary_import(self):
+        import analysis_worker
+        from tests_analysis_async import initial
+        from janome_import import import_from_janome
+        from last_choice import set_active
+        for imported in (False,True):
+            for source in ('肩のこり\t','足のこり','疲労、肩のこり、腰痛'):
+                with self.subTest(imported=imported,source=source):
+                    a=initial()
+                    if imported:import_from_janome(a.store)
+                    revision=a.store.revision()
+                    worker=analysis_worker.Runtime();worker.set_state(analysis_worker.snapshot(a))
+                    try:
+                        prepared=worker.prepare([source])
+                        result=worker.execute(dict(kind='line',line=source,
+                            context=prepared['context'],attested=prepared['attested'],
+                            input_method='kana'))['result']
+                        self.assertEqual(result['corrected'],source)
+                        self.assertFalse(result['odd_spans'])
+                        self.assertEqual(result['analysis_status'],'complete')
+                        self.assertEqual(a.store.revision(),revision)
+                    finally:set_active(None)
+
+    def test_genitive_spelling_keeps_coordination_and_native_copula(self):
+        for source in ('肩のこりと痛み','肩のこりや痛み','肩のこりだった。',
+                '足のこりではありません。'):
+            with self.subTest(source=source):
+                self.assertEqual(self._correct(source),source)
+        self.assertEqual(self._correct('首のこりです。'),'首の凝りです。')
+        from ime_spelling import _reinterprets_function_attachment
+        for source in ('時間がのこります。','時間がのこりたい。','時間がのこりました。'):
+            self.assertFalse(_reinterprets_function_attachment(source,3,6,'残り'))
+
+    def test_genitive_check_keeps_independent_verbs_and_whole_nouns(self):
+        from ime_spelling import _reinterprets_function_attachment
+        for text,start,end,face in (
+                ('まだのこります。',2,5,'残り'),
+                ('時間がのこります。',3,6,'残り'),
+                ('のこりを数える。',0,3,'残り'),
+                ('本ののこり',2,5,'残り'),
+                ('電動のこぎり',2,6,'鋸'),
+                ('肩のこり',1,4,'の凝り')):
+            with self.subTest(text=text,face=face):
+                self.assertFalse(_reinterprets_function_attachment(text,start,end,face))
+        self.assertEqual(self._correct('まだのこります。'),'まだ残ります。')
+        self.assertEqual(self._correct('本ののこり'),'本の残り')
+
+    def test_partitive_object_spelling_completes_with_counting(self):
+        # Independent existing gap: the current meaning inventory does not
+        # yet prove partitive objects for counting. Keep the required output
+        # visible rather than weakening the expectation after diagnosis.
+        self.assertEqual(self._correct('のこりを数える。'),'残りを数える。')
 
     def test_intact_enumerated_nouns_keep_their_source_spelling(self):
         source=('効能効果：疲労回復、荒れ性、あせも、にきび、しっしん、肩のこり、'

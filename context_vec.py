@@ -33,7 +33,7 @@
   計算する仕組みだが、それには大規模な事前学習が要る。
   ここではその発想を大きく簡略化し、
     - 「関連度」を、実際に近くで共起した回数（共起カウント）で近似する
-    - 「注意の重み」を、対象語からの距離（近いほど重い）で近似する
+    - 対象語から一定の語数以内だけを、同じ整数重みで数える
   という軽量な統計処理に落とし込む。行列演算もモデルの重みも無く、
   辞書と統計だけで完結するため、このアプリの設計方針
   （オフライン・AI不使用・辞書と統計的な学習だけ）を保てる。
@@ -95,9 +95,12 @@ class ContextVectorStore:
         if path and os.path.exists(path):
             self.load()
 
-    def ensure_seeded(self):
+    def ensure_seeded(self, *, check=None):
         """
         初期の話題のまとまりを、まだなら読み込む。
+
+        check は破棄できる私有の初期 store を中断するときだけ渡す。
+        通常の共有 store は従来どおり中断なしで初期値を読み込む。
 
         文脈ベクトルは本来ユーザーのメモから育つものだが、
         それでは使い込むまで効かない。初回起動の時点から
@@ -127,13 +130,13 @@ class ContextVectorStore:
                 for v in range(have + 1, SEED_VERSION + 1):
                     topics = TOPICS_BY_VERSION.get(v)
                     if topics:
-                        load_seed_topics(self, topics)
+                        load_seed_topics(self, topics, check=check)
             except Exception:
                 return False
             self.seed_version = SEED_VERSION
             return True
         try:
-            load_seed_topics(self)
+            load_seed_topics(self, check=check)
         except Exception:
             return False
         self.seeded = True
@@ -164,13 +167,10 @@ class ContextVectorStore:
                 other = surfaces[j]
                 if len(other) < MIN_SURFACE_LEN:
                     continue
-                # 距離が近いほど重みを大きくする
-                # （Self-Attention の「近い語ほど強く関連づけられやすい」
-                #   傾向を、簡易な距離減衰で近似する）。
-                dist = abs(i - j)
-                weight = 1 if dist <= 1 else 1  # 整数カウントに丸めて保持
-                self._co[w][other] += weight
-                self._totals[w] += weight
+                # The existing integer weight is one throughout CO_WINDOW.
+                # Count the same pair without an unused distance calculation.
+                self._co[w][other] += 1
+                self._totals[w] += 1
         self._prune_if_needed()
 
     def _prune_if_needed(self):

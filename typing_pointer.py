@@ -62,15 +62,24 @@ class TypingPointer:
             except tk.TclError:
                 pass
 
-    def poll_composition(self):
-        """Use the existing IME timer; unchanged composition never re-hides."""
+    def poll_composition(self, observation=None):
+        """Use a same-tick owned observation, or query the focused pane as before.
+
+        No observation is retained across calls. Unknown status remains only
+        a pointer observation and never supplies commit evidence.
+        """
         try:
             widget = self.root.focus_get()
             if widget not in self.attached or str(widget.cget('state')) != 'normal':
                 return
-            import ime_watch
-            comp = ((ime_watch.read_composition(widget.winfo_id()) or {}).get('comp') or ''
-                    if ime_watch.composition_active(widget.winfo_id()) else '')
+            hwnd = widget.winfo_id()
+            if (observation is not None and observation[0] is widget
+                    and observation[1] == hwnd):
+                comp = observation[3] if observation[2] else ''
+            else:
+                import ime_watch
+                comp = ((ime_watch.read_composition(hwnd) or {}).get('comp') or ''
+                        if ime_watch.composition_active(hwnd) else '')
             previous = self.compositions.get(widget, '')
             self.compositions[widget] = comp
             if comp and comp != previous:

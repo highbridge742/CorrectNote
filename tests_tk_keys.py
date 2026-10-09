@@ -19,7 +19,10 @@ def deliver_key(widget,sequence,keysym,keycode,state=0,event_type=2,char=''):
             tk.call('bind',tag,virtual,script)
         widget.event_generate(virtual)
     finally:
-        for tag,script in saved:tk.call('bind',tag,virtual,script)
+        for tag,script in saved:
+            # A real key handler may destroy the dialog receiving that key.
+            if str(tag).startswith('.') and not tk.call('winfo','exists',tag):continue
+            tk.call('bind',tag,virtual,script)
 
 
 def release_tk_fixture(owner, *attributes):
@@ -29,7 +32,14 @@ def release_tk_fixture(owner, *attributes):
     import weakref
     if threading.current_thread() is not threading.main_thread():
         raise AssertionError('Tk fixture release must run on its creating thread')
-    root_ref=weakref.ref(owner.root) if getattr(owner,'root',None) is not None else None
+    root=getattr(owner,'root',None)
+    if root is not None:
+        # destroy() deletes Python callback commands, but Tcl timers survive.
+        # Remove those pending callbacks before another Tk fixture pumps events.
+        for identifier in root.tk.splitlist(root.tk.call('after','info')):
+            root.tk.call('after','cancel',identifier)
+    root_ref=weakref.ref(root) if root is not None else None
+    root=None
     for name in attributes:
         setattr(owner,name,None)
     gc.collect()

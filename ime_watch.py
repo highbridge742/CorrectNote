@@ -59,6 +59,7 @@ def _imm32():
         imm=C.WinDLL('imm32')
         signatures={
             'ImmGetContext': ([W.HWND],W.HANDLE),
+            'ImmGetDefaultIMEWnd': ([W.HWND],W.HWND),
             'ImmReleaseContext': ([W.HWND,W.HANDLE],W.BOOL),
             'ImmGetOpenStatus': ([W.HANDLE],W.BOOL),
             'ImmGetConversionStatus': ([W.HANDLE,C.POINTER(W.DWORD),C.POINTER(W.DWORD)],W.BOOL),

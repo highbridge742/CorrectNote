@@ -76,6 +76,26 @@ def child():
             a.first_line_btn.invoke();root.update()
             a.result_view.mark_set('insert','1.0')
             print('CENTERED_NAVIGATION_OK',flush=True)
+            # Centering is a one-time destination. Manual scrolling must
+            # return the real first row to the top without a tab switch.
+            for unified in (False,True):
+                (a._set_layout_unified if unified else a._set_layout_split)()
+                until(done);root.update()
+                a.first_line_btn.invoke();root.update()
+                normal=a.editor.dlineinfo('1.0');normal_baseline=normal[1]+normal[4]
+                for scroll in (lambda:a._on_scrollbar('moveto',0),lambda:a._on_wheel_units(-100)):
+                    a._goto_line(3);root.update()
+                    scroll();root.update()
+                    assert not a.editor.tag_ranges('navigation_head'), (unified,a.editor.yview())
+                    assert not a.editor.tag_ranges('navigation_tail')
+                    assert a.editor.index('@0,0')=='1.0'
+                    info=a.editor.dlineinfo('1.0');assert info
+                    assert abs(info[1]+info[4]-normal_baseline)<=1,(unified,info,normal_baseline)
+                    assert a.editor_source_text()==original_text
+            a._set_layout_split();until(done);root.update()
+            a.first_line_btn.invoke();root.update()
+            a.result_view.mark_set('insert','1.0')
+            print('MANUAL_SCROLL_AFTER_BOOKMARK_OK',flush=True)
             # Right-pane navigation follows the same surviving row while
             # analysis preparation is held. An old visual cursor must not
             # make Previous revisit the bookmark we are already on.

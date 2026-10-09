@@ -124,3 +124,9 @@ tools_local/*
 # Explicitly collected personal phrases and floating-window state.
 word_book.json
 word_book.json.tmp
+
+# Local task instructions and work records are never release sources.
+/.agents/
+/.codex/
+/WORK*.md
+/WORK*.json

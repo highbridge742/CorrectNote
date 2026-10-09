@@ -12,6 +12,49 @@ def _worker_fields(background):
     return '_correction_worker', '_worker_state', '_async_request'
 
 
+def prewarm(app):
+    """Start the existing foreground worker with public tables only, no snapshot.
+
+    Main-thread stores can still be warming. The first real request supplies
+    their completed state normally; this never reads the editor or user files.
+    """
+    if getattr(app,'_closing',False) or getattr(app,'_correction_worker',None) is not None:
+        return
+    worker=None
+    try:
+        worker=Worker()
+        worker.submit(dict(kind='warmup'))
+        app._correction_worker=worker
+        app._worker_state=None
+    except Exception:
+        if worker is not None:worker.close()
+        traceback.print_exc()
+
+
+def queue_idle_prewarm(app, delay=1200):
+    """One optional retry after the document settles, never ahead of new input."""
+    if getattr(app, '_closing', False) or getattr(app, '_idle_prewarm_job', None) is not None:
+        return
+    worker = getattr(app, '_correction_worker', None)
+    if worker is None or getattr(worker, '_idle_prewarm_submitted', False):
+        return
+    def start():
+        app._idle_prewarm_job = None
+        worker = getattr(app, '_correction_worker', None)
+        if (getattr(app, '_closing', False) or app._foreground_analysis_pending()
+                or getattr(app, '_async_request', None) is not None
+                or getattr(app, '_worker_state', None) is None
+                or worker is None or not worker.process.is_alive()
+                or getattr(worker, '_idle_prewarm_submitted', False)):
+            return
+        try:
+            worker.submit(dict(kind='warmup'))
+            worker._idle_prewarm_submitted = True
+        except Exception:
+            traceback.print_exc()
+    app._idle_prewarm_job = app.root.after(delay, start)
+
+
 def _request(app, task, scope, background=False):
     worker_name,state_name,request_name=_worker_fields(background)
     worker=getattr(app,worker_name,None)
@@ -21,10 +64,34 @@ def _request(app, task, scope, background=False):
         worker=Worker();setattr(app,worker_name,worker)
     state=state_key(app)
     data=snapshot(app) if getattr(app,state_name,None)!=state else None
+    if data is not None:data['_state_identity']=state
     identifier=worker.submit(task,data)
     setattr(app,state_name,state)
     setattr(app,request_name,(scope,identifier))
     return identifier
+
+
+def _cancel_request(app,background):
+    """Stop only a request the UI has already decided not to consume."""
+    worker_name,_,request_name=_worker_fields(background)
+    pending=getattr(app,request_name,None)
+    setattr(app,request_name,None)
+    worker=getattr(app,worker_name,None)
+    if pending is None or worker is None or getattr(worker,'closed',False) is True:return
+    try:
+        if worker.process.is_alive():worker.submit(dict(kind='cancel'))
+    except Exception:
+        # Failed cancellation must not block parking finished rows or closing.
+        # The ordinary next request still checks/recreates a dead transport.
+        traceback.print_exc()
+
+
+def cancel_background_request(app):
+    _cancel_request(app,True)
+
+
+def cancel_foreground_request(app):
+    _cancel_request(app,False)
 
 
 def _poll(app, scope, background=False):
@@ -68,7 +135,10 @@ def _save_context(app, text, value):
 
 
 def context(app,text,lines):
-    value=cached_context(app,text)
+    from literal_lines import literal_only,prepared
+    literal=all(literal_only(line) for line in lines)
+    if literal:cancel_foreground_request(app)
+    value=prepared(lines) if literal else cached_context(app,text)
     if value is not None:
         app._async_context_scope=None
         app._attested_surfaces=value['attested']
@@ -135,11 +205,12 @@ def line_step(app,count):
             app._analyze_pos+=1;continue
         units_only=getattr(app,'_analyze_units_only',False)
         res=app.line_results[i]
-        if lines[i]=='':
-            res=dict(app._blank_result(''));res.pop('pending',None)
+        from literal_lines import literal_only,result as literal_result,units as literal_units
+        if literal_only(lines[i]):
+            res=literal_result(lines[i])
             res['_context_evidence']=analysis_context.Reads({}).evidence()
             app.line_results[i]=res
-            _unit_values(app,res,dict(corrected_units=('',[]),original_units=('',[])))
+            _unit_values(app,res,dict(corrected_units=literal_units(lines[i]),original_units=literal_units(lines[i])))
             app._analyze_pos+=1;continue
         key=(res['original'],res['corrected'])
         if units_only and key in getattr(app,'_units_cache',{}) and key+(False,) in getattr(app,'_suspect_units_cache',{}):
@@ -180,16 +251,25 @@ def line_step(app,count):
 
 def background_step(app,st):
     from tab_analysis import display_pending
+    from literal_lines import literal_only,result as literal_result,units as literal_units
     st.setdefault('units',{});st.setdefault('suspect_units',{})
+    if st['ctx'] is None and all(literal_only(line) for line in st['lines']):
+        cancel_background_request(app)
+        from literal_lines import prepared
+        value=prepared(st['lines']);st['ctx']=value['context'];st['words']=value['words'];st['attested']=value['attested']
     if st['ctx'] is not None:
         while st['pos'] < len(st['lines']):
             i=st['pos']
             if not display_pending(st['results'][i],st['units'],st['suspect_units']):
                 st['pos']+=1
-            elif st['lines'][i]=='':
-                result=dict(app._blank_result(''));result.pop('pending',None)
+            elif literal_only(st['lines'][i]):
+                result=literal_result(st['lines'][i])
                 result['_context_evidence']=analysis_context.Reads({}).evidence()
                 st['results'][i]=result;st['pos']+=1
+                key=(st['lines'][i],st['lines'][i])
+                st['units'][key]=literal_units(st['lines'][i])
+                st['suspect_units'][key+(False,)]=literal_units(st['lines'][i])
+                st['suspect_units'][key+(True,)]=literal_units(st['lines'][i])
             else:
                 break
         if st['pos']>=len(st['lines']):return
@@ -225,11 +305,24 @@ def background_step(app,st):
         st['suspect_units'][key+(True,)]=value['corrected_units']
 
 
-def close(app):
+def close(app,keep_prewarmed=False):
+    job = getattr(app, '_idle_prewarm_job', None)
+    if job is not None:
+        app.root.after_cancel(job)
+        app._idle_prewarm_job = None
+
     import quick_analysis
     quick_analysis.close(app)
     for worker_name,state_name,request_name in (_worker_fields(False),_worker_fields(True)):
         worker=getattr(app,worker_name,None)
+        # Initial dictionary import changes stores in the parent. A worker
+        # with no snapshot or document request can finish its public-table
+        # warmup safely and receive the completed stores afterwards.
+        if (keep_prewarmed and worker_name=='_correction_worker' and worker is not None
+                and getattr(app,state_name,None) is None
+                and getattr(app,request_name,None) is None
+                and worker.process.is_alive()):
+            continue
         if worker is not None:worker.close()
         setattr(app,worker_name,None)
         setattr(app,state_name,None)

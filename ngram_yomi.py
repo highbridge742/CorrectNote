@@ -113265,8 +113265,11 @@ def _bigram_counts():
     global _BIGRAMS
     if _BIGRAMS is not None:
         return _BIGRAMS
+    from analysis_context import check_current_request
     out = {}
-    for gram, count in TRIGRAMS.items():
+    for index, (gram, count) in enumerate(TRIGRAMS.items()):
+        if index % 512 == 0:
+            check_current_request()
         if len(gram) != 3:
             continue
         left, right = gram[1], gram[2]
@@ -113274,6 +113277,8 @@ def _bigram_counts():
             continue
         key = left + right
         out[key] = out.get(key, 0) + count
+    # Publish only a complete table; a cancelled local build is discarded.
+    check_current_request()
     _BIGRAMS = out
     return out
 

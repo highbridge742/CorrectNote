@@ -14,8 +14,8 @@ def start(app):
     app._cancel_analysis_job()
     job=getattr(app,'_after_id',None)
     if job is not None:app.root.after_cancel(job)
-    app._after_id=None;app._async_context_scope=None;app._async_request=None
-    analysis_async.close(app)
+    app._after_id=None;app._async_context_scope=None
+    analysis_async.close(app,keep_prewarmed=True)
     app.status.config(text='初回の辞書を準備しています。編集できます。')
     if rows is None:
         try:

@@ -85,6 +85,7 @@ def reuse_rows(results,todo,previous,signatures,old_context,new_context,attested
 from contextlib import contextmanager
 from contextvars import ContextVar
 from threading import get_ident
+from time import monotonic
 
 _REQUEST_CHECK=ContextVar('correctnote_request_check',default=None)
 
@@ -93,14 +94,22 @@ class SupersededAnalysis(BaseException):
     """Internal control flow; optional-evidence errors must not swallow it."""
 
 
-def check_current_request():
+def check_current_request(*,frequent=False):
     scope=_REQUEST_CHECK.get()
-    if scope is not None and scope[0]==get_ident() and scope[1]():
-        raise SupersededAnalysis()
+    if scope is None or scope[0]!=get_ident():return
+    cadence=scope[2]
+    if frequent and cadence is not None:
+        now=monotonic()
+        if cadence[1] is not None and now<cadence[1]:return
+        cadence[1]=now+cadence[0]
+    if scope[1]():raise SupersededAnalysis()
 
 
 @contextmanager
-def request_scope(check):
-    token=_REQUEST_CHECK.set((get_ident(),check))
+def request_scope(check,*,poll_interval=0):
+    # Only explicitly frequent checkpoints share this request-local cadence.
+    # Entry, semantic boundaries and publication still always check now.
+    cadence=[poll_interval,None] if poll_interval>0 else None
+    token=_REQUEST_CHECK.set((get_ident(),check,cadence))
     try:yield
     finally:_REQUEST_CHECK.reset(token)

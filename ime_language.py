@@ -125,6 +125,7 @@ class JapaneseIME:
         self._owner = None
         self._retained = False
         self._text_cache = {}
+        self._morph_cache = {}
 
     def __enter__(self):
         from ime_session import retain
@@ -174,6 +175,7 @@ class JapaneseIME:
         self._open=self._com=self.available=False
         self._owner=None;self._retained=False
         self._text_cache.clear()
+        self._morph_cache.clear()
         actions=[]
         if opened:actions.append(lambda:_method(language,4)(language))
         actions.extend((lambda:_release(language),lambda:_release(common)))
@@ -218,6 +220,11 @@ class JapaneseIME:
             return None
         from analysis_context import check_current_request
         check_current_request()
+        # Decoded tuples belong only to this correction scope. Native buffers
+        # are still freed immediately; failed queries are always retried.
+        cache=self._morph_cache if self._retained else None
+        key=(request,source)
+        if cache is not None and key in cache:return cache[key]
         result=C.c_void_p()
         try:
             source_units=len(source.encode('utf-16-le'))//2
@@ -228,7 +235,9 @@ class JapaneseIME:
                 self._language, request, 0, source_units, source,
                 None, C.byref(result))
             if hr!=0 or not result:return None
-            return _decode_morph_result(result.value,source_units)
+            value=_decode_morph_result(result.value,source_units)
+            if cache is not None and value is not None:cache[key]=value
+            return value
         except (ValueError,UnicodeError,OSError,AttributeError):
             return None
         finally:

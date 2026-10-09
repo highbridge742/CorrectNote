@@ -38,7 +38,12 @@ def _owners(reading,case):
         from ime_candidates import SearchCandidates
         from morphology import native_spelling_only
         with SearchCandidates() as search:
-            faces=search.candidates(reading) if search.available else ()
+            faces=list(search.candidates(reading)) if search.available else []
+        # The original quantity already has a native counter reading. Share
+        # that exact spelling when the OS does not propose it; neither an
+        # IME ranking nor a new reading supplies the owner relation below.
+        from reading_segments import native_counter_readings
+        faces.extend(native_counter_readings().get(reading,()))
         out.extend(face for face in faces if face!=reading
                    and native_counted_nominal_evidence(face)==proof
                    and native_spelling_only(reading,face))

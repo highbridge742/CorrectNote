@@ -16,6 +16,26 @@ class InputPendingTests(unittest.TestCase):
         cls.scope={'analysis_async':analysis_async,'input_work':input_work}
         exec(compile(ast.Module(body=functions,type_ignores=[]),'app.py','exec'),cls.scope)
 
+    def test_recent_input_does_not_pause_the_worker_transport(self):
+        class Dispatched(Exception):pass
+        def dispatch(count):raise Dispatched()
+        h=SimpleNamespace(_after_id=None,_view_changing=lambda:False,
+            ANALYZE_CHUNK=20,_analyze_units_only=False,_interacting=lambda:True,
+            _analyze_slice=dispatch,_schedule_analysis_chunk=lambda:self.fail('idle wait'))
+        with self.assertRaises(Dispatched):self.scope['_analyze_chunk'](h)
+
+    def test_held_view_still_defers_projection_even_for_cached_units(self):
+        for units in (False,True):
+            for overview,drag in ((object(),None),(None,{'mode':'scroll'})):
+                calls=[]
+                h=SimpleNamespace(_after_id=None,_view_changing=lambda:False,
+                    ANALYZE_CHUNK=20,_analyze_units_only=units,
+                    _overview=overview,_drag=drag,
+                    _analyze_slice=lambda count:self.fail('held view changed'),
+                    _schedule_analysis_chunk=lambda:calls.append('defer'))
+                self.scope['_analyze_chunk'](h)
+                self.assertEqual(calls,['defer'])
+
     def test_old_slice_stops_until_input_check(self):
         def forbidden():self.fail('入力確認前に旧解析へ進んだ')
         h=SimpleNamespace(_analyze_job='chunk',_after_id='input-check',_view_changing=forbidden)

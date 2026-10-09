@@ -3822,6 +3822,22 @@ def native_attributive_predicate_end(text):
         actual=tuple(row for row in dictionary_paradigms(last.surface) or ()
                      if row[0].startswith('助動詞,') and row[2]==last.infl_form
                      and row[3]==last.base_form and row[4]==last.reading)
+        # A native verb's volitional ending completes an utterance, but
+        # does not by itself prove direct modification of the next noun.
+        # Keep conjectural copulas (だろう), lexical verbs ending in う,
+        # and the separate literary attributive forms on their own paths.
+        # Izumiya, Constraints on Noun Modification (2007), sec. 2.2-2.3:
+        # https://www.jstage.jst.go.jp/article/kyoyobukiyo/37/0/37_KJ00006122619/_pdf
+        previous=parts[-2] if len(parts)>=2 else None
+        if (actual and last.has_reading and last.base_form in ('う','よう')
+                and last.infl_form=='基本形' and previous is not None
+                and previous.has_reading and previous.pos=='動詞'
+                and previous.end==last.start
+                and previous.infl_form in ('未然ウ接続','未然形')
+                and any(row[0].startswith('動詞,') and row[2]==previous.infl_form
+                        and row[3]==previous.base_form and row[4]==previous.reading
+                        for row in dictionary_paradigms(previous.surface) or ())):
+            return False
         if actual and all(row[1].startswith('文語・') for row in actual):
             return last.infl_form in ('体言接続','連体形')
     if _completed_predicate_token((last.surface,
@@ -3886,6 +3902,28 @@ def native_linked_reading_boundaries(text,nominal_constraint=None,allow_unclassi
     return tuple(sorted(boundaries))
 
 
+def _native_attributive_end_positions(text):
+    """Necessary native suffix positions, never a complete clause proof.
+
+    Both finite and literary attributive endings require a native terminal
+    entry. Unknown-token recovery recurses on a shorter literal suffix,
+    retaining that same final entry. Query the existing dictionary trie;
+    unavailable data leaves the original exhaustive checks in place.
+    """
+    from morphology import dictionary_prefix_paradigms
+    ends=set()
+    for start in range(len(text)):
+        tail=text[start:]
+        forms=dictionary_prefix_paradigms(tail)
+        if forms is None:return None
+        for surface,pos,kind,form,base,reading in forms:
+            if (surface and tail.startswith(surface)
+                    and pos.startswith(('動詞,','形容詞,','助動詞,'))
+                    and form in ('基本形','連体形','体言接続')):
+                ends.add(start+len(surface))
+    return frozenset(ends)
+
+
 @lru_cache(maxsize=4096)
 def completed_native_reading_sequence(text, nominal_constraint=None, allow_unclassified=False):
     """48-ABU / GPT-6 / 2026-09-13: compose independently proved clauses.
@@ -3905,7 +3943,9 @@ def completed_native_reading_sequence(text, nominal_constraint=None, allow_uncla
     # Their dictionary inflection and connection provide the proof;
     # a four-kana minimum is not a grammatical boundary.
     if native_linked_reading_boundaries(bare,nominal_constraint,allow_unclassified):return True
+    possible_ends=_native_attributive_end_positions(bare)
     for cut in range(2,len(bare)-1):
+        if possible_ends is not None and cut not in possible_ends:continue
         left,right=bare[:cut],bare[cut:]
         if not native_attributive_predicate_end(left):
             continue
@@ -4589,6 +4629,11 @@ def native_genitive_nominal_splits(text, allow_unknown_left=False, original_cont
             # an ordinal or unknown referent supplies no new evidence.
             from semantic_roles import counted_object_roles,nominal_role_matches,nominal_roles
             roles=counted_object_roles(text[:cut])
+            if not roles:
+                # Share only the existing quantity-no-noun context meaning;
+                # generic quantity/ordinal roles remain unchanged.
+                from semantic_roles import counted_genitive_roles
+                roles=counted_genitive_roles(text[:cut])
             # A typed linear quantity also modifies an already classified
             # geometric line. This does not classify every hon-counted
             # object as a line; the actual following noun supplies that sense.
@@ -7452,6 +7497,46 @@ def native_incomplete_linked_reading(text):
 
 
 @lru_cache(maxsize=2048)
+def native_incomplete_subject_predicate(text):
+    """Retain an original noun + actual nominative + open continuative.
+
+    This proves an unfinished source boundary, not the subject's meaning
+    or a completed generated predicate. Every original token and native
+    inflection stays unchanged; unknown tails and reopened cases add none.
+    """
+    bare=text[:-1] if text and text[-1] in '。！？.!?' else text
+    if not bare or not 3<=len(bare)<=80 or 'が' not in bare:return False
+    from morphology import tokenize,dictionary_inflections
+    parts=tokenize(bare)
+    if len(parts)<3:return False
+    case,verb=parts[-2:]
+    if (not verb.has_reading or verb.pos!='動詞' or verb.pos_sub!='自立'
+            or verb.infl_form!='連用形' or verb.end!=len(bare)
+            or not case.has_reading or case.surface!=case.reading or case.surface!='が'
+            or case.pos!='助詞' or case.pos_sub!='格助詞:一般'
+            or case.end!=verb.start or case.end!=case.start+1
+            or parts[0].start or any(a.end!=b.start for a,b in zip(parts,parts[1:]))
+            or any(bare[t.start:t.end]!=t.surface for t in parts)):return False
+    if not any(pos.startswith('動詞,自立,') and form==verb.infl_form
+               and base==verb.base_form and rd==verb.reading
+               for pos,form,base,rd in dictionary_inflections(verb.surface) or ()):return False
+    if not any(pos.startswith('助詞,格助詞,一般,') and base==case.surface and rd==case.reading
+               for pos,form,base,rd in dictionary_inflections(case.surface) or ()):return False
+    noun=bare[:case.start]
+    faces=native_surface_nominal_heads(noun,original_context=bare)
+    if not faces or native_nominal_case_boundary(bare,parts,case.start,'が',faces) is None:
+        return False
+    # The harmless polite-tail grammar probe must retain this exact host;
+    # a different token split after adding the auxiliary proves nothing.
+    formed=tokenize(bare+'ます')
+    if not any(t.start==verb.start and t.end==verb.end and t.surface==verb.surface
+               and t.has_reading and t.reading==verb.reading and t.pos==verb.pos
+               and t.pos_sub==verb.pos_sub and t.infl_form==verb.infl_form
+               and t.base_form==verb.base_form for t in formed):return False
+    return _native_continuative_verb_end(bare)
+
+
+@lru_cache(maxsize=2048)
 def native_incomplete_source_ranges(text):
     out=[]
     for start,clause in _native_source_clauses(text):
@@ -7460,6 +7545,8 @@ def native_incomplete_source_ranges(text):
                 or native_incomplete_linked_reading(clause)):
             out.append((start,start+len(clause)));continue
         if _native_written_predicate_conflicts(clause):continue
+        if native_incomplete_subject_predicate(clause):
+            out.append((start,start+len(clause)));continue
         # Use the same attested source noun/case seams as complete verbs.
         # This proves only an original unfinished suffix, never a candidate.
         contexts=tuple(dict.fromkeys(native_object_predicate_contexts(clause)+tuple(
@@ -8882,6 +8969,37 @@ def _native_written_predicate_conflicts(text):
 
 
 @lru_cache(maxsize=4096)
+def _native_partitive_object_projections(text,predicate_start,faces):
+    """An explicit genitive subset retains its own unchanged nominal source.
+
+    This transfers no roles to a bare partitive noun. Both original
+    particles, both whole noun readings and the existing genitive relation
+    are required before the same predicate can use that noun's meaning.
+    """
+    if not faces or text[predicate_start-1:predicate_start]!='を':return ()
+    prefix=text[:predicate_start-1]
+    if 'の' not in prefix:return ()
+    from morphology import tokenize
+    from semantic_roles import nominal_roles,genitive_nominal_support
+    if not all('partitive' in nominal_roles(face) for face in faces):return ()
+    parts=tokenize(text)
+    if not any(t.start==predicate_start-1 and t.end==predicate_start
+               and t.has_reading and t.surface==t.reading=='を' and t.pos=='助詞'
+               and t.pos_sub=='格助詞:一般' for t in parts):return ()
+    out=[]
+    for cut,left,right in native_genitive_nominal_splits(prefix,original_context=text):
+        if not (set(faces)<=set(right) and any(t.start==cut and t.end==cut+1
+                and t.has_reading and t.surface==t.reading=='の' and t.pos=='助詞'
+                and t.pos_sub=='連体化' for t in parts)):continue
+        owned=tuple(noun for noun in left if all(genitive_nominal_support(noun,face) for face in faces))
+        if owned:
+            # Only the proved nominal modifier changes in this proof view;
+            # the actual case, written action and entire tail stay original.
+            out.append((prefix[:cut]+text[predicate_start-1:],cut+1,owned))
+    return tuple(out)
+
+
+@lru_cache(maxsize=4096)
 def native_object_predicate_proof(text, predicate_start, faces, allow_link=False, return_action=False):
     """Shared nominal/case proof, retaining a written argument's own meaning.
 
@@ -8891,6 +9009,14 @@ def native_object_predicate_proof(text, predicate_start, faces, allow_link=False
     """
     from semantic_roles import nominal_role_matches
     if not 1<predicate_start<len(text):return False
+    partitive=_native_partitive_object_projections(text,predicate_start,faces)
+    if partitive:
+        for projected,cut,objects in partitive:
+            proof=native_object_predicate_proof(projected,cut,objects,
+                allow_link=allow_link,return_action=return_action)
+            if proof:return proof
+        # Missing inherited fit is not a conflict. The head may also own
+        # an independently proved sense; keep its normal validation below.
     from morphology import tokenize,dictionary_inflections
     # A finite path motion cannot inherit this non-path object. Close the
     # first te/de action with the same source ownership proof, then validate

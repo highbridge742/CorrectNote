@@ -739,6 +739,78 @@ def _dictionary_relative_spelling_evidence(text,start,end,face):
         source_parts=[t for t in parts if t.end<=end],candidate_face=face)
 
 
+def _is_native_action_unit(current,start,end,parts,action_links,actions):
+    """Share the original sahen/action classification without a spelling choice."""
+    from reading_segments import completed_sahen_reading,native_polite_auxiliary_chains
+    from contextual_repair import _completed_predicate_token
+    rd=current[start:end];after=current[end:]
+    return bool(actions and (
+        (start,end) in action_links
+        or completed_sahen_reading(rd+after,allow_nonpolite=True,return_action=True) in actions
+        or any(a>=end and b==len(current) for a,b,sig in
+            native_polite_auxiliary_chains(current,include_open=True))
+        and completed_sahen_reading(rd+after,allow_nonpolite=True,
+            return_action=True,allow_open_tail=True) in actions
+        or any(completed_sahen_reading(rd+current[end:t.end],
+            allow_nonpolite=True,return_action=True) in actions
+            for t in parts if start<t.start and end<t.end<=end+10 and t.has_reading
+            and (t.pos=='接続詞' and t.start<end
+                or end<=t.start and (t.pos=='助詞' and t.pos_sub=='接続助詞'
+                    or _completed_predicate_token((t.surface,t.pos+':'+t.pos_sub,
+                        t.reading,t.start,t.end,True,t.infl_form)))))))
+
+
+def _unresolved_focused_nominal(before,reading,after,native_nominals=None):
+    """Share the original short noun/focus boundary without inventing a sense."""
+    if not (2<=len(reading)<=3 and all('ぁ'<=c<='ゖ' or c=='ー' for c in reading)):
+        return False
+    from reading_segments import (native_focused_nominal_parts,
+        native_nominal_spelling_faces,native_nominal_phrase_faces,native_lexical_reading_faces)
+    focused_tail=None
+    for edge in range(1,min(5,len(after))+1):
+        focused=native_focused_nominal_parts(reading+after[:edge])
+        if focused and focused[0]==len(reading):
+            focused_tail=after[edge:]
+            break
+    if focused_tail is None:return False
+    if native_nominals is None:
+        import morphology as M,kango_tier as K,corrector as E
+        nominal=native_nominal_spelling_faces(reading) or native_nominal_phrase_faces(reading)
+        native_nominals={face for face in (*nominal,*native_lexical_reading_faces(reading))
+            if any(E.is_kanji(c) for c in face) and K.usage_tier_for_reading(face,reading)!=3
+            and any(pos.startswith(('名詞,一般,','名詞,サ変接続,')) and rd==reading
+                    for pos,form,base,rd in M.dictionary_inflections(face) or ())}
+    from semantic_roles import candidate_nominal_spelling_evidence
+    return bool(len(native_nominals)>1 and not any(
+        candidate_nominal_spelling_evidence(before,face,focused_tail)
+        for face in native_nominals))
+
+
+def _unresolved_focused_source_nominal(text,start,end):
+    """Keep only the native projector's explicit, non-action focused noun."""
+    if not 0<=start<end<=len(text):return False
+    owner=next(((lo,hi) for lo,hi in _fields(text) if lo<=start<end<=hi),None)
+    if owner is None:return False
+    lo,hi=owner;current=text[lo:hi];start-=lo;end-=lo
+    reading=current[start:end]
+    if not _unresolved_focused_nominal(current[:start],reading,current[end:]):return False
+    import morphology as M
+    from reading_segments import native_bare_action_faces
+    source_parts=M.tokenize(current)
+    parts,_=_relative_source_parts(current,source_parts)
+    nominal_members=set();action_links={}
+    _lexical_units(current,parts,nominal_members,action_links)
+    if parts!=source_parts:
+        # project retains original nominal ownership after a relative reparse.
+        _lexical_units(current,source_parts,nominal_members)
+    # The next actual token is the proved focus particle, not a case/no.
+    # Thus explicit_nominal's nominal_members arm is the only possible one;
+    # its independent-noun exclusion also applies only outside these members.
+    if (start,end) not in nominal_members:return False
+    actions=tuple(native_bare_action_faces(reading))
+    return not _is_native_action_unit(current,start,end,parts,action_links,actions)
+
+
 def project(text,store,index,decisions=None,partial=False):
     """Convert complete lexical units, retaining original grammatical tokens."""
     # No candidate loop can run without this same kana span pattern.
@@ -1065,22 +1137,8 @@ def project(text,store,index,decisions=None,partial=False):
                         (start==0 or current[:start].endswith('して')))
                     # An actual open polite auxiliary can establish its
                     # unchanged sahen head; a bare unfinished suru cannot.
-                    from reading_segments import native_polite_auxiliary_chains
                     actions=tuple(native_bare_action_faces(rd))
-                    action_unit=bool(actions and (
-                        (start,end) in action_links
-                        or completed_sahen_reading(rd+after,allow_nonpolite=True,return_action=True) in actions
-                        or any(a>=end and b==len(current) for a,b,sig in
-                            native_polite_auxiliary_chains(current,include_open=True))
-                        and completed_sahen_reading(rd+after,allow_nonpolite=True,
-                            return_action=True,allow_open_tail=True) in actions
-                        or any(completed_sahen_reading(rd+current[end:t.end],
-                            allow_nonpolite=True,return_action=True) in actions
-                            for t in parts if start<t.start and end<t.end<=end+10 and t.has_reading
-                            and (t.pos=='接続詞' and t.start<end
-                                or end<=t.start and (t.pos=='助詞' and t.pos_sub=='接続助詞'
-                                    or _completed_predicate_token((t.surface,t.pos+':'+t.pos_sub,
-                                        t.reading,t.start,t.end,True,t.infl_form)))))))
+                    action_unit=_is_native_action_unit(current,start,end,parts,action_links,actions)
                     if not (action_note or action_unit):actions=()
                     # A shipped compound with a proved on-reading prefix may
                     # act as its native sahen head before a completed する form.
@@ -1130,17 +1188,8 @@ def project(text,store,index,decisions=None,partial=False):
                     # real dictionary alternatives before familiarity omits
                     # unassessed spellings. Use the unchanged following case
                     # and predicate for positive context, never the focus alone.
-                    from reading_segments import native_focused_nominal_parts
-                    focused_tail=None
-                    if explicit_nominal and not action_unit and 2<=len(rd)<=3:
-                        for edge in range(1,min(5,len(after))+1):
-                            focused=native_focused_nominal_parts(rd+after[:edge])
-                            if focused and focused[0]==len(rd):
-                                focused_tail=after[edge:]
-                                break
-                    unresolved_focus=(focused_tail is not None and len(native_nominals)>1
-                        and not any(candidate_nominal_spelling_evidence(current[:start],f,focused_tail)
-                                    for f in native_nominals))
+                    unresolved_focus=(explicit_nominal and not action_unit
+                        and _unresolved_focused_nominal(current[:start],rd,after,native_nominals))
                     # A known common spelling is not evidence that an
                     # unclassified same-reading adjective sense is rare.
                     # Keep kana unless an explicit choice resolves the sense.

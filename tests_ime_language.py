@@ -159,4 +159,165 @@ class NativeTextCacheContractTests(unittest.TestCase):
                     self.assertIsNot(later,first);self.assertIsNotNone(later.convert('しりょう'))
             self.assertEqual(sum(call.args[1]==8 for call in method.call_args_list),2)
 
+
+class NativeMorphCacheContractTests(unittest.TestCase):
+    def ime(self,retained=True):
+        from threading import get_ident
+        obj=L.JapaneseIME();obj.available=True;obj._owner=get_ident();obj._retained=retained
+        return obj
+
+    def query(self,answers):
+        calls=[];answers=iter(answers);buffers=[]
+        def method(pointer,index,*signature):
+            self.assertEqual(index,5)
+            def native(language,request,mode,units,source,unused,output):
+                calls.append((request,source));answer=next(answers)
+                if answer is None:return -1
+                allocation,address,row=MorphologyBufferTests().block();buffers.append(allocation)
+                if answer=='invalid':row.size=0
+                output._obj.value=address
+                return 0
+            return native
+        return calls,buffers,method
+
+    def test_success_shares_decoded_values_but_request_and_input_remain_distinct(self):
+        obj=self.ime();calls,buffers,method=self.query(('ok','ok','ok'))
+        with patch.object(L,'_method',side_effect=method),patch.object(L._ole32,'CoTaskMemFree') as free:
+            value=obj._morph('😀確認',0x30000)
+            self.assertEqual(value,('😀確認','にやりかくにん',((0,1,0,3,100,63),(1,3,3,7,100,63))))
+            self.assertEqual(obj._morph('😀確認',0x30000),value)
+            obj._morph('😀確認',0x10000);obj._morph('😀調査',0x30000)
+            self.assertEqual(free.call_count,3)
+        self.assertEqual(calls,[(0x30000,'😀確認'),(0x10000,'😀確認'),(0x30000,'😀調査')])
+        obj.close();self.assertFalse(obj._morph_cache)
+
+    def test_failure_and_invalid_buffer_are_retried_and_never_retained(self):
+        obj=self.ime();calls,buffers,method=self.query((None,'invalid','ok'))
+        with patch.object(L,'_method',side_effect=method),patch.object(L._ole32,'CoTaskMemFree') as free:
+            for unused in range(2):
+                self.assertIsNone(obj._morph('😀確認',0x30000));self.assertFalse(obj._morph_cache)
+            self.assertIsNotNone(obj._morph('😀確認',0x30000))
+            self.assertEqual(free.call_count,2)
+        self.assertEqual(len(calls),3);obj.close()
+
+    def test_scope_owner_availability_and_cancellation_are_checked_even_on_hit(self):
+        from threading import get_ident
+        from analysis_context import SupersededAnalysis
+        obj=self.ime();calls,buffers,method=self.query(('ok','ok','ok'))
+        with patch.object(L,'_method',side_effect=method),patch.object(L._ole32,'CoTaskMemFree'):
+            value=obj._morph('😀確認',0x30000)
+            obj.available=False;self.assertIsNone(obj._morph('😀確認',0x30000));obj.available=True
+            obj._owner=-1;self.assertIsNone(obj._morph('😀確認',0x30000));obj._owner=get_ident()
+            with patch('analysis_context.check_current_request',side_effect=SupersededAnalysis):
+                with self.assertRaises(SupersededAnalysis):obj._morph('😀確認',0x30000)
+            obj._retained=False
+            self.assertEqual(obj._morph('😀確認',0x30000),value)
+            self.assertEqual(obj._morph('😀確認',0x30000),value)
+        self.assertEqual(len(calls),3);obj.close()
+        self.assertFalse(obj._morph_cache);self.assertIsNone(obj._morph('😀確認',0x30000))
+
+    def test_real_queries_share_within_row_and_release_after_scope_failure(self):
+        import ime_session as P
+        from analysis_context import SupersededAnalysis
+        # A fresh native query can return different flags from an earlier
+        # allocation. Compare every documented field with that query's own
+        # buffer; cache reuse must still return the exact original tuple.
+        import ctypes as C
+        native_answers=[];native_method=L._method
+        def observe(pointer,index,*signature):
+            query=native_method(pointer,index,*signature)
+            if index!=5:return query
+            def call(*args):
+                hr=query(*args)
+                if hr==0 and args[-1]._obj.value:
+                    row=C.cast(args[-1]._obj,C.POINTER(L._MORRSLT)).contents
+                    output=C.wstring_at(row.output,row.output_len)
+                    # This fixture has only BMP characters, so native UTF-16
+                    # offsets are also Python character offsets.
+                    self.assertEqual(len(output.encode('utf-16-le'))//2,len(output))
+                    words=tuple((w.display_pos,w.display_pos+w.display_len,
+                        w.reading_pos,w.reading_pos+w.reading_len,w.pos,w.flags&0x3f)
+                        for w in row.words[:row.word_count])
+                    native_answers.append((output,words))
+                return hr
+            return call
+        with patch.object(L,'_method',side_effect=observe) as method:
+            with self.assertRaises(SupersededAnalysis):
+                with P.resource_scope():
+                    with L.JapaneseIME() as first:
+                        if not first.available:self.skipTest(first.error)
+                        value=first.convert_words('しりょうをかくにんします');self.assertIsNotNone(value)
+                        self.assertEqual(value,native_answers[-1])
+                    with L.JapaneseIME() as second:
+                        self.assertIs(first,second)
+                        self.assertEqual(second.convert_words('しりょうをかくにんします'),value)
+                    self.assertEqual(sum(call.args[1]==5 for call in method.call_args_list),1)
+                    raise SupersededAnalysis()
+            self.assertFalse(first.available);self.assertFalse(first._morph_cache)
+            with P.resource_scope():
+                with L.JapaneseIME() as later:
+                    self.assertIsNot(first,later)
+                    current=later.convert_words('しりょうをかくにんします')
+                    self.assertEqual(current,native_answers[-1])
+                    self.assertEqual(len(native_answers),2)
+                    self.assertEqual(later.convert_words('しりょうをかくにんします'),current)
+            self.assertEqual(sum(call.args[1]==5 for call in method.call_args_list),2)
+            self.assertFalse(later.available);self.assertFalse(later._morph_cache)
+
+    def test_new_scope_preserves_stable_or_changed_native_flags(self):
+        import ime_session as P
+        from analysis_context import SupersededAnalysis
+        # Both answers are owned synthetic native buffers. Stable answers
+        # retain the previous cross-scope full-tuple equality contract; a
+        # changed answer must remain changed, including every defined flag.
+        for next_flags in (42,10):
+            with self.subTest(next_flags=next_flags):
+                buffers=[];queries=[];closed=[];flags=iter((42,next_flags))
+                def factory(output):output._obj.value=1;return 0
+                def method(pointer,index,*signature):
+                    def call(*args):
+                        if index==0:args[-1]._obj.value=2
+                        elif index==4:closed.append(pointer.value)
+                        elif index==5:
+                            allocation,address,row=MorphologyBufferTests().block()
+                            current_flags=next(flags)
+                            for word in row.words[:row.word_count]:word.flags=current_flags
+                            buffers.append(allocation);queries.append(args[4])
+                            args[-1]._obj.value=address
+                        return 0
+                    return call
+                def expected(current_flags):
+                    return ('😀確認',((0,1,0,3,100,current_flags),(1,3,3,7,100,current_flags)))
+                with patch.object(L,'_factory',side_effect=factory), \
+                        patch.object(L,'_method',side_effect=method), \
+                        patch.object(L,'_release') as release, \
+                        patch.object(L._ole32,'CoInitializeEx',return_value=0), \
+                        patch.object(L._ole32,'CoUninitialize') as uninit, \
+                        patch.object(L._ole32,'CoTaskMemFree') as free:
+                    with self.assertRaises(SupersededAnalysis):
+                        with P.resource_scope():
+                            with L.JapaneseIME() as first:
+                                self.assertTrue(first.available)
+                                value=first.convert_words('にやりかくにん')
+                                self.assertEqual(value,expected(42))
+                            with L.JapaneseIME() as second:
+                                self.assertIs(second,first)
+                                self.assertEqual(second.convert_words('にやりかくにん'),value)
+                            self.assertEqual(len(queries),1)
+                            raise SupersededAnalysis()
+                    self.assertFalse(first.available);self.assertFalse(first._morph_cache)
+                    with P.resource_scope():
+                        with L.JapaneseIME() as later:
+                            self.assertIsNot(later,first)
+                            current=later.convert_words('にやりかくにん')
+                            self.assertEqual(current,expected(next_flags))
+                            self.assertEqual(later.convert_words('にやりかくにん'),current)
+                            if next_flags==42:self.assertEqual(current,value)
+                            else:self.assertNotEqual(current,value)
+                    self.assertFalse(later.available);self.assertFalse(later._morph_cache)
+                    self.assertEqual(queries,['にやりかくにん']*2)
+                    self.assertEqual(len(closed),2)
+                    self.assertEqual(free.call_count,2);self.assertEqual(uninit.call_count,2)
+                    self.assertEqual(release.call_count,4)
+
 if __name__=='__main__':unittest.main()

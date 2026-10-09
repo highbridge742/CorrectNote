@@ -134,6 +134,42 @@ def reversed_explanatory_particles(parts):
                for a,b in zip(parts,parts[1:]))
 
 
+def unheaded_nominalizer_frames(source):
+    """A conjunction cannot supply the missing clause before a nominalizer.
+
+    The source has its own native noun/case boundary, then only a native
+    conjunction and non-independent nominalizer before another case. Whole
+    lexical readings, separators and literal examples retain their scopes.
+    JF nominalization: https://www.kyozai.jpf.go.jp/kyozai/material/BTS00096/ja/render.do
+    """
+    if 'の' not in source:return ()
+    from morphology import tokenize,dictionary_inflections
+    from reading_segments import native_nominal_phrase_faces
+    from literal_examples import protected_ranges,overlaps
+    parts=tokenize(source);out=[];protected=None
+    def native(t):
+        return (t.has_reading and source[t.start:t.end]==t.surface and any(
+            pos.rstrip(',*').replace(',',':')==t.pos+(':'+t.pos_sub if t.pos_sub else '')
+            and base==t.base_form and rd==t.reading
+            and form==(t.infl_form or '*')
+            for pos,form,base,rd in dictionary_inflections(t.surface) or ()))
+    for i in range(2,len(parts)-2):
+        noun,before,conjunction,nominal,after=parts[i-2:i+3]
+        if not (noun.pos=='名詞' and not noun.pos_sub.startswith(('非自立','接尾'))
+                and before.pos=='助詞' and before.pos_sub in ('格助詞:一般','係助詞')
+                and conjunction.pos=='接続詞' and nominal.surface=='の'
+                and nominal.pos=='名詞' and nominal.pos_sub=='非自立:一般'
+                and after.pos=='助詞' and after.pos_sub=='格助詞:一般'
+                and all(a.end==b.start for a,b in zip((noun,before,conjunction,nominal),(before,conjunction,nominal,after)))
+                and all(native(t) for t in (noun,before,conjunction,nominal,after))):continue
+        if native_nominal_phrase_faces(source[conjunction.start:nominal.end]):continue
+        if protected is None:protected=protected_ranges(source)
+        if overlaps(noun.start,after.end,protected):continue
+        out.append(dict(start=conjunction.start,end=nominal.end,case_end=after.end,
+                        reason='名詞化する「の」の前が接続詞だけで、名詞化する節がありません'))
+    return tuple(out)
+
+
 def nominalized_existential_case_frames(source):
     """A nominalized finite clause needs a case before existential aru.
 

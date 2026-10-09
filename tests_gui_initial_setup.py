@@ -30,12 +30,15 @@ def child(mode):
  with patch.object(app,'GlobalHotkeys',return_value=Mock()),patch.object(app.CorrectNoteApp,'_learn_now',new=lambda *args:None):
   try:
    a=app.CorrectNoteApp(root);initial=[dict(e) for e in a.store.to_list()]
+   prewarmed=a._correction_worker;assert prewarmed is not None
    root.after(10,tick);last[0]=time.monotonic()
    until(lambda:getattr(a,'_initial_setup',None) is not None and a._initial_setup['worker'] is not None)
    state=a._initial_setup;worker=state['worker'];start=time.monotonic()
+   assert a._correction_worker is prewarmed and prewarmed.process.is_alive()
    if mode=='close':
     a._on_close();closed=True;a=None
     assert worker.closed and not worker.process.is_alive()
+    assert prewarmed.closed and not prewarmed.process.is_alive()
     assert sys.getswitchinterval()==initial_interval
     assert not Path(app.SETUP_FILE).exists()
     print('INITIAL_SETUP_REPORT '+json.dumps(dict(mode=mode,close_ms=round((time.monotonic()-start)*1000,2))),flush=True)
@@ -45,6 +48,7 @@ def child(mode):
    assert a.editor_source_text().startswith('追加しました。')
    assert interaction_ms<250,interaction_ms
    until(done)
+   assert a._correction_worker is prewarmed and not prewarmed.closed
    assert sys.getswitchinterval()==initial_interval
    assert a.editor_source_text().startswith('追加しました。')
    assert Path(app.SETUP_FILE).is_file()

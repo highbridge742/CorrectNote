@@ -5,6 +5,17 @@ from tests_analysis_async import initial
 
 from morphology import HAS_JANOME
 
+
+def _native_stem_readings(target,tokenize,dictionary,limit=32):
+    # Native-family bounds are independent of an installed IME's exact
+    # context round trip, which intentionally suppresses guessed stems.
+    # Only this reading query is isolated; application checks keep live IME.
+    import contextual_repair as Q
+    from unittest.mock import patch
+    with patch('ime_language.JapaneseIME') as ime:
+        ime.return_value.__enter__.return_value.available=False
+        return Q.reading_evidence(target,tokenize,dictionary,limit=limit)
+
 @unittest.skipUnless(HAS_JANOME, "Requires real Janome; run with the native integration suite")
 class NaturalDefaultTests(unittest.TestCase):
     @classmethod
@@ -101,7 +112,7 @@ class NaturalDefaultTests(unittest.TestCase):
             target=next(t for t in Q.targets_for_line(source,tk,state.store,state.dict_index)
                         if t.text in ('纏路手文章','纏路手資料'))
             search={};report=Q._SEARCH.set(search)
-            try:readings=Q.reading_evidence(target,tk,state.dict_index)
+            try:readings=_native_stem_readings(target,tk,state.dict_index)
             finally:Q._SEARCH.reset(report)
             with self.subTest(source=source):
                 self.assertEqual(len(readings),expected_count)
@@ -134,7 +145,7 @@ class NaturalDefaultTests(unittest.TestCase):
         source='必要な部分だけを点刷してください。'
         target=next(t for t in Q.targets_for_line(source,tk,state.store,state.dict_index) if t.text=='点刷')
         search={};token=Q._SEARCH.set(search)
-        try:rows=Q.reading_evidence(target,tk,state.dict_index)
+        try:rows=_native_stem_readings(target,tk,state.dict_index)
         finally:Q._SEARCH.reset(token)
         self.assertEqual(len(rows),35)
         self.assertTrue({'つざつ','たさっ','つさっ'}<={r.text for r in rows})
@@ -147,13 +158,13 @@ class NaturalDefaultTests(unittest.TestCase):
         # Removing the independent source proof restores only the original
         # family; it does not attest a hidden stem or promote its source.
         with patch.object(Q,'_marked_single_kanji_nominal_run',return_value=False):
-            original=Q.reading_evidence(target,tk,state.dict_index)
+            original=_native_stem_readings(target,tk,state.dict_index)
         self.assertEqual(len(original),14)
         by_text={row.text:row for row in rows}
         for row in original:
             self.assertTrue(set(row.provenance)<=set(by_text[row.text].provenance))
         search={};token=Q._SEARCH.set(search)
-        try:Q.reading_evidence(target,tk,state.dict_index,limit=2)
+        try:_native_stem_readings(target,tk,state.dict_index,limit=2)
         finally:Q._SEARCH.reset(token)
         self.assertTrue(any(row['unexplored'] for row in search.values()))
         self.assertTrue(all(search[k]['limit']==2 for k in ('token_readings','readings','hidden_stem_token_readings','hidden_stem_readings')))
@@ -174,7 +185,7 @@ class NaturalDefaultTests(unittest.TestCase):
         source='説明を纏路手資料にしました。'
         target=next(t for t in Q.targets_for_line(source,tk,state.store,state.dict_index) if t.text=='纏路手資料')
         search={};token=Q._SEARCH.set(search)
-        try:rows=Q.reading_evidence(target,tk,state.dict_index)
+        try:rows=_native_stem_readings(target,tk,state.dict_index)
         finally:Q._SEARCH.reset(token)
         # These original72 + stem48 branches exceed the combined64.
         # Preserve fallback and the real unexplored state on overflow.
@@ -270,6 +281,53 @@ class NaturalDefaultTests(unittest.TestCase):
             with patch('morphology.dictionary_inflections',return_value=(
                     ('動詞,自立,*,*',form,'付ける','つけ'),)):
                 self.assertFalse(Q._keeps_native_inflection_readings(reading('づけ'),other))
+
+    def test_weak_reading_merge_keeps_original_nominal_tail_proof(self):
+        import contextual_repair as Q
+        from dataclasses import replace
+        from itertools import permutations
+        bounded=Q.Reading('しはょだな','token_sequence',1,(
+            (0,1,'し','literal_kana'),(1,2,'は','literal_kana'),
+            (2,3,'ょ','literal_kana'),(3,4,'だな','source_nominal_voicing')))
+        reverse=Q.Reading(bounded.text,'ime_reverse',0,(
+            (0,3,'しはょ','ime_reverse_word'),(3,4,'だな','ime_reverse_word')))
+        guessed=Q.Reading(bounded.text,'character_guess',0,((0,4,bounded.text,'character_guess'),))
+        for order in permutations((bounded,reverse,guessed)):
+            with self.subTest(order=[r.source for r in order]):
+                rows=Q.merge_readings(order)
+                self.assertEqual(len(rows),1)
+                self.assertEqual((rows[0].source,rows[0].rank,rows[0].segments),
+                    (bounded.source,bounded.rank,bounded.segments))
+                self.assertEqual(len(rows[0].provenance),3)
+                self.assertEqual(Q._reading_strength(rows[0])[0],5)
+                self.assertTrue(Q.needs_source_argument_proof(rows[0]))
+                nested=Q.merge_readings(Q.merge_readings(order[:2])+[order[2]])
+                self.assertEqual(rows,nested)
+        for origin in ('current_ime_occurrence','original_spelling','ime_first_roundtrip','saved_ime_pair'):
+            observed=Q.Reading(bounded.text,origin,4)
+            merged=Q.merge_readings((reverse,bounded,observed))[0]
+            self.assertEqual(merged.source,origin)
+            self.assertFalse(Q.needs_source_argument_proof(merged))
+        native=replace(bounded,segments=bounded.segments[:-1]+((3,4,'だな','analyzed_word'),))
+        self.assertEqual(Q.merge_readings((bounded,reverse,native))[0].segments,native.segments)
+        dictionary=Q.Reading(bounded.text,'token_sequence',7,(
+            (0,3,'しはょ','dictionary_word'),(3,4,'だな','dictionary_word')))
+        self.assertEqual(Q._reading_strength(dictionary)[0],5)
+        self.assertFalse(Q.needs_source_argument_proof(dictionary))
+        for order in permutations((bounded,reverse,dictionary)):
+            rows=Q.merge_readings(order)
+            self.assertEqual(rows[0].source,'ime_reverse')
+            self.assertEqual(rows[0].rank,0)
+            self.assertFalse(Q.needs_source_argument_proof(rows[0]))
+            nested=Q.merge_readings(Q.merge_readings(order[:2])+[order[2]])
+            self.assertEqual(rows,nested)
+        for segments in (
+                ((0,2,'しはょ','literal_kana'),(3,4,'だな','source_nominal_voicing')),
+                ((0,3,'しは','literal_kana'),(3,4,'だな','source_nominal_voicing')),
+                ((0,3,'しはょ','character_guess'),(3,4,'だな','source_nominal_voicing')),
+                ((0,3,'しはょ','source_nominal_voicing'),(3,4,'だな','analyzed_word'))):
+            invalid=replace(bounded,segments=segments)
+            self.assertEqual(Q.merge_readings((invalid,reverse))[0].source,'ime_reverse')
 
     def test_damaged_kana_member_keeps_attested_written_nominal_voicing(self):
         import corrector as C,contextual_repair as Q

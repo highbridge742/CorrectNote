@@ -7,7 +7,7 @@
 import re
 from functools import lru_cache
 
-KNOWLEDGE_VERSION = '2026-10-03a'
+KNOWLEDGE_VERSION = '2026-10-09a'
 
 _ERROR_NOUN = r'(?:誤入力|誤変換|誤字|誤記|誤植|入力ミス|タイプミス|ミスタイプ|打ち間違い)'
 # The label names the quoted spelling as data, even when the example is
@@ -53,9 +53,13 @@ _PAIRS = {'「':'」','『':'』','“':'”','‘':'’','"':'"'}
 _CLOSE = frozenset(_PAIRS.values())
 
 # A closed quote can be the value asserted for an actual input/output
-# label. Require the adjacent native subject/topic and a complete copula;
-# labels in another field and ordinary quotative actions provide no scope.
-_IO_VALUE_BEFORE = re.compile(r'(?P<label>入力|出力)[ 　]*(?P<case>は|が)[ 　]*$')
+# label. Prove either the native subject/topic and complete copula, or
+# the native quotative link and following nominal label. Another field
+# and ordinary quotative actions provide no scope.
+_IO_VALUE_LABEL = r'(?:入力|出力)'
+_IO_VALUE_BEFORE = re.compile(r'(?P<label>'+_IO_VALUE_LABEL+r')[ 　]*(?P<case>は|が)[ 　]*$')
+_IO_VALUE_NAMED_AFTER = re.compile(
+    r'[ 　]*(?P<link>という|といった)[ 　]*(?P<label>'+_IO_VALUE_LABEL+r')')
 _IO_VALUE_AFTER = re.compile(r'[ 　]*(?:ではありませんでした|ではありません|ではなかった|ではない|であった|である|でした|です|だった|だ)'
     r'(?=$|[ 　、。，．:：;；!?！？がとねよか])')
 
@@ -280,23 +284,58 @@ def _unquoted_label_ranges(line,quoted,pattern,field_bound=False):
     return out
 
 
+def _attested_report_token(part,surface,base_form=None):
+    """The original report token, including its reading and full native row."""
+    from morphology import dictionary_inflections
+    if base_form is None:base_form=surface
+    if not part or not part.has_reading or part.surface!=surface or part.base_form!=base_form:return False
+    return any(':'.join(x for x in pos.split(',') if x!='*')==part.pos+(':'+part.pos_sub if part.pos_sub else '')
+               and rd==part.reading and base==part.base_form and ('' if form=='*' else form)==part.infl_form
+               for pos,form,base,rd in dictionary_inflections(surface) or ())
+
+
 def _input_output_value_report(line,start,end):
-    """Prove a local value report; the quoted characters are never parsed."""
+    """Prove an asserted or named value; never parse its quoted characters."""
     if not 0<=start<end<len(line) or _PAIRS.get(line[start])!=line[end]:return False
+    from morphology import tokenize
+    named=_IO_VALUE_NAMED_AFTER.match(line,end+1)
+    if named:
+        # The same input/output label may follow its named value. Its exact
+        # native quotative link and noun belong to this field, not the quote.
+        suffix=line[end+1:]
+        parts=tokenize(suffix)
+        for name in ('link','label'):
+            lo,hi=named.span(name);lo-=end+1;hi-=end+1
+            part=next((t for t in parts if t.start==lo and t.end==hi),None)
+            if not _attested_report_token(part,named.group(name)):return False
+            if name=='link' and (part.pos!='助詞' or part.pos_sub!='格助詞:連語'):return False
+            if name=='label' and part.pos!='名詞':return False
+        edge=named.end()-(end+1)
+        following=next((t for t in parts if t.start>=edge and t.surface.strip(' 　')),None)
+        if following is None:return all(c in ' 　' for c in suffix[edge:])
+        if (not edge<=following.start<following.end<=len(suffix)
+                or suffix[following.start:following.end]!=following.surface
+                or not all(c in ' 　' for c in suffix[edge:following.start])):return False
+        # A compound such as input-device or a suru action is not a label
+        # for the quoted value. Sentence/field ends need no following word.
+        if following.surface[0] in '\t\r\n⇒。！？!?、，,;；:：':return True
+        if not following.has_reading:return False
+        if following.pos=='助詞' and following.pos_sub in (
+                '格助詞:一般','係助詞','連体化','並立助詞'):
+            return _attested_report_token(following,following.surface)
+        if following.pos=='助動詞' and following.base_form in ('だ','です'):
+            return _attested_report_token(following,following.surface,following.base_form)
+        return False
     label=_IO_VALUE_BEFORE.search(line[:start])
     if not label or not _IO_VALUE_AFTER.match(line,end+1):return False
-    from morphology import tokenize,dictionary_inflections
     parts=tokenize(line[:start])
     matched=[]
     for name in ('label','case'):
         a,b=label.span(name);surface=label.group(name)
         part=next((t for t in parts if t.start==a and t.end==b),None)
-        if not part or not part.has_reading or part.surface!=surface or part.base_form!=surface:return False
+        if not _attested_report_token(part,surface):return False
         if name=='label' and part.pos!='名詞':return False
         if name=='case' and not (part.pos=='助詞' and part.pos_sub in ('係助詞','格助詞:一般')):return False
-        if not any(':'.join(x for x in pos.split(',') if x!='*')==part.pos+(':'+part.pos_sub if part.pos_sub else '')
-                   and rd==part.reading and base==part.base_form and ('' if form=='*' else form)==part.infl_form
-                   for pos,form,base,rd in dictionary_inflections(surface) or ()):return False
         matched.append(part)
     return all(c in ' 　' for c in line[matched[0].end:matched[1].start]+line[matched[1].end:start])
 

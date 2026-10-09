@@ -145,6 +145,8 @@ def child():
             assert 1 in a.bookmarks,a.bookmarks
             native_key(0x03,a.result_view)
             assert 1 not in a.bookmarks,a.bookmarks
+            # Restore a usable toolbar after the deliberately tiny focus fixture.
+            root.geometry('1400x650+10000+10000');root.update()
             assert a.editor.bind('<F5>')
             assert len(a._bracket_buttons)==5
             assert all(label not in labels for label in
@@ -206,6 +208,7 @@ def child():
             a.editor.delete('1.0','end');a.editor.insert('1.0','語')
             a.editor.mark_set('insert','1.end')
             key('<F5>')
+            assert a.layout_split_btn.winfo_viewable()
             a.layout_split_btn.event_generate('<ButtonPress-1>',x=2,y=2)
             root.update();assert a._bracket_cycle is None
             key('<Escape>');assert a.editor.get('1.0','1.end')=='語（）'

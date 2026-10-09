@@ -826,6 +826,20 @@ def counted_object_roles(quantity):
     return frozenset().union(*(_COUNTER_CORE_ROLES[unit] for unit,ordinal in evidence))
 
 
+# The existing two context meanings of quantity + の + a counted noun.
+# Kept separate from generic counted-object roles and ordinal noun meaning.
+_COUNTED_GENITIVE_ROLES={'枚':'sheet_object','台':'device'}
+
+
+def counted_genitive_roles(quantity):
+    """Share the existing modifier's role; not a free quantity's meaning."""
+    from reading_segments import native_counted_nominal_evidence
+    evidence=native_counted_nominal_evidence(quantity)
+    units={unit for unit,ordinal in evidence or () if not ordinal}
+    if len(units)!=1 or not units<=_COUNTED_GENITIVE_ROLES.keys():return None
+    return frozenset((_COUNTED_GENITIVE_ROLES[next(iter(units))],))
+
+
 def ongoing_nominal_support(surface):
     """Positive activity sense; absence never declares a source anomalous."""
     return 'process' in NOUN_ROLES.get(surface,())
