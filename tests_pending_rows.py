@@ -100,12 +100,24 @@ class PendingRowsTests(unittest.TestCase):
             shown.append(d.state(self.scope,1,'pending'))
             self.now=.301
         self.redraw.side_effect=repaint
+        # Windows timers fire a little early: the timer firing is the deadline,
+        # so the row is shown at once and no second wakeup is left behind.
         self.now=.299;self.calls[first][1]()
-        self.assertEqual(shown,[None])
-        self.assertIsNotNone(d.job,'deadline crossed during painting needs a wakeup')
-        second=d.job;self.now=.32;self.calls[second][1]()
-        self.assertEqual(shown,[None,'pending'])
+        self.assertEqual(shown,['pending'])
         self.assertIsNone(d.job)
+
+    def test_row_due_between_two_panes_repaints_both(self):
+        # CI 2026-10-14: the memo gutter was painted just before the deadline,
+        # the result gutter just after; the memo gutter never got the mark.
+        d=self.make();idle=[]
+        self.root.after_idle=Mock(side_effect=lambda callback:idle.append(callback) or 'idle')
+        d.state(self.scope,1,'pending')
+        self.now=.29;self.assertIsNone(d.state(self.scope,1,'pending'))      # first pane
+        self.now=.31;self.assertEqual(d.state(self.scope,1,'pending'),'pending')   # second pane
+        self.assertEqual(len(idle),1,'all panes are painted again')
+        idle.pop()();self.redraw.assert_called_once_with()
+        self.assertEqual(d.state(self.scope,1,'pending'),'pending')
+        self.assertFalse(idle,'a notified row does not ask again')
 
     def test_later_deadline_crossing_during_repaint_and_offscreen_rows_finish(self):
         d=self.make();shown=[]

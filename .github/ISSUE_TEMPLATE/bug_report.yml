@@ -1,0 +1,73 @@
+name: 不具合の報告
+description: CorrectNoteで再現する問題を報告します。
+title: "[不具合] "
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        GitHub Issueは公開され、誰でも閲覧できます。報告本文や添付画像に、メモの内容・個人情報・認証情報を含めないでください。問題の再現に必要な最小限の情報だけを書いてください。
+
+  - type: input
+    id: summary
+    attributes:
+      label: 困っていること
+      description: 何が起きるかを短く書いてください。
+      placeholder: 例：F2キーを押しても候補一覧が開かない
+    validations:
+      required: true
+
+  - type: input
+    id: app-version
+    attributes:
+      label: CorrectNoteのバージョン
+      description: 「このアプリについて」で確認できます。
+      placeholder: 例：1.13.13
+    validations:
+      required: true
+
+  - type: input
+    id: windows-version
+    attributes:
+      label: Windowsのバージョン
+      description: Windows 10／11と、分かればバージョンまたはOSビルドを書いてください。「winver」で確認できます。分からなければ「不明」で構いません。
+      placeholder: 例：Windows 11 24H2
+    validations:
+      required: false
+
+  - type: textarea
+    id: reproduction-steps
+    attributes:
+      label: 再現手順
+      description: 問題が起きるまでの操作を、順番に書いてください。
+      placeholder: |
+        1. CorrectNoteを起動する
+        2. 〇〇を入力する
+        3. 〇〇を押す
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待した動作
+      description: どのような結果になると思っていたかを書いてください。
+      placeholder: 例：候補一覧が表示される
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 実際の動作
+      description: 何が起きたかを書いてください。エラーメッセージがあれば、個人情報を除いて記載してください。
+      placeholder: 例：候補一覧が表示されず、画面に変化がない
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: 補足（任意）
+      description: 発生頻度や、問題が起きる前に行った操作などがあれば書いてください。画像を添付する場合は、メモ本文や個人情報が映っていないことを確認してください。
+    validations:
+      required: false
