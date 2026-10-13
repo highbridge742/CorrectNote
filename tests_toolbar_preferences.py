@@ -72,8 +72,12 @@ class ToolbarWidgetTests(unittest.TestCase):
         self.editor=tk.Text(self.root,undo=True,exportselection=False);self.editor.pack(fill='both',expand=True)
         self.editor.insert('1.0','合成の選択範囲');self.editor.edit_reset();self.editor.tag_add('sel','1.0','1.3')
         self.a._bracket_buttons=[]
-        for key,label,attr in BUTTONS:
-            button=tk.Button(self.a._toolbar,text=label)
+        for index,(key,label,attr) in enumerate(BUTTONS):
+            # Short labels: the order is under test, not the width. With the real
+            # labels the row is wider than a 1024px screen (GitHub's windows-latest),
+            # buttons that get no room keep stale x positions and the order looks
+            # scrambled (CI 2026-10-14).
+            button=tk.Button(self.a._toolbar,text=str(index))
             button.pack(side='left',padx=2)
             if type(attr) is int:self.a._bracket_buttons.append(button)
             else:setattr(self.a,attr,button)

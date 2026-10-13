@@ -43,12 +43,21 @@ class EmojiOverlayTests(unittest.TestCase):
         self.w.insert('1.0','今日は\U0001F600です\U0001F44D。\U00020BB7')
         labels=self.placed()
         self.assertEqual(len(labels),2)
-        for label,index in zip(labels,('1.3','1.6')):
+        # The second emoji's column depends on how this Tk counts the first one.
+        second='1.%d'%(5+emoji_color.emoji_columns(self.w))
+        for label,index in zip(labels,('1.3',second)):
             x,y,width,height=self.w.bbox(index)
             # One pixel kept free at each side for the insertion cursor.
             self.assertEqual((label.winfo_x(),label.winfo_y()),(x+1,y))
             self.assertEqual((label.winfo_width(),label.winfo_height()),(width-2,height))
         self.assertIs(emoji_color.install(self.w),self.overlay)
+    def test_emoji_columns_match_how_this_tk_reads_row_col(self):
+        # Tk 8.6.9 reads an emoji as one column, Tk 8.6.12+ (Python 3.11, CI) as two.
+        n=emoji_color.emoji_columns(self.w)
+        self.assertIn(n,(1,2))
+        self.w.insert('1.0','a\U0001F600b')
+        self.assertEqual(self.w.get('1.1'),'\U0001F600')
+        self.assertEqual(self.w.get('1.%d'%(1+n)),'b')
     def test_labels_follow_scrolling_and_deletion(self):
         self.w.insert('1.0','\n'.join('行%d \U0001F600'%i for i in range(60)))
         self.assertTrue(self.placed())

@@ -42,6 +42,32 @@ def emoji_spans(text):
     return [m.span() for m in EMOJI.finditer(text or '')]
 
 
+_PAIR_COLUMNS = {}
+
+
+def emoji_columns(widget):
+    """How many `row.col` columns an emoji outside the BMP takes in this Tk.
+
+    Tk 8.6.9 (Python 3.9) reads `row.col` with an emoji as one column, while
+    Tk 8.6.12 and later (Python 3.11, which builds the released EXE) count its
+    two UTF-16 halves (CI 2026-10-14: the colour was laid one character off
+    per earlier emoji). Measured once per interpreter on a hidden pane."""
+    key = id(widget.tk)
+    if key not in _PAIR_COLUMNS:
+        import tkinter as tk
+        probe = tk.Text(widget)
+        try:
+            probe.insert('1.0', 'a\U0001F600b')
+            _PAIR_COLUMNS[key] = 1 if probe.get('1.2') == 'b' else 2
+        finally:
+            probe.destroy()
+    return _PAIR_COLUMNS[key]
+
+
+def _units(text):
+    return len(text.encode('utf-16-le')) // 2
+
+
 if sys.platform == 'win32':
     from ctypes import wintypes as _wt
 
@@ -324,29 +350,32 @@ class EmojiOverlay:
         text = str(call('get', first, last)) + str(call('get', last))
         if not EMOJI.search(text):
             return []
-        # Python offset (= Tk input column) of the first visible character.
-        lead = len(str(call('get', '%d.0' % line0, first)))
+        # Column of a Python offset: Tk 8.6.9 counts an emoji as one column,
+        # later Tk as two (emoji_columns).
+        width_of = len if emoji_columns(w) == 1 else _units
+        # Column of the first visible character within its row.
+        lead = width_of(str(call('get', '%d.0' % line0, first)))
         focused = w.focus_get() is w
         colors = {'': str(call('cget', '-bg'))}
         out = []
         for offset, line in enumerate(text.split('\n')):
             row = line0 + offset
             base = lead if offset == 0 else 0
-            for start, end in ((a + base, b + base) for a, b in emoji_spans(line)):
-                # An emoji is one index column in Tk 8.6.9 ('.end' alone
-                # counts it twice), so Python offsets are Tk columns.
-                a = w.tk.splitlist(call('bbox', '%d.%d' % (row, start)))
-                b = a if end - start == 1 else w.tk.splitlist(
-                    call('bbox', '%d.%d' % (row, end - 1)))
+            for start, end in emoji_spans(line):
+                first_col = base + width_of(line[:start])
+                last_col = base + width_of(line[:end - 1])
+                a = w.tk.splitlist(call('bbox', '%d.%d' % (row, first_col)))
+                b = a if last_col == first_col else w.tk.splitlist(
+                    call('bbox', '%d.%d' % (row, last_col)))
                 if len(a) != 4 or len(b) != 4 or int(a[1]) != int(b[1]):
                     continue
                 x, y, h = int(a[0]), int(a[1]), int(a[3])
                 width = int(b[0]) + int(b[2]) - x
                 if width < 4 or h < 4:
                     continue
-                tags = w.tk.splitlist(call('tag', 'names', '%d.%d' % (row, start)))
+                tags = w.tk.splitlist(call('tag', 'names', '%d.%d' % (row, first_col)))
                 # Leave the insertion cursor's pixels at both edges visible.
-                out.append((x + 1, y, width - 2, h, line[start - base:end - base],
+                out.append((x + 1, y, width - 2, h, line[start:end],
                             self._hex(self._background(tags, focused, colors))))
                 if len(out) >= MAX_LABELS:
                     return out
