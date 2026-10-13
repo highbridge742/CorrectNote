@@ -29,6 +29,44 @@ class BlockNavigationTests(unittest.TestCase):
             self.assertEqual(text_edge(text,len(text),-1),0)
         self.assertEqual(text_edge('a,b.c!d?e',0,1),2)
 
+    def test_decimal_point_stays_inside_ascii_or_fullwidth_number(self):
+        from text_navigation import text_boundaries,text_edge
+        for text in ('6.1','６．１','値は6.1です'):
+            stops=text_boundaries(text)
+            if '.' in text:self.assertNotIn(text.index('.')+1,stops)
+            if '．' in text:self.assertNotIn(text.index('．')+1,stops)
+        self.assertEqual(text_boundaries('6.1'),(0,3))
+        self.assertEqual(text_edge('6.1',1,1),3)
+        self.assertEqual(text_edge('6.1',2,-1),0)
+        self.assertEqual(text_boundaries('6.1,次'),(0,4,5))
+
+    def test_consecutive_particles_stop_once_after_the_last(self):
+        from text_navigation import text_boundaries,text_edge
+        tokens=(('補正','名詞:サ変接続','',0,2),('欄','名詞:一般','',2,3),
+                ('に','助詞:格助詞:一般','',3,4),('も','助詞:係助詞','',4,5),
+                ('反映','名詞:サ変接続','',5,7),('する','動詞:自立','',7,9),
+                ('。','記号:句点','',9,10))
+        text='補正欄にも反映する。'
+        self.assertEqual(text_boundaries(text,tokens),(0,5,10))
+        self.assertEqual(text_edge(text,0,1,tokens),5)
+        single=(('私','名詞:代名詞:一般','',0,1),('は','助詞:係助詞','',1,2),
+                ('本','名詞:一般','',2,3),('を','助詞:格助詞:一般','',3,4),
+                ('読む','動詞:自立','',4,6))
+        self.assertEqual(text_boundaries('私は本を読む',single),(0,2,4,6))
+
+    def test_te_form_before_a_helping_verb_is_one_stop(self):
+        from text_navigation import text_boundaries
+        # しているはず：して｜いるはず と区切らない（2026-10-12 うにさんの指摘）
+        shite=(('し','動詞:自立','し',0,1),('て','助詞:接続助詞','て',1,2),
+               ('いる','動詞:非自立','いる',2,4),('はず','名詞:非自立:一般','はず',4,6))
+        self.assertEqual(text_boundaries('しているはず',shite),(0,6))
+        aru=(('書い','動詞:自立','かい',0,2),('て','助詞:接続助詞','て',2,3),
+             ('ある','動詞:自立','ある',3,5))
+        self.assertEqual(text_boundaries('書いてある',aru),(0,5))
+        # 別の動作が続くときは今までどおり て の後ろで止まる
+        kaeru=(('行っ','動詞:自立','いっ',0,2),('て','助詞:接続助詞','て',2,3),
+               ('帰る','動詞:自立','かえる',3,5))
+        self.assertEqual(text_boundaries('行って帰る',kaeru),(0,3,5))
     def test_edges_blanks_and_document_ends_in_both_directions(self):
         lines=['','甲','乙','丙','','　','丁','戊','','']
         down=[1,3,3,6,6,6,7,9,9,9]
@@ -110,6 +148,21 @@ class NavigationTkTests(unittest.TestCase):
             self.assertFalse(w.tag_ranges('sel'))
             self.assertEqual(w.index('insert'),'1.0')
             self.assertEqual(w.get('1.0','end-1c'),before)
+
+    def test_ctrl_arrows_move_across_decimal_as_one_value(self):
+        from tests_tk_keys import deliver_key
+        text='6.1'
+        self.a._ctrl_boundary_plans={text:((0,len(text)),(),())}
+        for w in (self.a.editor,self.a.result_view):
+            w.delete('1.0','end');w.insert('1.0',text)
+            self.a._bind_block_navigation(w)
+            if w is self.a.result_view:w.configure(state='disabled')
+            w.mark_set('insert','1.0')
+            deliver_key(w,'<Control-Right>','Right',39,state=4)
+            self.assertEqual(w.index('insert'),'1.3')
+            deliver_key(w,'<Control-Left>','Left',37,state=4)
+            self.assertEqual(w.index('insert'),'1.0')
+            self.assertEqual(w.get('1.0','end-1c'),text)
 
     def test_particle_keys_and_selection_in_all_text_panes(self):
         from vocabulary import VocabularyStore

@@ -616,6 +616,55 @@ class HalfwidthAutofixTkTests(unittest.TestCase):
         a._on_change.assert_called_once()
 
 
+    def test_romaji_native_completion_applies_only_typed_range_and_undo_restores_keys(self):
+        from analysis_worker import Runtime,snapshot
+        import analysis_async,analysis_work_app,ime_watch
+        a=self.a;source='前文。shoruiが届きます。'
+        a.settings['input_method']='romaji'
+        a.editor.delete('1.0','end');a.editor.insert('1.0',source)
+        a.editor.edit_reset();a._typed_shadow=[source]
+        a.editor.tag_remove(a.TYPED_TAG,'1.0','end')
+        a.editor.tag_add(a.TYPED_TAG,'1.3','1.9')
+        runtime=Runtime();runtime.set_state(snapshot(a))
+        value=runtime.execute(dict(kind='line',line=source,input_method='romaji',context=[]))
+        self.assertEqual(value['result']['corrected'],'前文。書類が届きます。')
+        self.assertEqual(value['result']['odd_spans'],[])
+        self.assertEqual(value['result']['analysis_status'],'complete')
+        a.line_results=[value['result']];analysis_async._unit_values(a,value['result'],value)
+        a._analyze_text=source;a._analyze_dependencies=analysis_async.state_key(a)
+        a._analyze_work=analysis_work_app.token(a)
+        a._ime_comp='';a._ime_first_kana='';a._ime_last_result=''
+        with patch.object(ime_watch,'composition_active',return_value=False):
+            self.assertTrue(a._apply_unified_autofix())
+        self.assertEqual(a.editor.get('1.0','1.end'),'前文。書類が届きます。')
+        a.editor.edit_undo();self.assertEqual(a.editor.get('1.0','1.end'),source)
+        a.editor.edit_redo();self.assertEqual(a.editor.get('1.0','1.end'),'前文。書類が届きます。')
+
+    def test_whole_romaji_completion_and_undo_keep_original_ascii(self):
+        from analysis_worker import Runtime,snapshot
+        import analysis_async,analysis_work_app,ime_watch
+        a=self.a;source='shoruigatodokimasu'
+        a.settings['input_method']='romaji'
+        a.editor.delete('1.0','end');a.editor.insert('1.0',source)
+        a.editor.edit_reset();a._typed_shadow=[source]
+        a.editor.tag_remove(a.TYPED_TAG,'1.0','end')
+        a.editor.tag_add(a.TYPED_TAG,'1.0','1.end')
+        runtime=Runtime();runtime.set_state(snapshot(a))
+        value=runtime.execute(dict(kind='line',line=source,input_method='romaji',context=[]))
+        self.assertEqual(value['result']['corrected'],'書類が届きます')
+        self.assertEqual(value['result']['odd_spans'],[])
+        self.assertEqual(value['result']['analysis_status'],'complete')
+        a.line_results=[value['result']];analysis_async._unit_values(a,value['result'],value)
+        a._analyze_text=source;a._analyze_dependencies=analysis_async.state_key(a)
+        a._analyze_work=analysis_work_app.token(a)
+        a._ime_comp='';a._ime_first_kana='';a._ime_last_result=''
+        with patch.object(ime_watch,'composition_active',return_value=False):
+            self.assertTrue(a._apply_unified_autofix())
+        self.assertEqual(a.editor.get('1.0','1.end'),'書類が届きます')
+        a.editor.edit_undo();self.assertEqual(a.editor.get('1.0','1.end'),source)
+        a.editor.edit_redo();self.assertEqual(a.editor.get('1.0','1.end'),'書類が届きます')
+
+
 if __name__=='__main__':unittest.main()
 
 

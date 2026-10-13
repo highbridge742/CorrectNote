@@ -55,10 +55,12 @@ class UnheadedNominalizerTests(unittest.TestCase):
             target=targets[0]
             self.assertEqual(target.following,'になっていないだろうか')
             self.assertFalse(C._chunk_is_intact(target.text,tok,repair_context=target))
-            for surface,reading in (('蛇','じゃ'),('邪魔','じゃま')):
-                allowed,reason=R.validate(target,surface,C,tok,a.store,a.dict_index,a.decisions,expected_reading=reading)
-                self.assertFalse(allowed,surface)
-                self.assertEqual(reason,'unproven_object_predicate')
+            # 48-CV（本人依頼 2026-10-12）: が＋名詞＋に＋なる の名詞は主語の意味を
+            # 選ばないので 邪魔 を通す。1字の 蛇 は読みの検査で落ちる。
+            self.assertEqual(R.validate(target,'蛇',C,tok,a.store,a.dict_index,a.decisions,expected_reading='じゃ'),
+                             (False,'unproven_candidate_reading_object'))
+            self.assertEqual(R.validate(target,'邪魔',C,tok,a.store,a.dict_index,a.decisions,expected_reading='じゃま'),
+                             (True,'native_object_predicate'))
             with patch.object(C,'_check_replacement',return_value=(None,'forced_source_rejection')):
                 self.assertEqual(R.validate(target,'邪魔',C,tok,a.store,a.dict_index,a.decisions),
                                  (False,'forced_source_rejection'))
@@ -83,7 +85,7 @@ class UnheadedNominalizerTests(unittest.TestCase):
                 target=own[0]
                 self.assertEqual((target.start,target.end,target.boundary_kind),(offset+3,offset+6,'kana_predicate'))
                 self.assertEqual(R.validate(target,'邪魔',C,tok,a.store,a.dict_index,a.decisions,expected_reading='じゃま'),
-                                 (False,'unproven_object_predicate'))
+                                 (True,'native_object_predicate'))  # 48-CV
             for text in ('処理がじゃのになっている。\t資料を読みます。',
                          '処理がじゃのになっている。資料を読みます。',
                          '資料を読みます。\t処理がじゃのになっている。'):
@@ -113,10 +115,9 @@ class UnheadedNominalizerTests(unittest.TestCase):
                 context=runtime.execute(dict(kind='prepare',lines=[source]))
                 result=runtime.execute(dict(kind='line',line=source,input_method='kana',
                     context=context['context'],attested=context['attested']))['result']
-                self.assertEqual(result['corrected'],source)
+                # 48-CV（本人依頼 2026-10-12）: 邪魔 に直る
+                self.assertEqual(result['corrected'],'処理が邪魔になっていないだろうか\t')
                 self.assertEqual(result['analysis_status'],'complete')
-                self.assertEqual(result['odd_spans'],[(3,6)])
-                self.assertEqual(result['diagnosis']['language_state'],'anomaly_unrepaired')
                 self.assertTrue(result['search_reports'])
                 self.assertTrue(all(r['state']=='complete' for r in result['search_reports']))
                 self.assertEqual(a.store.revision(),before)

@@ -324,6 +324,14 @@ def _lexical_units(text,parts,nominal_members=None,action_links=None,inflected_m
             span=(start,end);units.append(span)
             if compound:compound_units.append(span)
             if nominal_members is not None:nominal_members.add(span)
+    # A field-ending focus still owns the same complete source noun.
+    # Share that existing native boundary with both the projector and the
+    # final spelling gate; an adjacent field cannot supply its missing role.
+    from reading_segments import native_focused_nominal_parts
+    closed_focus=native_focused_nominal_parts(text)
+    from analysis_context import check_current_request
+    check_current_request()
+    if closed_focus:add_nominal_phrase(0,len(text))
     # Reuse the original written action and complete noun reading even
     # when a guessed lexical unit crosses its actual suru/auxiliary seam.
     # This supplies ranges only; noun senses and final checks remain below.

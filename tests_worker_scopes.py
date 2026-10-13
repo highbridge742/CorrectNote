@@ -32,7 +32,7 @@ class WorkerScopeTests(unittest.TestCase):
         def suspect(result,*args,**kw):
             visit('suspect',result['original']);return result['original'],[]
         runtime=Runtime();runtime.store=SimpleNamespace(has_reading=lambda text:False)
-        runtime.choices=runtime.index=runtime.decisions=runtime.context_vec=None;runtime.tokenize=M.tokenize
+        runtime.choices=runtime.index=runtime.decisions=runtime.context_vec=None;runtime.tokenize=corrector.make_tokenizer(runtime.store)
         task=dict(kind=kind,line='資料',context={},input_method='kana',result=dict(original='資料',corrected='資料'),lines=['資料','資料'],calculations={})
         if kind=='units':task.pop('lines')
         groups=2 if kind=='quick' else 1

@@ -53,7 +53,8 @@ import search as searchlib
 from settings import (Settings, effective_hotkeys, DEFAULT_EDITOR_FONT,
                       FONT_SIZE_MIN, FONT_SIZE_MAX, editor_font,
                       LAYOUT_LABELS, LAYOUT_SPLIT, LAYOUT_UNIFIED,
-                      INPUT_METHOD_LABELS, INPUT_KANA, INPUT_ROMAJI)
+                      INPUT_METHOD_LABELS, INPUT_KANA, INPUT_ROMAJI,
+                      MEMORY_LABELS, MEMORY_LOW, MEMORY_HIGH)
 from hotkeys import GlobalHotkeys, HOTKEY_LABELS
 from ime_readings import IMEReadings, is_kana_reading as ime_readings_kana
 import analysis_work_app as input_work
@@ -256,7 +257,7 @@ APP_TITLE = 'CorrectNote'
 # 「判断に迷った箇所」から**「不自然な文字列」**へ入れ替え（既定オン・
 # 補正が入った範囲には付けない）、**かな書きのアルファベット読みを
 # 英字に直す**（`エフ2 → F2`）、スクロール後の反映（項目48-IZ〜）。
-APP_VERSION = '1.12.58'
+APP_VERSION = '1.13.14'
 
 # 同梱する説明書のファイル名。exe の中に入れて持ち歩き、
 # 初回起動時に exe と同じフォルダへ書き出す
@@ -654,6 +655,17 @@ def ime_confirmed_char_event(event):
     return ime_confirmed_char(keysym, getattr(event, 'char', '') or '')
 
 
+def ime_result_needs_help(text):
+    """IME の確定文字に、Tk 8.6.9 が落とす字（BMP の外＝絵文字など）があるか。
+
+    うにさんの報告（2026-10-13）「Windows+. で候補が出るウインドウを
+    クリックしても、絵文字が入らない」。絵文字パネルの字は IME の確定
+    （WM_IME_COMPOSITION の GCS_RESULTSTR）で届き、Tk 8.6.9 はサロゲート
+    対の字をそこで捨てる（ふつうの字・WM_CHAR の対は通る。
+    tools_local/v114_emoji/ime_probe.py）。"""
+    return any(ord(c) > 0xFFFF or 0xD800 <= ord(c) <= 0xDFFF for c in text or '')
+
+
 def app_dir():
     """
     データファイル（語彙・判断・選び直し・辞書索引）を置く場所。
@@ -732,7 +744,9 @@ MANUAL_FILE = os.path.join(app_dir(), MANUAL_FILENAME)
 
 # 配色
 BG = '#f6f4ee'
-PANEL = '#ffffff'
+# 欄の地。真っ白より少しだけ灰色寄り（2026-10-12 うにさん）。
+# さらにもう少し灰色へ寄せた（2026-10-13 うにさん）。補正欄も合わせる。
+PANEL = '#f0f0ed'
 INK = '#1c2b2d'
 RULE = '#d8d3c4'
 ACCENT = '#2c5f6f'
@@ -774,7 +788,7 @@ LINE_NUM_FG = '#a39d8c'
 LINE_NUM_ACTIVE_BG = '#fffdf5'
 
 # 補正結果欄（右ペイン）の配色。メモ欄と少し変えて区別する。
-RESULT_BG = '#fbfaf7'
+RESULT_BG = '#f3f2ee'
 RESULT_GUTTER_BG = '#f2efe8'
 # 補正の可能性がある箇所への薄い網掛け。
 # **明るい配色のとき、白地との差が 1.07 しかなく「見えにくい」と
@@ -1346,6 +1360,7 @@ class CorrectNoteApp:
             return
         def refresh():
             self._icon_after_id = None
+            self._icons_wait_for_map = False
             self._set_window_icons_win32()
         self._icon_after_id = self.root.after_idle(refresh)
 
@@ -1419,6 +1434,15 @@ class CorrectNoteApp:
         if sys.platform != 'win32':
             return False
         widget = widget if widget is not None else self.root
+        if widget is self.root and getattr(self, '_icons_wait_for_map', False):
+            # 起動中は本体の窓にまだ触らない（うにさん 2026-10-13「起動中、
+            # タスクバーのアプリ表示の左端のアイコンが表示されないことが
+            # 多い」）。HWND を取る update_idletasks で窓が先に出ると、
+            # __init__ の残りの間は応答できず、タスクバーがボタンを作る
+            # ときの WM_GETICON に答えられないまま空になっていた
+            # （tools_local/v114_taskbar_icon で8回中8回）。窓は mainloop
+            # の最初で出て、すぐ後の _queue_window_icons が付ける。
+            return False
         ico = bundled_path(ICON_ICO)
         if not ico:
             return False
@@ -1471,6 +1495,7 @@ class CorrectNoteApp:
         import time
         _t_start = time.monotonic()
         self.root = root
+        self._icons_wait_for_map = True
         self.root.title(APP_TITLE)
         self._apply_window_icon()
         self.root.geometry('1280x720')
@@ -2717,6 +2742,9 @@ class CorrectNoteApp:
             cursor=cursor, scroll=scroll, title=title,
             bookmarks=self.bookmarks, top=top,
             ruler_rows=(self._editor_guides.ruler_rows() if getattr(self,'_editor_guides',None) is not None else cur.get('ruler_rows',[]) if cur else []),
+            text_styles=(self.editor._correctnote_text_format.capture(text.split('\n'))
+                         if getattr(self.editor,'_correctnote_text_format',None) is not None
+                         else cur.get('text_styles',{}) if cur else {}),
             calculations=input_work.session_calculations(self,text),
             file_format=file_formats.rebase(cur.get('file_format') if cur else None,
                 cur.get('text', '') if cur else '', text)))
@@ -4779,6 +4807,8 @@ class CorrectNoteApp:
         self._restyle_widget(self.root, old_to_new)
         if getattr(self,'_ruler_icon',None) is not None:
             self._ruler_icon.put(INK,to=(2,12,22,14))
+        formatter=getattr(getattr(self,'editor',None),'_correctnote_text_format',None)
+        if formatter is not None:formatter.refresh_buttons()
         for target in (getattr(self,'editor',None),getattr(self,'_quick_text',None)):
             feedback=getattr(target,'_correctnote_undo_feedback',None)
             if feedback is not None:feedback.refresh_theme()
@@ -4879,6 +4909,11 @@ class CorrectNoteApp:
                             bordercolor=RULE, arrowcolor=INK)
         except Exception:
             pass
+
+        # 品詞の文字色はライトとダークで別に持つ（pos_font.current_colors）。
+        # 印の色も欄の色から決まるので、ここで塗り直す。
+        try:self._refresh_pos_font_style()
+        except Exception:pass
 
         self._refresh_title()
 
@@ -5043,6 +5078,11 @@ class CorrectNoteApp:
         # Share synchronous long-row presentation, without adding link gestures.
         from text_links import TextLinks
         text._correctnote_line_display = TextLinks(text, links=False)
+        from boundary_colors import install
+        install(self, text)
+        # 絵文字をメモ帳と同じ色つきで重ねる（emoji_color.py・2026-10-13 うにさん）
+        from emoji_color import install as install_emoji_color
+        install_emoji_color(text)
         from undo_feedback import install as install_undo_feedback
         install_undo_feedback(text,lambda:HISTORY_HINT_BG,lambda:HISTORY_HINT_LINE)
         text.pack(fill='both', expand=True)
@@ -5838,6 +5878,65 @@ class CorrectNoteApp:
         except Exception:
             return None
 
+    def _quick_line_px(self, text_widget, row, line, font):
+        """1行の表示幅（ピクセル）。フォントを持つタグの字はそのフォントで測る。
+
+        タグの優先順（tag names の後ろほど強い）どおりに、字ごとの
+        フォントを決めてから、同じフォントの続きをまとめて測る。"""
+        width = font.measure(line)
+        if not line:
+            return width
+        try:
+            import tkinter.font as tkfont
+            fonts = [None] * len(line)
+            for tag in text_widget.tag_names():
+                spec = str(text_widget.tag_cget(tag, 'font') or '')
+                if not spec:
+                    continue
+                ranges = text_widget.tag_ranges(tag)
+                for a, z in zip(ranges[::2], ranges[1::2]):
+                    a, z = str(a), str(z)
+                    if int(a.split('.')[0]) > row or int(z.split('.')[0]) < row:
+                        continue
+                    lo = 0 if int(a.split('.')[0]) < row else len(
+                        text_widget.get(f'{row}.0', a))
+                    hi = len(line) if int(z.split('.')[0]) > row else len(
+                        text_widget.get(f'{row}.0', z))
+                    for i in range(lo, min(hi, len(line))):
+                        fonts[i] = spec
+            if not any(fonts):
+                return width
+            cache = {}
+            total, start = 0, 0
+            for i in range(1, len(line) + 1):
+                if i == len(line) or fonts[i] != fonts[start]:
+                    spec = fonts[start]
+                    if spec is None:
+                        measure = font
+                    else:
+                        measure = cache.get(spec)
+                        if measure is None:
+                            measure = cache[spec] = tkfont.Font(font=spec)
+                    total += measure.measure(line[start:i])
+                    start = i
+            return max(width, total)
+        except Exception:
+            return width
+
+    def _queue_quick_resize(self):
+        """品詞ごとのサイズが付いたあとに、簡易入力の大きさを合わせ直す。"""
+        if getattr(self, '_quick_resize_job', None) is not None:
+            return
+        def run():
+            self._quick_resize_job = None
+            quick = getattr(self, '_quick_text', None)
+            if quick is not None:
+                self._adjust_quick_size(quick)
+        try:
+            self._quick_resize_job = self.root.after_idle(run)
+        except Exception:
+            self._quick_resize_job = None
+
     def _adjust_quick_size(self, text_widget, lines=None):
         """
         入力内容に合わせて、簡易入力ウィンドウの横幅・縦幅・折り返しを
@@ -5870,6 +5969,12 @@ class CorrectNoteApp:
         font = self._quick_font()
         if font is None:
             return
+        # この呼び出しの番号。下の update_idletasks の中で、品詞のサイズが
+        # 付いたあとの合わせ直し（_queue_quick_resize）が先に走ることがある。
+        # そのときは古い測り方の幅で上書きせず、新しいほうに任せる
+        # （Windows で見切れが直らなかった・2026-10-13）。
+        seq = getattr(self, '_quick_size_seq', 0) + 1
+        self._quick_size_seq = seq
 
         try:
             # 1文字ぶんの幅の基準。Text(width=N) の N はこの幅の倍数。
@@ -5879,13 +5984,18 @@ class CorrectNoteApp:
             # Literal data and oversized rows remain visible as one clipped row;
             # measuring their complete payload would defeat that bounded layout.
             from literal_lines import unwrapped_only
-            max_px = max((font.measure(ln) for ln in lines
+            # 品詞ごとのサイズや書式で字が大きい行は、その字のフォントで
+            # 測る（基準のフォントだけで測ると右へ見切れた・2026-10-13）。
+            max_px = max((self._quick_line_px(text_widget, row, ln, font)
+                          for row, ln in enumerate(lines, 1)
                           if not unwrapped_only(ln)), default=0)
             # カーソルぶんの余白を1文字足しておく（末尾で打ち続けた
             # ときに、カーソルが枠にめり込まないように）。
             max_px += unit
 
             win.update_idletasks()
+            if getattr(self, '_quick_size_seq', seq) != seq:
+                return      # 中で新しい合わせ直しが済んでいる
             left = win.winfo_x()  # Negative coordinates are valid on a left monitor.
             top = win.winfo_y()
             # ウィンドウのあるモニターの右端を基準にする。
@@ -6698,6 +6808,8 @@ class CorrectNoteApp:
             self.editor.insert('1.0', tab.get('text', ''))
             self._reset_typed_marks()
             self._pad_blank_lines()
+            formatter=getattr(self.editor,'_correctnote_text_format',None)
+            if formatter is not None:formatter.restore(tab.get('text_styles'))
         import analysis_work_app as input_work
         input_work.select_document(self,self.editor_source_text())
         if getattr(self,'_auto_learning_deferred_owner',None)!=input_work.owner(self):
@@ -7253,6 +7365,21 @@ class CorrectNoteApp:
             selectcolor=ACCENT)
         # 目に見えない空白（半角・全角・タブ）を見せる。
         # **既定はオン**（うにさんの指定・2026-08-21・項目48-IF）。
+        self.show_ctrl_boundaries_var = tk.BooleanVar(
+            value=self.settings.get('show_ctrl_boundaries'))
+        m_view.add_checkbutton(
+            label='Ctrl＋左右キーで止まる場所を小さな印で示す',
+            variable=self.show_ctrl_boundaries_var,
+            command=self._on_toggle_ctrl_boundaries,
+            selectcolor=ACCENT)
+        # 既定はカーソルのある行だけ（さりげなく・2026-10-12）。
+        self.ctrl_boundaries_cursor_row_only_var = tk.BooleanVar(
+            value=self.settings.get('ctrl_boundaries_cursor_row_only'))
+        m_view.add_checkbutton(
+            label='　カーソルがある行にだけ印を表示する',
+            variable=self.ctrl_boundaries_cursor_row_only_var,
+            command=self._on_toggle_ctrl_boundaries_cursor_row_only,
+            selectcolor=ACCENT)
         self.show_whitespace_var = tk.BooleanVar(
             value=self.settings.get('show_whitespace'))
         m_view.add_checkbutton(
@@ -7334,6 +7461,8 @@ class CorrectNoteApp:
         _btn_font, m_font = _make_menubutton('フォント')
         m_font.add_command(label='種類・サイズを選択…',
                            command=self.open_font_dialog)
+        m_font.add_command(label='品詞ごとのサイズ倍率と文字色…',
+                           command=self.open_pos_font_dialog)
         m_font_size = tk.Menu(m_font, tearoff=0)
         self._font_size_var = tk.IntVar(value=self._editor_font()[1])
         for size in (8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48):
@@ -7343,7 +7472,7 @@ class CorrectNoteApp:
                 selectcolor=ACCENT)
         m_font.add_cascade(label='サイズ', menu=m_font_size)
         m_font.add_separator()
-        m_font.add_command(label='初期設定に戻す（Yu Mincho・11）',
+        m_font.add_command(label='初期設定に戻す（Yu Mincho・10）',
                            command=lambda: self._choose_editor_font(*EDITOR_FONT))
 
         # --- このアプリについて（「表示」の次・うにさんの指定・
@@ -7354,6 +7483,13 @@ class CorrectNoteApp:
         _btn_m_about, m_about = _make_menubutton('このアプリについて')
         m_about.add_command(label='説明書をHTMLで展開',
                             command=self.open_manual)
+        m_memory = tk.Menu(m_about, tearoff=0)
+        self.memory_usage_var = tk.StringVar(value=self.settings.get('memory_usage'))
+        for mode, label in MEMORY_LABELS.items():
+            m_memory.add_radiobutton(label=label, value=mode,
+                variable=self.memory_usage_var, command=self._choose_memory_usage,
+                selectcolor=ACCENT)
+        m_about.add_cascade(label='メモリ使用量', menu=m_memory)
         m_about.add_separator()
         m_about.add_command(label=f'バージョン {APP_VERSION}',
                             state='disabled')
@@ -7378,7 +7514,7 @@ class CorrectNoteApp:
         m_learn.add_cascade(label='辞書と語彙の管理', menu=m_maint)
 
         self._menus = [m_file, m_encoding, self._recent_files_menu, m_edit, m_word_sets, m_view, self._buttons_menu, m_font, m_font_size,
-                       m_about, m_learn, m_maint]
+                       m_about, m_memory, m_learn, m_maint]
         # A posted native Windows menu can capture Motion/Enter events before
         # the adjacent Menubutton sees them.  Watch the pointer only while a
         # menu is posted; Tk timers continue during its native menu loop.
@@ -7395,6 +7531,24 @@ class CorrectNoteApp:
             button.bind('<Enter>', self._on_menu_bar_motion, add='+')
             button.bind('<Motion>', self._on_menu_bar_motion, add='+')
 
+    def _choose_memory_usage(self):
+        mode = self.memory_usage_var.get()
+        if mode not in MEMORY_LABELS or mode == self.settings.get('memory_usage'):
+            return
+        self.settings.set('memory_usage', mode)
+        self.settings.save()
+        import memory_usage
+        if mode == MEMORY_LOW:
+            self._stop_background_tabs()
+            memory_usage.apply_low(self)
+        else:
+            memory_usage.cancel_releases(self)
+            analysis_async.prewarm(self)
+            analysis_async.queue_idle_prewarm(self)
+            import quick_analysis
+            quick_analysis.schedule_prepare(self)
+            self._queue_background_tabs()
+
     def _post_menu_bar(self, event):
         """Switch top menus only after the current native menu loop returns."""
         inertia=getattr(self,'_scroll_inertia',None)
@@ -7402,6 +7556,13 @@ class CorrectNoteApp:
         from menu_hover import NativeMenuHover
         button = event.widget
         if getattr(self, '_native_menu_active', False):
+            return 'break'
+        # 開いているメニューの見出しをもう一度押したら、閉じたままにする
+        # （その押下は閉じた後にも見出しへ届くので、ここで捨てる）。
+        closed = getattr(self, '_menu_closed_by_title', None)
+        self._menu_closed_by_title = None
+        if closed is not None and closed[0] == str(button) and \
+                time.monotonic() - closed[1] < 0.5:
             return 'break'
         self._native_menu_active = True
         original_focus = self.root.focus_get()
@@ -7419,6 +7580,9 @@ class CorrectNoteApp:
                 finally:
                     native.close()
                     self.root.tk.call('tk::MenuUnpost', '')
+                if native.closed_by_title:
+                    self._menu_closed_by_title = (str(button), time.monotonic())
+                    break
                 button = next((b for b in self._menu_buttons if str(b) == native.pending), None)
         finally:
             self._native_menu_hover = None
@@ -7548,7 +7712,365 @@ class CorrectNoteApp:
             self._set_ime_font(quick)
         self._apply_tab_stops()
         self._configure_end_rule_tag()
+        self._refresh_pos_font_tags()
         self._schedule_whitespace_paint(0)
+
+    def _refresh_pos_font_tags(self):
+        for widget in (getattr(self,'editor',None),
+                       getattr(self,'result_view',None),
+                       getattr(self,'_quick_text',None)):
+            colors=getattr(widget,'_correctnote_boundary_colors',None)
+            if colors is not None:colors.refresh_option()
+            formatter=getattr(widget,'_correctnote_text_format',None)
+            if formatter is not None:formatter.refresh_fonts()
+
+    def _toggle_text_format(self, key):
+        formatter=getattr(getattr(self,'editor',None),'_correctnote_text_format',None)
+        if formatter is None:return 'break'
+        formatter.toggle(key)
+        try:self.editor.focus_set()
+        except Exception:pass
+        return 'break'
+
+    def _mirror_text_format(self):
+        """メモ欄の書式を補正欄の対応する文字へ写す（補正で長さが変わった語は語ごと）。"""
+        self._text_format_mirror_job=None
+        source=getattr(getattr(self,'editor',None),'_correctnote_text_format',None)
+        target=getattr(getattr(self,'result_view',None),'_correctnote_text_format',None)
+        if source is None or target is None:return
+        try:source.mirror_to(target)
+        except Exception:pass
+
+    def _queue_text_format_mirror(self):
+        if getattr(self,'_text_format_mirror_job',None) is not None:return
+        try:self._text_format_mirror_job=self.root.after_idle(self._mirror_text_format)
+        except Exception:self._text_format_mirror_job=None
+
+    def _refresh_pos_font_style(self):
+        """品詞の倍率・色だけが変わったとき。色を付ける品詞が増減したら全体を塗り直す。"""
+        repainted=False
+        for widget in (getattr(self,'editor',None),
+                       getattr(self,'result_view',None),
+                       getattr(self,'_quick_text',None)):
+            colors=getattr(widget,'_correctnote_boundary_colors',None)
+            if colors is not None:repainted=colors.refresh_pos_style() or repainted
+            formatter=getattr(widget,'_correctnote_text_format',None)
+            if formatter is not None:formatter.configure()
+        return repainted
+
+    def _choose_pos_font_multipliers(self, values, save=True):
+        from pos_font import normalize_multipliers
+        multipliers=normalize_multipliers(values)
+        self.settings.set('pos_font_multipliers',multipliers)
+        if save:self.settings.save()
+        if self._refresh_pos_font_style() and save and getattr(self,'_analyze',None) is not None:
+            # 新しく大きさを変える品詞の範囲がまだ無い行を求める。
+            self._analyze()
+        status=getattr(self,'status',None)
+        if status is not None and save:
+            status.config(text='品詞ごとのフォントサイズを反映しました')
+        return multipliers
+
+    def _choose_pos_font_colors(self, values, save=True):
+        """save=False は色見本にマウスを乗せている間の試し表示（設定ファイルは書かない）。
+
+        いまのモード（ライト／ダーク）の色だけを変える。"""
+        from pos_font import normalize_colors,colors_key
+        dark=bool(self.settings.get('dark_mode'))
+        colors=normalize_colors(values,dark)
+        self.settings.set(colors_key(dark),colors)
+        if save:self.settings.save()
+        self._refresh_pos_font_style()
+        if save and any(colors.values()) and getattr(self,'_analyze',None) is not None:
+            # 品詞の範囲がまだ無い行（Ctrl区切りをオフにしていた等）を求める。
+            # 試し表示では解析し直さない（マウスの動きに付いていくため）。
+            self._analyze()
+        status=getattr(self,'status',None)
+        if status is not None and save:
+            status.config(text='品詞ごとの文字色を反映しました')
+        return colors
+
+    def _open_pos_color_palette(self, anchor, current, choose, preview=None):
+        """色の候補。横に色合い、縦に明るい→濃い。「色を変えない」は欄の文字色のまま。
+
+        preview(color) は色見本にマウスが乗るたび、preview(None) は離れたとき
+        （選ばずに閉じたときも）に呼ばれる。"""
+        import tkinter as tk
+        from pos_font import PALETTE_ROWS, PALETTE_NAMES
+        # 見本の色がそのまま、いまのモードの色になる（ライトとダークで別に持つ）。
+        previous=getattr(self,'_pos_color_palette',None)
+        if previous is not None and previous.winfo_exists():
+            previous.destroy()
+        top=self._pos_color_palette=tk.Toplevel(anchor)
+        top.title('文字色')
+        top.configure(bg=BG)
+        top.transient(anchor.winfo_toplevel())
+        top.resizable(False,False)
+        state={'picked':False,'shown':None,'leave':None}
+
+        def show(color):
+            if state['leave'] is not None:
+                try:top.after_cancel(state['leave'])
+                except tk.TclError:pass
+                state['leave']=None
+            if preview is None or color==state['shown']:return
+            state['shown']=color
+            preview(color)
+
+        def leave():
+            # 隣の見本へ移る間に元の色へ戻してちらつかないよう、少し待つ。
+            def back():
+                state['leave']=None
+                if state['shown'] is not None and preview is not None:
+                    state['shown']=None;preview(None)
+            try:state['leave']=top.after(80,back)
+            except tk.TclError:pass
+
+        def pick(color):
+            state['picked']=True
+            top.destroy()
+            choose(color)
+
+        def closed(event):
+            if event.widget is not top:return
+            if state['leave'] is not None:
+                try:top.after_cancel(state['leave'])
+                except tk.TclError:pass
+                state['leave']=None
+            if not state['picked'] and state['shown'] is not None and preview is not None:
+                state['shown']=None;preview(None)
+        top.bind('<Destroy>',closed,add=True)
+
+        default=tk.Button(top,text='色を変えない（欄の文字色）',
+                          command=lambda:pick(''),relief='sunken' if not current else 'raised',
+                          bg=PANEL,fg=INK,activebackground=PANEL,activeforeground=INK)
+        default.pack(fill='x',padx=8,pady=(8,6))
+        default.bind('<Enter>',lambda _e:show(''),add=True)
+        default.bind('<Leave>',lambda _e:leave(),add=True)
+        grid=tk.Frame(top,bg=BG);grid.pack(padx=8)
+        name=tk.StringVar(master=top,value=PALETTE_NAMES.get(current,''))
+        for r,row in enumerate(PALETTE_ROWS):
+            for c,color in enumerate(row):
+                chosen=color==current
+                swatch=tk.Frame(grid,width=20,height=20,bg=color,cursor='hand2',
+                                highlightthickness=2 if chosen else 1,
+                                highlightbackground=ACCENT if chosen else RULE)
+                swatch.grid(row=r,column=c,padx=1,pady=1)
+                swatch.bind('<ButtonRelease-1>',lambda _e,value=color:pick(value))
+                def enter(_e,value=color):
+                    name.set(PALETTE_NAMES[value]);show(value)
+                def away(_e):
+                    name.set(PALETTE_NAMES.get(current,''));leave()
+                swatch.bind('<Enter>',enter)
+                swatch.bind('<Leave>',away)
+        tk.Label(top,textvariable=name,bg=BG,fg=MUTED,anchor='w').pack(
+            fill='x',padx=8,pady=(4,8))
+        top.bind('<Escape>',lambda _event:top.destroy())
+        try:
+            top.update_idletasks()
+            x=anchor.winfo_rootx()
+            y=anchor.winfo_rooty()+anchor.winfo_height()
+            top.geometry(f'+{x}+{y}')
+        except tk.TclError:
+            pass
+        top.focus_set()
+        return top
+
+    def open_pos_font_dialog(self):
+        import tkinter as tk
+        from pos_font import (POS_LABELS, POS_FONT_DEFAULTS, color_defaults,
+                              normalize_multipliers, current_colors,
+                              MULTIPLIER_MIN, MULTIPLIER_MAX)
+        previous=getattr(self,'_pos_font_dialog',None)
+        if previous is not None and previous.winfo_exists():
+            previous.lift()
+            return
+        dlg=self._pos_font_dialog=tk.Toplevel(self.root)
+        dlg.title('品詞ごとのフォントサイズ')
+        dlg.configure(bg=BG)
+        dlg.transient(self.root)
+        self._place_dialog(dlg,440,645)
+        tk.Label(dlg,text='品詞ごとの倍率と文字色',bg=BG,fg=INK,
+                 anchor='w').pack(fill='x',padx=18,pady=(14,2))
+        tk.Label(dlg,text='基準サイズに倍率を掛け、小数点以下は切り上げます。',
+                 bg=BG,fg=MUTED,anchor='w').pack(fill='x',padx=18,pady=(0,8))
+        form=tk.Frame(dlg,bg=BG)
+        form.pack(anchor='w',padx=22)
+        form.columnconfigure(0,weight=0)
+        form.columnconfigure(1,weight=0)
+        form.columnconfigure(2,weight=0)
+        tk.Label(form,text='品詞',bg=BG,fg=MUTED,anchor='w').grid(
+            row=0,column=0,sticky='w',pady=(0,4))
+        tk.Label(form,text='倍率',bg=BG,fg=MUTED,anchor='e').grid(
+            row=0,column=1,sticky='e',pady=(0,4))
+        tk.Label(form,text='文字色',bg=BG,fg=MUTED,anchor='w').grid(
+            row=0,column=2,sticky='w',padx=(10,0),pady=(0,4))
+        current=normalize_multipliers(
+            self.settings.get('pos_font_multipliers'))
+        # いまのモードの色。ライトとダークは別に持つ。
+        chosen_colors=current_colors(self.settings)
+        # 開いた時の状態。キャンセルでここへ戻す。
+        opened=(dict(current),dict(chosen_colors))
+        variables={}
+        swatches={}
+
+        def show_color(key):
+            color=chosen_colors[key]
+            swatch=swatches[key]
+            if color:
+                swatch.config(text='',bg=color,activebackground=color)
+            else:
+                swatch.config(text='変えない',bg=PANEL,fg=MUTED,
+                              activebackground=PANEL,activeforeground=MUTED)
+
+        def apply_colors():
+            self._choose_pos_font_colors(dict(chosen_colors))
+            notice.set('本文と補正欄に反映しました。')
+
+        def choose_color(key,color):
+            chosen_colors[key]=color
+            show_color(key)
+            apply_colors()
+
+        def preview_color(key,color):
+            # 色見本にマウスが乗っている間だけの表示。None は選んである色へ戻す。
+            colors=dict(chosen_colors)
+            if color is not None:colors[key]=color
+            self._choose_pos_font_colors(colors,save=False)
+
+        for row,(key,label) in enumerate(POS_LABELS,1):
+            tk.Label(form,text=label,bg=BG,fg=INK,anchor='w').grid(
+                row=row,column=0,sticky='w',pady=1)
+            var=tk.StringVar(master=dlg,value=f'{current[key]:.1f}')
+            variables[key]=var
+            tk.Spinbox(form,from_=MULTIPLIER_MIN,to=MULTIPLIER_MAX,
+                       increment=0.1,format='%.1f',textvariable=var,width=7,
+                       bg=PANEL,fg=INK,insertbackground=INK,
+                       justify='right').grid(row=row,column=1,sticky='w',pady=1)
+            swatch=tk.Button(form,width=9,relief='groove',bd=1,cursor='hand2',
+                             padx=0,pady=0)
+            swatch.config(command=lambda k=key,s=swatch:self._open_pos_color_palette(
+                s,chosen_colors[k],lambda color,k=k:choose_color(k,color),
+                lambda color,k=k:preview_color(k,color)))
+            swatch.grid(row=row,column=2,sticky='w',padx=(10,0),pady=1)
+            swatches[key]=swatch
+            show_color(key)
+        notice=tk.StringVar(master=dlg)
+        tk.Label(dlg,textvariable=notice,bg=BG,fg=MUTED,
+                 anchor='w').pack(fill='x',padx=18,pady=(4,0))
+
+        def read_values():
+            values={}
+            try:
+                for key,var in variables.items():
+                    values[key]=float(var.get())
+            except (ValueError,tk.TclError):
+                notice.set('倍率を数値で入力してください。')
+                return None
+            checked=normalize_multipliers(values)
+            if checked!=values:
+                notice.set(f'倍率は{MULTIPLIER_MIN:.1f}〜{MULTIPLIER_MAX:.1f}で指定してください。')
+                return None
+            return checked
+
+        # 倍率は変えたらすぐ反映する。矢印の押し続けや打鍵の途中で毎回
+        # 塗り直さないよう、少し待ってまとめる。
+        pending={'job':None}
+
+        def cancel_queued():
+            job=pending['job'];pending['job']=None
+            if job is not None:
+                try:dlg.after_cancel(job)
+                except tk.TclError:pass
+
+        def queue_apply():
+            cancel_queued()
+            try:pending['job']=dlg.after(150,apply)
+            except tk.TclError:pass
+
+        def apply():
+            cancel_queued()
+            values=read_values()
+            if values is None:return False
+            self._choose_pos_font_multipliers(values)
+            notice.set('本文と補正欄に反映しました。')
+            return True
+
+        traces=[(var,var.trace_add('write',lambda *_args:queue_apply()))
+                for var in variables.values()]
+
+        def ok():
+            if apply():dlg.destroy()
+
+        def close():
+            # 数値でない倍率が残っていても閉じられる（その欄は反映しない）。
+            if pending['job'] is not None:apply()
+            dlg.destroy()
+
+        def cancel():
+            cancel_queued()
+            for key,var in variables.items():
+                var.set(f'{opened[0][key]:.1f}')
+            cancel_queued()
+            chosen_colors.update(opened[1])
+            self._choose_pos_font_multipliers(dict(opened[0]))
+            self._choose_pos_font_colors(dict(opened[1]))
+            status=getattr(self,'status',None)
+            if status is not None:
+                status.config(text='品詞ごとのフォントを開いた時の状態に戻しました')
+            dlg.destroy()
+
+        resets=tk.Frame(dlg,bg=BG)
+        resets.pack(fill='x',padx=16,pady=(10,0))
+        buttons=tk.Frame(dlg,bg=BG)
+        buttons.pack(fill='x',padx=16,pady=(6,12))
+        def reset():
+            for key,var in variables.items():
+                var.set(f'{POS_FONT_DEFAULTS[key]:.1f}')
+            apply()
+        def all_one():
+            for var in variables.values():
+                var.set('1.0')
+            apply()
+        def reset_colors():
+            # いまのモードの色だけを初期値に戻す。
+            defaults=color_defaults(bool(self.settings.get('dark_mode')))
+            for key in chosen_colors:
+                chosen_colors[key]=defaults[key]
+                show_color(key)
+            apply_colors()
+        def plain_colors():
+            for key in chosen_colors:
+                chosen_colors[key]=''
+                show_color(key)
+            apply_colors()
+        tk.Button(resets,text='倍率を初期値',command=reset).pack(side='left')
+        tk.Button(resets,text='すべて1倍',command=all_one).pack(
+            side='left',padx=(6,0))
+        tk.Button(resets,text='色を初期化',command=reset_colors).pack(
+            side='left',padx=(6,0))
+        tk.Button(resets,text='色をすべて変えない',command=plain_colors).pack(
+            side='left',padx=(6,0))
+        tk.Button(buttons,text='キャンセル',command=cancel).pack(side='right')
+        tk.Button(buttons,text='OK',command=ok).pack(side='right',padx=6)
+        def cleanup(event):
+            if event.widget is dlg and self._pos_font_dialog is dlg:
+                self._pos_font_dialog=None
+                cancel_queued()
+                # 変数の見張りを外す（残すと Tcl 側から画面への参照が切れない）。
+                for var,name in traces:
+                    try:var.trace_remove('write',name)
+                    except tk.TclError:pass
+                palette=getattr(self,'_pos_color_palette',None)
+                if palette is not None:
+                    try:palette.destroy()
+                    except tk.TclError:pass
+                    self._pos_color_palette=None
+        dlg.bind('<Destroy>',cleanup,add=True)
+        # Esc と閉じるボタン（×）は、反映したまま閉じる（戻すのはキャンセル）。
+        dlg.bind('<Escape>',lambda _event:close())
+        dlg.protocol('WM_DELETE_WINDOW',close)
+        dlg.focus_set()
 
     def open_font_dialog(self):
         import tkinter.font as tkfont
@@ -8027,6 +8549,24 @@ class CorrectNoteApp:
                 self._ruler_icon=tk.PhotoImage(master=self.root,width=24,height=18)
                 self._ruler_icon.put(INK,to=(2,12,22,14))
                 button.configure(image=self._ruler_icon)
+        # 書式ボタン。Windows のメモ帳と同じ1文字のボタンで、
+        # 文字そのものを太字・斜体・下線・取り消し線で見せる。
+        from text_format import STYLES as _FORMAT_STYLES
+        self._format_button_palette=lambda on:dict(
+            bg=ACCENT if on else PANEL,fg=PANEL if on else INK)
+        for key, letter, title, keys in _FORMAT_STYLES:
+            style={'bold':('bold',),'italic':('italic',),
+                   'underline':('underline',),'overstrike':('overstrike',)}[key]
+            button = tk.Button(toolbar, text=letter,
+                command=lambda k=key:self._toggle_text_format(k),
+                bg=PANEL, fg=INK, relief='flat', bd=1,
+                font=('Yu Gothic UI', 9)+style, padx=8, pady=4,
+                width=1, cursor='hand2')
+            button.pack(side='left', padx=(4, 0))
+            hint=f'【{title}】選択中の文字、またはこれから入力する文字の{title}をオン・オフします。ショートカットキー：{keys}'
+            button.bind('<Enter>', lambda e, h=hint: self._toolbar_hover_hint(e, True, h))
+            button.bind('<Leave>', lambda e, h=hint: self._toolbar_hover_hint(e, False, h))
+            setattr(self, f'format_{key}_btn', button)
         self._bracket_buttons = []
         button = tk.Button(
             toolbar, text='（）', command=self._wrap_with_parens,
@@ -8543,6 +9083,27 @@ class CorrectNoteApp:
         input_work.install(self)
         import text_links
         text_links.install(self)
+        from boundary_colors import install
+        install(self, self.editor)
+        install(self, self.result_view)
+        # 絵文字は Tk では黒一色になるので、色つきで重ねる（emoji_color.py。
+        # うにさん 2026-10-13「Windowsのメモ帳と同じ見た目にする」）。
+        from emoji_color import install as install_emoji_color
+        install_emoji_color(self.editor)
+        install_emoji_color(self.result_view)
+        # 改行で分かれた行は、左右の行そろえの余白を引き継がない。
+        from text_layout import strip_inserted_rows
+        for pane in (self.editor, self.result_view):
+            pane._correctnote_observers.setdefault('inserted', []).append(
+                lambda start, text, pane=pane: strip_inserted_rows(pane, start, text))
+        import text_format
+        formatter=text_format.install(self, self.editor)
+        for key in text_format.STYLE_KEYS:
+            button=getattr(self,f'format_{key}_btn',None)
+            if button is not None:formatter.attach_button(key,button)
+        # 補正欄は同じ書式を写して見せるだけ（読み取り専用）。
+        text_format.install(self, self.result_view, editable=False)
+        formatter.listeners.append(self._queue_text_format_mirror)
         from undo_feedback import install as install_undo_feedback
         install_undo_feedback(self.editor,lambda:HISTORY_HINT_BG,lambda:HISTORY_HINT_LINE)
         # 本文より下の余白を1本指（マウス）でドラッグしたら
@@ -9018,14 +9579,19 @@ class CorrectNoteApp:
         elif direction < 0 and column == 0:
             index = f'{max(1, row - 1)}.end' if row > 1 else '1.0'
         else:
+            from boundary_colors import plan_for
+            plan=plan_for(self,widget,row,text)
             store = getattr(self, 'store', None)
             tokens = ()
-            if store is not None and not unwrapped_only(text):
+            if plan is None and store is not None and not unwrapped_only(text):
                 fn = getattr(store, '_tokenize_fn', None)
                 if fn is None:
                     fn = store._tokenize_fn = corrector.make_tokenizer(store)
                 tokens = fn(text)
-            index = f'{row}.0+{text_edge(text, column, direction, tokens)}c'
+            if plan is None:target=text_edge(text,column,direction,tokens)
+            elif direction>0:target=next((n for n in plan[0] if n>column),len(text))
+            else:target=next((n for n in reversed(plan[0]) if n<column),0)
+            index = f'{row}.0+{target}c'
         if widget.compare(index, '>', 'end-1c'):
             index = 'end-1c'
         self._move_text_cursor(event, index)
@@ -9263,6 +9829,8 @@ class CorrectNoteApp:
     def _on_editor_scroll(self, first, last):
         guides=getattr(self,'_editor_guides',None)
         if guides is not None:guides.queue_draw()
+        colors=getattr(self.editor,'_correctnote_boundary_colors',None)
+        if colors is not None:colors.view_moved()
         bulk = getattr(self, '_bulk_insert', None)
         if bulk is not None:bulk.queue_preview()
         # 相手側を追従させている最中（_sync_partner_to_line が
@@ -9298,6 +9866,8 @@ class CorrectNoteApp:
     def _on_result_scroll(self, first, last):
         guides=getattr(self,'_editor_guides',None)
         if guides is not None:guides.queue_draw()
+        colors=getattr(self.result_view,'_correctnote_boundary_colors',None)
+        if colors is not None:colors.view_moved()
         """
         補正欄が動いたときの通知。
 
@@ -10197,7 +10767,29 @@ class CorrectNoteApp:
         result=results[row-1] if 0<row<=len(results) else None
         if result and (result.get('analysis_error') or result.get('analysis_status')=='incomplete'):
             return 'incomplete'
-        return 'done' if tab_analysis.reusable_result(result) else 'pending'
+        if not tab_analysis.reusable_result(result):return 'pending'
+        # Ctrl区切り・品詞の大きさ/色の計算がまだの行も、未解析として縦線を出す。
+        if self._row_navigation_missing(row):return 'pending'
+        return 'done'
+
+    def _row_navigation_missing(self, row):
+        from pos_font import has_adjustments,current_colors
+        settings=self.settings
+        if not (settings.get('show_ctrl_boundaries')
+                or has_adjustments(settings.get('pos_font_multipliers'))
+                or any(current_colors(settings).values())):
+            return False
+        if getattr(self.editor,'_correctnote_boundary_colors',None) is None:return False
+        try:text=self.editor.get(f'{row}.0',f'{row}.end')
+        except tk.TclError:return False
+        if not text.strip():return False
+        from boundary_colors import ready_for,plan_for
+        missing=not ready_for(self,text) and plan_for(self,self.editor,row,text) is None
+        if missing:
+            waiting=getattr(self,'_navigation_waiting',None)
+            if waiting is None:waiting=self._navigation_waiting=set()
+            waiting.add(text)
+        return missing
 
     def _line_analysis_display_state(self, row):
         if getattr(self,'_closing',False):return None
@@ -10212,6 +10804,22 @@ class CorrectNoteApp:
         from literal_lines import literal_only
         state='done' if literal_only(self.editor.get(f'{row}.0',f'{row}.end')) else self._line_analysis_state(row)
         return display.state(input_work.token(self),row,state)
+
+    def _queue_analysis_gutters(self, texts=None):
+        """区切りの計算が届いたら、未解析の縦線を引き直す（まとめて1回）。
+
+        引き直すのは、計算待ちとして縦線を出した行の計算が届いた時だけ。
+        背景解析の結果ごとに引き直すと、行番号の描画が積み重なって重くなる。"""
+        if texts is not None:
+            waiting=getattr(self,'_navigation_waiting',None)
+            if not waiting:return
+            arrived=waiting.intersection(texts)
+            if not arrived:return
+            waiting.difference_update(arrived)
+        if (getattr(self,'_gutter_after_id',None) or getattr(self,'_closing',False)
+                or getattr(self,'editor_gutter',None) is None):return
+        try:self._gutter_after_id=self.root.after(60,self._redraw_gutter_now)
+        except Exception:self._gutter_after_id=None
 
     def _redraw_gutter_now(self):
         self._gutter_after_id = None
@@ -10843,7 +11451,37 @@ class CorrectNoteApp:
             except (tk.TclError, AttributeError):
                 pass
 
-    def _line_tab_stops(self, w, line):
+    def _row_char_fonts(self, w, row, line):
+        """Font spec of each character where a POS size or bold/italic tag
+        sets one (None = the pane font). Format fonts win over POS sizes,
+        as they are raised above them."""
+        if row is None or w is None or '\t' not in line:
+            return None
+        try:
+            from pos_font import POS_FONT_TAGS
+            from text_format import FONT_TAGS
+            fonts = [None] * len(line)
+            start, end = f'{row}.0', f'{row}.end'
+            used = False
+            for tag in tuple(POS_FONT_TAGS.values()) + tuple(FONT_TAGS):
+                index = start
+                while True:
+                    found = w.tag_nextrange(tag, index, end)
+                    if not found:
+                        break
+                    spec = str(w.tag_cget(tag, 'font') or '')
+                    if spec:
+                        a = len(w.get(start, found[0]))
+                        z = len(w.get(start, found[1]))
+                        for i in range(a, min(z, len(fonts))):
+                            fonts[i] = spec
+                        used = True
+                    index = found[1]
+            return tuple(fonts) if used else None
+        except Exception:
+            return None
+
+    def _line_tab_stops(self, w, line, row=None):
         """
         **行の中身に合わせたタブの止まり**（項目48-LG・後半）。
 
@@ -10870,7 +11508,11 @@ class CorrectNoteApp:
             fkey = str(w.cget('font'))
         except Exception:
             fkey = ''
-        key = (fkey, line)
+        # 品詞の大きさ・太字で字が広がった行は、その字の幅で測る
+        # （2026-10-12 うにさんの報告「タブが半角ぶんしか出ないことがある」。
+        # 素のフォントで測ると、広がった字のぶん止まりの手前に来ていた）。
+        char_fonts = self._row_char_fonts(w, row, line)
+        key = (fkey, line, char_fonts)
         got = cache.get(key)
         if got is not None:
             return got
@@ -10878,10 +11520,36 @@ class CorrectNoteApp:
             f = tkfont.Font(font=w.cget('font'))
             zk = max(4, f.measure('　'))
             grid = zk * 4       # 目盛りは土台（_apply_tab_stops）と同じ
+            fonts = getattr(self, '_tab_measure_fonts', None)
+            if fonts is None:
+                fonts = self._tab_measure_fonts = {}
+            def width(a, z):
+                if char_fonts is None:
+                    return f.measure(line[a:z])
+                total = 0
+                i = a
+                while i < z:
+                    spec = char_fonts[i]
+                    j = i
+                    while j < z and char_fonts[j] == spec:
+                        j += 1
+                    if spec is None:
+                        total += f.measure(line[i:j])
+                    else:
+                        g = fonts.get(spec)
+                        if g is None:
+                            if len(fonts) > 64:
+                                fonts.clear()
+                            g = fonts[spec] = tkfont.Font(font=spec)
+                        total += g.measure(line[i:j])
+                    i = j
+                return total
             stops = []
             pos = 0
+            at = 0
             for seg in line.split('	')[:-1]:
-                pos += f.measure(seg)
+                pos += width(at, at + len(seg))
+                at += len(seg) + 1
                 # **全角1つぶん先の、次の「4全角の目盛り」**。
                 # 目盛りを全行で共有するから列が揃う（全角刻みに
                 # したら、揃えるのにタブを重ねる羽目になった・実測）
@@ -10952,7 +11620,7 @@ class CorrectNoteApp:
                 line = w.get(f'{li}.0', f'{li}.end')
                 if '	' not in line:
                     continue
-                stops = self._line_tab_stops(w, line)
+                stops = self._line_tab_stops(w, line, li)
                 if not stops:
                     continue
                 want[li] = ('ws_stops_' + '_'.join(map(str, stops)), stops)
@@ -11168,7 +11836,8 @@ class CorrectNoteApp:
         self._syncing = True
         try:
             changed = align_rows(self.editor, self.result_view,
-                                 enabled=not self._layout_is_unified())
+                                 enabled=not self._layout_is_unified(),
+                                 partners=self._pane_row_partners())
             if changed:
                 self.editor.update_idletasks()
                 if not self._layout_is_unified():
@@ -11177,6 +11846,34 @@ class CorrectNoteApp:
                 self.result_gutter.redraw()
         finally:
             self._syncing = was_syncing
+
+    def _pane_row_partners(self):
+        """メモ欄の行 → 同じ元の文を表示している補正欄の行（無ければ None）。
+
+        補正欄は編集より遅れて作り直されるので、行番号だけで組にすると、
+        改行した直後のメモ欄の行に、別の補正行ぶんの余白が付いていた。
+        前から同じ行・後ろから同じ行を組にし、間の編集中の行は組にしない。"""
+        sources = getattr(self, '_result_sources', None)
+        if sources is None:
+            return None
+        lines = self.editor.get('1.0', 'end-1c').split('\n')
+        if lines == sources:
+            return None
+        n, m = len(lines), len(sources)
+        head = 0
+        while head < min(n, m) and lines[head] == sources[head]:
+            head += 1
+        tail = 0
+        while (tail < min(n, m) - head
+               and lines[n - 1 - tail] == sources[m - 1 - tail]):
+            tail += 1
+        def partner(row):
+            if row <= head:
+                return row
+            if row > n - tail:
+                return row + m - n
+            return None
+        return partner
 
     def _wrap_edge_columns(self, w, li):
         """
@@ -11234,6 +11931,23 @@ class CorrectNoteApp:
                 cache.clear()   # 増えすぎたら捨てるだけ（また貯まる）
             cache[key] = edges
         return edges
+
+    def _on_toggle_ctrl_boundaries(self):
+        self.settings.set('show_ctrl_boundaries', bool(self.show_ctrl_boundaries_var.get()))
+        self.settings.save()
+        for widget in (self.editor,self.result_view,getattr(self,'_quick_text',None)):
+            colors=getattr(widget,'_correctnote_boundary_colors',None)
+            if colors is not None:colors.refresh_option()
+        if self.settings.get('show_ctrl_boundaries'):
+            self._analyze()
+
+    def _on_toggle_ctrl_boundaries_cursor_row_only(self):
+        self.settings.set('ctrl_boundaries_cursor_row_only',
+                          bool(self.ctrl_boundaries_cursor_row_only_var.get()))
+        self.settings.save()
+        for widget in (self.editor,self.result_view,getattr(self,'_quick_text',None)):
+            colors=getattr(widget,'_correctnote_boundary_colors',None)
+            if colors is not None:colors.queue_draw()
 
     def _on_toggle_show_whitespace(self):
         """表示メニュー「見えない空白を表示」の切り替え。"""
@@ -11911,6 +12625,8 @@ class CorrectNoteApp:
                 or getattr(self, '_analyze_pos', 0) < len(getattr(self, '_analyze_todo', ())))
 
     def _queue_background_tabs(self, delay=1500):
+        from memory_usage import low
+        if low(self):return
         job = getattr(self, '_bg_start_job', None)
         if job is not None:
             return  # Repeated edits must not postpone the first dispatch.
@@ -11920,6 +12636,8 @@ class CorrectNoteApp:
         self._bg_start_job = self.root.after(delay, start)
 
     def _start_background_tabs(self):
+        from memory_usage import low
+        if low(self):return
         import analysis_work_app as input_work
         if (getattr(self, '_closing', False)
                 or getattr(self, '_initial_setup', None) is not None
@@ -14027,6 +14745,8 @@ class CorrectNoteApp:
                         tag_ranges[u['kind']].extend(
                             (f"{row}.0+{u['start']}c", f"{row}.0+{u['end']}c"))
 
+            # 左右の行そろえが、補正欄の各行がメモ欄のどの行から来たかを引く。
+            self._result_sources = [result.get('original') for result in visible]
             # 本文は1回で渡す。行ごとの挿入・タグ付けでTkを往復しない。
             text = '\n'.join(self.line_texts)
             interaction=(ui_projection.consume_result_cursor(self,interaction[0]),interaction[1])
@@ -14037,6 +14757,8 @@ class CorrectNoteApp:
                 self.result_view.mark_set('insert',interaction[0])
             for tag, ranges in tag_ranges.items():
                 ui_projection.update_tag(self.result_view, tag, list(zip(ranges[::2], ranges[1::2])), _stable_text_index)
+            # 作り直した行へメモ欄の書式（太字など）を写し直す。
+            self._mirror_text_format()
             self._units_cache = fresh
             ui_projection.remember(self, visible)
             self.result_view.config(state='disabled')
@@ -14663,6 +15385,7 @@ class CorrectNoteApp:
             # タブの止まりは字の幅で決めている。字と一緒に置き直す
             # （項目48-LG）
             self._apply_tab_stops(font)
+            self._refresh_pos_font_tags()
             # 行の高さは字で変わる。**捨てて測り直させる**
             self._line_h = None
             # **見ていた行へ置き直す**（字を変えた副作用の打ち消し）。
@@ -15935,9 +16658,14 @@ class CorrectNoteApp:
             editor.mark_set(mark, chunks[-1][2])
             editor.mark_gravity(mark, 'right')
             with undo_group(editor):
-                for _, start, end, text, tag in reversed(chunks[1:]):
-                    if editor.get(f'{start}-1c', start) != '\n':
-                        editor.insert(start, '\n')
+                # 改行を含む簡易入力のあとは、空白行を1つ挟む（2026-10-13 うにさん）。
+                for k in range(len(chunks) - 1, 0, -1):
+                    start = chunks[k][1]
+                    need = 2 if '\n' in chunks[k - 1][3].rstrip('\r\n') else 1
+                    before = editor.get(f'{start}-{need}c', start)
+                    have = len(before) - len(before.rstrip('\n'))
+                    if have < need:
+                        editor.insert(start, '\n' * (need - have))
                 editor.mark_set('insert', mark)
                 editor.tag_remove('sel', '1.0', 'end')
         else:
@@ -15949,7 +16677,12 @@ class CorrectNoteApp:
                 for _, start, end, text, tag in reversed(chunks):
                     editor.delete(start, end)
                 start = _stable_text_index(editor, f'{mark} lineend')
-                value = prefix + '\n'.join(item[3].rstrip('\r\n') for item in chunks)
+                items = [item[3].rstrip('\r\n') for item in chunks]
+                # 改行を含む簡易入力のあとは、空白行を1つ挟む（2026-10-13 うにさん）。
+                value = prefix + ''.join(
+                    text + ('' if i == len(items) - 1
+                            else '\n\n' if '\n' in text else '\n')
+                    for i, text in enumerate(items))
                 editor.insert(start, value)
                 editor.mark_set('insert', f'{start}+{len(value)}c')
                 editor.tag_remove('sel', '1.0', 'end')
@@ -20041,6 +20774,7 @@ class CorrectNoteApp:
     def _make_dropdown(self, items, x, y, parent=None, topmost=False):
         parent = parent or self.root
         dd = tk.Toplevel(parent)
+        dd.withdraw()
         dd.wm_overrideredirect(True)
         dd.configure(bg=RULE)
         if topmost:
@@ -20070,34 +20804,14 @@ class CorrectNoteApp:
         # そのまま幅にすると一覧が画面をはみ出す。上限を切っても
         # 中身は消えない（見切れるだけ・上下の選び方も変わらない）。
         width = max(20, min(80, max(_disp_width(t) for t, _ in items) + 3))
-        # **いちばん下の説明は、必ず見えるところに置く**（項目48-ML・
-        # 2026-08-31。うにさんの画面「品詞判定が出ないものがあります」）。
-        # 説明は一覧の**いちばん下**に足すので、これまでの16行で切ると
-        # 候補の多い語（`やん` は21項目）では**外に出て、しかも上下キーは
-        # 見出しを飛ばすので届かない**。説明が在るぶんだけ伸ばす。
+        # Measure the actual row height before fitting the complete list.
         rows = min(len(items), DROPDOWN_ROWS)
-        for _i, (_t, _cb) in enumerate(items):
-            if _t in (ANALYSIS_HEAD_POS, ANALYSIS_HEAD_WHY):
-                # **説明の塊ぜんぶが見える高さにする**（項目48-QB・
-                # 2026-09-04）。以前の「16 ＋ 説明の行数」は、説明の
-                # 見出しが**16行目より下から始まる**（候補が16件を
-                # 超える）語では足りない——実機の `たぶい` は候補18行
-                # ＋品詞判定4行＝22項目に対して 16+4=20 行となり、
-                # `い ＝ 名詞` と ※の注記の**2行が画面の外**に出ていた
-                # （うにさんの画面・2026-09-04）。見出しがどこから
-                # 始まっても下端（説明）まで入る高さ＝項目の総数
-                # （上限は今までどおり ROWS_MAX）。品詞判定がオフで
-                # 根拠だけオンのとき（項目48-OC）は見出しが
-                # ANALYSIS_HEAD_WHY から始まるので、そちらも見る
-                # （HEAD_POS だけ見ると根拠が切れたまま伸びない）。
-                rows = min(len(items), DROPDOWN_ROWS_MAX)
-                break
         lb = tk.Listbox(dd, bg=PANEL, fg=INK, relief='flat',
                         font=('Yu Gothic UI', 10), activestyle='none',
                         selectbackground=EDITOR_SEL_BG, selectforeground=INK,
                         width=width, height=rows,
                         exportselection=False)
-        lb.pack(padx=1, pady=1)
+        lb.pack(side='left', padx=1, pady=1)
         for label, cb in items:
             lb.insert('end', label)
             if cb is None:
@@ -20209,44 +20923,40 @@ class CorrectNoteApp:
         lb.bind('<Control-C>', _copy_here)
         lb.bind('<Control-Insert>', _copy_here)
 
-        # 置き場所は「基準ウィンドウの中」に収める。
-        # 画面全体の大きさで判断すると、マルチディスプレイのときに
-        # 隣のディスプレイへ出てしまう（実機で報告された）。
-        # 簡易入力ウィンドウから開いた場合は、本体ではなく
-        # 簡易入力ウィンドウ自身を基準にする
-        # （本体の位置に合わせると、簡易入力ウィンドウの外に
-        #   候補が出てしまうことがあるため）。
+        win_x, win_y = parent.winfo_rootx(), parent.winfo_rooty()
+        win_w, win_h = parent.winfo_width(), parent.winfo_height()
+        area = monitor_work_area(win_x + 10, win_y + 10)
+        if parent is getattr(self, '_quick_win', None):
+            # Quick input may use the surrounding monitor's work area.
+            a_l, a_t, a_r, a_b = (area or
+                (0, 0, parent.winfo_screenwidth(), parent.winfo_screenheight()))
+        else:
+            a_l, a_t, a_r, a_b = win_x, win_y, win_x + win_w, win_y + win_h
+            if area:
+                a_l, a_t = max(a_l, area[0]), max(a_t, area[1])
+                a_r, a_b = min(a_r, area[2]), min(a_b, area[3])
+        # Requested size includes Listbox padding and selection borders.
+        # Measure it rather than assuming a font size or display scaling.
+        lb.configure(height=1);dd.update_idletasks()
+        one_row = dd.winfo_reqheight()
+        lb.configure(height=2);dd.update_idletasks()
+        row_height = max(1, dd.winfo_reqheight() - one_row)
+        padding = max(0, one_row - row_height)
+        rows = min(len(items), max(1, (a_b - a_t - padding) // row_height))
+        lb.configure(height=rows)
+        if rows < len(items):
+            scrollbar = tk.Scrollbar(dd, orient='vertical', command=lb.yview)
+            scrollbar.pack(side='right', fill='y')
+            lb.configure(yscrollcommand=scrollbar.set)
         dd.update_idletasks()
         w, h = dd.winfo_reqwidth(), dd.winfo_reqheight()
-        win_x = parent.winfo_rootx()
-        win_y = parent.winfo_rooty()
-        win_w = parent.winfo_width()
-        win_h = parent.winfo_height()
-        if parent is getattr(self, '_quick_win', None):
-            # 簡易入力は窓が小さく、窓の中に収めようとすると候補が
-            # 文字の上に重なる（実機で「文字を隠す」と報告・
-            # 2026-08-09）。候補は常に最前面なので、窓の外
-            # （モニターの作業領域の中）へ出してよい。
-            area = monitor_work_area(win_x + 10, win_y + 10)
-            if area:
-                a_l, a_t, a_r, a_b = area
-            else:
-                a_l, a_t = 0, 0
-                a_r = parent.winfo_screenwidth()
-                a_b = parent.winfo_screenheight()
-            x = max(a_l, min(x, a_r - w))
-            if y + h > a_b:
-                # 下に入り切らなければ、対象の語の上側に出す
-                above = y - h - 24
-                y = above if above >= a_t else max(a_t, a_b - h)
-        else:
-            # 右端・下端がウィンドウからはみ出すなら内側へ寄せる
-            x = max(win_x, min(x, win_x + win_w - w))
-            if y + h > win_y + win_h:
-                above = y - h - 24
-                y = (above if above >= win_y
-                     else max(win_y, win_y + win_h - h))
+        x = max(a_l, min(x, a_r - w))
+        if y + h > a_b:
+            above = y - h - 24
+            y = above if above >= a_t else max(a_t, a_b - h)
+        y = max(a_t, min(y, a_b - h))
         dd.geometry(f'+{int(x)}+{int(y)}')
+        dd.deiconify()
         try:
             lb.focus_set()
         except Exception:
@@ -20626,10 +21336,10 @@ class CorrectNoteApp:
         dlg.transient(self.root)
         self._place_dialog(dlg, 460, 420)
 
-        tk.Label(dlg, text='「補正しない」と判断した語',
+        tk.Label(dlg, text='覚えている補正の判断',
                  bg=BG, fg=INK, font=('Yu Gothic UI', 10, 'bold'),
                  anchor='w').pack(fill='x', padx=16, pady=(16, 2))
-        tk.Label(dlg, text='補正結果の色つき部分をクリックすると登録されます。'
+        tk.Label(dlg, text='直さない・紫を付けない・選び直した語などを覚えています。'
                            '選んで「取り消す」で元に戻せます。',
                  bg=BG, fg=MUTED, font=('Yu Gothic UI', 8),
                  anchor='w', justify='left').pack(fill='x', padx=16, pady=(0, 8))
@@ -21304,12 +22014,50 @@ class CorrectNoteApp:
                 except Exception:
                     pass
 
+            imm = ctypes.windll.imm32
+            imm.ImmGetContext.argtypes = [_wt.HWND]
+            imm.ImmGetContext.restype = ctypes.c_void_p
+            imm.ImmReleaseContext.argtypes = [_wt.HWND, ctypes.c_void_p]
+            imm.ImmGetCompositionStringW.argtypes = [
+                ctypes.c_void_p, _wt.DWORD, ctypes.c_void_p, _wt.DWORD]
+            imm.ImmGetCompositionStringW.restype = ctypes.c_long
+
+            def _ime_result(hwnd):
+                """確定した文字（GCS_RESULTSTR）。読めなければ空。"""
+                himc = imm.ImmGetContext(hwnd)
+                if not himc:
+                    return ''
+                try:
+                    size = imm.ImmGetCompositionStringW(himc, 0x0800, None, 0)
+                    if size <= 0:
+                        return ''
+                    buf = ctypes.create_string_buffer(size)
+                    got = imm.ImmGetCompositionStringW(himc, 0x0800, buf, size)
+                    if got <= 0:
+                        return ''
+                    return buf.raw[:got].decode('utf-16-le', 'surrogatepass').encode(
+                        'utf-16', 'surrogatepass').decode('utf-16')
+                except Exception:
+                    return ''
+                finally:
+                    imm.ImmReleaseContext(hwnd, himc)
+
             def _on_message(hwnd, msg, wparam, lparam, uid, ref):
                 if msg == 0x0112 and wparam&0xfff0 == 0xf100 and not lparam:
                     native = getattr(self,'_native_f5',None)
                     if native is not None and native.consume_alt_menu(u32.GetMessageTime()):return 0
                 if msg in taskbar_messages:
                     self._drop_icon_pending = True
+                if msg == 0x010F and lparam & 0x0800:   # WM_IME_COMPOSITION・GCS_RESULTSTR
+                    text = _ime_result(hwnd)
+                    if text and ime_result_needs_help(text):
+                        # Tk はこの字を捨てるので、ここで受け取って積む
+                        # （**ここで Tk を触らない**。入れるのは見回りの中）。
+                        try:
+                            self._ime_text_queue.append(text)
+                        except Exception:
+                            pass
+                        return 0
                 if msg != _MSG:
                     return comctl.DefSubclassProc(hwnd, msg, wparam, lparam)
                 got = []
@@ -21344,6 +22092,7 @@ class CorrectNoteApp:
             self._drop_comctl = comctl
             self._drop_hwnds = []
             self._drop_queue = []
+            self._ime_text_queue = []
 
             def _attach(widget):
                 """その窓に差し替えを掛ける。掛けた hwnd の並びを返す。
@@ -21434,6 +22183,31 @@ class CorrectNoteApp:
 
     DROP_POLL_MS = 120
 
+    def _insert_ime_text(self, text):
+        """IME で確定した絵文字などを、いま焦点のある欄へ打ち込む。
+
+        Tk の打ち込みと同じ `tk::TextInsert` を使う（選んでいる字は置き換わり、
+        取り消しの区切りもふつうの打鍵と同じ）。読み取り専用の欄には入れない。"""
+        try:
+            widget = self.root.focus_get()
+        except Exception:
+            widget = None
+        # 欄の種類ごとに Tk 自身の打ち込みの手続き（検索欄などの Entry も）。
+        insert = {'Text': 'tk::TextInsert', 'Entry': 'tk::EntryInsert',
+                  'TEntry': 'ttk::entry::Insert'}.get(
+                      widget.winfo_class() if widget is not None else None)
+        if insert is None:
+            return False
+        try:
+            if str(widget.cget('state')) in ('disabled', 'readonly'):
+                return False
+            widget.tk.call(insert, widget, text)
+            if insert == 'tk::TextInsert':
+                widget.see('insert')
+        except Exception:
+            return False
+        return True
+
     def _drain_drop_queue(self):
         """受け皿に積まれたドロップを取り出して開く（項目48-TO）。
 
@@ -21447,6 +22221,12 @@ class CorrectNoteApp:
             q = getattr(self, '_drop_queue', None)
             while q:
                 self._on_files_dropped(q.pop(0))
+        except Exception:
+            pass
+        try:
+            q = getattr(self, '_ime_text_queue', None)
+            while q:
+                self._insert_ime_text(q.pop(0))
         except Exception:
             pass
         try:

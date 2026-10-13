@@ -428,6 +428,25 @@ def _native_verb_family_allows(word, family):
     return not kinds or any(kind.startswith(family) for kind in kinds)
 
 
+_NOUN_SUFFIX_READINGS = ('ちゅう', 'じゅう', 'ずみ', 'しだい', 'ちょう', 'ぶん')
+
+
+def _noun_only_kana(word):
+    """48-DI / 2026-10-12: かなの並びが辞書で動詞以外（名詞・副詞…）としてだけ
+    読まれるか（びょう＝病・秒）。そうなら五段の動詞として活用させない
+    （びょ＋え で `びょえいん` が説明されていた）。言い切りの形そのもの
+    （かんりょう＋ちゅう の切れ目）は前どおり読む。"""
+    if not word or not all('ぁ' <= c <= 'ゖ' or c == 'ー' for c in word):
+        return False
+    from morphology import dictionary_paradigms
+    from corrector import table_surfaces_for_reading
+    faces = tuple(dict.fromkeys((word, *table_surfaces_for_reading(word, limit=12))))
+    rows = [(pos, reading) for face in faces
+            for pos, kind, form, base, reading in dictionary_paradigms(face) or ()
+            if reading == word]
+    return bool(rows) and not any(pos.startswith('動詞,') for pos, reading in rows)
+
+
 def _looks_verb(word, words):
     """
     その表記は**用言（動詞）の形**か（項目48-MR・2026-08-31）。
@@ -615,15 +634,18 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
                 if any(p.startswith('名詞,形容動詞語幹,')
                        for p in (dictionary_base_pos(base) or ())):
                     stack.append((k + 1, 'Bw'))
-        if kanji_stem:
+        # 漢字の連続の**末尾から**語幹を探す（項目48-CD。`昨日見たはず` の
+        # 語幹は `見` で、`昨日見` ではない。用言の漢字はいつも連続の終わりに在る）
+        for _cut in range(len(kanji_stem) if after_kanji else 0):
+            _ks = kanji_stem[_cut:]
             for k in range(1, min(6, n) + 1):
-                w0 = kanji_stem + run[:k]
+                w0 = _ks + run[:k]
                 if w0 not in words:
                     continue
                 stack.append((k, 'Bw' if _looks_verb(w0, words) else 'Bf'))
             # 漢字の語幹の動詞・形容詞（動く・早い）を活用させた形
             for k in range(0, min(4, n)):
-                stem = kanji_stem + run[:k]
+                stem = _ks + run[:k]
                 if (stem + 'い' in words and k < n
                         and _possible_i_adjective(stem + 'い')):
                     stack.append((k, 'IST'))
@@ -633,7 +655,11 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
                     a, i_, e, o, onb = row
                     c = run[k]
                     if not _native_verb_family_allows(stem+u,'五段'):
-                        if u=='る' and _native_verb_family_allows(stem+u,'一段'):
+                        # カ変の `来る` も、書かれた形は一段と同じ並び
+                        # （来た・来て・来ない・来ます・来れば・来よう。
+                        # 項目48-CD・2026-10-11。`誰が来たのですか` に紫が立っていた）
+                        if u=='る' and (_native_verb_family_allows(stem+u,'一段')
+                                        or _native_verb_family_allows(stem+u,'カ変')):
                             stack.append((k,'E'))
                         continue
                     if c == u:
@@ -648,7 +674,8 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
                         stack.append((k + 1, 'TSU' if onb != 'ん' else 'N'))
                     if c == o and k + 1 < n and run[k + 1] == 'う':
                         stack.append((k + 2, 'Ev' if stems_only else 'END'))
-                    if (u == 'る' and _native_verb_family_allows(stem+u,'一段')
+                    if (u == 'る' and (_native_verb_family_allows(stem+u,'一段')
+                                       or _native_verb_family_allows(stem+u,'カ変'))
                             and (not ('ぁ' <= stem[-1] <= 'ゖ') or stem[-1] in _ICHIDAN_TAIL)):
                         stack.append((k, 'E'))       # 一段（見る・出る）
     while stack:
@@ -838,6 +865,12 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
                         if (u=='る' and not _onbin_only
                                 and _native_verb_family_allows(stem+u,'一段')):
                             stack.append((j,'E'))
+                        continue
+                    if (c2 != u and _noun_only_kana(stem + u)
+                            and not (stem[0] in 'おご' and (stem + u)[1:] in words)):
+                        # 48-DI: 名詞の読みは活用させない（びょ＋え）。言い切りの形
+                        # （とうちゃく｜まち・かんりょう｜ちゅう の切れ目）と、お／ご＋動詞
+                        # （お＋まち）は前どおり読む（塞ぐと正しい文に紫が立った）
                         continue
                     if _onbin_only:
                         if onb and c2 == onb:
@@ -1239,6 +1272,647 @@ def _double_native_verb_polite_tail_spans(line, store):
                 or overlaps(head[3],past[4],protected)):
             continue
         out.append((suru[3],te[4]))
+    return tuple(out)
+
+
+# 48-CP: 丁寧の ます は動詞の連用形（い段・え段・し・き）にしか付かない。
+# 文末で閉じる ます の直前がそれ以外の字なら、述語が壊れている
+# （`そうじをとました`・`しんぶんをよこます`・`いはます`）。
+# 名詞の 真下（〜のました）・鱒（さけとます）と ますます・ですます は語
+# なので除く。
+_RENYOU_FINAL_KANA = frozenset('いきぎしじちぢにひびぴみりえけげせぜてでねへべぺめれ')
+_POLITE_FINAL_TAILS = ('ませんでした', 'ましょう', 'ますか', 'ました', 'ません', 'ます')
+_SENTENCE_CLOSERS = frozenset('。．.、，,！？!?」』）)】 \u3000\t\n')
+
+
+def _polite_tail_after_non_renyou_spans(line):
+    """文末の丁寧の ます 類の直前が、連用形の字でない位置。"""
+    if 'ま' not in line:
+        return ()
+    from literal_examples import protected_ranges, overlaps
+    out = []
+    n = len(line)
+    i = 0
+    while i < n:
+        if not _is_hira(line[i]):
+            i += 1
+            continue
+        j = i
+        while j < n and _is_hira(line[j]):
+            j += 1
+        run, start, i = line[i:j], i, j
+        if j < n and line[j] not in _SENTENCE_CLOSERS:
+            continue
+        for tail in _POLITE_FINAL_TAILS:
+            if not run.endswith(tail):
+                continue
+            if len(run) > len(tail):
+                head = run[:-len(tail)]
+                ch = head[-1]
+                if (ch not in _RENYOU_FINAL_KANA
+                        and not (ch == 'の' and tail == 'ました')
+                        and not (ch in 'とや' and tail == 'ます')
+                        and not run.endswith(('ますます', 'ですます'))):
+                    a = start + len(head) - 1
+                    if not overlaps(a, j, protected_ranges(line)):
+                        out.append((a, j))
+            break
+    return tuple(out)
+
+
+# 48-CU: する（し＋ます類）が直に付くのは、動作の名詞（旅行・電話）・
+# 副詞（ゆっくり）・形容詞の く形（おおきく）だけ。それ以外の かなの塊が
+# し＋ます の直前に裸で置かれていたら、その塊が壊れている
+# （`くるまのかぎをにくしました`——くるまの・かぎを・しました はそれぞれ
+# 成立し、説明の付かない にく だけが残る）。印はその塊だけに立てる。
+# 五段サ行の連用形（なくし・かえし）として読めるなら壊れていない。
+_SURU_POLITE_TAILS = ('しませんでした', 'しましょう', 'しますか', 'しました',
+                      'しません', 'します')
+_SURU_HEAD_DELIMITERS = frozenset('をがはもでへとに')
+
+
+def _suru_head_is_sound(head, dict_index):
+    """かなの塊 head に し＋ます が続いてよいか（辞書で確かめる）。"""
+    from morphology import dictionary_base_pos, dictionary_inflections
+    # 五段サ行の連用形（なくし・さがし）
+    for surface in (dict_index.inflected_surfaces_for_reading(head + 'し') or ()):
+        for pos, form, base, rd in dictionary_inflections(surface) or ():
+            if pos.startswith('動詞,') and form.startswith('連用') and rd == head + 'し':
+                return True
+    # 動作の名詞・副詞（旅行・ゆっくり）。辞書は 寝坊・怪我 を普通名詞と
+    # しか書かないので、2字以上の表記を持つ名詞の読みなら受ける。
+    # 判定の決め手は「し の前の塊が、何の語の読みでもない」こと（にく）
+    for surface in (dict_index.surfaces_for_reading(head) or ()):
+        for pos in dictionary_base_pos(surface) or ():
+            if pos.startswith(('名詞,', '副詞,')) and not pos.startswith(
+                    ('名詞,接尾,', '名詞,非自立,', '名詞,固有名詞,')):
+                return True
+    # かなで書く副詞・動作の名詞そのもの（どきどき・うっかり）
+    for pos in dictionary_base_pos(head) or ():
+        if pos.startswith(('名詞,サ変接続,', '副詞,')):
+            return True
+    # かなで打った外来語の名詞（ぷれい＝プレイ・すきゃん＝スキャン）
+    from reading_segments import native_katakana_nominal_face
+    if native_katakana_nominal_face(head):
+        return True
+    # どう・こう・そう（機能語の表に在るもの）
+    if head in _load_tables()[1]:
+        return True
+    # 謙譲の お／ご＋連用形・動作の名詞（おかけします・ごれんらくします）
+    if len(head) >= 3 and head[0] in 'おご' and _suru_head_is_sound(head[1:], dict_index):
+        return True
+    if len(head) >= 3 and head[0] in 'おご':
+        for surface in (dict_index.inflected_surfaces_for_reading(head[1:]) or ()):
+            for pos, form, base, rd in dictionary_inflections(surface) or ():
+                if pos.startswith('動詞,') and form.startswith('連用') and rd == head[1:]:
+                    return True
+    # 形容詞の連用形（おおきく・はやく）＋する
+    if len(head) >= 2 and head[-1] == 'く':
+        for surface in (dict_index.inflected_surfaces_for_reading(head) or ()):
+            for pos, form, base, rd in dictionary_inflections(surface) or ():
+                if pos.startswith('形容詞,') and form.startswith('連用') and rd == head:
+                    return True
+    return False
+
+
+def _bare_head_before_suru_spans(line, dict_index):
+    """し＋ます の直前に置けない かなの塊（48-CU）。"""
+    if dict_index is None or 'しま' not in line:
+        return ()
+    from literal_examples import protected_ranges, overlaps
+    out = []
+    n = len(line)
+    i = 0
+    while i < n:
+        if not _is_hira(line[i]):
+            i += 1
+            continue
+        j = i
+        while j < n and _is_hira(line[j]):
+            j += 1
+        run, start, i = line[i:j], i, j
+        if j < n and line[j] not in _SENTENCE_CLOSERS:
+            continue
+        tail = next((t for t in _SURU_POLITE_TAILS if run.endswith(t)), None)
+        if tail is None:
+            continue
+        cut = len(run) - len(tail)
+        # 助詞の直後の塊だけを見る。前に何も無い行頭の連続と、漢字・
+        # カタカナの直後の連続（送り仮名かもしれない）は区切りが言えない
+        heads = []
+        for p in range(cut - 1, -1, -1):
+            if run[p] not in _SURU_HEAD_DELIMITERS:
+                continue
+            if p == 0 and start > 0 and not _is_hira(line[start - 1]) \
+                    and line[start - 1] not in _SENTENCE_CLOSERS:
+                pass                         # 漢字＋を（鍵を）の を は助詞
+            elif p == 0:
+                continue                     # 行頭の を・が… は語の頭
+            heads.append(p + 1)
+        # 行頭・句読点のあとの連続は、頭から し の前までも1つの塊として見る
+        # （よろしくおねがいします の が・おとどけします の と は語の中）
+        # 謙譲の お／ご は新しい語の頭（よろしく｜おねがいします）
+        heads.extend(p for p in range(1, cut - 1) if run[p] in 'おご')
+        if cut and (start == 0 or line[start - 1] in _SENTENCE_CLOSERS
+                    or not (_is_kanji(line[start - 1]) or _is_kata(line[start - 1])
+                            or _is_hira(line[start - 1]))):
+            heads.append(0)
+        if not heads:
+            continue
+        if any(h == cut for h in heads):
+            continue                         # 助詞＋しました（しゅくだいをしました）
+        if any(_suru_head_is_sound(run[h:cut], dict_index) for h in heads):
+            continue
+        # 区切りの字が無くても、し の直前の2字以上が語なら壊れていない
+        # （もういちど｜かくにんします・さんまい｜よういします）
+        if any(_suru_head_is_sound(run[k:cut], dict_index)
+               for k in range(max(0, cut - 8), cut - 1)):
+            continue
+        # 印は、成立した句（かぎを）のすぐあとの塊に立てる。助詞が2つ
+        # 続く位置（を｜に）の2つ目は、塊の中の字として扱う
+        real = [h for h in heads if h and run[h - 1] in _SURU_HEAD_DELIMITERS
+                and not (h >= 2 and run[h - 2] in _SURU_HEAD_DELIMITERS)]
+        h = max(real) if real else max(heads)
+        a, b = start + h, start + cut
+        if not overlaps(a, b, protected_ranges(line)):
+            out.append((a, b))
+    return tuple(out)
+
+
+# 48-CW: ような・みたいな は連体形で、次に名詞が要る。助詞1字で
+# 連続が終わる（`きりがないようなも`）なら、名詞が抜けたか ように の
+# 打ち間違い。ようなもの・ようなもん のように名詞が続く形は立たない。
+_ATTRIBUTIVE_LIKE = ('みたいな', 'ような')
+
+
+def _attributive_before_particle_spans(line):
+    """ような／みたいな＋助詞1字で連続が終わる位置（48-CW）。"""
+    if 'な' not in line:
+        return ()
+    from literal_examples import protected_ranges, overlaps
+    out = []
+    n = len(line)
+    i = 0
+    while i < n:
+        if not _is_hira(line[i]):
+            i += 1
+            continue
+        j = i
+        while j < n and _is_hira(line[j]):
+            j += 1
+        run, start, i = line[i:j], i, j
+        if j < n and line[j] not in _SENTENCE_CLOSERS:
+            continue
+        if len(run) < 4 or run[-1] not in 'もをがはで':
+            continue
+        # 行の終わり（打っている途中: ようなも＋の）は見ない。後ろに区切りが
+        # 来て並びが閉じたときだけ（きりがないようなも　　（…））。
+        if j >= n:
+            continue
+        for head in _ATTRIBUTIVE_LIKE:
+            if run[:-1].endswith(head):
+                a = start + len(run) - 1 - len(head)
+                if not overlaps(a, j, protected_ranges(line)):
+                    out.append((a, j))
+                break
+    return tuple(out)
+
+
+# 48-CZ / AI の判断 / 2026-10-12: 文末の丁寧の ます類 が1字崩れた形。
+# 動詞の連用形（いき・まってい）の直後で並びが
+#   ・まか で終わる（ますか の す が抜けた：いきまか）
+#   ・す で終わる（ます の ま が抜けた：いきす）
+# 場合は、ます類 が崩れている。末尾が辞書の語（かえす＝返す・いす＝椅子）の
+# 読みで終われるなら壊れていない。
+def _verb_continuative_end(head, dict_index):
+    """head の末尾が、2字以上の動詞の連用形の読みで終わるなら、その字数（最長）。"""
+    from morphology import dictionary_inflections
+    found = 0
+    for k in range(2, min(6, len(head)) + 1):
+        r = head[-k:]
+        for surface in (dict_index.inflected_surfaces_for_reading(r) or ()):
+            if any(pos.startswith('動詞,') and form.startswith('連用') and rd == r
+                   for pos, form, base, rd in dictionary_inflections(surface) or ()):
+                found = k
+                break
+    if not found and head.endswith(('てい', 'でい')):
+        found = 2
+    return found
+
+
+def _ends_with_word_reading(run, dict_index, shortest=2):
+    """run の末尾 shortest 字以上が、辞書の語の読み（活用形を含む）で終われるか。"""
+    for k in range(shortest, min(6, len(run)) + 1):
+        r = run[-k:]
+        if dict_index.surfaces_for_reading(r, limit=1):
+            return True
+        if dict_index.inflected_surfaces_for_reading(r):
+            return True
+    return False
+
+
+def _ends_with_noun_reading(run, dict_index):
+    """run の末尾2字以上が、名詞・副詞の読みで終われるか（いま・あたま・たま）。"""
+    from morphology import dictionary_base_pos
+    if run.endswith(('ていま', 'でいま')):
+        return False  # まってい＋ま は 待っています の崩れ（今 ではない）
+    for k in range(2, min(6, len(run)) + 1):
+        r = run[-k:]
+        faces = list(dict_index.surfaces_for_reading(r) or ()) + [r]
+        if r == 'いま' or any(pos.startswith(('名詞,', '副詞,'))
+                              for face in faces for pos in dictionary_base_pos(face) or ()):
+            return True
+    return False
+
+
+def _broken_polite_tail_spans(line, dict_index):
+    """連用形の後ろの ます類 が1字崩れて文が終わる位置（48-CZ）。"""
+    if dict_index is None or ('まか' not in line and 'す' not in line and 'またし' not in line):
+        return ()
+    from literal_examples import protected_ranges, overlaps
+    out = []
+    n = len(line)
+    i = 0
+    while i < n:
+        if not _is_hira(line[i]):
+            i += 1
+            continue
+        j = i
+        while j < n and _is_hira(line[j]):
+            j += 1
+        run, start, i = line[i:j], i, j
+        if j < n and line[j] not in _SENTENCE_CLOSERS:
+            continue
+        if (run.endswith('まか') and not run.endswith('ますか')
+                and not _ends_with_noun_reading(run[:-1], dict_index)):
+            # いまか（今か）・あたまか のように ま で終わる語なら壊れていない
+            cut = len(run) - 2
+        elif run.endswith('またし'):
+            # 48-DJ: ました の し と た の入れ替わり（とどきまたし）
+            cut = len(run) - 3
+        elif (run.endswith('す') and not run.endswith(('ます', 'です'))
+                and not _ends_with_word_reading(run, dict_index, shortest=3)):
+            # 2字の読み（きす）は何にでも当たるので、3字以上の語（かえす）で見る
+            cut = len(run) - 1
+        else:
+            continue
+        head = run[:cut]
+        if len(head) < 2 or not (_verb_continuative_end(head, dict_index)
+                                 or run.endswith('またし') and len(head) >= 3
+                                 and head.endswith('し')):
+            continue
+        a = start + cut
+        if not overlaps(a, j, protected_ranges(line)):
+            out.append((a, j))
+    return tuple(out)
+
+
+# 48-DG / 2026-10-12: 目的の に は連用形に付く（買いに行く・迎えに行く）。
+# 終止形＋に＋行く（むかうにいきます）は崩れ。行くに行けない・言うに言えない
+# の形は後ろが いけ／いえ なので当たらない。
+_PURPOSE_GO_HEADS = ('いきま', 'いきた', 'いきたい', 'いく', 'いった', 'いって', 'いこう')
+
+
+def _terminal_before_purpose_spans(line, dict_index):
+    if dict_index is None or 'にい' not in line:
+        return ()
+    from morphology import dictionary_inflections
+    from literal_examples import protected_ranges, overlaps
+    out = []
+    n = len(line)
+    for a in range(2, n - 2):
+        if line[a] != 'に' or not line.startswith(_PURPOSE_GO_HEADS, a + 1):
+            continue
+        if line.startswith('いくら', a + 1) or line.startswith('いくつ', a + 1):
+            continue
+        b = a
+        while b > 0 and _is_hira(line[b - 1]):
+            b -= 1
+        head = line[b:a]
+        if len(head) < 2 or head[-1] not in 'うくぐすずつぬぶむるゆふ':
+            continue
+        verb = 0
+        for k in range(2, min(6, len(head)) + 1):
+            r = head[-k:]
+            for surface in (dict_index.inflected_surfaces_for_reading(r) or ()):
+                if any(pos.startswith('動詞,') and form == '基本形' and rd == r
+                       for pos, form, base, rd in dictionary_inflections(surface) or ()):
+                    verb = k
+                    break
+        if not verb or _ends_with_noun_reading(head, dict_index):
+            continue
+        # 連用形としても読める並び（かう＝買う…ではなく かい）は終止形なので見る。
+        span = (a - 1, a + 1)
+        if not overlaps(span[0], span[1], protected_ranges(line)):
+            out.append(span)
+    return tuple(out)
+
+
+# 48-DH / 2026-10-12: かな配列で を は Shift＋わ。Shift が抜けると わ になる
+# （てがみわかきました）。わ を を に戻すと、かなの並びがまるごと成り立ち、
+# 元のままでは成り立たないときだけ見る。でんわ・にわ のように わ で終わる語は除く。
+def _unshifted_wo_spans(line, dict_index):
+    if dict_index is None or 'わ' not in line:
+        return ()
+    from reading_segments import completed_native_reading
+    from literal_examples import protected_ranges, overlaps
+    out = []
+    n = len(line)
+    i = 0
+    while i < n:
+        if not _is_hira(line[i]):
+            i += 1
+            continue
+        j = i
+        while j < n and _is_hira(line[j]):
+            j += 1
+        run, start, i = line[i:j], i, j
+        if 'わ' not in run[1:-1] or len(run) < 5:
+            continue
+        whole = None
+        for k in range(1, len(run) - 1):
+            if run[k] != 'わ' or not _is_hira(run[k - 1]):
+                continue
+            if _ends_with_word_reading(run[:k + 1], dict_index, shortest=2):
+                continue
+            if whole is None:
+                whole = completed_native_reading(run)
+            if whole:
+                break
+            if completed_native_reading(run[:k] + 'を' + run[k + 1:]):
+                a = start + k
+                if not overlaps(a, a + 1, protected_ranges(line)):
+                    out.append((a, a + 1))
+    return tuple(out)
+
+
+# 48-DK / 2026-10-12: 文末の決まった語尾（ください・ですか・ますか…）が1打だけ
+# 崩れた形（くだそい・まださい・でかす）。崩れた語尾を戻すと並びがまるごと成り立ち、
+# 元のままでは成り立たないときだけ見る。
+_POLITE_END_TAILS = ('てください', 'ください', 'ですか', 'ますか', 'ていました', 'ました', 'ません',
+                     'でした', 'ています', 'ます')
+
+
+def _one_key_from(text, tail):
+    if text == tail:
+        return False
+    if len(text) == len(tail) - 1:
+        # 1字の打ち落とし（たべした＝たべ［ま］した）
+        return any(tail[:k] + tail[k + 1:] == text for k in range(len(tail)))
+    if len(text) != len(tail):
+        return False
+    diff = [k for k in range(len(tail)) if text[k] != tail[k]]
+    if len(diff) == 1:
+        return True
+    return (len(diff) == 2 and diff[1] == diff[0] + 1
+            and text[diff[0]] == tail[diff[1]] and text[diff[1]] == tail[diff[0]])
+
+
+def _broken_polite_end_spans(line, dict_index):
+    return tuple((a, b) for a, b, tail in _broken_polite_end_frames(line, dict_index))
+
+
+_POLITE_END_OMISSIBLE = ('てください', 'ていました', 'ました', 'ています', 'ます')
+
+
+def _polite_end_head_fits(head, tail, dict_index):
+    """語尾の前の並びが、その語尾を受けられる形か（たに＋でした は受けない）。"""
+    from morphology import tokenize
+    parts = tokenize(head)
+    if not parts or parts[-1].pos == '助詞' and parts[-1].surface not in ('て', 'で'):
+        return False
+    if tail.startswith('ま') or tail in ('てください', 'ています', 'ていました'):
+        if len(head) >= 3 and head.endswith('し') and tail != 'てください':
+            return True  # サ変の連用形（べんきょうし）
+        return bool(dict_index is not None and _verb_continuative_end(head, dict_index))
+    if tail == 'ください':
+        return head.endswith(('て', 'で'))
+    return True
+
+
+_SMALL_KANA_LARGE = str.maketrans('ぁぃぅぇぉっゃゅょゎ', 'あいうえおつやゆよわ')
+
+
+def _small_kana_style(text, tail):
+    """崩れた字が小さい仮名（くださぃ・よみますぅ）か。書き手の崩しとして残す。"""
+    return any(a != b and a in 'ぁぃぅぇぉゃゅょゎ' for a, b in zip(text, tail))
+
+
+def _broken_polite_end_of_run(run, dict_index=None):
+    from reading_segments import completed_native_reading
+    from morphology import tokenize
+    checked = None
+    if any(len(t) >= 3 and run.endswith(t) and len(run) > len(t)
+           and not run[:-len(t)].endswith(('て', 'で'))
+           and _polite_end_head_fits(run[:-len(t)], t, dict_index) for t in _POLITE_END_TAILS):
+        return None                       # 語尾はそろっている（にくしました を でした と見ない）
+    for tail in _POLITE_END_TAILS:
+        for size in (len(tail), len(tail) - 1):
+            k = len(run) - size
+            if k < 2 or size < 2 or not _one_key_from(run[k:], tail):
+                continue
+            if size < len(tail) and tail not in _POLITE_END_OMISSIBLE:
+                continue
+            if size == len(tail) and _small_kana_style(run[k:], tail):
+                continue                  # くださぃ は書き手の崩し（打ち間違いではない）
+            if size == len(tail) and run[-1] != tail[-1] and run[-1] == run[-2]:
+                continue                  # ますす は2度打ち（直さない設定のまま。か に替えない）
+            if (tail == 'ます' and dict_index is not None
+                    and (dict_index.surfaces_for_reading(run[k:], limit=1)
+                         or dict_index.inflected_surfaces_for_reading(run[k:]))):
+                continue                  # まち・なす は語の読み（かんごし＋まち）
+            if not _polite_end_head_fits(run[:k], tail, dict_index):
+                continue
+            # 漢字・カタカナの後ろの並び（を＋おくりのした・が＋こわれのした）や長い並びは
+            # 語尾に近い助詞の後ろだけで見る（やくそくを｜わすれいました）
+            cut = max((q for q in range(1, k - 1) if run[q - 1] in 'をがにはでとも'), default=0)
+            body = run[cut:] if cut else run
+            if checked is None:
+                checked = (completed_native_reading(run) or completed_native_reading(body)
+                           or body.endswith(('した', 'します')) and len(body) >= 4
+                           and bool(_noun_reading_faces(body[:-2]))
+                           and not (dict_index is not None
+                                    and _verb_continuative_end(body[:-2], dict_index)))
+            if checked:
+                return None               # ほぞん＋した は サ変（ました の崩れではない）
+            # 元の語尾が機能語だけで読める（ですが・ますが）なら崩れではない
+            if all(t.has_reading and t.pos in ('助詞', '助動詞')
+                   for t in tokenize(run) if t.end > k):
+                return None
+            if (completed_native_reading(run[:k] + tail)
+                    or cut and completed_native_reading(body[:k - cut] + tail)):
+                return k, tail
+    return None
+
+
+def _broken_polite_end_frames(line, dict_index):
+    if dict_index is None:
+        return ()
+    from reading_segments import completed_native_reading
+    from literal_examples import protected_ranges, overlaps
+    out = []
+    n = len(line)
+    i = 0
+    while i < n:
+        if not _is_hira(line[i]):
+            i += 1
+            continue
+        j = i
+        while j < n and _is_hira(line[j]):
+            j += 1
+        run, start, i = line[i:j], i, j
+        if j < n and line[j] not in _SENTENCE_CLOSERS:
+            continue
+        frame = _broken_polite_end_of_run(run, dict_index)
+        if frame:
+            k, tail = frame
+            if not overlaps(start + k, j, protected_ranges(line)):
+                out.append((start + k, j, tail))
+    return tuple(out)
+
+
+# 48-DM / 2026-10-12: な は形容動詞の語幹のあとに付く。ただの名詞＋な＋名詞
+# （かいしゃなでんわ）は に・の の打ち間違い（な と に は隣のキー）。
+# 名詞の読みのどの表記にも 形容動詞語幹・連体詞 が無いときだけ見る。
+_NA_FUNCTION_HEADS = ('ので', 'のに', 'のだ', 'のです', 'ら', 'ど', 'んて', 'んか', 'んで', 'く', 'い',
+                      'かった', 'さい', 'がら', 'がい', 'がく', 'ければ')
+
+
+def _noun_reading_faces(reading):
+    from corrector import table_surfaces_for_reading
+    from morphology import dictionary_base_pos
+    faces = table_surfaces_for_reading(reading, limit=8) or ()
+    return [(face, tuple(dictionary_base_pos(face) or ())) for face in faces]
+
+
+# 48-DP / 2026-10-12: 許しの 〜ても いい の て を た と打った形（あけたもいい）。
+# 動詞の連用形の読みの後ろの たも／だも ＋ いい・よい・かまわ だけを見る。
+_PERMISSION_HEADS = ('いい', 'よい', 'かまわ', 'けっこう')
+
+
+def _ta_for_te_permission_spans(line, dict_index):
+    if dict_index is None or 'もいい' not in line and 'もよい' not in line and 'もかまわ' not in line \
+            and 'もけっこう' not in line:
+        return ()
+    from literal_examples import protected_ranges, overlaps
+    out = []
+    for a in range(2, len(line) - 3):
+        if line[a] not in 'ただ' or line[a + 1] != 'も':
+            continue
+        if not line.startswith(_PERMISSION_HEADS, a + 2):
+            continue
+        head = line[:a]
+        k = 0
+        while k < len(head) and _is_hira(head[len(head) - 1 - k]):
+            k += 1
+        if k < 2 or head.endswith(('また', 'まだ')) or not _verb_continuative_end(head[-k:], dict_index):
+            continue
+        if not overlaps(a, a + 1, protected_ranges(line)):
+            out.append((a, a + 1))
+    return tuple(out)
+
+
+def _plain_noun_before_na_spans(line, dict_index):
+    if dict_index is None or 'な' not in line:
+        return ()
+    from literal_examples import protected_ranges, overlaps
+    out = []
+    n = len(line)
+    for a in range(2, n - 2):
+        if line[a] != 'な' or not _is_hira(line[a - 1]) or not _is_hira(line[a + 1]):
+            continue
+        rest = line[a + 1:]
+        if rest.startswith(_NA_FUNCTION_HEADS):
+            continue
+        if any(_noun_reading_faces(line[a + 1 - k:a + 1]) for k in range(2, min(6, a + 1) + 1)
+               if all(_is_hira(c) for c in line[a + 1 - k:a + 1])):
+            continue  # みんな・おとな のように な で終わる語
+        head = None
+        for k in range(min(6, a), 1, -1):
+            r = line[a - k:a]
+            if not all(_is_hira(c) for c in r):
+                continue
+            faces = _noun_reading_faces(r)
+            if faces:
+                head = (r, faces)
+                break
+        if head is None:
+            continue
+        r, faces = head
+        if line[:a].endswith(('じゃ', 'では', 'でわ')) or rest.startswith('さ'):
+            continue  # しずかじゃなさすぎ（ない の語幹）
+        if r.endswith('の') and len(r) >= 3 and _noun_reading_faces(r[:-1]):
+            continue  # ひも＋の＋ながさ（名詞＋の の後ろの語の頭）
+        pos = [p for face, ps in faces for p in ps]
+        if not faces[0][1] or not faces[0][1][0].startswith(('名詞,一般', '名詞,サ変接続')):
+            continue
+        if any(p.startswith(('名詞,形容動詞語幹', '連体詞', '形容詞', '副詞', '名詞,副詞可能',
+                             '名詞,代名詞', '名詞,ナイ形容詞語幹'))
+               for p in pos):
+            continue
+        tail = None
+        for k in range(min(6, n - a - 1), 1, -1):
+            t = line[a + 1:a + 1 + k]
+            if all(_is_hira(c) for c in t):
+                tf = _noun_reading_faces(t)
+                if tf and tf[0][1] and tf[0][1][0].startswith('名詞'):
+                    tail = t
+                    break
+        if tail is None or _starts_word_reading(line, a, dict_index):
+            continue
+        if not overlaps(a, a + 1, protected_ranges(line)):
+            out.append((a, a + 1))
+    return tuple(out)
+
+
+# 48-DA / AI の判断 / 2026-10-12: 助詞1字が2回続く打ち間違い（へやののそうじ）。
+# 語の中に同じ並びを持つもの（ものの・ののしる・ににんさんきゃく・ででむし）は除く。
+# はは（母）・もも（桃）・とと は語なので見ない。
+_DOUBLED_PARTICLES = ('をを', 'のの', 'にに', 'がが', 'でで', 'へへ')
+_DOUBLED_PARTICLE_WORDS = ('ものの', 'ののし', 'ののさま', 'ににん', 'ででむし', 'ががいも',
+                           'へへえ', 'へへん')
+
+
+def _starts_word_reading(line, a, dict_index):
+    """line[a:] が2字以上の語の読みで始まるか（そこに にもつ・かれが がっこう）。"""
+    if dict_index is None:
+        return True  # 確かめられないときは印を付けない
+    for k in range(2, 7):
+        r = line[a:a + k]
+        if len(r) < k or not all(_is_hira(c) for c in r):
+            break
+        if dict_index.surfaces_for_reading(r, limit=1):
+            return True
+        if k >= 3:
+            # のこり（残る の連用形＝名詞）。短い活用形（のそ・のそう）は数えない
+            from morphology import dictionary_inflections
+            for surface in (dict_index.inflected_surfaces_for_reading(r) or ()):
+                if any(pos.startswith('動詞,') and form == '連用形' and rd == r
+                       for pos, form, base, rd in dictionary_inflections(surface) or ()):
+                    return True
+    return False
+
+
+def _doubled_particle_spans(line, dict_index=None):
+    """名詞の後ろで助詞1字が2回続く位置（48-DA）。印は2つ目の1字。"""
+    if not any(p in line for p in _DOUBLED_PARTICLES):
+        return ()
+    from literal_examples import protected_ranges, overlaps
+    out = []
+    for pair in _DOUBLED_PARTICLES:
+        start = line.find(pair)
+        while start >= 0:
+            a = start + 1
+            before = line[start - 1:start]
+            after = line[start + 2:start + 3]
+            near = line[max(0, start - 2):start + 6]
+            if (before and (_is_hira(before) or '一' <= before <= '鿿' or 'ァ' <= before <= 'ヶ')
+                    and after and not after in _SENTENCE_CLOSERS
+                    and not any(w in near for w in _DOUBLED_PARTICLE_WORDS)
+                    and not _starts_word_reading(line, a, dict_index)
+                    and not overlaps(a, a + 1, protected_ranges(line))):
+                out.append((a, a + 1))
+            start = line.find(pair, start + 1)
     return tuple(out)
 
 
@@ -1812,6 +2486,16 @@ def odd_kana_spans(line, dict_index=None, store=None, preserve_unknown_source=Tr
     out0.extend(_past_before_sahen_without_connective_spans(line, store))
     out0.extend(_double_native_verb_polite_tail_spans(line, store))
     out0.extend(_terminal_polite_connective_spans(line, store))
+    out0.extend(_polite_tail_after_non_renyou_spans(line))
+    out0.extend(_bare_head_before_suru_spans(line, dict_index))
+    out0.extend(_attributive_before_particle_spans(line))
+    out0.extend(_broken_polite_tail_spans(line, dict_index))
+    out0.extend(_doubled_particle_spans(line, dict_index))
+    out0.extend(_terminal_before_purpose_spans(line, dict_index))
+    out0.extend(_unshifted_wo_spans(line, dict_index))
+    out0.extend(_broken_polite_end_spans(line, dict_index))
+    out0.extend(_plain_noun_before_na_spans(line, dict_index))
+    out0.extend(_ta_for_te_permission_spans(line, dict_index))
     out0.extend(_single_key_between_sahen_actions_spans(line, store))
     out0.extend(_stray_key_before_next_object_spans(line, store))
     out0.extend(_stray_to_between_verb_and_sahen_past_spans(line, store))
@@ -1892,6 +2576,16 @@ def odd_kana_spans(line, dict_index=None, store=None, preserve_unknown_source=Tr
                                   is_word=_is_word, bare_head=_bare)
         except Exception:
             ok = True
+        if not ok and stem and _is_kanji(prev) and 'ごと' in run:
+            # 48-CN': 送り仮名で終わる名詞＋配分の ごと（区切りごとに・
+            # 切り替えごとの）。漢字の語幹＋送り仮名がちょうど語で、
+            # 残りが説明できるときだけ。かなだけの連続（しごとが）には
+            # 使わない——ごと を助詞に読むと 仕事 の打ち間違いが消える。
+            p = run.find('ごと')
+            if (p > 0 and (stem + run[:p] in _load_tables()[0]
+                           or _is_word(stem + run[:p]))
+                    and explain_kana_run(run[p + 2:], is_word=_is_word)):
+                ok = True
         if not ok and dict_index is not None:
             # かなで書いただけの、世の中に在る語（にゅうりょく）
             try:
@@ -1932,6 +2626,12 @@ def odd_kana_spans(line, dict_index=None, store=None, preserve_unknown_source=Tr
             # A proved prefix never certifies the run's unexplained tail.
             from reading_segments import native_context_ranges
             ok=any(lo<=i0 and j<=hi for lo,hi in native_context_ranges(line))
+        if not ok:
+            # A fragment split after kanji can omit the actual preceding
+            # coordination. This original syntax is not candidate meaning
+            # evidence and does not remove independent anomaly rows.
+            from reading_segments import native_coordinated_syntax_ranges
+            ok=any(lo<=i0 and j<=hi for lo,hi in native_coordinated_syntax_ranges(line))
         if not ok and preserve_unknown_source:
             from reading_segments import source_opaque_object_ranges
             ok=any(lo<=i0 and j<=hi for lo,cut,hi in source_opaque_object_ranges(line))

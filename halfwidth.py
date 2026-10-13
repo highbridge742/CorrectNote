@@ -236,6 +236,68 @@ def _joins_word_and_value(text):
     return False
 
 
+def original_ascii_expression(line, start, end):
+    """Prove the original run is an operand of written ASCII syntax.
+
+    The candidate run is opaque: its JIS parentheses and dot keys must not
+    be reinterpreted as source delimiters. Syntax must remain outside it.
+    This does not declare a bare parenthesized typing fragment to be code.
+    """
+    import re
+    if not 0 <= start < end <= len(line):return False
+    def run_char(ch):
+        return not ch.isspace() and (ch.isascii() or 0xFF01<=ord(ch)<=0xFF5E)
+    if not all(run_char(ch) for ch in line[start:end]):return False
+    lo,hi=start,end
+    while lo and run_char(line[lo-1]):lo-=1
+    while hi<len(line) and run_char(line[hi]):hi+=1
+    field_lo,field_hi=0,len(line)
+    for boundary in re.finditer(r'[\t\r\n⇒→。！？]',line):
+        if boundary.end()<=lo:field_lo=boundary.end()
+        elif boundary.start()>=hi:field_hi=boundary.start();break
+        else:return False
+    # Detached edge symbols do not erase the written ASCII syntax of a
+    # field. Only the existing source separator proof can remove them;
+    # internal symbols, names and attached marks remain in the skeleton.
+    from morphology import detached_symbol_separators
+    field=line[field_lo:field_hi]
+    symbols=detached_symbol_separators(field);left,right=0,len(field)
+    for a,b in symbols:
+        if not field[left:a].strip():left=max(left,b)
+        else:break
+    for a,b in reversed(symbols):
+        if not field[b:right].strip():right=min(right,a)
+        else:break
+    base=field_lo;field_lo+=left;field_hi=base+right
+    if not field_lo<=lo<hi<=field_hi:return False
+    before=zenkaku_to_hankaku(line[field_lo:lo])
+    after=zenkaku_to_hankaku(line[hi:field_hi])
+    outside=before+after
+    if not outside.isascii() or not any(c in outside for c in '(.=<>!['):return False
+    marker='_correctnote_operand_'
+    while marker in outside:marker+='x'
+    skeleton=(before+marker+after).strip()
+    import ast
+    try:tree=ast.parse(skeleton)
+    except (SyntaxError,ValueError,RecursionError):return False
+    def contains(node):
+        return any(isinstance(x,ast.Name) and x.id==marker for x in ast.walk(node))
+    def external_name(node):
+        return any(isinstance(x,ast.Name) and x.id!=marker for x in ast.walk(node))
+    for node in ast.walk(tree):
+        if isinstance(node,ast.Call) and external_name(node.func):
+            if any(contains(x) for x in node.args):return True
+        if isinstance(node,ast.Attribute) and node.attr==marker and external_name(node.value):return True
+        if isinstance(node,ast.Subscript) and external_name(node.value) and contains(node.slice):return True
+        if isinstance(node,(ast.Assign,ast.AnnAssign,ast.AugAssign)) and contains(node):
+            # Either a surviving source identifier or an explicit numeric
+            # value supplies the other side of a written assignment.
+            if external_name(node) or any(isinstance(x,ast.Constant) and
+                    isinstance(x.value,(int,float,complex)) for x in ast.walk(node)):return True
+        if isinstance(node,ast.Compare) and contains(node) and external_name(node):return True
+    return False
+
+
 def looks_like_halfwidth_input(text, min_len=4):
     """
     この文字列は「半角モードのまま打ってしまったかな」に見えるか。
@@ -464,7 +526,8 @@ def _digits_after_letters(text, n_letters):
     return False
 
 
-def correct_halfwidth(text, store, find_readings, max_dist=1.6, judge=None):
+def correct_halfwidth(text, store, find_readings, max_dist=1.6, judge=None,
+                      native_context_accept=None):
     """
     半角モードのまま打ってしまった文字列を、かなに戻して補正する。
 
@@ -561,6 +624,14 @@ def correct_halfwidth(text, store, find_readings, max_dist=1.6, judge=None):
         # そこで語彙にある表記が分かる範囲で漢字・カタカナに変換する
         # （もじにゅうりょく → 文字入力）。
         return kana_to_kanji_where_possible(kana, store, judge=judge)
+
+    # An exact JIS restoration may form a native clause even when its
+    # content words are not seed phrases. Require the unchanged full field
+    # and the common gate before admitting such a new restoration.
+    if native_context_accept is not None and _complete_restored_reading(kana, store):
+        fixed=kana_to_kanji_where_possible(kana, store, judge=judge)
+        accepted=native_context_accept(fixed)
+        if accepted is not None:return accepted
 
     # --- 訂正を伴う場合 ---
     # 半角モードでも隣のキーを押し間違えるので、
@@ -779,8 +850,18 @@ def _is_dictionary_english(text):
         return False       # 名簿が無ければ意見なし（今までどおり）
 
 
+def _complete_restored_reading(kana, store):
+    """Require full unchanged reading evidence, including native grammar."""
+    if makes_sense_as_japanese(kana, store, min_ratio=1.0):return True
+    from reading_segments import completed_native_reading,native_nominal_phrase_faces
+    return bool(native_nominal_phrase_faces(kana) or completed_native_reading(kana))
+
+
+_complete_romaji_reading = _complete_restored_reading
+
+
 def correct_romaji(text, store, find_readings, max_dist=1.6, min_len=4,
-                   judge=None):
+                   judge=None, native_context_accept=None, source_keys_text=None):
     """
     ローマ字のまま打ってしまった文字列を、かなに戻して補正する。
 
@@ -844,6 +925,12 @@ def correct_romaji(text, store, find_readings, max_dist=1.6, min_len=4,
     # 「たまたま最後までローマ字として読めた」ものだけ。
     if entries or makes_sense_as_japanese(kana, store, min_ratio=1.0):
         return kana_to_kanji_where_possible(kana, store, judge=judge)
+    # Newly recognized native phrases need their original field, including
+    # any ASCII syntax. Existing seed-based restoration keeps its old path.
+    if native_context_accept is not None and _complete_restored_reading(kana, store):
+        fixed=kana_to_kanji_where_possible(kana, store, judge=judge)
+        accepted=native_context_accept(fixed)
+        if accepted is not None:return accepted
 
     # 訂正を伴う場合は、英単語が偶然かなの語に化けないよう厳しくする
     if len(kana) < 6:
@@ -853,6 +940,13 @@ def correct_romaji(text, store, find_readings, max_dist=1.6, min_len=4,
         if edits > 0 and cost / edits > 1.35:
             continue
         if abs(len(cand_reading) - len(kana)) > 1:
+            continue
+        from romaji_source import checked_source_keys
+        raw_keys=text if source_keys_text is None else source_keys_text
+        # A mixed fullwidth/kana fallback has already reconstructed some
+        # letters. Those inferred letters are not observed original keys.
+        if (raw_keys and all(c in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-' for c in raw_keys)
+                and not checked_source_keys(raw_keys,cand_reading).proved):
             continue
         if makes_sense_as_japanese(cand_reading, store):
             return kana_to_kanji_where_possible(cand_reading, store,
@@ -1035,7 +1129,8 @@ def correct_zenkaku_input(text, store, find_readings, max_dist=1.6,
                               judge=judge)
     if fixed:
         return fixed
-    return correct_romaji(half, store, find_readings, max_dist, judge=judge)
+    return correct_romaji(half, store, find_readings, max_dist, judge=judge,
+                          source_keys_text=zenkaku_to_hankaku(text))
 
 
 # ============================================================
@@ -1072,6 +1167,18 @@ def _explained_ratio(kana, store, min_word_len=2, max_word_len=12):
         'する', 'される', 'された', 'されない', 'しな', 'すること',
         'いる', 'ある', 'なる', 'こと', 'もの', 'ため', 'この', 'その',
         'では', 'には', 'とは', 'かも', 'なら', 'ながら', 'ければ',
+        # 指示語・疑問語と、述語の閉じた活用形（項目48-CA・2026-10-11）。
+        # どれも文法が決める閉じた類で、内容語の名簿の多寡に左右されない。
+        # これが無いと `korehanandesuka`（これはなんですか）や
+        # `soudesu`（そうです）が「説明できない」と落ちていた。
+        'これ', 'それ', 'あれ', 'どれ', 'ここ', 'そこ', 'あそこ', 'どこ',
+        'こちら', 'そちら', 'あちら', 'どちら', 'あの', 'どの', 'こう',
+        'どう', 'こんな', 'そんな', 'あんな', 'どんな',
+        'なに', 'なん', 'だれ', 'いつ', 'なぜ', 'いくつ', 'いくら',
+        'ですか', 'ますか', 'でしょう', 'だろう', 'だった', 'じゃない',
+        'ましょう', 'のです', 'んです', 'ください',
+        'います', 'いました', 'いない', 'あります', 'ありません',
+        'します', 'しました', 'しない', 'した', 'して',
     }
 
     # covered[i] = 位置 i までで説明できた文字数の最大
@@ -1126,7 +1233,36 @@ def makes_sense_as_japanese(kana, store, min_ratio=0.6, min_content_len=3):
         return False
     # 機能語だけで埋まった場合を除くため、
     # 実質的な語が含まれていることを求める
-    return content_len >= min_content_len
+    if content_len >= min_content_len:
+        return True
+    # **閉じた類だけで隙間なく組める文は、述語で終わるなら日本語**
+    # （項目48-CA）。`そうです`・`どうしたのですか` は内容語を持たないが、
+    # 指示語・疑問語＋述語の活用で全体が説明でき、文末が述語で閉じる。
+    # 英単語が偶然この形に全部読める例は、4かな以上ではまず無い。
+    if not (ratio >= 1.0 and len(kana) >= 4
+            and kana.endswith(_CLOSED_SENTENCE_ENDINGS)):
+        return False
+    # 連体詞は名詞を待つ語で、述語の直前には立たない（`そのです` は文でない）。
+    for ending in sorted(_CLOSED_SENTENCE_ENDINGS, key=len, reverse=True):
+        if kana.endswith(ending):
+            head = kana[:-len(ending)]
+            # 頭は指示語・疑問語で始まること。`なします`（な＋します）の
+            # ように助詞1つと述語だけが残った断片を、文と見ないため。
+            return (bool(head) and not head.endswith(_ADNOMINAL_ONLY)
+                    and head.startswith(_DEICTIC_HEADS))
+    return False
+
+
+_CLOSED_SENTENCE_ENDINGS = (
+    'です', 'ですか', 'ですね', 'ですよ', 'でした', 'でしょう', 'でしょうか',
+    'ます', 'ますか', 'ました', 'ません', 'ましょう', 'ください',
+    'だった', 'だろう', 'のか', 'んだ',
+)
+_DEICTIC_HEADS = ('これ', 'それ', 'あれ', 'どれ', 'ここ', 'そこ', 'あそこ', 'どこ',
+                  'こちら', 'そちら', 'あちら', 'どちら', 'こう', 'そう', 'ああ',
+                  'どう', 'なに', 'なん', 'だれ', 'いつ', 'なぜ', 'いくつ', 'いくら')
+_ADNOMINAL_ONLY = ('この', 'その', 'あの', 'どの', 'こんな', 'そんな',
+                   'あんな', 'どんな')
 
 
 # **語の直後にだけ付く、閉じた文法の接尾**（項目48-JE・2026-08-25）。

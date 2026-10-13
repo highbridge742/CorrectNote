@@ -8,10 +8,11 @@ that alternative, and the caller still runs the common final validator.
 """
 
 
-def positive_predicate_alternatives(source, first, reading, tokenize, ime, *, supplied=()):
+def positive_predicate_alternatives(source, first, reading, tokenize, ime, *, supplied=(), subject_completion=False):
     """Return (whole surface, original object, positive role proof) tuples."""
     from morphology import native_spelling_only, tokenize as native_tokenize
-    from semantic_roles import object_before, case_argument_before, candidate_evidence
+    from semantic_roles import (object_before, case_argument_before, candidate_evidence,
+        subject_before, subject_candidate_evidence)
 
     reverse=ime.reverse_words(first)
     if not reverse or reverse[0]!=reading:
@@ -33,12 +34,21 @@ def positive_predicate_alternatives(source, first, reading, tokenize, ime, *, su
         return ()
     object_word=object_before(source,verb.start,tokenize)
     case_argument=case_argument_before(source,verb.start,tokenize)
-    if not object_word and not case_argument:
+    subject_word=(subject_before(source,verb.start,tokenize,allow_direct_topic=True)
+                  if subject_completion else '')
+    source_subject=(subject_candidate_evidence(subject_word,suffix_reading,'')
+                    if subject_word else None)
+    if not (source_subject and source_subject['shared_roles']):subject_word=''
+    if not object_word and not case_argument and not subject_word:
         return ()
 
     def original_role_proof(suffix):
         proofs=[]
         before=source[:verb.start]
+        if subject_word:
+            subject_fit=subject_candidate_evidence(subject_word,suffix,'')
+            if not (subject_fit and subject_fit['shared_roles']):return ()
+            proofs.append(subject_fit)
         if object_word:
             proofs.append(candidate_evidence(object_word,suffix,'',before=before))
         if case_argument:
@@ -59,6 +69,14 @@ def positive_predicate_alternatives(source, first, reading, tokenize, ime, *, su
     except (ImportError,OSError,AttributeError):
         pass
     suffixes=list(dict.fromkeys(hits))
+    if subject_word:
+        # Reuse the native inflections that supplied the original reading
+        # proof. Optional search availability cannot change that proof.
+        from semantic_roles import native_verb_lexemes, _native_lexeme_forms
+        for lemma in sorted(native_verb_lexemes(verb.reading,verb.infl_form,verb.reading)):
+            for face in _native_lexeme_forms(lemma,verb.infl_form,verb.reading):
+                suffix=face+first[verb.end:]
+                if suffix not in suffixes:suffixes.append(suffix)
     # A candidate already supplied by native spelling uses the same source
     # boundary and positive proof even when optional TSF search is absent.
     # Preserve search order; new spellings still pass every check below.
@@ -75,6 +93,7 @@ def positive_predicate_alternatives(source, first, reading, tokenize, ime, *, su
         if not proof:
             continue
         surface=first[:verb.start]+suffix
+        if subject_word and surface==source:continue
         if (not native_spelling_only(reading,surface)
                 or ime.phonetic(surface)!=reading):
             continue

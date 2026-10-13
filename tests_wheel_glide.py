@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Longer wheel glide keeps distance, cancellation and bounded timer work."""
+"""Longer wheel glide keeps its initial response, cancellation and bounded work."""
 import unittest
 from types import SimpleNamespace
 from scroll_inertia import ScrollInertia
@@ -25,25 +25,29 @@ class WheelGlideTests(unittest.TestCase):
             self.now=at;del self.jobs[key];callback()
         self.now=end
 
-    def test_tail_remains_visible_after_quarter_second_without_extra_distance(self):
-        self.controller.wheel(80);self.advance(.24)
+    def test_tail_keeps_sliding_after_three_quarters_second_at_doubled_distance(self):
+        self.controller.wheel(80);self.advance(.048)
+        self.assertTrue(26<=sum(self.steps)<=32)
+        self.advance(.048);self.assertTrue(48<=sum(self.steps)<=56)
+        self.advance(.144)
         middle=sum(self.steps)
-        self.assertTrue(0<middle<80)
+        self.assertTrue(0<middle<160)
         self.assertIsNotNone(self.controller.job)
-        self.advance(.24)
-        self.assertTrue(middle<sum(self.steps)<80)
+        self.advance(.48)
+        self.assertTrue(middle<sum(self.steps)<160)
+        self.assertGreaterEqual(160-sum(self.steps),7)
         self.assertIsNotNone(self.controller.job)
-        self.advance(.25)
-        self.assertEqual(sum(self.steps),80)
+        self.advance(.72)
+        self.assertEqual(sum(self.steps),160)
         self.assertFalse(self.jobs)
         self.assertEqual(self.maximum_jobs,1)
-        self.assertLessEqual(self.scheduled,60)
+        self.assertLessEqual(self.scheduled,120)
 
     def test_long_burst_keeps_one_timer_and_stops_without_idle_work(self):
         for _ in range(20):
             self.controller.wheel(100);self.advance(.012)
-        self.advance(1.2)
-        self.assertEqual(sum(self.steps),2000)
+        self.advance(2.2)
+        self.assertEqual(sum(self.steps),4000)
         self.assertEqual(self.maximum_jobs,1)
         self.assertFalse(self.jobs)
         scheduled=self.scheduled;self.advance(3)
@@ -67,8 +71,8 @@ class WheelGlideTests(unittest.TestCase):
         self.controller.cancel();before=list(self.steps);stale();self.advance(1)
         self.assertEqual(self.steps,before)
         self.controller.wheel(80);self.advance(.24);count=len(self.steps)
-        self.controller.wheel(-30);self.advance(.8)
-        self.assertEqual(sum(self.steps[count:]),-30)
+        self.controller.wheel(-30);self.advance(1.2)
+        self.assertEqual(sum(self.steps[count:]),-60)
         self.assertTrue(all(n<0 for n in self.steps[count:]))
         self.assertFalse(self.jobs)
 
@@ -76,7 +80,7 @@ class WheelGlideTests(unittest.TestCase):
         self.controller.wheel(80)
         key,(_,callback)=next(iter(self.jobs.items()));del self.jobs[key]
         self.now=.25;callback()
-        self.assertEqual(self.steps,[80])
+        self.assertEqual(self.steps,[160])
         self.assertFalse(self.jobs)
         self.assertEqual(self.scheduled,1)
 

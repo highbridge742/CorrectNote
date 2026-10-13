@@ -40,15 +40,19 @@ class Window:
 
 @lru_cache(maxsize=1)
 def _distributions():
+    from analysis_context import check_current_request
+    check_current_request()
     from ngram_yomi import TRIGRAMS
     forward = {}; backward = {}
     alphabet = set()
-    for gram, count in TRIGRAMS.items():
+    for index, (gram, count) in enumerate(TRIGRAMS.items()):
+        if index % 512 == 0:check_current_request(frequent=True)
         if len(gram) != 3 or not _reading(gram):
             continue
         forward[gram[:2]] = forward.get(gram[:2], 0)+count
         backward[gram[1:]] = backward.get(gram[1:], 0)+count
         alphabet.update(gram)
+    check_current_request()
     return forward, backward, max(1, len(alphabet))
 
 

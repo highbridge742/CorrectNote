@@ -55,7 +55,12 @@ INPUT_METHOD_LABELS = {
 }
 INPUT_METHOD_CHOICES = tuple(INPUT_METHOD_LABELS)
 
-DEFAULT_EDITOR_FONT = ('Yu Mincho', 11)
+MEMORY_LOW = 'low'
+MEMORY_HIGH = 'high'
+MEMORY_LABELS = {MEMORY_LOW: '低', MEMORY_HIGH: '高'}
+MEMORY_CHOICES = tuple(MEMORY_LABELS)
+
+DEFAULT_EDITOR_FONT = ('Yu Mincho', 10)
 FONT_SIZE_MIN = 6
 FONT_SIZE_MAX = 96
 
@@ -69,7 +74,23 @@ def editor_font(family, size):
     return family, size
 
 
+# 2: 数詞を1.2倍・緑（とても明るい）、記号を黄（とても明るい）にした。
+# 3: 名詞を1.1倍・緑（ごく明るい）、英字と記号をグレー（明るい）にし、
+#    ライトモードの色を別に持つようにした（2026-10-13 うにさん）。
+POS_FONT_DEFAULTS_VERSION = '3'
+# 2: 印を一度オフにした（重かった）。3: Ctrl を押している間だけ出る下線に
+# なったので、一度オンに戻した（2026-10-12 うにさん）。
+CTRL_BOUNDARIES_DEFAULTS_VERSION = '3'
+
+
 DEFAULTS = {
+    # 高は先読みと解析子を保持。低は完了後の待機中に解放する。
+    'memory_usage': MEMORY_HIGH,
+    # Ctrl＋左右で止まる場所の印。Ctrl を押している間だけ出る（既定オン）。
+    'show_ctrl_boundaries': True,
+    # Ctrl＋左右の印をカーソルのある行だけに出す（既定オン）。オフで全行。
+    # 以前の 'ctrl_boundaries_all_rows'（逆の意味）は load() で読み替える。
+    'ctrl_boundaries_cursor_row_only': True,
     'toolbar_order': [],
     'toolbar_hidden': [],
     'recent_files': [],
@@ -91,6 +112,28 @@ DEFAULTS = {
     'dark_mode': False,
     'editor_font_family': DEFAULT_EDITOR_FONT[0],
     'editor_font_size': DEFAULT_EDITOR_FONT[1],
+    # 品詞ごとの表示倍率。本文と補正欄の文字サイズだけに使い、
+    # 入力文字・補正結果・解析内容は変えない。
+    'pos_font_multipliers': {
+        '名詞': 1.1, '名詞（サ変）': 1.0, '数詞': 1.2, '英字': 1.0, '動詞': 1.1,
+        '形容詞': 1.1, '形容動詞': 1.0,
+        '副詞': 1.1, '連体詞': 1.0, '接続詞': 1.0, '感動詞': 1.0,
+        '助詞': 1.0, '助動詞': 1.1, '接頭詞': 1.0, '記号': 1.0,
+        'フィラー': 1.0, 'その他': 1.0,
+    },
+    # 品詞ごとの文字色（ダークモード）。空文字は色を変えない。書かれて
+    # いない品詞は pos_font.POS_COLOR_DEFAULTS（名詞・数詞は緑、英字・
+    # 記号はグレー）になる。
+    'pos_font_colors': {},
+    # ライトモードの文字色。別に持つ（2026-10-13 うにさん）。書かれて
+    # いない品詞は pos_font.POS_COLOR_DEFAULTS_LIGHT（名詞は青緑など）。
+    'pos_font_colors_light': {},
+    # 品詞の初期値の版。これより古い設定ファイルは、初期値のままだった
+    # 品詞だけ load() で新しい初期値へ移す。
+    'pos_font_defaults': POS_FONT_DEFAULTS_VERSION,
+    # Ctrl＋左右の印の初期値の版。これより古い設定ファイルは、印を一度
+    # オフにする（それまでは既定オンで保存されていた）。
+    'ctrl_boundaries_defaults': CTRL_BOUNDARIES_DEFAULTS_VERSION,
     # 画面のレイアウト。
     #   'split'   入力エリアと補正エリアを左右に並べる（従来どおり・既定）
     #   'unified' 入力と補正をひとつのエリアにまとめる
@@ -227,10 +270,14 @@ class Settings:
         for old, new in _RENAMED.items():
             if old in data and isinstance(data[old], bool):
                 self.values[new] = data[old]
+        # 「すべての行に示す」は「カーソルのある行だけ」に反転した（2026-10-12）。
+        if isinstance(data.get('ctrl_boundaries_all_rows'), bool):
+            self.values['ctrl_boundaries_cursor_row_only'] = not data['ctrl_boundaries_all_rows']
         # 受け入れる値の一覧を持つ設定（真偽値ではないもの）。
         # ここに無い値が書かれていたら、既定値のまま動かす。
         allowed = {'layout': LAYOUT_CHOICES,
-                   'input_method': INPUT_METHOD_CHOICES}
+                   'input_method': INPUT_METHOD_CHOICES,
+                   'memory_usage': MEMORY_CHOICES}
 
         for key, default in DEFAULTS.items():
             if key not in data:
@@ -251,15 +298,76 @@ class Settings:
                 self.values[key] = editor_font(value, DEFAULT_EDITOR_FONT[1])[0]
             elif key == 'editor_font_size':
                 self.values[key] = editor_font(DEFAULT_EDITOR_FONT[0], value)[1]
+            elif key == 'pos_font_multipliers':
+                from pos_font import normalize_multipliers
+                self.values[key] = normalize_multipliers(value)
+            elif key in ('pos_font_colors', 'pos_font_colors_light'):
+                from pos_font import normalize_colors
+                self.values[key] = normalize_colors(
+                    value, key == 'pos_font_colors')
             elif key in allowed:
                 if value in allowed[key]:
                     self.values[key] = value
+            elif key in ('pos_font_defaults', 'ctrl_boundaries_defaults'):
+                continue    # 下で古い初期値を移してから新しい版にする
             elif isinstance(default, str):
                 # 決められた候補を持たない文字列の設定
                 # （説明書を書き出した印など）。文字列でありさえ
                 # すれば受け入れる。
                 if isinstance(value, str):
                     self.values[key] = value
+        if data.get('pos_font_defaults') != POS_FONT_DEFAULTS_VERSION:
+            _move_to_new_pos_defaults(self.values, data)
+        if data.get('ctrl_boundaries_defaults') != CTRL_BOUNDARIES_DEFAULTS_VERSION:
+            # 印は Ctrl を押している間だけになったので一度オンにする
+            # （2026-10-12 うにさん）。あとでオフにした人の設定は、新しい
+            # 版で保存されるのでそのまま残る。
+            self.values['show_ctrl_boundaries'] = True
+            self.values['ctrl_boundaries_defaults'] = CTRL_BOUNDARIES_DEFAULTS_VERSION
+
+
+def _move_to_new_pos_defaults(values, data):
+    """古い版の初期値のままだった品詞だけ、今の初期値にする。
+
+    版1では数詞が1.0倍、文字色はすべて空（変えない）だった。
+    版2では名詞が1.0倍・色なし、記号が黄（とても明るい）、英字が色なし
+    で、ライトモードの色はダークの色の濃さを反転して出していた。
+    利用者が選び直した値はそのまま残す（ライトでは反転した色として）。"""
+    from pos_font import (POS_FONT_DEFAULTS, POS_COLOR_DEFAULTS,
+                          POS_COLOR_DEFAULTS_LIGHT, POS_CATEGORIES,
+                          normalize_colors, palette_color, display_color)
+    version = data.get('pos_font_defaults')
+    multipliers = dict(values.get('pos_font_multipliers') or {})
+    old_colors = {key: '' for key in POS_CATEGORIES}
+    if version == '2':
+        old_colors.update({'数詞': palette_color('緑', 'とても明るい'),
+                           '記号': palette_color('黄', 'とても明るい')})
+    else:
+        if multipliers.get('数詞') == 1.0:
+            multipliers['数詞'] = POS_FONT_DEFAULTS['数詞']
+    if multipliers.get('名詞') == 1.0:
+        multipliers['名詞'] = POS_FONT_DEFAULTS['名詞']
+    values['pos_font_multipliers'] = multipliers
+    saved = data.get('pos_font_colors')
+    saved = saved if isinstance(saved, dict) else {}
+    colors = normalize_colors(saved)
+    light = normalize_colors(None, False)
+    for key in POS_CATEGORIES:
+        if key not in saved or colors[key] == old_colors[key]:
+            colors[key] = POS_COLOR_DEFAULTS[key]
+        elif colors[key] == POS_COLOR_DEFAULTS[key]:
+            # 選んであった色が新しいダークの初期値と同じなら、ライトも
+            # 新しい初期値にする（うにさんの設定は名詞＝緑・ごく明るい、
+            # 英字・記号＝グレー・明るいを選んであり、反転だと名詞が
+            # 緑・濃い、英字・記号がグレー・中間になってしまう）。
+            pass
+        else:
+            # 選び直してあった色。ライトでは今まで見えていた色のまま。
+            light[key] = display_color(colors[key], False)
+    values['pos_font_colors'] = colors
+    if not isinstance(data.get('pos_font_colors_light'), dict):
+        values['pos_font_colors_light'] = light
+    values['pos_font_defaults'] = POS_FONT_DEFAULTS_VERSION
 
 
 def active_hotkeys(settings):

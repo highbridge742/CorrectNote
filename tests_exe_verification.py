@@ -17,7 +17,8 @@ class ExeVerificationTests(unittest.TestCase):
     def verify(self, extra=(), missing=()):
         root = Path(V.__file__).resolve().parent
         modules = {'analysis_cache', 'contextual_repair', 'ime_colloquial',
-                   'seed_japanese', 'word_book', 'menu_hover'} - set(missing)
+                   'seed_japanese', 'word_book', 'menu_hover', 'tsf_worker',
+                   'boundary_colors', 'pos_font'} - set(missing)
         def code(name):
             return compile((root / (name + '.py')).read_text(encoding='utf8'),
                            name + '.py', 'exec')
@@ -56,7 +57,8 @@ class ExeVerificationTests(unittest.TestCase):
                     self.verify(extra=(name,))
 
     def test_new_ui_modules_cannot_be_silently_omitted(self):
-        for name in ('word_book', 'menu_hover'):
+        for name in ('word_book', 'menu_hover', 'tsf_worker',
+                     'boundary_colors', 'pos_font'):
             with self.subTest(name=name):
                 with self.assertRaisesRegex(AssertionError, 'module missing from EXE'):
                     self.verify(missing=(name,))

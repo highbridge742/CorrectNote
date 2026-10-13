@@ -21,9 +21,12 @@ class WorkerPrewarmTests(unittest.TestCase):
   import contextual_repair as R
   for during in (False,True):
    with self.subTest(during=during):
-    rt=Runtime();rt.prepare_tables=Mock();checks=[]
-    def cancelled():checks.append(True);return len(checks)>(1 if during else 0)
-    with patch.object(R,'_native_written_nominal_readings',side_effect=check_current_request) as extra,request_scope(cancelled):
+    rt=Runtime();rt.prepare_tables=Mock();entered=[]
+    def walk():entered.append(True);check_current_request()
+    # Observe entry to the optional walk, not the number of unrelated
+    # preparation checkpoints before it.
+    def cancelled():return not during or bool(entered)
+    with patch.object(R,'_native_written_nominal_readings',side_effect=walk) as extra,request_scope(cancelled):
      with self.assertRaises(SupersededAnalysis):rt.execute(dict(kind='warmup'))
      self.assertEqual(extra.call_count,1 if during else 0)
  def test_cancelled_dictionary_walk_is_not_retained_as_complete(self):

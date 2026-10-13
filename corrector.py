@@ -4393,6 +4393,45 @@ def _break_tie_by_usage(candidates, store):
     return top_reading
 
 
+def _break_tie_by_object_fit(candidates, store, window, end):
+    """48-DF: 拮抗した芯の直後が「を＋述語」なら、その述語の目的語として
+    意味の合う候補が1つだけのときに、それを採る。
+
+    `ししんをとりました` の拮抗（ししゅん・しゃしん・しょしん・しんしん・
+    じしん）は、どれも語として在り、費用も同じ。決め手は後ろの
+    `をとりました`——「とる」の目的語として合うのは `写真` だけ
+    （semantic_roles.support の正の当てはまり。合わないことは証拠にしない）。
+    """
+    rest = window[end:] if window else ''
+    if not rest.startswith('を') or len(rest) < 2:
+        return None
+    try:
+        from morphology import tokenize as _tok
+        from semantic_roles import support
+        parts = _tok(rest[1:])
+    except Exception:
+        return None
+    if not parts or parts[0].pos != '動詞' or parts[0].start != 0:
+        return None
+    base = parts[0].base_form
+    predicates = {base}
+    try:
+        from morphology import katakana_to_hiragana
+        for e in store.lookup(katakana_to_hiragana(base)):
+            predicates.add(e['surface'])
+    except Exception:
+        pass
+    fits = []
+    for r, _c, _e in candidates:
+        try:
+            faces = [e['surface'] for e in store.lookup(r)]
+        except Exception:
+            faces = []
+        if any(support(f, p) for f in faces for p in predicates):
+            fits.append(r)
+    return fits[0] if len(fits) == 1 else None
+
+
 def _break_tie_by_context(candidates, store, context_vec, surrounding_words):
     """
     費用が拮抗している候補のうち、文脈に馴染むものを1つ選ぶ。
@@ -8135,6 +8174,9 @@ def rebuild_window_core(window, store, tokenize_fn, max_cost=3.0,
                 if picked is None:
                     picked = _break_tie_by_usage(close, store)
                     how = '使用実績'
+                if picked is None:
+                    picked = _break_tie_by_object_fit(close, store, window, c_e)
+                    how = '後ろの述語'
                 if picked is None and _core_is_unnatural(core, store):
                     # **元の並びが語として成立していない**なら、
                     # 決め手が無くても直す（うにさんの指定・
@@ -13613,6 +13655,22 @@ def _has_new_repetition(original, replacement):
     return _max_run(replacement) > max(1,_max_run(original))
 
 
+
+def _literal_romaji_repetition(original, replacement):
+    """A repeated kana inside an exact key restoration was already typed.
+
+    This only compares representations; it does not prove a Japanese word
+    or relax an edit, and does not justify a seam at an untouched neighbor.
+    """
+    from halfwidth import zenkaku_to_hankaku, romaji_to_kana
+    typed=zenkaku_to_hankaku(original)
+    if not typed or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-' for c in typed):
+        return False
+    if not replacement or any(not ('ぁ'<=c<='ゖ' or c=='ー') for c in replacement):
+        return False
+    return romaji_to_kana(typed)[0]==replacement
+
+
 def _match_score(a, b):
     """
     同じ長さの2つのかな列が、何文字違うかを返す。
@@ -15573,6 +15631,15 @@ def _sm_single_unit(text, tokenize_fn):
     return _sm_content_count(text, tokenize_fn) <= 1
 
 
+def _okurigana_word(surface):
+    """漢字の頭に、ひらがなの送り仮名が続いて終わる語か（好き・嫌い・食べ）。"""
+    k = 0
+    while k < len(surface) and is_kanji(surface[k]):
+        k += 1
+    return (0 < k < len(surface)
+            and all(is_hiragana(c) for c in surface[k:]))
+
+
 def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
                       input_method=None, assemble=False, vocab_only=False,
                       as_kana_run=False):
@@ -15763,9 +15830,15 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
     # 信用しない固有名詞（48-OR で `_dtoks` が落とす）は縛らない
     try:
         from morphology import katakana_to_hiragana as _k2h_tc
+        # **送り仮名の付いた既知語（好き・嫌い）も同じ**（項目48-CC・
+        # 2026-10-11）。送り仮名は訓の活用語尾で、音読み（好＝こう）や
+        # 別の訓（好＝この）に `き` を繋いだ `こうき`・`このき` は
+        # IME が `好き` を出す読みになりえない。そこから1打の手で
+        # `公金にする` を組み、`確認する` への道を塞いでいた。
         _fixed_rd = [_k2h_tc(t[2]) for t in _dtoks
                      if t[0] and len(t[0]) >= 2 and t[2]
-                     and all(is_kanji(_c) for _c in t[0])
+                     and (all(is_kanji(_c) for _c in t[0])
+                          or _okurigana_word(t[0]))
                      and len(t) > 5 and t[5]
                      and '固有名詞' not in (t[1] or '')]   # 田部井（たぶい）
     except Exception:
@@ -20864,6 +20937,15 @@ def _resegment_fixes(line, tokenize_fn, store, dict_index=None,
             #   項目48-SW'）
             if i > 0 and '数' in (tokens[i - 1][1] or ''):
                 continue
+            # 48-CL: 算用数字で始まる語（1つ・1本）は打った人が数を書いた
+            # 印で、IME の変換違い（二階席＝に解析）の形ではない。
+            # 漢数字の頭は 48-SW' のとおり外さない。
+            if run[0][0][:1].isdigit() and not is_kanji(run[0][0][:1]):
+                continue
+            # 48-CL: 頭が接尾（表示|用|空|行 の 用）は前の語の尻尾で、
+            # 新しい複合語の頭ではない。残りは次の位置から見る。
+            if '接尾' in pos[0] and i > 0 and tokens[i - 1][4] == run[0][3]:
+                continue
             if not any('接尾' not in p and '数' not in p
                        and '非自立' not in p for p in pos):
                 continue
@@ -22250,6 +22332,11 @@ def _with_correction_source(fn):
         source_token = _CORRECTION_SOURCE.set(line) if root else None
         method_token = _CORRECTION_INPUT_METHOD.set(kwargs.get('input_method',args[6] if len(args)>6 else 'kana')) if root else None
         path_token = _CORRECTION_PATH.set(path + (line,))
+        from romaji_source import _LIMITS,finish_limits
+        romaji_limits_token=_LIMITS.set([]) if root else None
+        from romaji_repair import _DIAGNOSTICS,_READINGS,finish as finish_romaji_repair
+        romaji_repair_token=_DIAGNOSTICS.set([]) if root else None
+        romaji_readings_token=_READINGS.set({}) if root else None
         try:
             result = fn(line, *args, **kwargs)
             if not isinstance(result,dict):return result
@@ -22268,6 +22355,7 @@ def _with_correction_source(fn):
             else:
                 result.pop('_repair_surfaces',None)
                 result.pop('_grammatical_display_frames',None)
+            if root:result=finish_romaji_repair(finish_limits(line,result))
             return result
         except (_CorrectionCycle, _CorrectionLimit) as exc:
             if not root:
@@ -22292,8 +22380,16 @@ def _with_correction_source(fn):
                 result['diagnostic_cycle'] = True
             else:
                 result['diagnostic_limit'] = MAX_CORRECTION_DEPTH
-            return result
+            # A source-reading anomaly was established before key search.
+            # The outer abort preserves that original evidence as unresolved;
+            # it neither publishes a trial output nor changes the stop state.
+            return finish_romaji_repair(result)
         finally:
+            if romaji_limits_token is not None:_LIMITS.reset(romaji_limits_token)
+            if romaji_repair_token is not None:_DIAGNOSTICS.reset(romaji_repair_token)
+            if romaji_readings_token is not None:
+                _READINGS.get().clear()
+                _READINGS.reset(romaji_readings_token)
             _CORRECTION_PATH.reset(path_token)
             if ime_cache_token is not None:
                 _CORRECTION_CACHE.reset(ime_cache_token)
@@ -22692,15 +22788,89 @@ def _drops_nominal_head(original, replacement, tokenize_fn):
     return not odd.is_odd_run(original, tokenize_fn, skip_join=True, preserve_unknown_source=True)
 
 
-def _candidate_source_ranges(line, start, end):
+class _SourceRangeText:
+    """Exact immutable characters with checkpoints during stdlib alignment."""
+    __slots__=('_text','_check')
+    def __init__(self,text):
+        from analysis_context import check_current_request
+        self._text=text;self._check=check_current_request
+    def __len__(self):return len(self._text)
+    def __getitem__(self,index):
+        self._check(frequent=True)
+        return self._text[index]
+
+
+def _source_range_bounded_match(original,current):
+    """Prove one maximum match using only globally unmatchable edge chars."""
+    from analysis_context import check_current_request
+    original_chars=set(original);current_chars=set(current)
+    check_current_request()
+    a,b=0,len(original);c,d=0,len(current)
+    while a<b and original[a] not in current_chars:
+        check_current_request(frequent=True);a+=1
+    while a<b and original[b-1] not in current_chars:
+        check_current_request(frequent=True);b-=1
+    while c<d and current[c] not in original_chars:
+        check_current_request(frequent=True);c+=1
+    while c<d and current[d-1] not in original_chars:
+        check_current_request(frequent=True);d-=1
+    # Only excluded chars that cannot occur in any match establish this
+    # bound. A shared-character prefix/suffix or interior gap does not.
+    if a==b or c==d:return None
+    if b-a<=d-c:
+        position=current.find(original[a:b],c,d)
+        match=(a,position,b-a)
+    else:
+        position=original.find(current[c:d],a,b)
+        match=(position,c,d-c)
+    check_current_request()
+    return match if position>=0 else None
+
+
+class _SourceRangeOpcodes:
+    """Immutable alignments retained only by the current correction scope."""
+    def __init__(self):self.opcodes={}
+    def close(self):self.opcodes.clear()
+
+
+def _candidate_source_ranges(line, start, end, *, allow_empty=False):
     """Exact original boundaries shared by repetition and intrusion checks."""
+    from analysis_context import check_current_request
+    check_current_request()
     yield line,start,end
     import difflib
+    from ime_session import retain
     for ancestor in _CORRECTION_PATH.get():
+        check_current_request()
         if ancestor == line:
             continue
-        opcodes = difflib.SequenceMatcher(None, ancestor, line,
-                                         autojunk=False).get_opcodes()
+        # A suspended generator may resume in another scope or thread.
+        cache,shared=retain(_SourceRangeOpcodes())
+        key=(ancestor,line)
+        opcodes=cache.opcodes.get(key)
+        if opcodes is None:
+            matcher=difflib.SequenceMatcher(None,_SourceRangeText(ancestor),
+                                           _SourceRangeText(line),autojunk=False)
+            # A whole smaller input gives the maximum possible match. The
+            # earliest exact occurrence keeps stdlib's source/destination
+            # tie order; both remaining sides have an empty opposite side.
+            # Partial prefixes/suffixes do not establish this proof.
+            if ancestor and line:
+                if len(ancestor)<=len(line):
+                    position=line.find(ancestor)
+                    match=(0,position,len(ancestor))
+                else:
+                    position=ancestor.find(line)
+                    match=(position,0,len(line))
+                if position<0:
+                    proved=_source_range_bounded_match(ancestor,line)
+                    if proved is not None:match=proved;position=match[1]
+                if position>=0:
+                    matcher.matching_blocks=[difflib.Match(*match),
+                        difflib.Match(len(ancestor),len(line),0)]
+            opcodes=tuple(matcher.get_opcodes())
+            check_current_request()
+            cache.opcodes[key]=opcodes
         def source_boundary(position):
             points = set()
             for tag, a, b, c, d in opcodes:
@@ -22711,7 +22881,8 @@ def _candidate_source_ranges(line, start, end):
                     if position == d: points.add(b)
             return next(iter(points)) if len(points) == 1 else None
         a, b = source_boundary(start), source_boundary(end)
-        if a is not None and b is not None and a<b:
+        check_current_request()
+        if a is not None and b is not None and (a<b or allow_empty and a==b):
             yield ancestor,a,b
 
 
@@ -22943,10 +23114,33 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
                        f'（外した1文字を作り直していた）')
         start, end = _s2, _e2
     original = line[start:end]
+    # A path or URL stays literal even when Japanese characters split its
+    # ASCII tail into a separate run. Recheck the original ancestors too.
+    source_ranges=None
+    if new_surface!=original:
+        from literal_examples import explicit_link_ranges,overlaps
+        links={source:explicit_link_ranges(source)
+               for source in (line,)+_CORRECTION_PATH.get()}
+        if any(links.values()):
+            source_ranges=tuple(_candidate_source_ranges(line,start,end,allow_empty=True))
+            if any(overlaps(a,b,links[source]) for source,a,b in source_ranges):
+                return None,'original_explicit_link'
+    from halfwidth import original_ascii_expression
+    # The original guard excludes empty ancestral ranges; share only its
+    # previous view sequence, not the new insertion-only link evidence.
+    ascii_ranges=(_candidate_source_ranges(line,start,end) if source_ranges is None
+                  else ((source,a,b) for source,a,b in source_ranges if source==line or a<b))
+    if any(original_ascii_expression(source,a,b) for source,a,b in ascii_ranges):
+        return None,'original_ascii_expression'
+    from romaji_source import candidate_evidence
+    key_evidence=candidate_evidence(line,start,end,new_surface,tokenize_fn)
+    if key_evidence is not None and not key_evidence.proved:
+        return None,('original_romaji_keys_unexplored' if key_evidence.state in ('state_limit','input_limit')
+                     else 'unproven_original_romaji_keys')
     from morphology import native_spelling_only
-    if spelling and not native_spelling_only(original,new_surface):
+    if spelling and not native_spelling_only(original,new_surface,following=line[end:]):
         return None,'spelling_reading_changed'
-    if spelling or native_spelling_only(original,new_surface):
+    if spelling or native_spelling_only(original,new_surface,following=line[end:]):
         from ime_spelling import _reinterprets_function_attachment
         if _reinterprets_function_attachment(line,start,end,new_surface):
             return None,'original_function_attachment'
@@ -23124,7 +23318,9 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
         # agree; this cannot excuse a duplicated untouched neighbor.
         from morphology import original_spelling_facts
         spelling_facts=(original_spelling_facts(line) if len(new_surface)==end-start else ())
+        literal_keys=_literal_romaji_repetition(original,new_surface)
         if not seams or not all(_repeated_nominal_seam(joined,edge,tokenize_fn)
+                or (literal_keys and start<edge<start+len(new_surface))
                 or _native_degree_repeat(joined,edge)
                 or any(f.start<edge<f.end and joined[f.start:f.end]==f.normal
                        for f in spelling_facts) for edge in seams):
@@ -23186,6 +23382,87 @@ def _replacement_acceptor(line, start, end, store, tokenize_fn,
         _trace(route, f'{surface!r} を除外: {reason}')
         return False
     return accept
+
+
+def _finish_halfwidth_candidate(line, start, end, fixed, store, tokenize_fn,
+                                dict_index, decisions, halfwidth_taken=(),
+                                input_method='kana', native_context_required=False):
+    """Finish only a checked ASCII restoration in its unchanged source context."""
+    from analysis_context import check_current_request
+    check_current_request()
+    fallback=None if native_context_required else fixed
+    if dict_index is None or (input_method != 'romaji' and not native_context_required):
+        return fallback
+    taken=tuple(halfwidth_taken)+((start,end),)
+    accepted,_=_check_replacement(line,(start,end,fixed,'IT・PC操作'),
+        store,tokenize_fn,dict_index,decisions,halfwidth_taken=taken)
+    check_current_request()
+    if accepted is None or tuple(accepted[:3])!=(start,end,fixed):return None
+    if native_context_required:
+        # Do not strip parentheses, dots, operators or Latin prefixes to
+        # manufacture a Japanese clause inside a code expression. Repeated
+        # spaces are not enough to discard those original connectors either.
+        lo,hi=0,len(line)
+        for boundary in re.finditer(r'[\t\r\n⇒→。！？]',line):
+            if boundary.end()<=start:lo=boundary.end()
+            elif boundary.start()>=end:hi=boundary.start();break
+            else:return None
+        raw=line[lo:hi]
+        # Share the existing detached-symbol boundary only at this field's
+        # edges. A symbol inside an ASCII call cannot discard its caller or
+        # closing delimiter. All final checks still use the untouched line.
+        from morphology import detached_symbol_separators
+        symbols=detached_symbol_separators(raw);left,right=0,len(raw)
+        for a,b in symbols:
+            if not raw[left:a].strip():left=max(left,b)
+            else:break
+        for a,b in reversed(symbols):
+            if not raw[b:right].strip():right=min(right,a)
+            else:break
+        base=lo;lo+=left;hi=base+right
+        if not lo<=start<end<=hi:return None
+        raw=line[lo:hi];owner=(lo+len(raw)-len(raw.lstrip()),raw.strip())
+    else:
+        from reading_segments import _native_source_clauses
+        owner=next(((offset,clause) for offset,clause in _native_source_clauses(line)
+                    if offset<=start<end<=offset+len(clause)),None)
+    if owner is None:return fallback
+    offset,clause=owner;lo=start-offset;hi=lo+len(fixed)
+    source=clause[:lo]+fixed+clause[end-offset:]
+    from ime_spelling import project_first_words
+    try:proposal=project_first_words(source,store,dict_index,decisions,tokenize_fn,
+                                     subject_completion=native_context_required)
+    except (ImportError,OSError,AttributeError):return fallback
+    check_current_request()
+    if not proposal:return fallback
+    projected,edits,_=proposal
+    inside=[];edge=0
+    for a,b,face in edits:
+        if not edge<=a<b<=len(source):return fallback
+        edge=b
+        if a<hi and lo<b:
+            if not lo<=a<b<=hi:return fallback
+            inside.append((a-lo,b-lo,face))
+    from contextual_repair import _apply
+    if _apply(source,edits)!=projected:return fallback
+    candidate=_apply(fixed,inside)
+    if candidate==fixed:return fallback
+    from morphology import native_spelling_only
+    if not native_spelling_only(fixed,candidate):return fallback
+    # The full IME proposal may have changed other kana words. Those edits
+    # are not ours: recheck the local spelling against the unchanged line.
+    restored=line[:start]+fixed+line[end:]
+    accepted,_=_check_replacement(restored,(start,start+len(fixed),candidate,'かな入力'),
+        store,tokenize_fn,dict_index,decisions,conv_taken=((start,start+len(fixed)),),
+        spelling=True)
+    check_current_request()
+    if accepted is None or tuple(accepted[:3])!=(start,start+len(fixed),candidate):return fallback
+    # User blocks refer to original ASCII offsets and text, not IME offsets.
+    accepted,_=_check_replacement(line,(start,end,candidate,'IT・PC操作'),
+        store,tokenize_fn,dict_index,decisions,halfwidth_taken=taken)
+    check_current_request()
+    if accepted is None or tuple(accepted[:3])!=(start,end,candidate):return fallback
+    return candidate
 
 
 from contextual_repair import with_contextual_repair as _with_contextual_repair
@@ -23972,21 +24249,41 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
             return []
 
     for start, end, chunk in find_halfwidth_runs(line):
+        from halfwidth import original_ascii_expression
+        if original_ascii_expression(line,start,end):continue
         # 全角で入ってしまった場合は、まず半角に戻して解釈する
         # （ｍｄ＠い（４ｌ）ｈ → md@i(4l)h → もじにゅうりょく）
         fixed = None
+        native_finished=[]
+        def accept_native_restoration(restored):
+            completed=_finish_halfwidth_candidate(line,start,end,restored,store,
+                tokenize_fn,dict_index,decisions,halfwidth_taken,input_method,
+                native_context_required=True)
+            if completed is not None:native_finished.append(completed)
+            return completed
         if has_zenkaku_ascii(chunk):
             fixed = correct_zenkaku_input(chunk, store, find_readings,
                                           max_dist, judge=_odd_judge)
         if not fixed:
             # かな入力配列として解釈する（md@i(4l)h → もじにゅうりょく）
             fixed = correct_halfwidth(chunk, store, find_readings, max_dist,
-                                      judge=_odd_judge)
+                                      judge=_odd_judge,
+                                      native_context_accept=(accept_native_restoration
+                                          if input_method=='kana' else None))
         if not fixed:
             # ローマ字として解釈する（mojinyuuryoku → もじにゅうりょく）
             fixed = correct_romaji(chunk, store, find_readings, max_dist,
-                                   judge=_odd_judge)
+                                   judge=_odd_judge,
+                                   native_context_accept=(accept_native_restoration
+                                       if input_method=='romaji' else None))
+        if not fixed and input_method=='romaji':
+            from romaji_repair import propose as propose_romaji_keys
+            fixed=propose_romaji_keys(line,start,end,store,tokenize_fn,_odd_judge,accept_native_restoration,max_dist)
         if fixed:
+            if not native_finished:
+                fixed = _finish_halfwidth_candidate(line, start, end, fixed, store,
+                    tokenize_fn, dict_index, decisions, halfwidth_taken, input_method)
+            if not fixed:continue
             replacements.append((start, end, fixed, 'IT・PC操作'))
             halfwidth_taken.append((start, end))
 

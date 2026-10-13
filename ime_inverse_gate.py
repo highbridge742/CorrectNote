@@ -13,7 +13,9 @@ from contextvars import ContextVar
 _CORRECTION_CACHE = ContextVar("ime_inverse_correction_cache", default=None)
 
 
-_FIELD_END = re.compile(r'[\t\r\n⇒→、,。！？!?;；]')
+# 48-CX / AI の判断 / 2026-10-12: 2つ以上の空白（全角含む）は欄の区切り。
+# 補正側（morphology.COLUMN_SEPARATOR）と同じ区切りで節を作る。
+_FIELD_END = re.compile(r'[ \u3000]*(?:[\t\r\n⇒→]|\s{2,})[ \u3000]*|[、,。！？!?;；]')
 
 
 def _kana_reading(text):
@@ -222,6 +224,141 @@ def _written_relative_note(field, parts, tokenize):
         and _written_attributive_end(field[:parts[start][3]],parts[:start]))
 
 
+def _written_unit_spans(field, tokenize, single_nouns=True):
+    """48-CT: written pieces that already stand as words in the source.
+
+    A katakana word, a symbol/Latin/digit run, an attested native noun
+    group (or real nouns of two or more letters in a row, with dictionary
+    suffixes) and a kanji predicate whose written form is a dictionary
+    inflection are each a finished unit of the written text. Their kana
+    reading is not an independent clue: the kana-only grammar does not know
+    every compound or loanword (`しょりそくど`・`すれっど`・`こめ`=※) and
+    would accuse the whole field. Returns surface spans (start, end).
+    Bare one-letter kanji pieces (`旧|明|井`) never qualify.
+    """
+    from reading_segments import native_lexical_phrase
+    from morphology import dictionary_inflections
+    parts=list(tokenize(field))
+    if not parts or ''.join(t[0] for t in parts)!=field:return ()
+    def kanji(text):
+        return any('一'<=c<='鿿' or c in '々〆' for c in text)
+    def katakana(text):
+        return bool(text) and all('ァ'<=c<='ヶ' or c=='ー' for c in text)
+    def suffix(t):
+        return (t[1].startswith('名詞:接尾') and kanji(t[0]) and any(
+            pos.startswith('名詞,接尾,') and rd==t[2]
+            for pos,form,base,rd in dictionary_inflections(t[0]) or ()))
+    def inflected(t):
+        return (t[1].startswith(('動詞:自立','形容詞:自立','連体詞','副詞')) and kanji(t[0])
+            and len(t[0])>=2 and any(
+                pos.split(',')[0]==t[1].split(':')[0] and rd==t[2]
+                and (form if form!='*' else '')==t[6]
+                for pos,form,base,rd in dictionary_inflections(t[0]) or ()))
+    def real_noun(t):
+        return (t[1].startswith('名詞') and not t[1].startswith('名詞:接尾')
+            and '固有名詞' not in t[1] and kanji(t[0]) and len(t[0])>=2
+            and native_lexical_phrase(t[0],tokenize))
+    out=[]
+    i=0
+    while i<len(parts):
+        t=parts[i]
+        if katakana(t[0]):
+            out.append((t[3],t[4]));i+=1;continue
+        if t[0] and not any('ぁ'<=c<='ゖ' or 'ァ'<=c<='ヶ' or kanji(c) for c in t[0]):
+            out.append((t[3],t[4]));i+=1;continue
+        if (t[1].startswith('名詞') or t[1]=='接頭詞:名詞接続') and kanji(t[0]):
+            j=i+1
+            while j<len(parts) and parts[j][1].startswith('名詞') and kanji(parts[j][0]):
+                j+=1
+            group=parts[i:j]
+            k=len(group)
+            while k and suffix(group[k-1]):k-=1
+            proved=(not any('固有名詞' in g[1] for g in group) and (
+                (single_nouns or len(group)>1)
+                and _written_nominal_group(field,group,tokenize)
+                or k and all(real_noun(g) for g in group[:k])
+                and (single_nouns or len(group)>1)))
+            if proved:out.append((group[0][3],group[-1][4]))
+            i=j;continue
+        if inflected(t):
+            j=i+1
+            while j<len(parts) and suffix(parts[j]):j+=1
+            out.append((t[3],parts[j-1][4]));i=j;continue
+        i+=1
+    return tuple(out)
+
+
+def _noun_with_dictionary_suffix(group, tokenize):
+    """48-CT: an attested noun of two or more letters plus one dictionary
+    suffix (`取り消し|線`・`入力|欄`). Prefixes and bare kanji pieces do
+    not qualify (`旧|明|井` stays open to the inverse reading)."""
+    from reading_segments import native_lexical_phrase
+    from morphology import dictionary_inflections
+    if len(group)!=2:return False
+    head,suffix=group
+    return bool(head[1].startswith(('名詞:一般','名詞:サ変接続'))
+        and len(head[0])>=2 and native_lexical_phrase(head[0],tokenize)
+        and suffix[1].startswith('名詞:接尾') and any(
+            pos.startswith('名詞,接尾,') and rd==suffix[2]
+            for pos,form,base,rd in dictionary_inflections(suffix[0]) or ()))
+
+
+def _orphan_fragment_outside(field, units, tokenize):
+    """48-DD: a broken piece next to the written units keeps them open.
+
+    A dictionary suffix with no noun before it (`的|買い`) or a token that
+    starts with a small kana (`じ|ゆ|ぅに|設定`) is not a finished part of
+    the written text, so the field is judged by its whole inverse reading
+    as before 48-CT (the units would only hide the slip that made them).
+    """
+    parts=list(tokenize(field))
+    def kanji(text):
+        return any('一'<=c<='鿿' or c in '々〆' for c in text)
+    prev=None
+    for t in parts:
+        if not any(lo<=t[3] and t[4]<=hi for lo,hi in units):
+            if t[0][:1] in 'ぁぃぅぇぉゃゅょゎ':return True
+            if (t[1].startswith('名詞:接尾') and len(t[0])==1 and kanji(t[0])
+                    and (prev is None or not kanji(prev[0]))):
+                return True
+        prev=t
+    return False
+
+
+def _reading_with_written_units(field, reading, morph, tokenize, single_nouns=True):
+    """48-CT: the reading with each finished written unit kept as written.
+
+    None when the reading cannot be aligned to the field (then the old,
+    whole-reading judgement applies unchanged).
+    """
+    units=_written_unit_spans(field,tokenize,single_nouns)
+    if not units:return None
+    if _orphan_fragment_outside(field,units,tokenize):return None
+    from morphology import katakana_to_hiragana
+    segments=None
+    if morph and _kana_reading(morph[0] or '')==reading:
+        segments=[(a,b,c,d) for a,b,c,d,_p,_f in morph[1]]
+    else:
+        parts=list(tokenize(field));at=0;segments=[]
+        for t in parts:
+            rd=_kana_reading(katakana_to_hiragana(t[2] or '')) if t[5] else None
+            if not rd:
+                rd=_kana_reading(t[0])
+            if not rd:
+                segments.append((t[3],t[4],at,at));continue
+            segments.append((t[3],t[4],at,at+len(rd)));at+=len(rd)
+        if ''.join(reading[c:d] for a,b,c,d in segments)!=reading:return None
+    if not segments:return None
+    out=[];last=0
+    for a,b,c,d in sorted(segments,key=lambda x:x[2]):
+        if c<last:return None
+        out.append(reading[last:c])
+        inside=any(lo<=a and b<=hi for lo,hi in units)
+        out.append(field[a:b] if inside else reading[c:d]);last=d
+    out.append(reading[last:])
+    return ''.join(out)
+
+
 def anomalous_source_fields(line, tokenize, store, dictionary, source_marks=(), display_ranges_out=None):
     """Yield original field ranges with an independently odd inverse reading."""
     if not line or dictionary is None:
@@ -246,7 +383,8 @@ def anomalous_source_fields(line, tokenize, store, dictionary, source_marks=(), 
     start = 0
     for separator in _FIELD_END.finditer(line):
         if start < separator.start():
-            closed = separator.group() in '\t\r\n⇒→。！？!?'
+            closed = (separator.group() in '\t\r\n⇒→。！？!?'
+                      or separator.group().isspace())
             fields.append((start, separator.start(), closed))
         start = separator.end()
     if start < len(line):
@@ -594,6 +732,13 @@ def anomalous_source_fields(line, tokenize, store, dictionary, source_marks=(), 
                     if not t[1].startswith('名詞') or not t[5]:break
         return 0
 
+    import os as _os
+    _single=_os.environ.get('CN_CT_SINGLE','1')!='0'
+    def _units_reading(field,reading,morph):
+        # 48-CT: judge only what the written words leave unexplained.
+        if _os.environ.get('CN_CT')=='0':return None
+        try:return _reading_with_written_units(field,reading,morph,tokenize,_single)
+        except Exception:return None
     found = []
     display_ranges={}
     aliases_complete=True
@@ -670,7 +815,10 @@ def anomalous_source_fields(line, tokenize, store, dictionary, source_marks=(), 
                     source_match=bool(hits and surface in hits)
                 if not source_match:continue
                 # Exact IME conversion or TSF membership is positive evidence.
-                if odd_kana_spans(reading+'\t',dictionary,store):
+                if odd_kana_spans(reading+'\t',dictionary,store) and (
+                        _units_reading(surface,reading,morph) is None
+                        or odd_kana_spans(_units_reading(surface,reading,morph)+'\t',
+                                          dictionary,store)):
                     if cache is not None:
                         cache['source_readings',surface]=((reading,first_match),)
                     edge=completed_source_prefix(surface)

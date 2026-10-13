@@ -632,6 +632,18 @@ def preserves_native_adverbial_word(original,changed):
         and t.pos_sub=='副詞可能' and any(p.startswith('名詞,副詞可能,')
         and r==t.reading for p,f,b,r in dictionary_inflections(t.surface) or ())]
     if not protected:return True
+    # 48-CZ / AI の判断 / 2026-10-12: て形の直後の い は補助の いる
+    # （まってい＋ます）。崩れた語尾の いま（今）を守る語として扱わない。
+    # 直した文でも同じ位置が いる の非自立の形になる場合だけ。
+    if any(original[t.start-1:t.start] in ('て','で') and t.surface[:1]=='い' for t in protected):
+        new_parts=tokenize(changed)
+        # 原文に ます が残っている（ていますす）なら、語尾は崩れていない
+        protected=[t for t in protected if not (
+            original[t.start-1:t.start] in ('て','で') and t.surface[:1]=='い'
+            and original[t.end:t.end+1]!='す'
+            and any(n.start==t.start and n.pos=='動詞' and n.pos_sub.startswith('非自立')
+                    and n.base_form=='いる' for n in new_parts))]
+        if not protected:return True
     # A source-proved malformed numeric unit owns the inner homographic
     # adverb. Require the actual replacement to complete that same native
     # counter; an unrelated noun or a normal approximation is not exempt.
@@ -1151,6 +1163,52 @@ def dictionary_prefix_paradigms(text):
         return tuple(dict.fromkeys((surface,row[0],row[1],row[2],row[3],
             katakana_to_hiragana(row[4])) for surface,row in rows))
     except (Exception,SystemExit):return None
+
+
+def native_dependent_noun_ending_possible(text):
+    """Whether some unchanged native dependent noun can finish this prefix.
+
+    This is only a necessary terminal boundary, never evidence that a
+    source clause is natural or that a repair should be accepted. A missing
+    backend, custom/unknown dependent-noun grammar, or a spelling-restoring
+    prefix leaves the answer unknown and preserves the exhaustive caller.
+    """
+    from analysis_context import check_current_request
+    check_current_request()
+    def completed(value):
+        # Publication cannot wait for the frequent-check cadence, including
+        # a native failure which would otherwise return unknown evidence.
+        check_current_request()
+        return value
+    if not HAS_JANOME:return completed(None)
+    # Existing colloquial restoration may retokenize these two characters
+    # with a different spelling. Retain its full older path in that case.
+    if any(c in text for c in ('ぅ','ょ')):return completed(None)
+    tail=text.rstrip()
+    if not tail:return completed(False)
+    try:
+        with _TOKENIZE_LOCK:
+            if _TOKENIZER.user_dic is not None:return completed(None)
+            unknowns=_TOKENIZER.sys_dic.unknowns
+            if (not isinstance(unknowns,dict) or not unknowns
+                    or any(not isinstance(row,(tuple,list)) or len(row)<4
+                           or not isinstance(row[3],str)
+                           or row[3].startswith('名詞,非自立,')
+                           for entries in unknowns.values() for row in entries)):
+                return completed(None)
+            # The matcher contains all native senses, unlike one best
+            # tokenization. Check every possible original suffix start;
+            # there is no word/length roster and no truncated search.
+            for number,begin in enumerate(range(len(tail)-1,-1,-1)):
+                if number%64==0:check_current_request(frequent=True)
+                suffix=tail[begin:]
+                entries=_TOKENIZER.sys_dic.lookup(suffix.encode('utf-8'),_TOKENIZER.matcher)
+                if any(entry[1]==suffix
+                       and _TOKENIZER.sys_dic.lookup_extra(entry[0])[0].startswith('名詞,非自立,')
+                       for entry in entries):
+                    return completed(True)
+    except (Exception,SystemExit):return completed(None)
+    return completed(False)
 
 
 @lru_cache(maxsize=8192)
@@ -2293,35 +2351,58 @@ def native_excess_head(surface, reading):
 def native_final_particle_tail(reading):
     """The entire reading is an attested sequence of sentence particles."""
     if not reading:return True
-    reachable={0}
-    for start in range(len(reading)):
-        if start not in reachable:continue
-        for end in range(start+1,len(reading)+1):
-            piece=reading[start:end]
-            if any(pos.startswith('助詞,終助詞,') and rd==piece
-                   for pos,form,base,rd in dictionary_inflections(piece) or ()):
-                reachable.add(end)
+    from analysis_context import check_current_request
+    check_current_request()
+    from heapq import heappop,heappush
+    reachable={0};pending=[0]
+    def reached(end):
+        if end not in reachable:
+            reachable.add(end)
+            if end<len(reading):heappush(pending,end)
+    while pending:
+        start=heappop(pending)
+        check_current_request(frequent=True)
+        entries=dictionary_prefix_paradigms(reading[start:])
+        if entries is None:
+            # Preserve exact native lookup when a prefix query is unavailable.
+            for end in range(start+1,len(reading)+1):
+                check_current_request(frequent=True)
+                piece=reading[start:end]
+                if any(pos.startswith('助詞,終助詞,') and rd==piece
+                       for pos,form,base,rd in dictionary_inflections(piece) or ()):
+                    reached(end)
+        else:
+            for surface,pos,kind,form,base,rd in entries:
+                if surface and pos.startswith('助詞,終助詞,') and rd==surface:
+                    reached(start+len(surface))
+    check_current_request()
     return len(reading) in reachable
 
 
-def _native_small_particle_tail(word,index,parts):
+def _small_particle_tail_possible(word,index,tail_end=None,normalized=None):
     # The source's actual native forms can explain a colloquial small よ.
     # A competing first POS label is not the only possible native reading.
     if katakana_to_hiragana(word[index])!='ょ':return False
-    from pos_grammar import continuation_state,explain_kana_run
     # A final particle must explain its complete unchanged kana tail.
     # Proving only the left verb + よ would protect an interior typo while
     # silently discarding the remaining い (or another lexical fragment).
-    tail_end=index+1
-    while tail_end<len(word) and ('ぁ'<=word[tail_end]<='ゖ' or 'ァ'<=word[tail_end]<='ヶ' or word[tail_end]=='ー'):
-        tail_end+=1
+    if tail_end is None:
+        tail_end=index+1
+        while tail_end<len(word) and ('ぁ'<=word[tail_end]<='ゖ' or 'ァ'<=word[tail_end]<='ヶ' or word[tail_end]=='ー'):
+            tail_end+=1
     # A final particle ends at an actual textual boundary. Stopping the
     # kana scan before a kanji/Latin word does not complete the utterance.
     if (tail_end<len(word) and not word[tail_end].isspace()
             and word[tail_end] not in '、。，,！？!?;；:：…‥()（）[]［］【】「」『』〈〉《》⇒→'):
         return False
-    after=katakana_to_hiragana(word[index+1:tail_end])
-    if not native_final_particle_tail(after):return False
+    after=(katakana_to_hiragana(word[index+1:tail_end]) if normalized is None
+           else normalized[index+1:tail_end])
+    return native_final_particle_tail(after)
+
+
+def _native_small_particle_tail(word,index,parts):
+    if not _small_particle_tail_possible(word,index):return False
+    from pos_grammar import continuation_state,explain_kana_run
     for j,t in enumerate(parts):
         if not (t.has_reading and t.start<=index-1<t.end==index):continue
         native=[row for row in dictionary_inflections(t.surface) or () if row[3]==t.reading]
@@ -2349,13 +2430,31 @@ def _native_small_particle_tail(word,index,parts):
 def colloquial_particle_normal_form(line):
     """Read a proved casual final よ without changing text or positions."""
     if not HAS_JANOME or 'ょ' not in line:return line
+    from analysis_context import check_current_request
+    check_current_request()
+    # A kana run has one unchanged right edge, shared by every small よ.
+    # Normalize once; proof still queries each original suffix in order.
+    eligible=[];tail_end=0;normalized=katakana_to_hiragana(line)
+    for i,c in enumerate(line):
+        if c=='ょ':
+            check_current_request(frequent=True)
+            if i>=tail_end:
+                tail_end=i+1
+                while tail_end<len(line) and ('ぁ'<=line[tail_end]<='ゖ' or 'ァ'<=line[tail_end]<='ヶ' or line[tail_end]=='ー'):
+                    tail_end+=1
+                    check_current_request(frequent=True)
+            if _small_particle_tail_possible(line,i,tail_end,normalized):eligible.append(i)
+    check_current_request()
+    if not eligible:return line
     parts=_tokenize_janome(line)
-    changes=[i for i,c in enumerate(line) if c=='ょ'
-             and _native_small_particle_tail(line,i,parts)]
+    changes=[i for i in eligible if _native_small_particle_tail(line,i,parts)]
+    check_current_request()
     if not changes:return line
     chars=list(line)
     for i in changes:chars[i]='よ'
-    return ''.join(chars)
+    result=''.join(chars)
+    check_current_request()
+    return result
 
 
 @lru_cache(maxsize=2048)
@@ -2399,10 +2498,56 @@ def source_yoon_spans(text):
     return tuple(out)
 
 
-def native_spelling_only(original,changed):
+def native_spelling_only(original,changed,*,following=None):
     """Prove literal kana-to-written projection, with no key or written-word edit."""
     if not original or not changed:return False
     parts=tokenize(changed)
+    # A split native verb form needs its actual following grammar. A bare
+    # dictionary reading must not turn an original question into an unfinished
+    # verb. Only the common gate supplies this unchanged source continuation.
+    if (following and len(parts)>1
+            and all('ぁ'<=ch<='ゖ' or ch=='ー' for ch in original)
+            and any(not ('ぁ'<=ch<='ゖ' or ch=='ー') for ch in changed)):
+        from analysis_context import check_current_request
+        forms=tuple(row for row in dictionary_inflections(changed) or ()
+                    if row[0].startswith('動詞,自立,') and row[3]==original)
+        check_current_request()
+        if forms:
+            combined=changed+following;continued=tokenize(combined)
+            original_parts=tokenize(original+following)
+            source_head=original_parts[0] if original_parts else None
+            # Preserve the actual source ownership as well: a complete
+            # existence verb plus a question particle is not a verb stem,
+            # even if a different written verb could take the later tail.
+            source_owned=bool(source_head and source_head.start==0
+                and source_head.end==len(original) and source_head.has_reading
+                and source_head.pos=='動詞' and source_head.pos_sub=='自立'
+                and source_head.reading==original
+                and any(pos.startswith('動詞,自立,') and form==source_head.infl_form
+                        and base==source_head.base_form and reading==original
+                        for pos,form,base,reading in dictionary_inflections(original) or ()))
+            if (source_owned and continued and continued[0].start==0
+                    and source_head.infl_form==continued[0].infl_form
+                    and continued[0].end==len(changed) and continued[0].has_reading
+                    and continued[0].pos=='動詞' and continued[0].pos_sub=='自立'
+                    and any(form==continued[0].infl_form and base==continued[0].base_form
+                            and rd==continued[0].reading for pos,form,base,rd in forms)):
+                edge=len(changed)
+                for token in continued[1:]:
+                    if (token.start!=edge or not token.has_reading
+                            or not (token.pos=='助動詞'
+                                or token.pos=='動詞' and token.pos_sub.startswith(('非自立','接尾'))
+                                or token.pos=='助詞' and token.pos_sub.startswith(('接続助詞','終助詞','係助詞')))):
+                        break
+                    edge=token.end
+                from contextual_repair import _allows_grammatical_tail
+                from reading_segments import _completed_native_verb_surface
+                tail=combined[len(changed):edge]
+                proof=bool(tail and _allows_grammatical_tail(forms,tail,original,changed)
+                    and _completed_native_verb_surface(combined[:edge],True,False,True))
+                check_current_request()
+                if proof:return True
+        check_current_request()
     # The native tokenizer may read the first kanji of an attested noun as an
     # unrelated verb. Use the whole shipped noun and its attested reading.
     if (original and 'ぁ'<=original[0]<='ゖ' and len(parts)>1

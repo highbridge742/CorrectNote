@@ -4,8 +4,9 @@ import math
 import time
 
 
-# Keep wheel travel unchanged, spreading it over a longer glide.
-_WHEEL_DECAY_SECONDS = .12
+# Double wheel travel and decay together to retain the initial response.
+_WHEEL_DECAY_SECONDS = .24
+_WHEEL_DISTANCE_SCALE = 2.
 
 
 class ScrollInertia:
@@ -39,7 +40,7 @@ class ScrollInertia:
         if self.kind != 'wheel' or owner is not self.scope or self.remaining * pixels < 0:
             self.cancel()
         self.kind = 'wheel'; self.scope = owner
-        self.remaining += pixels
+        self.remaining += pixels * _WHEEL_DISTANCE_SCALE
         self.last = self.clock() if self.last is None else self.last
         self._schedule()
 

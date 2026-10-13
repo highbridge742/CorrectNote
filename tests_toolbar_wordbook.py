@@ -115,6 +115,9 @@ def child(phase):
                 u.PostMessageW.argtypes=[W.HWND,W.UINT,c.c_size_t,c.c_ssize_t]
                 kernel=c.WinDLL('kernel32');kernel.GetCurrentThreadId.restype=W.DWORD
                 menu_thread=kernel.GetCurrentThreadId();font_ticks=[]
+                font_menu=root.nametowidget(str(font.cget('menu')))
+                cascade_index=next((i for i in range(font_menu.index('end')+1)
+                                    if font_menu.type(i)=='cascade'),2)
                 def tick(hwnd,msg,ident,ms):
                     ticks.append(ms)
                     native=getattr(a,'_native_menu_hover',None)
@@ -129,12 +132,12 @@ def child(phase):
                         u.EnumThreadWindows(menu_thread,enum_type(each),0)
                         font_ticks.append(len(windows))
                         if len(windows)>=2:cascades.append(True)
-                        elif windows and len(font_ticks)<=3:
-                            key=0x28 if len(font_ticks)<=2 else 0x27
+                        elif windows and len(font_ticks)<=cascade_index+2:
+                            key=0x28 if len(font_ticks)<=cascade_index+1 else 0x27
                             u.PostMessageW(windows[0],0x0100,key,1)
                             u.PostMessageW(windows[0],0x0101,key,0xc0000001)
                             return
-                        elif len(font_ticks)<10:return
+                        elif len(font_ticks)<cascade_index+6:return
                         else:u.EndMenu();return
                     target=str(edit) if native.current==str(font) else str(view) if native.current==str(edit) else None
                     if target is None:u.EndMenu()

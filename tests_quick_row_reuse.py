@@ -89,7 +89,7 @@ class QuickReuseValueTests(unittest.TestCase):
 
     def test_worker_skips_only_completed_matching_rows_and_keeps_result_order(self):
         from analysis_worker import Runtime
-        r=Runtime.__new__(Runtime);r.store=Mock();r.tokenize=Mock();r.decisions=None;r.context_vec=None;r.index=None;r.choices=None
+        r=Runtime.__new__(Runtime);r.store=Mock();r.tokenize=Mock(return_value=[]);r.decisions=None;r.context_vec=None;r.index=None;r.choices=None
         task=dict(lines=['保持','変更',''],input_method='kana',calculations={},readings={})
         result=dict(original='保持',corrected='保持結果',analysis_status='complete')
         task['reuse']={0:(reuse.row_key(task,0),(result,[{'start':0}],('保持結果',[])))}

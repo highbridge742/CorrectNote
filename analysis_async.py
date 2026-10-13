@@ -2,6 +2,7 @@
 """Tk-side scheduling for the isolated engine. Only completed values cross back."""
 import traceback
 import analysis_context
+import memory_usage
 import analysis_work_app as input_work
 from analysis_worker import Worker,WorkerExitedError,snapshot,state_key
 
@@ -18,7 +19,7 @@ def prewarm(app):
     Main-thread stores can still be warming. The first real request supplies
     their completed state normally; this never reads the editor or user files.
     """
-    if getattr(app,'_closing',False) or getattr(app,'_correction_worker',None) is not None:
+    if memory_usage.low(app) or getattr(app,'_closing',False) or getattr(app,'_correction_worker',None) is not None:
         return
     worker=None
     try:
@@ -33,6 +34,9 @@ def prewarm(app):
 
 def queue_idle_prewarm(app, delay=1200):
     """One optional retry after the document settles, never ahead of new input."""
+    if memory_usage.low(app):
+        memory_usage.queue_release(app, 'foreground')
+        return
     if getattr(app, '_closing', False) or getattr(app, '_idle_prewarm_job', None) is not None:
         return
     worker = getattr(app, '_correction_worker', None)
@@ -41,7 +45,7 @@ def queue_idle_prewarm(app, delay=1200):
     def start():
         app._idle_prewarm_job = None
         worker = getattr(app, '_correction_worker', None)
-        if (getattr(app, '_closing', False) or app._foreground_analysis_pending()
+        if (memory_usage.low(app) or getattr(app, '_closing', False) or app._foreground_analysis_pending()
                 or getattr(app, '_async_request', None) is not None
                 or getattr(app, '_worker_state', None) is None
                 or worker is None or not worker.process.is_alive()
@@ -56,6 +60,7 @@ def queue_idle_prewarm(app, delay=1200):
 
 
 def _request(app, task, scope, background=False):
+    if not background:memory_usage.cancel_release(app, 'foreground')
     worker_name,state_name,request_name=_worker_fields(background)
     worker=getattr(app,worker_name,None)
     if worker is not None and not worker.process.is_alive():
@@ -99,7 +104,9 @@ def _poll(app, scope, background=False):
     pending=getattr(app,request_name,None)
     if not pending or pending[0]!=scope:return False,None
     result=getattr(app,worker_name).poll(pending[1])
-    if result is not None:setattr(app,request_name,None)
+    if result is not None:
+        setattr(app,request_name,None)
+        if not background:memory_usage.queue_release(app, 'foreground')
     return True,result
 
 
@@ -190,6 +197,8 @@ def _unit_values(app,result,value):
     app._units_cache[key]=value['corrected_units']
     app._suspect_units_cache[key+(False,)]=value['original_units']
     app._suspect_units_cache[key+(True,)]=value['corrected_units']
+    from boundary_colors import remember
+    remember(app,value.get('navigation'))
 
 
 def line_step(app,count):
@@ -213,7 +222,16 @@ def line_step(app,count):
             _unit_values(app,res,dict(corrected_units=literal_units(lines[i]),original_units=literal_units(lines[i])))
             app._analyze_pos+=1;continue
         key=(res['original'],res['corrected'])
-        if units_only and key in getattr(app,'_units_cache',{}) and key+(False,) in getattr(app,'_suspect_units_cache',{}):
+        from boundary_colors import ready_for
+        from pos_font import has_adjustments,current_colors
+        navigation_enabled=((app.settings.get('show_ctrl_boundaries') or
+                             has_adjustments(app.settings.get('pos_font_multipliers')) or
+                             any(current_colors(app.settings).values())) and
+                            getattr(getattr(app,'editor',None),'_correctnote_boundary_colors',None) is not None)
+        navigation_ready=(not navigation_enabled or
+                          ready_for(app,res['original'],res['corrected']))
+        if (units_only and navigation_ready and key in getattr(app,'_units_cache',{})
+                and key+(False,) in getattr(app,'_suspect_units_cache',{})):
             app._analyze_pos+=1;continue
         scope=('line',app._analyze_work,app._analyze_dependencies,app._analyze_text,i,units_only)
         try:
@@ -303,9 +321,13 @@ def background_step(app,st):
         st['units'][key]=value['corrected_units']
         st['suspect_units'][key+(False,)]=value['original_units']
         st['suspect_units'][key+(True,)]=value['corrected_units']
+        from boundary_colors import remember
+        remember(app,value.get('navigation'))
 
 
 def close(app,keep_prewarmed=False):
+    memory_usage.cancel_releases(app)
+    keep_prewarmed = keep_prewarmed and not memory_usage.low(app)
     job = getattr(app, '_idle_prewarm_job', None)
     if job is not None:
         app.root.after_cancel(job)

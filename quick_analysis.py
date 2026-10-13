@@ -5,6 +5,7 @@ import math
 import time
 import analysis_work_app as input_work
 import quick_row_reuse
+import memory_usage
 from analysis_worker import Worker,WorkerExitedError,snapshot,state_key
 
 
@@ -89,6 +90,9 @@ def _cancel_idle_release(app):
 
 def queue_idle_prewarm(app,delay=1200):
     """Use quiet time for public resources; never replace a pending correction."""
+    if memory_usage.low(app):
+        memory_usage.queue_release(app, 'quick')
+        return
     widget=getattr(app,'_quick_text',None);worker=getattr(app,'_quick_worker',None)
     if (widget is None or worker is None or getattr(app,'_closing',False)
             or getattr(app,'_quick_prewarm_after_id',None) is not None
@@ -96,7 +100,7 @@ def queue_idle_prewarm(app,delay=1200):
     def ready():
         if getattr(app,'_quick_prewarm_after_id',None)!=identifier:return
         app._quick_prewarm_after_id=None
-        if (getattr(app,'_closing',False) or getattr(app,'_quick_text',None) is not widget
+        if (memory_usage.low(app) or getattr(app,'_closing',False) or getattr(app,'_quick_text',None) is not widget
                 or getattr(app,'_quick_worker',None) is not worker
                 or not worker.process.is_alive()
                 or getattr(worker,'_quick_idle_prewarm_submitted',False) is True
@@ -117,6 +121,7 @@ def queue_idle_prewarm(app,delay=1200):
 
 
 def _prepare_composition(app):
+    if memory_usage.low(app):return
     # Opening the quick window or its first IME composition gives the child
     # time to prepare public lexical evidence. No text is analysed.
     if getattr(app,'_quick_composition_prepared',False):return
@@ -145,6 +150,7 @@ def prepare(app):
 
 
 def schedule_prepare(app):
+    if memory_usage.low(app):return
     widget=getattr(app,'_quick_text',None)
     if widget is None:return
     _cancel_idle_release(app)
@@ -177,6 +183,7 @@ def _committed_scope(app):
 def start(app):
     scope=_committed_scope(app)
     if scope is None:return
+    memory_usage.cancel_release(app, 'quick')
     _cancel_idle_release(app)
     pending=getattr(app,'_quick_f2_pending',None)
     if pending and pending[0]!=scope:app._quick_f2_pending=None
@@ -223,6 +230,8 @@ def start(app):
             _schedule(app,remaining)
             return
         value=job['value'];app._quick_job=None
+        from boundary_colors import remember
+        remember(app,value.get('navigation'))
         quick_row_reuse.remember(app,scope,job['task'],value)
         again=app._finish_quick_analysis(scope.source,value['results'],value['units'],value['corrected_units'])
         if again:
@@ -247,6 +256,8 @@ def start(app):
 
 
 def close(app,keep_idle_worker=False):
+    memory_usage.cancel_release(app, 'quick')
+    keep_idle_worker = keep_idle_worker and not memory_usage.low(app)
     input_work.close_quick_readings(app)
     _cancel_idle_release(app)
     for name in ('_quick_after_id','_quick_prepare_after_id','_quick_prewarm_after_id'):

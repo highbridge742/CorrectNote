@@ -1,0 +1,377 @@
+{
+  "source_only_capture": true,
+  "source": "どこへいきますか",
+  "first": "どこへ行きますか",
+  "descriptors": [
+    [
+      0,
+      2,
+      0,
+      2,
+      125,
+      11
+    ],
+    [
+      2,
+      3,
+      2,
+      3,
+      0,
+      2
+    ],
+    [
+      3,
+      4,
+      3,
+      4,
+      210,
+      3
+    ],
+    [
+      4,
+      5,
+      4,
+      5,
+      0,
+      10
+    ],
+    [
+      5,
+      7,
+      5,
+      7,
+      0,
+      2
+    ],
+    [
+      7,
+      8,
+      7,
+      8,
+      0,
+      2
+    ]
+  ],
+  "records": [
+    {
+      "face": "行き",
+      "written": "どこへ行きますか",
+      "inverse": [
+        "どこへいきますか",
+        [
+          [
+            0,
+            2,
+            0,
+            2,
+            125,
+            3
+          ],
+          [
+            2,
+            3,
+            2,
+            3,
+            0,
+            2
+          ],
+          [
+            3,
+            4,
+            3,
+            4,
+            210,
+            11
+          ],
+          [
+            4,
+            5,
+            4,
+            5,
+            0,
+            2
+          ],
+          [
+            5,
+            7,
+            5,
+            7,
+            0,
+            10
+          ],
+          [
+            7,
+            8,
+            7,
+            8,
+            0,
+            2
+          ]
+        ]
+      ],
+      "native_forms": [
+        [
+          "名詞,一般,*,*",
+          "*",
+          "行き",
+          "ゆき"
+        ],
+        [
+          "動詞,非自立,*,*",
+          "連用形",
+          "行く",
+          "いき"
+        ],
+        [
+          "動詞,自立,*,*",
+          "連用形",
+          "行く",
+          "いき"
+        ],
+        [
+          "名詞,接尾,地域,*",
+          "*",
+          "行き",
+          "いき"
+        ],
+        [
+          "動詞,自立,*,*",
+          "連用形",
+          "行く",
+          "ゆき"
+        ],
+        [
+          "名詞,接尾,地域,*",
+          "*",
+          "行き",
+          "ゆき"
+        ],
+        [
+          "動詞,非自立,*,*",
+          "連用形",
+          "行く",
+          "ゆき"
+        ],
+        [
+          "名詞,一般,*,*",
+          "*",
+          "行き",
+          "いき"
+        ]
+      ],
+      "native_parts": [
+        {
+          "surface": "どこ",
+          "pos": "名詞",
+          "pos_sub": "代名詞:一般",
+          "reading": "どこ",
+          "base_form": "どこ",
+          "infl_form": "",
+          "start": 0,
+          "end": 2,
+          "has_reading": true
+        },
+        {
+          "surface": "へ",
+          "pos": "助詞",
+          "pos_sub": "格助詞:一般",
+          "reading": "へ",
+          "base_form": "へ",
+          "infl_form": "",
+          "start": 2,
+          "end": 3,
+          "has_reading": true
+        },
+        {
+          "surface": "行き",
+          "pos": "動詞",
+          "pos_sub": "自立",
+          "reading": "いき",
+          "base_form": "行く",
+          "infl_form": "連用形",
+          "start": 3,
+          "end": 5,
+          "has_reading": true
+        },
+        {
+          "surface": "ます",
+          "pos": "助動詞",
+          "pos_sub": "",
+          "reading": "ます",
+          "base_form": "ます",
+          "infl_form": "基本形",
+          "start": 5,
+          "end": 7,
+          "has_reading": true
+        },
+        {
+          "surface": "か",
+          "pos": "助詞",
+          "pos_sub": "終助詞",
+          "reading": "か",
+          "base_form": "か",
+          "infl_form": "",
+          "start": 7,
+          "end": 8,
+          "has_reading": true
+        }
+      ],
+      "evidence": {
+        "version": "2026-10-04d",
+        "object": "どこ",
+        "predicate": "行き",
+        "case": "へ",
+        "object_roles": [
+          "place"
+        ],
+        "predicate_roles": [
+          "event",
+          "place",
+          "process"
+        ],
+        "shared_roles": [
+          "place"
+        ],
+        "preferred_relation": null
+      }
+    },
+    {
+      "face": "生き",
+      "written": "どこへ生きますか",
+      "inverse": [
+        "どこへいきますか",
+        [
+          [
+            0,
+            2,
+            0,
+            2,
+            125,
+            11
+          ],
+          [
+            2,
+            3,
+            2,
+            3,
+            0,
+            2
+          ],
+          [
+            3,
+            5,
+            3,
+            5,
+            213,
+            3
+          ],
+          [
+            5,
+            7,
+            5,
+            7,
+            0,
+            10
+          ],
+          [
+            7,
+            8,
+            7,
+            8,
+            0,
+            2
+          ]
+        ]
+      ],
+      "native_forms": [
+        [
+          "動詞,自立,*,*",
+          "未然形",
+          "生きる",
+          "いき"
+        ],
+        [
+          "名詞,一般,*,*",
+          "*",
+          "生き",
+          "いき"
+        ],
+        [
+          "動詞,自立,*,*",
+          "連用形",
+          "生きる",
+          "いき"
+        ]
+      ],
+      "native_parts": [
+        {
+          "surface": "どこ",
+          "pos": "名詞",
+          "pos_sub": "代名詞:一般",
+          "reading": "どこ",
+          "base_form": "どこ",
+          "infl_form": "",
+          "start": 0,
+          "end": 2,
+          "has_reading": true
+        },
+        {
+          "surface": "へ",
+          "pos": "助詞",
+          "pos_sub": "格助詞:一般",
+          "reading": "へ",
+          "base_form": "へ",
+          "infl_form": "",
+          "start": 2,
+          "end": 3,
+          "has_reading": true
+        },
+        {
+          "surface": "生き",
+          "pos": "動詞",
+          "pos_sub": "自立",
+          "reading": "いき",
+          "base_form": "生きる",
+          "infl_form": "連用形",
+          "start": 3,
+          "end": 5,
+          "has_reading": true
+        },
+        {
+          "surface": "ます",
+          "pos": "助動詞",
+          "pos_sub": "",
+          "reading": "ます",
+          "base_form": "ます",
+          "infl_form": "基本形",
+          "start": 5,
+          "end": 7,
+          "has_reading": true
+        },
+        {
+          "surface": "か",
+          "pos": "助詞",
+          "pos_sub": "終助詞",
+          "reading": "か",
+          "base_form": "か",
+          "infl_form": "",
+          "start": 7,
+          "end": 8,
+          "has_reading": true
+        }
+      ],
+      "evidence": {
+        "version": "2026-10-04d",
+        "object": "どこ",
+        "predicate": "生き",
+        "case": "へ",
+        "object_roles": [
+          "place"
+        ],
+        "predicate_roles": [],
+        "shared_roles": [],
+        "preferred_relation": null
+      }
+    }
+  ]
+}

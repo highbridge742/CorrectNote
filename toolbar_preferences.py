@@ -12,6 +12,10 @@ BUTTONS = (
     ('word_book', '単語帳', 'word_book_btn'),
     ('bulk_insert', '一括挿入', 'bulk_insert_btn'),
     ('ruler', 'ルーラー', 'ruler_btn'),
+    ('format_bold', 'ボールド（B）', 'format_bold_btn'),
+    ('format_italic', '斜体（I）', 'format_italic_btn'),
+    ('format_underline', '下線（U）', 'format_underline_btn'),
+    ('format_overstrike', '取り消し線（S）', 'format_overstrike_btn'),
     ('bracket_parens', '（）', 0),
     ('bracket_single', '「」', 1),
     ('bracket_double', '『』', 2),
@@ -24,6 +28,8 @@ IDS = tuple(item[0] for item in BUTTONS)
 LABELS = {key: label for key, label, _ in BUTTONS}
 BRACKET_KINDS = {key: attr for key, _, attr in BUTTONS if type(attr) is int}
 LAYOUT_KEYS = ('layout_split','layout_unified')
+# Shown only after the user turns them on from the button menu.
+DEFAULT_HIDDEN = ('format_italic', 'format_underline', 'format_overstrike')
 
 def configuration_order(order):
     return [key for key in order if key!='layout_unified']
@@ -39,9 +45,16 @@ def normalized(order=None, hidden=None):
         for key in order:
             if isinstance(key, str) and key in IDS and key not in result:
                 result.append(key)
-    result.extend(key for key in IDS if key not in result)
+    # A button added in a newer version goes after every button that precedes
+    # it by default, and starts with its default visibility.
+    added = [key for key in IDS if key not in result]
+    for key in added:
+        position = max((result.index(earlier) for earlier in IDS[:IDS.index(key)]
+                        if earlier in result), default=-1) + 1
+        result.insert(position, key)
     hidden = hidden if isinstance(hidden, (tuple, list, set, frozenset)) else ()
     hidden={key for key in hidden if isinstance(key,str) and key in IDS}
+    hidden.update(key for key in added if key in DEFAULT_HIDDEN)
     position=min(result.index(key) for key in LAYOUT_KEYS)
     result=[key for key in result if key not in LAYOUT_KEYS]
     result[position:position]=LAYOUT_KEYS

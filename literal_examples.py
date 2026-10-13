@@ -340,11 +340,34 @@ def _input_output_value_report(line,start,end):
     return all(c in ' 　' for c in line[matched[0].end:matched[1].start]+line[matched[1].end:start])
 
 
+class _ExplicitLinkRanges:
+    """Ranges owned by one correction's existing resource scope."""
+    def __init__(self):self.ranges={}
+    def close(self):self.ranges.clear()
+
+
+def explicit_link_ranges(line):
+    """Use complete visible-link ranges without retaining text across requests."""
+    from analysis_context import check_current_request
+    from ime_session import retain
+    check_current_request()
+    cache,shared=retain(_ExplicitLinkRanges())
+    ranges=cache.ranges.get(line)
+    if ranges is None:
+        from text_links import find_links
+        ranges=tuple((link.start,link.end) for link in find_links(line))
+        check_current_request()
+        cache.ranges[line]=ranges
+    result=list(ranges)
+    check_current_request()
+    return result
+
+
 def protected_ranges(line):
     """記述対象のコードポイント範囲。閉じていない引用や裸の括弧は対象外。"""
     if not isinstance(line,str) or not line:
         return []
-    stack=[];found=[];quoted=[]
+    stack=[];found=explicit_link_ranges(line);quoted=[]
     for pos,ch in enumerate(line):
         if ch=='"':
             back=pos-1

@@ -185,48 +185,43 @@ _LAYOUT_KANJI = set('行欄列枠桁段頁')
 
 
 def _load():
-    """表を作る（**必要になってから1回だけ**）。"""
+    """Build the unchanged public tables, publishing only a current completion."""
     global _WORDS, _LEFT, _RIGHT, _PAIR, _LOADED
-    if _LOADED:
-        return _WORDS
-    _LOADED = True
-    path = None
-    for base in (os.path.dirname(os.path.abspath(__file__)), os.getcwd()):
-        p = os.path.join(base, 'seed_japanese.txt.gz')
-        if os.path.exists(p):
-            path = p
-            break
-    if path is None:
-        return None                       # 表が無ければ**意見なし**
+    if _LOADED:return _WORDS
+    from analysis_context import check_current_request
+    check_current_request()
+    path=None;words=None;left,right,pair=_LEFT,_RIGHT,_PAIR
+    for base in (os.path.dirname(os.path.abspath(__file__)),os.getcwd()):
+        p=os.path.join(base,'seed_japanese.txt.gz')
+        if os.path.exists(p):path=p;break
     try:
-        from word_table import read_word_sets,read_compound_tables
-        words, _narrow = read_word_sets(path)
-        if len(words) < MIN_WORDS:
-            return None
-        derived=read_compound_tables(path)
-        if derived is not None:
-            _WORDS=words
-            _LEFT,_RIGHT,_PAIR=derived
-            return _WORDS
-        left = collections.Counter()
-        right = collections.Counter()
-        pair = set()
-        import re
-        kanji = re.compile(r'[\u4e00-\u9fff]+').fullmatch
-        for w in words:
-            if not (2 <= len(w) <= 6) or not kanji(w):
-                continue
-            for i in range(1, len(w)):
-                a, b = w[:i], w[i:]
-                if a in words and b in words:
-                    left[a] += 1
-                    right[b] += 1
-                    pair.add((a, b))
-        _WORDS, _LEFT, _RIGHT, _PAIR = words, left, right, pair
+        if path is not None:
+            from word_table import read_word_sets,read_compound_tables
+            candidate,_narrow=read_word_sets(path)
+            check_current_request()
+            if len(candidate)>=MIN_WORDS:
+                derived=read_compound_tables(path)
+                check_current_request()
+                if derived is not None:left,right,pair=derived
+                else:
+                    left=collections.Counter();right=collections.Counter();pair=set()
+                    import re
+                    kanji=re.compile(r'[\u4e00-\u9fff]+').fullmatch
+                    for index,w in enumerate(candidate):
+                        if not index&255:check_current_request(frequent=True)
+                        if not (2<=len(w)<=6) or not kanji(w):continue
+                        for i in range(1,len(w)):
+                            a,b=w[:i],w[i:]
+                            if a in candidate and b in candidate:
+                                left[a]+=1;right[b]+=1;pair.add((a,b))
+                words=candidate
     except Exception:
-        _WORDS = None
+        words=None
+        left,right,pair=_LEFT,_RIGHT,_PAIR
+    check_current_request()
+    _WORDS,_LEFT,_RIGHT,_PAIR=words,left,right,pair
+    _LOADED=True
     return _WORDS
-
 
 def available():
     return _load() is not None
@@ -329,6 +324,18 @@ _NAADJ_NARU = frozenset(('なっ', 'なり', 'なる'))
 #:   ぶる・ぶっ  「〜のように振る舞う」（上品**ぶる**／謙虚**ぶって**）
 _NAADJ_BARE_OK = frozenset(('なら', 'なれ', 'ぶる', 'ぶっ', 'ぶら', 'ぶれ'))
 
+def _renyou_naadj_stem(a):
+    """漢字で始まり、い段のひらがな1字で終わる語幹（好き・嫌い・大好き）。"""
+    return (len(a) >= 2 and '一' <= a[0] <= '鿿' and a[-1] in _I_ROW_KANA
+            and all('一' <= c <= '鿿' for c in a[:-1]))
+
+
+_I_ROW_KANA = frozenset('いきぎしじちぢにひびぴみり')
+
+#: 引用の「と」を落として語幹に直付きしうる、言う・思う の類の頭（48-CB）。
+_QUOTATIVE_VERB_HEADS = ('言', '云', '思', '感', '叫', '呟', '囁', '申',
+                         'いう', 'いっ', 'いわ', 'いい', 'いえ', 'おも')
+
 
 def naadj_stem_bare(a, ap, b, bp):
     """
@@ -346,6 +353,18 @@ def naadj_stem_bare(a, ap, b, bp):
     if b in _NAADJ_BARE_OK and bp.startswith('動詞'):
         return False
     if b in _NAADJ_NARU and bp.startswith('動詞'):
+        return True
+    # **動詞の連用形から来た語幹（好き・嫌い・大好き）＋自立の動詞**も
+    # 「に」が落ちた形（項目48-CB・2026-10-11）。`好き任して` は
+    # 好き**に**任せて ではなく、`かくにん` の誤打が IME で化けたもの。
+    # 漢字＋い段の送り仮名1字の語幹だけ（好く→好き・嫌う→嫌い）。
+    # 副詞の顔を持つ `確か`（確か見た）・名詞の顔を持つ `幸せ`、
+    # かなだけの `めちゃくちゃ`（めちゃくちゃ壊れる）はこの形に入らない。
+    # `すぎる`（非自立）・`がる`（接尾）は 動詞:自立 でないので来ない。
+    # する（サ変）と、言う・思う の類（引用の「と」が落ちた口語）は除く。
+    if (bp.startswith('動詞:自立') and _renyou_naadj_stem(a)
+            and not b.startswith(_QUOTATIVE_VERB_HEADS)
+            and b not in ('する', 'し', 'さ', 'せ', 'すれ', 'しろ', 'せよ')):
         return True
     return a in _NAADJ_STEM_ONLY
 
@@ -449,6 +468,10 @@ def can_join(a, ap, b, bp, a_reading=''):
     # 立ってしまった。2026-08-21 に実測して直した）。
     # (4) 数詞は数え方の話（3日以内・1本指）
     if '数' in ap or '数' in bp:
+        return True
+    # 48-CF: 解析が `1本` `1つ` を名詞:一般の1語に切っても、算用数字で
+    # 始まる語は数え方の表現（1本指・1つ隣・2段目）。上の (4) と同じ類。
+    if a[0].isdigit():
         return True
     # (3) 接頭詞・接尾・非自立は、くっつくのが仕事
     #     **前が接尾**の形も入れる（`1本指` の `本`＝助数詞は
@@ -630,6 +653,10 @@ def can_join(a, ap, b, bp, a_reading=''):
     # 要素の単位（素・辞・項）とは分け、前が名詞の場合に限る。
     if b == '例' and _plain_noun(ap):
         return True
+    # 48-CH: 『文』も同じく、名詞・語幹の後ろでその種類の文を作る
+    # （正常文・疑問文・補正文）。要素の表（素辞項）とは別に置く。
+    if b == '文' and len(a) >= 2 and ap.startswith('名詞'):
+        return True
     # (6-4') **位置・順序の2字の名詞**（最後・最初・先頭・直後…）も
     #        何の後ろにも付く（項目48-LJ・2026-08-30。うにさんの
     #        「補正の誤検知」——`文節最後の文字` の 文節最後 に印が
@@ -659,6 +686,11 @@ def can_join(a, ap, b, bp, a_reading=''):
         return True
     # (8) **名詞どうしの複合は、日本語では既定で作れる**（試し・48-NA）
     if ordinary_nominal_composition(a,ap,b,bp):
+        return True
+    # 48-CG: 訓読みの1字名詞（色・手・水）も、2字以上の名詞の前に立って
+    # 複合名詞を作る（色見本・水不足）。音読みの1字（差・本）は
+    # 今までどおり別の根拠を要る。
+    if _kun_noun_1(a, ap, a_reading) and _plain_noun(bp) and len(b) >= 2:
         return True
     # (5) 後ろに立った実績があるか
     if _RIGHT.get(b, 0) >= RIGHT_MIN:
@@ -698,6 +730,34 @@ _HEAD_PARTICLES = frozenset('もをへにが')
 
 # 動詞の言い切りの尾（ウ段）。項目48-KZ (B)
 _U_DAN_KZ = frozenset('うくぐすずつづぬふぶぷむゆる')
+
+
+def _renyou_compound_head(text, spans, j):
+    """spans[j] の動詞の連用形が、すぐ後ろの語と複合名詞を作る頭か（48-CK）。
+
+    `続く打ち|間違い` は 続く が 打ち間違い を修飾しているだけで、
+    動詞の言い切りに動詞が直付きしたのではない。表に 連用形＋後ろ が
+    在るか、後ろが漢字で始まる名詞なら、その連用形は名詞の頭。
+    """
+    if j + 1 >= len(spans):
+        return False
+    b_s, b_e, b = spans[j]
+    n_s, n_e, n = spans[j + 1]
+    b_sf, n_sf = b[0] or '', n[0] or ''
+    if n_s != b_e or not b_sf or not n_sf:
+        return False
+    # 送り仮名の無い1字の漢字を解析が動詞と読んでも（誤|補正 の 誤）、
+    # 漢字の名詞が直に続くなら複合名詞の頭（誤補正・誤変換）。
+    if (len(b_sf) == 1 and '一' <= b_sf <= '鿿'
+            and (n[1] or '').startswith('名詞') and '一' <= n_sf[0] <= '鿿'):
+        return True
+    # 連用形の側に漢字が要る（打ち・貼り）。かなだけの `し`＋`て` は
+    # 表に `して` が在っても複合名詞の頭ではない（`貸すして` を見逃した）。
+    if b_sf[-1] not in _RENYOU_TAIL or not any('一' <= c <= '鿿' for c in b_sf):
+        return False
+    if (b_sf + n_sf) in (_load() or ()):
+        return True
+    return (n[1] or '').startswith('名詞') and '一' <= n_sf[0] <= '鿿'
 
 
 def _is_unknown_fragment(surf, known, dict_index=None, kata_split=False):
@@ -1901,7 +1961,8 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         # ゆすかりた）は異様。**同じ語の繰り返し**（やるやる）は
         # 話し言葉なので見ない。
         if (ap == '動詞:自立' and a_sf and a_sf[-1] in _U_DAN_KZ
-                and bp == '動詞:自立' and a_sf != b_sf):
+                and bp == '動詞:自立' and a_sf != b_sf
+                and not _renyou_compound_head(text, spans, i + 1)):
             if not source_range_contains(a_s,b_e):
                 out.append((a_sf, b_sf, a_s, b_e) if with_spans
                            else (a_sf, b_sf))
@@ -1976,6 +2037,14 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
             if can_join(a_sf, ap, b_sf, bp,
                         _hira(a[2] if len(a) > 2 else '')) is not False:
                 continue
+            # 48-CJ: 解析が表の語を接頭詞＋1字に割った形（同|梱・全|件）は、
+            # つないだ語のまま後ろとの並びを見る（同梱語彙・全件一括）。
+            if i > 0 and spans[i - 1][1] == a_s:
+                _pre = spans[i - 1][2]
+                _joined = (_pre[0] or '') + a_sf
+                if ((_pre[1] or '').startswith('接頭') and _joined in (_load() or ())
+                        and can_join(_joined, '名詞:一般', b_sf, bp) is not False):
+                    continue
         else:
             # **動詞の連用形＋名詞**（項目48-JC・2026-08-25。うにさんの指定
             # 「`買い脊柱` が異様という判定が要ります。異様ならさらに
@@ -2003,6 +2072,13 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
             if a_sf[-1] not in _RENYOU_TAIL:
                 continue                    # 連体形（う段）は見ない
             if not kanji(a_sf[0]):
+                continue
+            # 48-CI: 名詞＋動詞の連用形（色付き・手書き・下書き）は
+            # 既に名詞化した複合語で、名詞の前に立つ（色付き下線）。
+            # 後ろが送り仮名で終わる連用形名詞（押し|忘れ・書き|込み）は
+            # 複合動詞の名詞化。どちらも的（買い|脊柱）の形ではない。
+            if (sum(1 for c in a_sf if kanji(c)) >= 2
+                    or not kanji(b_sf[-1])):
                 continue
             if ap.startswith('動詞'):
                 # **後ろが1字の名詞なら見ない**（項目48-NC・2026-08-31）。
@@ -3232,7 +3308,8 @@ def changed_auxiliary_chain_allowed(changed,start,end,original=None):
             if auxiliary_connection_mismatch(a,b,native[i-1] if i else None)
             or past_auxiliary_mismatch(a,b,include_finite_verbs=True,include_adjective_forms=True) or volitional_auxiliary_mismatch(a,b)
             or finite_copula_aux_mismatch(a,b,native[i-1] if i else None)
-            or negative_aux_mismatch(a,b) or polite_aux_mismatch(a,b))
+            or negative_aux_mismatch(a,b) or polite_aux_mismatch(a,b,
+                native[:i] if a[1].startswith('助動詞') else None))
     # An unknown best-parse token can swallow a known noun+ます. Original
     # case edges expose the same candidate seam for wide and narrow edits;
     # internal edges of known lexical words are never reopened here.
@@ -3438,7 +3515,27 @@ def polite_aux_mismatch(a, b, preceding=None):
     # かなで書いた一つの名詞を、語中のますだけで丁寧語と断定しない。
     # 活用の途中に現れる接尾動詞までこの別解で守ることはしない。
     if a[1].startswith(('名詞','助動詞','動詞:自立')) and _kana_nominal_alternative(a[0]+b[0]):
-        return False
+        # A local noun homophone cannot consume an auxiliary that is already
+        # attached to its actual native irrealis host. Missing context keeps
+        # the nominal alternative; neither a candidate nor an unknown token
+        # proves an original negative connection.
+        native_negative=False
+        if preceding and a[1].startswith('助動詞'):
+            host=preceding[-1]
+            if (len(host)>=7 and host[5] and host[4]==a[3]
+                    and 0<=host[3] and host[4]-host[3]==len(host[0])
+                    and a[4]-a[3]==len(a[0]) and b[4]-b[3]==len(b[0])
+                    and host[1].startswith('動詞') and host[6].startswith('未然')
+                    and host[6]!='未然ウ接続'):
+                from morphology import dictionary_inflections
+                native_role=host[1].replace(':',',')+','
+                native_negative=(any(pos.startswith(native_role) and form==host[6] and rd==host[2]
+                    for pos,form,base,rd in dictionary_inflections(host[0]) or ())
+                    and any(pos.startswith('助動詞,') and base=='ない' and form==a[6] and rd==a[2]
+                    for pos,form,base,rd in dictionary_inflections(a[0]) or ())
+                    and any(pos.startswith('助動詞,') and base=='ます' and form==b[6] and rd==b[2]
+                    for pos,form,base,rd in dictionary_inflections(b[0]) or ()))
+        if not native_negative:return False
     from morphology import dictionary_inflections
     forms=dictionary_inflections(a[0])
     if forms is None:
@@ -3475,6 +3572,15 @@ def polite_aux_mismatch(a, b, preceding=None):
             (pos.startswith('助動詞,') and base in ('れる','られる','せる','させる')))
            for pos,form,base,reading in forms):
         return False
+    # 48-CM: 五段動詞の仮定形（え段）は、辞書に無い可能動詞の連用形と
+    # 同じ形（差し込め|ます＝差し込める＋ます・浮け|ます）。五段の
+    # 自立動詞のときだけ、その活用表で確かめて丁寧のますを認める。
+    if a[1].startswith('動詞:自立') and a[0][-1:] in _E_DAN_KANA:
+        from morphology import dictionary_paradigms
+        if any(pos.startswith('動詞,自立') and kind.startswith('五段')
+               and form=='仮定形' and reading==a[2]
+               for pos,kind,form,base,reading in dictionary_paradigms(a[0]) or ()):
+            return False
     return True
 
 
@@ -3669,7 +3775,22 @@ def infl_mismatch(a, b, prev=None):
     # いまの日本語でも諺・言い回しとして生きている。
     if form.startswith('未然') and (b[0] or '') == 'ば':
         return False
+    # 48-CM: 五段動詞の仮定形（え段）に助動詞が続く形は、辞書に無い
+    # **可能動詞**（差し込める・浮ける）を解析が取り違えた形。可能動詞の
+    # 連用形・未然形は同じ え段 なので、ます・た・ない が正しく続く
+    # （`差し込め|ます` に紫が立ち、`仕込めます` へ化けていた）。
+    if (form == '仮定形' and ap.startswith('動詞') and bp.startswith('助動詞')
+            and (a[0] or '')[-1:] in _E_DAN_KANA
+            and (b[0] or '') in _POTENTIAL_AUX_HEADS):
+        return False
     return True
+
+
+#: え段のかな（可能動詞の語尾）と、可能動詞の連用形・未然形に続く
+#: 助動詞の頭（48-CM）。
+_E_DAN_KANA = frozenset('えけげせぜてでねへべぺめれ')
+_POTENTIAL_AUX_HEADS = frozenset(('ます', 'ませ', 'まし', 'ましょ', 'た', 'ない',
+                                  'なかっ', 'なく', 'ず', 'ぬ', 'ん', 'たい', 'たかっ'))
 
 
 #: 副詞＋に のあとが名詞のとき、**その名詞が動詞句になれる**印
@@ -3770,6 +3891,11 @@ def _run_is_word(text, start, end):
     if not words:
         return False
     kanji = lambda c: '一' <= c <= '鿿'
+    # **送り仮名を挟む複合語そのもの**（貼り付け・打ち間違い）も表の語
+    # （項目48-CE・2026-10-11）。解析は `貼り|付け` と割るが、その対の
+    # 範囲がちょうど表の語なら、並びは異様ではない。
+    if text[start:end] in words:
+        return True
     rs, re_ = start, end
     while rs > 0 and kanji(text[rs - 1]):
         rs -= 1

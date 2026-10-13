@@ -25,19 +25,19 @@ class InertiaTimingTests(unittest.TestCase):
             self.now=at;del self.jobs[key];call()
         self.now=end
 
-    def test_wheel_glides_then_stops_at_requested_distance_with_one_timer(self):
+    def test_wheel_glides_then_stops_at_doubled_distance_with_one_timer(self):
         self.scroll.wheel(80);self.assertEqual(len(self.jobs),1)
         self.advance(.024);self.assertTrue(0<sum(self.pixels)<80)
-        self.advance(.8);self.assertEqual(sum(self.pixels),80)
+        self.advance(1.5);self.assertEqual(sum(self.pixels),160)
         self.assertFalse(self.jobs);self.assertIsNone(self.scroll.kind)
 
     def test_repeated_notches_add_and_reversal_drops_old_direction(self):
         self.scroll.wheel(50);self.advance(.024);self.scroll.wheel(50)
-        self.assertEqual(len(self.jobs),1);self.advance(.8);self.assertEqual(sum(self.pixels),100)
+        self.assertEqual(len(self.jobs),1);self.advance(1.5);self.assertEqual(sum(self.pixels),200)
         self.scroll.wheel(100);self.advance(.024);before=len(self.pixels)
-        self.scroll.wheel(-30);self.advance(.8)
+        self.scroll.wheel(-30);self.advance(1.2)
         self.assertTrue(all(value<0 for value in self.pixels[before:]))
-        self.assertEqual(sum(self.pixels[before:]),-30)
+        self.assertEqual(sum(self.pixels[before:]),-60)
 
     def test_other_tab_cancellation_and_close_do_not_replay_old_ticks(self):
         self.scroll.wheel(100);callback=next(iter(self.jobs.values()))[1]
@@ -103,7 +103,7 @@ class InertiaTkTests(unittest.TestCase):
     def test_real_pixels_are_smooth_synchronized_and_do_not_edit_or_add_undo(self):
         before=self.a.editor.yview()[0];self.a._wheel_scroll(4)
         self.pump(.035);middle=self.a.editor.yview()[0]
-        self.pump(.8);after=self.a.editor.yview()[0]
+        self.pump(1.5);after=self.a.editor.yview()[0]
         self.assertTrue(before<middle<after)
         self.assertAlmostEqual(after,self.a.result_view.yview()[0],places=5)
         self.assertEqual(self.a.editor.get('1.0','end-1c'),self.before)

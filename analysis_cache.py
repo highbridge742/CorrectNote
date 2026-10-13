@@ -167,7 +167,7 @@ import zlib
 # 2026-09-06a: 項目48-RZ〜48-SC（格助詞の連続・人名＋を＋叙述動詞・濁点の
 #              位置ずれ・語の列として組み直す道を起こした）で答えが変わる。
 # 2026-10-09a: 候補キャッシュを語彙identity/revisionごとに分離。
-ENGINE_STAMP = '2026-10-09ab'
+ENGINE_STAMP = '2026-10-10al'
 
 # 控えの形式の版。作りを変えたら上げる（古い控えは捨てられる）。
 CACHE_VERSION = 1
@@ -313,11 +313,11 @@ def _engine_source_stamp(app_dir):
     for name in ('analysis_worker.py', 'analysis_async.py', 'analysis_work_app.py',
                  'analysis_work.py', 'tab_analysis.py', 'initial_setup.py', 'janome_import.py',
                  'corrector.py', 'vocabulary.py', 'kana_layout.py',
-                 'halfwidth.py', 'loanword.py', 'morphology.py',
+                 'halfwidth.py', 'romaji_source.py', 'romaji_repair.py', 'loanword.py', 'morphology.py',
                  'kanji_guess.py', 'context_vec.py', 'dict_index.py',
                  'okurigana.py', 'naturalness.py', 'charngram.py',
                  'ngram_ja.py', 'ngram_yomi.py',
-                 'literal_examples.py', 'reading_segments.py',
+                 'literal_examples.py', 'reading_segments.py', 'reading_likelihood.py',
                  'contextual_repair.py', 'inflected_lexicon.py', 'reading_likelihood.py',
                  'semantic_roles.py', 'mark_usage.py',
                  'repaired_spelling.py', 'kana_spelling.py', 'particle_frames.py',

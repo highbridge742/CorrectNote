@@ -89,23 +89,23 @@ MIN_LEN = 2
 
 
 def _load():
-    global _WIDE, _NARROW, _MISSING
-    if _WIDE is not None or _MISSING:
-        return _WIDE
-    here = os.path.dirname(os.path.abspath(__file__))
-    for path in (os.path.join(here, FILENAME), FILENAME):
+    global _WIDE,_NARROW,_MISSING
+    if _WIDE is not None or _MISSING:return _WIDE
+    from analysis_context import check_current_request
+    check_current_request()
+    here=os.path.dirname(os.path.abspath(__file__))
+    for path in (os.path.join(here,FILENAME),FILENAME):
         try:
             from word_table import read_word_sets
-            wide, narrow = read_word_sets(path)
+            wide,narrow=read_word_sets(path)
+            check_current_request()
             if wide:
-                _WIDE, _NARROW = wide, narrow
+                _WIDE,_NARROW=wide,narrow
                 return _WIDE
-        except Exception:
-            continue
-    # **無くても動く**。表が無ければ「意見なし」＝今までどおり。
-    _MISSING = True
+        except Exception:continue
+    check_current_request()
+    _MISSING=True
     return None
-
 
 def available():
     """表が読めているか（診断用）。"""

@@ -3652,6 +3652,39 @@ def targets_for_line(line, tokenize, store, dictionary, _keep_completed=True,
                     (('品詞文法','独立動詞の直結',lo,lo+anomaly_end),),
                     True,'','ime_colloquial',candidate_surface=surface,
                     candidate_reading=reading))
+    # 48-DH: Shift の抜けた を（てがみわかきました）。紫の判定と同じ材料で、
+    # かなの並びまるごとを を に戻した読みだけを候補にする。
+    from pos_grammar import _unshifted_wo_spans
+    for a,b in _unshifted_wo_spans(line,dictionary):
+        s0=a
+        while s0>0 and '\u3041'<=line[s0-1]<='\u3096':s0-=1
+        e0=b
+        while e0<len(line) and '\u3041'<=line[e0]<='\u3096':e0+=1
+        lo,hi=_source_clause_bounds(line,s0,e0)
+        targets.append(RepairTarget(line,s0,e0,lo,hi,
+            (('品詞文法','Shift の抜けた を',a,b),),True,line[e0:hi],'unshifted_wo',
+            candidate_reading=line[s0:a]+'を'+line[b:e0]))
+    # 48-DK: 1打崩れた文末（おいください・たべした）。紫と同じ材料の読みだけを候補にする。
+    from pos_grammar import _broken_polite_end_frames
+    for a,b,tail in _broken_polite_end_frames(line,dictionary):
+        s0=a
+        while s0>0 and '\u3041'<=line[s0-1]<='\u3096':s0-=1
+        lo,hi=_source_clause_bounds(line,s0,b)
+        targets.append(RepairTarget(line,s0,b,lo,hi,
+            (('品詞文法','1打崩れた文末',a,b),),True,line[b:hi],'broken_polite_end',
+            candidate_reading=line[s0:a]+tail))
+    # 48-DP: 〜たもいい の た は て の打ち間違い。紫と同じ材料の読みだけを候補にする。
+    from pos_grammar import _ta_for_te_permission_spans,_verb_continuative_end
+    for a,b in _ta_for_te_permission_spans(line,dictionary):
+        s0=a
+        while s0>0 and '\u3041'<=line[s0-1]<='\u3096':s0-=1
+        s0=a-(_verb_continuative_end(line[s0:a],dictionary) or a-s0)
+        e0=b
+        while e0<len(line) and '\u3041'<=line[e0]<='\u3096':e0+=1
+        lo,hi=_source_clause_bounds(line,s0,e0)
+        targets.append(RepairTarget(line,s0,e0,lo,hi,
+            (('品詞文法','許しの ても の打ち間違い',a,b),),True,line[e0:hi],'broken_polite_end',
+            candidate_reading=line[s0:a]+('て' if line[a]=='た' else 'で')+line[b:e0]))
     from particle_frames import interrogative_extent_frames
     for frame in interrogative_extent_frames(line):
         lo,hi=_source_clause_bounds(line,frame['start'],frame['end'])
@@ -4848,8 +4881,117 @@ def _object_predicate_candidate_fits(src,dst,cut,faces,new_cut=None,spelling=Fal
     cut=new_cut
     if native_object_predicate_proof(dst,cut,faces):return True
     retained=_unchanged_finite_connective(src,dst)
-    return bool(retained and dst.endswith(retained)
-                and native_object_predicate_proof(dst[:-len(retained)],cut,faces))
+    if (retained and dst.endswith(retained)
+            and native_object_predicate_proof(dst[:-len(retained)],cut,faces)):
+        return True
+    # 48-CQ: 前の連用の句を除いた目的語＋述語だけの証明（下の関数）。
+    return src[:cut]==dst[:cut] and _object_proof_after_adjunct(dst,cut,faces)
+
+
+def _object_proof_after_adjunct(text,cut,faces):
+    """48-CQ: 目的語の前の、そのまま残る連用の句は組を変えない。
+
+    `こうえんでさんぽをしました` は解析が こうえん＋で を形容動詞＋助動詞と
+    読み違え、文全体では目的語＋述語の証明が立たない。名詞の直前の助詞で
+    切り、目的語＋述語だけで**同じ証明**をもう一度求める。前の句は
+    書き換えないし、証明そのものは緩めない。前の句がかなだけのとき
+    （解析が読み違えうるとき）に限る。
+    """
+    from reading_segments import native_object_predicate_proof
+    for face in faces:
+        k=cut-1-len(face)
+        # 前の句が漢字を含むなら解析は読み違えていない。その句の格の意味
+        # （店で・家族に）は述語の検査が使うので、切り離さない。
+        if any('一'<=ch<='鿿' for ch in text[:k]):continue
+        if (k>1 and text[k:cut-1]==face and text[k-1] in 'でにへとがはも'
+                and native_object_predicate_proof(text[k:],cut-k,faces)):
+            return True
+    return False
+
+
+_PURPOSE_GO_BASES=('いく','行く','くる','来る')
+
+
+def _purpose_motion_proof(text,cut,faces):
+    """48-DG: 目的の「連用形＋に」は移動の動詞に掛かる添え物。
+
+    `えきにむかえにいきます` は `えきにいきます` の 駅に＋行く が成り立てば
+    成り立つ。添え物の頭は動詞の連用形に限る（`むすうに` は当たらない）。
+    """
+    from morphology import tokenize as native_tokenize
+    from reading_segments import native_object_predicate_proof
+    parts=[p for p in native_tokenize(text) if p.start>=cut]
+    if len(parts)<3 or parts[0].start!=cut:return False
+    head,case,motion=parts[0],parts[1],parts[2]
+    if not (_purpose_head(head)
+            and len(head.surface)>=2 and head.base_form not in _PURPOSE_GO_BASES
+            and case.surface=='に' and case.pos=='助詞' and case.start==head.end
+            and motion.pos=='動詞' and motion.base_form in _PURPOSE_GO_BASES
+            and motion.start==case.end):
+        return False
+    return bool(native_object_predicate_proof(text[:cut]+text[case.end:],cut,faces))
+
+
+def _purpose_head(part):
+    """連用形の動詞。かなだけの頭（かい＝名詞にも読める）は、辞書の連用形の読みで見る。"""
+    if part.pos=='動詞' and part.pos_sub=='自立' and part.infl_form=='連用形':
+        return True
+    if part.surface and all('ぁ'<=c<='ゖ' for c in part.surface):
+        from morphology import dictionary_inflections
+        return any(pos.startswith('動詞,自立') and form=='連用形' and rd==part.surface
+                   for pos,form,base,rd in dictionary_inflections(part.surface) or ())
+    return False
+
+
+def _broken_purpose_head(text):
+    """48-DG: 移動の動詞の前の に に、連用形でない頭が付いているか。"""
+    from morphology import tokenize as native_tokenize
+    parts=native_tokenize(text)
+    for a,b,c in zip(parts,parts[1:],parts[2:]):
+        if (b.surface=='に' and b.pos=='助詞' and c.pos=='動詞'
+                and c.base_form in ('いく','行く') and a.end==b.start and b.end==c.start
+                and not _purpose_head(a)):
+            return True
+    return False
+
+
+def _subject_becomes_nominal(text,cut):
+    """48-CV: 「XがNになる」——主語と なる のあいだの名詞 N は述語の補語。
+
+    なる（変化）は主語の意味を選ばないので、意味の表に行が無くても文が
+    成立する（`処理が邪魔になっていない`）。N は辞書で読める名詞、に は
+    格助詞、続く なる はその活用で、文の残りも辞書どおりに解析できること。
+    """
+    if not (1<cut<len(text)) or text[cut-1] not in 'がは':return False
+    from morphology import tokenize
+    parts=[t for t in tokenize(text[cut:]) if t.surface]
+    # 「Xがない／ある」も主語の意味を選ばない（きりがないようにも）
+    if (parts and parts[0].has_reading and parts[0].base_form in ('ない','無い','ある','有る')
+            and parts[0].pos in ('形容詞','動詞') and all(t.has_reading for t in parts)):
+        # 述語がかなだけなら、用言1つ＋語尾として説明が付くこと
+        # （ないようにも は付く。ないゆうなも・ないようなみ は付かない）
+        tail=text[cut:].rstrip('。、！？!?')
+        if all('ぁ'<=c<='ゖ' or c=='ー' for c in tail):
+            from pos_grammar import explain_kana_run
+            return bool(explain_kana_run(tail,stems_only=True))
+        # 漢字まじりなら、述語の読み全体に かなの文法の異様が無いこと
+        # （あるので休みぐす の ぐす を通さない）
+        from morphology import katakana_to_hiragana
+        from pos_grammar import odd_kana_spans
+        reading=''.join(katakana_to_hiragana(t.reading) for t in parts)
+        return not odd_kana_spans(reading.rstrip('。、！？!?')+'\t')
+    i=0
+    while i<len(parts) and parts[i].pos=='名詞' and parts[i].has_reading:i+=1
+    if not i or i+1>=len(parts):return False
+    case,verb=parts[i],parts[i+1]
+    if not (case.surface=='に' and case.pos=='助詞' and case.pos_sub.startswith('格助詞')):return False
+    if not (verb.pos=='動詞' and verb.base_form=='なる' and verb.has_reading):return False
+    if any('非自立' in t.pos_sub or '接尾' in t.pos_sub or '固有' in t.pos_sub for t in parts[:i]):return False
+    if not parts[0].pos_sub.startswith(('一般','サ変接続','形容動詞語幹')):return False
+    noun=''.join(t.surface for t in parts[:i])
+    # 2字のカタカナ・かな（ジャ）は語の切れ端と区別できない
+    if not (any('一'<=c<='鿿' for c in noun) or len(noun)>=3):return False
+    return all(t.has_reading for t in parts)
 
 
 def _wide_object_predicate_allowed(line,start,end,surface,spelling=False):
@@ -5104,9 +5246,33 @@ def independently_spelled_object_verb(line,start,end,surface):
     return False
 
 
+def _polite_end_restore_only(line,start,end,surface):
+    """48-DO: 直しが文末の丁寧の語尾（ています・ました…）の1打の崩れを戻すだけか。
+    述語の語幹も目的語も原文のまま。原文の目的語と述語の結び付きは原文の証拠。"""
+    from pos_grammar import _POLITE_END_TAILS,_POLITE_END_OMISSIBLE,_one_key_from,_small_kana_style
+    changed=line[:start]+surface+line[end:]
+    closer=''
+    while changed and changed[-1] in '。！？!?、':
+        closer=changed[-1]+closer;changed=changed[:-1]
+    if not line.endswith(closer):return False
+    original=line[:len(line)-len(closer)]
+    for tail in _POLITE_END_TAILS:
+        if not changed.endswith(tail):continue
+        head=changed[:-len(tail)]
+        if not head or not original.startswith(head):continue
+        broken=original[len(head):]
+        if _small_kana_style(broken,tail):continue
+        if (_one_key_from(broken,tail) or tail in _POLITE_END_OMISSIBLE
+                and len(broken)==len(tail)-1
+                and any(tail[:k]+tail[k+1:]==broken for k in range(len(tail)))):
+            return all('ぁ'<=c<='ゖ' for c in broken)
+    return False
+
+
 def object_predicate_candidate_allowed(line,start,end,surface,spelling=False):
     """A proposed edit completes the same independently proved object clause."""
     if not _changed_genitive_object_allowed(line,start,end,surface):return False
+    if _polite_end_restore_only(line,start,end,surface):return True
     if spelling and independently_spelled_object_verb(line,start,end,surface):return True
     if _later_object_scope(line,start,end,surface) is not None:return True
     frame=_source_object_predicate_frame(line,start,end)
@@ -5114,6 +5280,16 @@ def object_predicate_candidate_allowed(line,start,end,surface,spelling=False):
         return (_changed_object_slot_allowed(line,start,end,surface)
                 and _wide_object_predicate_allowed(line,start,end,surface,spelling=spelling))
     lo,hi,clause,cut,faces=frame
+    from last_choice import active
+    from reading_segments import _native_phonetic_mixed_noun,native_mixed_object_choice_preserved
+    choices=active()
+    if choices is not None:
+        mixed=_native_phonetic_mixed_noun(line[lo+clause:lo+cut-1])
+        if mixed and tuple(faces)==(mixed,):
+            from units import _find_choice_ranges
+            bindings=tuple(_find_choice_ranges(line,(),choices))
+            if not native_mixed_object_choice_preserved(line,start,end,surface,
+                    lo+clause,lo+cut,faces,bindings):return False
     original=line[lo:hi];changed=line[lo:start]+surface+line[end:hi]
     src,dst=original[clause:],changed[clause:]
     return (_object_predicate_candidate_fits(src,dst,cut-clause,faces,spelling=spelling)
@@ -5960,7 +6136,18 @@ def key_repairs(reading, before='', after=''):
             adjacent.append(left_key)
         if i==len(keys)-1 and right_key is not None:
             adjacent.append(right_key)
-        if not any(k.same_physical_key(key,neighbor) for neighbor in adjacent) and any(0 < k.intrusion_key_distance(key, neighbor) <= 1.0 for neighbor in adjacent):
+        # 48-DC / AI の判断 / 2026-10-12: 巻き込みの根拠になる隣のキーが、
+        # それ自身2度続けて打たれている（か|きき）なら、余分なのはその連打の側。
+        # 連打の直しは本人の指定でオフなので、別の字（か）を消して
+        # `てがみをかききました → 聞きました` のように意味を変えない。
+        def doubled(j):
+            return any(0<=m<len(keys) and m!=j and keys[m]==keys[j] for m in (j-1,j+1))
+        justifying=[j for j in (i-1,i+1) if 0<=j<len(keys) and 0<k.intrusion_key_distance(key,keys[j])<=1.0]
+        if (not any(k.same_physical_key(key,neighbor) for neighbor in adjacent)
+                and any(0 < k.intrusion_key_distance(key, neighbor) <= 1.0 for neighbor in adjacent)
+                and not (justifying and not dup_repair_enabled() and all(doubled(j) for j in justifying)
+                         and not any(0 < k.intrusion_key_distance(key, n) <= 1.0
+                                     for n in adjacent[2:]))):
             add(keys[:i]+keys[i+1:], 'adjacent_intrusion', i, key, '', 1.0)
         if any(k.same_physical_key(key,neighbor) for neighbor in adjacent) and dup_repair_enabled():
             add(keys[:i]+keys[i+1:], 'duplicate', i, key, '', 1.0)
@@ -5976,6 +6163,16 @@ def key_repairs(reading, before='', after=''):
         if key in k.SHIFT_KANA_PAIR:
             other = k.SHIFT_KANA_PAIR[key]
             add(keys[:i]+(other,)+keys[i+1:], 'shift', i, key, other, 0.4)
+    # 48-DL / 2026-10-12: 濁点のかな（じ＝し＋゛）は2打でも、並べ違いは字の単位で
+    # 起きる（そじう＝そうじ）。打鍵1つずつの入れ替えでは届かないので、隣り合う
+    # 2字の入れ替えも同じ費用の一手に数える（片方が2打以上のときだけ）。
+    at = 0
+    for i in range(len(reading) - 1):
+        a, b = reading[i], reading[i + 1]
+        if a != b and (len(k.keystrokes(a)) > 1 or len(k.keystrokes(b)) > 1):
+            add(tuple(key for c in reading[:i] + b + a + reading[i + 2:] for key in k.keystrokes(c)),
+                'transposition', at, a + b, b + a, 1.0)
+        at += len(k.keystrokes(a))
     return tuple(sorted(out.values(), key=lambda row: (row.cost, row.reading)))
 
 
@@ -6152,6 +6349,47 @@ def lexical_omission_repairs(reading,dictionary,include_shift=False,nominal_comp
             found.setdefault(restored,row)
     return tuple(found[key] for key in sorted(found))
 
+
+
+_POLITE_TAIL_ENDINGS=('ませんでした','ましょう','ますか','ました','ません','ます')
+
+
+def predicate_tail_omission_repairs(reading):
+    """48-CS: 述語の活用語尾の中で1打抜けた形（たべまた → たべました）。
+
+    `lexical_omission_repairs` は抜けを戻した形が辞書の語であることを
+    根拠にするので、語尾と助動詞まで続いた述語（たべました）は辞書に無く、
+    候補に上がらなかった。ここでは **用言1つ＋活用語尾・機能語**の文法
+    （`explain_kana_run(stems_only=True)`）を根拠にする: 元の並びは
+    説明できず、1打戻した並びは説明でき、丁寧の ます 類で閉じるときだけ。採るかどうかは
+    ふつうの検査と順位が決める（ここは候補を出すだけ）。
+    """
+    import kana_layout as k
+    from pos_grammar import explain_kana_run
+    if not _is_reading(reading) or len(reading)<3:return ()
+    if explain_kana_run(reading,stems_only=True):return ()
+    keys=tuple(key for char in reading for key in k.keystrokes(char))
+    insertions=tuple(key for key in k.KANA_POSITIONS
+                     if key not in k._SHIFT_KANA and key not in '゛゜')
+    found={}
+    # 語幹には入れない——そこは語の抜けで、辞書の側の仕事。抜けを探すのは
+    # 末尾の語尾の打鍵（最後の5打）の中だけ（`うすくくきります` に よ を足して
+    # `うすくよくきります` を作らない）。
+    for position in range(max(2,len(keys)-5),len(keys)+1):
+        for key in insertions:
+            restored=_render(keys[:position]+(key,)+keys[position:])
+            if restored in found or restored==reading or not _is_reading(restored):continue
+            # 戻した形は丁寧の ます 類で閉じること（`ましした` に て を足した
+            # `ましてした` のような、述語を2つ重ねる形は採らない）。
+            ending=next((e for e in _POLITE_TAIL_ENDINGS if restored.endswith(e)),None)
+            if ending is None:continue
+            # 抜けは ます 類そのものか、その直前の1字の中（`うすくくきります`
+            # の前のほうに よ を足して `うすくよくきります` を作らない）。
+            first=next((i for i,(x,y) in enumerate(zip(reading,restored)) if x!=y),len(reading))
+            if first<len(restored)-len(ending)-1:continue
+            if explain_kana_run(restored,stems_only=True):
+                found[restored]=KeyRepair(restored,'omission',position,'',key,k.MISSING_KEY_COST)
+    return tuple(found[key] for key in sorted(found))
 
 
 @lru_cache(maxsize=2048)
@@ -6581,6 +6819,69 @@ def validate(target, surface, engine, tokenize, store, dictionary, decisions=Non
     import oddness
     if surface is None or surface == target.text:
         return False, 'unchanged'
+    # 48-CU: 原文の丁寧の ます 類（します・しました…）は成立した語尾。
+    # 直す先も同じ ます 類で閉じる（`かくんします → 確認しまい` を採らない）
+    from pos_grammar import _SURU_POLITE_TAILS
+    _tail=next((t for t in _SURU_POLITE_TAILS if target.text.endswith(t)),None)
+    if _tail and not target.following and not surface.endswith(_tail[1:]):
+        return False, 'changed_intact_polite_tail'
+    # 48-DB: 直す先で、て形に です が直に付く形（いてですか）を新しく作らない。
+    if surface and 'です' in surface:
+        from morphology import tokenize as _tok
+        def _te_desu(text):
+            parts=_tok(text)
+            return any(a.surface in ('て','で') and a.pos=='助詞' and a.pos_sub.startswith('接続助詞')
+                       and b.pos=='助動詞' and b.base_form=='です' and a.end==b.start
+                       for a,b in zip(parts,parts[1:]))
+        if _te_desu(surface+target.following) and not _te_desu(target.text+target.following):
+            return False, 'te_form_before_desu'
+    # 48-DE: 直す先で、命令形に問いの か が直に付く形（消してくださいか）を
+    # 新しく作らない。命令と問いは同じ文末で重ならない。
+    if surface and 'か' in surface:
+        from morphology import tokenize as _tok
+        def _order_ka(text):
+            parts=_tok(text)
+            return any(a.pos=='動詞' and a.infl_form.startswith('命令')
+                       and b.surface=='か' and b.pos=='助詞' and a.end==b.start
+                       for a,b in zip(parts,parts[1:]))
+        if _order_ka(surface+target.following) and not _order_ka(target.text+target.following):
+            return False, 'imperative_before_question'
+    # 48-DK: 1打崩れた文末（でかす）は、その決まった語尾（ですか）へ戻す。
+    # 崩れた字を消すだけ（です）では、問いの か が落ちる。
+    if expected_reading is not None or _is_reading(surface):
+        from pos_grammar import _broken_polite_end_frames
+        source=target.source
+        repaired=expected_reading if expected_reading is not None else surface
+        for a,b,tail in _broken_polite_end_frames(source,dictionary):
+            if target.start<b and a<target.end and b<=target.end+len(target.following):
+                changed_line=source[:target.start]+repaired+source[target.end:]
+                if not changed_line[:b+len(changed_line)-len(source)].endswith(tail):
+                    return False, 'polite_end_not_restored'
+        # 48-CZ の紫（いきす・まっていまか）も同じ：直す先は ます／ますか に戻す。
+        from pos_grammar import _broken_polite_tail_spans
+        for a,b in _broken_polite_tail_spans(source,dictionary):
+            if target.start<b and a<target.end and b<=target.end+len(target.following):
+                changed_line=source[:target.start]+repaired+source[target.end:]
+                head=changed_line[:b+len(changed_line)-len(source)]
+                want=('ますか','ます') if source[a:b]=='まか' else ('ます','です','ました')
+                if not head.endswith(want):
+                    return False, 'polite_end_not_restored'
+    # 48-DN: 語の終わりの1字を消す直し（しんぶんよ→しんぶん）は、その字と後ろの1字の
+    # 並べ違い（よを＝をよ）でも説明が付くなら採らない。消すと 読む が 見る に替わる。
+    if (expected_reading is not None and len(target.text)==len(expected_reading)+1
+            and target.text.startswith(expected_reading) and len(target.following)>=2
+            and _is_reading(target.text+target.following)):
+        from reading_segments import completed_native_reading
+        c=target.text[-1]; f=target.following
+        if f[0]!=c and completed_native_reading(expected_reading+f[0]+c+f[1:]):
+            return False, 'swapped_tail_reads_better'
+    # 48-DG: 終止形＋に＋行く（むかうにいきます）を直すなら、頭を連用形にする。
+    # 別の語に替えて に を残す形（むすうにいきます）は、崩れを直していない。
+    if 'にい' in target.text+target.following or 'に行' in target.text+target.following:
+        from pos_grammar import _terminal_before_purpose_spans
+        if (_terminal_before_purpose_spans(target.text+target.following,dictionary)
+                and _broken_purpose_head((expected_reading or surface)+target.following)):
+            return False, 'purpose_head_not_continuative'
     if not surface:
         # An empty replacement can be a proved deletion, not an unchanged
         # candidate. Share the original mark/key/seam validator used by
@@ -6899,6 +7200,12 @@ def validate(target, surface, engine, tokenize, store, dictionary, decisions=Non
             if retained and bare.endswith(retained):
                 completed=native_object_predicate_proof(bare[:-len(retained)],local_cut,source_faces)
         if not completed:
+            completed=_object_proof_after_adjunct(changed_predicate_context,local_cut,source_faces)
+        if not completed:
+            completed=_subject_becomes_nominal(changed_predicate_context,local_cut)
+        if not completed:
+            completed=_purpose_motion_proof(changed_predicate_context,local_cut,source_faces)
+        if not completed:
             # Validate this predicate up to an unchanged native link. A
             # second malformed clause must not invalidate the first repair.
             from difflib import SequenceMatcher
@@ -6991,6 +7298,12 @@ def validate(target, surface, engine, tokenize, store, dictionary, decisions=Non
         if not (completed_sahen_reading(reading,allow_nonpolite=True)
                 or completed_native_action_note(reading)):
             return False,'unproven_sahen_attachment'
+    # 48-DH: Shift の抜けた を を戻しただけのかなの並びは、並びまるごとの
+    # かなの文法で確かめる（としょかん のように一語が未知の解析でも）。
+    if target.boundary_kind in ('unshifted_wo','broken_polite_end') and surface==expected_reading:
+        from reading_segments import completed_native_reading
+        if completed_native_reading(surface):
+            return True,'unshifted_wo'
     parts = list(tokenize(surface))
     if not parts or not all(t[5] for t in parts):
         # A whole kana action can remain unknown in the best parse even
@@ -8009,6 +8322,20 @@ def _productive_predicate(surface, head, before=""):
     # The actual case on the left can distinguish a verb such as しめて
     # from its isolated adverb homograph. Preserve that original context.
     parts=[t for t in tokenize(before+surface) if t.start>=len(before)]
+    # 48-CY / AI の判断 / 2026-10-12: い抜きの て＋られ（待ってられない）は
+    # ていられ（待っていられない）と同じ述語。接続助詞 て の直後の られ だけを補う。
+    for a,b in zip(parts,parts[1:]):
+        if (a.surface in ('て','で') and a.pos=='助詞' and a.pos_sub.startswith('接続助詞')
+                and b.surface.startswith('られ') and b.pos=='動詞' and b.pos_sub.startswith('接尾')
+                and a.end==b.start):
+            cut=a.end-len(before)
+            return _productive_predicate(surface[:cut]+'い'+surface[cut:],head,before=before)
+    # 48-DB / AI の判断 / 2026-10-12: て形（接続助詞 て／で）に です・でした が
+    # 直に付く形は述語にならない（あけてもいてですか の いてです）。
+    for a,b in zip(parts,parts[1:]):
+        if (a.surface in ('て','で') and a.pos=='助詞' and a.pos_sub.startswith('接続助詞')
+                and b.pos=='助動詞' and b.base_form=='です' and a.end==b.start):
+            return False
     # Share the native finite-auxiliary seam with the final replacement
     # check, including candidates whose first token is a particle.
     import oddness
@@ -8085,6 +8412,15 @@ def _productive_predicate(surface, head, before=""):
             return _productive_predicate(surface[len(head):],parts[1].surface,before=before+head)
     for i,t in enumerate(parts[1:],1):
         if t.pos=='助動詞' or (t.pos=='助詞' and t.pos_sub.startswith('接続助詞')):
+            continue
+        # 48-DB / AI の判断 / 2026-10-12: 許可・譲歩の ても／ては と、
+        # ても＋いい（開けてもいいですか）は同じ述語の語尾。
+        if (t.pos=='助詞' and t.pos_sub.startswith('係助詞') and t.surface in ('も','は')
+                and parts[i-1].pos=='助詞' and parts[i-1].pos_sub.startswith('接続助詞')
+                and parts[i-1].surface in ('て','で')):
+            continue
+        if (t.pos=='形容詞' and t.base_form in ('いい','良い','よい') and i>=2
+                and parts[i-1].surface=='も' and parts[i-2].surface in ('て','で')):
             continue
         if t.pos=='動詞' and ((t.pos_sub.startswith(('非自立','接尾'))
                 and not (parts[i-1].pos=='助詞' and parts[i-1].surface in ('て','で')))
@@ -8953,6 +9289,27 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
             from process_familiarity import options
             for reading in readings:yield from options(target,reading)
             return
+        if target.boundary_kind=='broken_polite_end':
+            import kana_layout as _k
+            for reading in readings:
+                if reading.text!=target.text:continue
+                want=target.candidate_reading
+                found=[r for r in cached_key_repairs(reading) if r.reading==want
+                       and r.operation in ('adjacent_substitution','adjacent_intrusion','shift','transposition')]
+                if not found and len(want)==len(reading.text)+1:
+                    p=next(i for i in range(len(want)) if i>=len(reading.text) or want[i]!=reading.text[i])
+                    found=[KeyRepair(want,'omission',p,'',want[p],_k.MISSING_KEY_COST)]
+                for repair in found:
+                    yield reading,repair,False
+            return
+        if target.boundary_kind=='unshifted_wo':
+            for reading in readings:
+                for repair in cached_key_repairs(reading):
+                    if (repair.operation=='shift' and repair.pressed=='わ'
+                            and repair.intended=='を'
+                            and repair.reading==target.candidate_reading):
+                        yield reading,repair,False
+            return
         if target.boundary_kind=='source_projected_polite_tail':
             from ime_spelling import project_first_words
             from semantic_roles import object_before,case_argument_before,candidate_evidence
@@ -9117,6 +9474,10 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
                 for repair in lexical_omission_repairs(reading.text,dictionary,include_shift=semantic_omission,nominal_compound=nominal_omission,
                         native_tails=_source_written_nominal_tails(target.text,reading.text)):
                     yield reading,repair,False
+        if target.boundary_kind=='kana_predicate' and not target.spelling:
+            for reading in readings:
+                for repair in predicate_tail_omission_repairs(reading.text):
+                    yield reading,repair,False
         if not candidates:
             for reading in readings:
                 for repair in request_shift_key_repairs(target,reading.text,*surrounding_readings):
@@ -9240,6 +9601,16 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
             from kana_spelling import project
             projected=project(repair.reading,store,dictionary,decisions)
             surfaces=[projected[0]] if projected and projected[0] in priority[1] else []
+            # 48-CX / AI の判断 / 2026-10-12: a repaired reading that keeps
+            # no lexical spelling of its own (kana projection is None) can
+            # still be a whole explained clause. Then the IME's own first
+            # search candidate for that reading is its written form, e.g.
+            # 霧が内容名も (きりがないようなも) -> キリがないようにも.
+            # The common original-context gate below still decides.
+            if not surfaces and projected is None and priority[1]:
+                from pos_grammar import odd_kana_spans
+                if not odd_kana_spans(repair.reading+'\t',dictionary,store):
+                    surfaces=[priority[1][0]]
         elif priority:
             from kana_spelling import project
             projected=project(repair.reading,store,dictionary,decisions)
@@ -9263,7 +9634,7 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
                          [question_surface] if target.boundary_kind=='question_particle' else
                          [particle_surface] if target.boundary_kind=='particle_intrusion' else
                          [target.spelling[0].normal] if target.spelling else
-                         [repair.reading] if unattached_masu or target.boundary_kind in ('kana_action_note','kana_predicate','kana_request','kana_copula','particle_adverbial','mark_transposition','nominalized_subject')
+                         [repair.reading] if unattached_masu or target.boundary_kind in ('kana_action_note','kana_predicate','kana_request','kana_copula','particle_adverbial','mark_transposition','nominalized_subject','unshifted_wo','broken_polite_end')
                          else _surfaces(repair.reading,store,dictionary,
                              # A native action-tail omission already proves
                              # this composition, even when the source anomaly

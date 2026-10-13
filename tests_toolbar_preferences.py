@@ -7,7 +7,7 @@ from unittest.mock import patch
 import tkinter as tk
 import app,ime_watch
 from settings import Settings
-from toolbar_preferences import BUTTONS,IDS,normalized,bracket_order,next_bracket,ToolbarPreferences
+from toolbar_preferences import BUTTONS,IDS,DEFAULT_HIDDEN,normalized,bracket_order,next_bracket,ToolbarPreferences
 from tests_bracket_composition import BracketCompositionTests
 
 
@@ -16,8 +16,8 @@ class ToolbarModelTests(unittest.TestCase):
         order,hidden=normalized(['last',[], 'unknown','last','first'],['first',{},'unknown'])
         self.assertEqual(order[:2],['last','first'])
         self.assertEqual(len(order),len(IDS));self.assertEqual(set(order),set(IDS))
-        self.assertEqual(hidden,{'first'})
-        self.assertEqual(normalized('last',False),(list(IDS),set()))
+        self.assertEqual(hidden,{'first',*DEFAULT_HIDDEN})
+        self.assertEqual(normalized('last',False),(list(IDS),set(DEFAULT_HIDDEN)))
         self.assertEqual(normalized(['first','last'])[0][-1],'layout_unified')
 
     def test_saved_visibility_and_order_survive_reopen_without_changing_other_preferences(self):
@@ -38,6 +38,26 @@ class ToolbarModelTests(unittest.TestCase):
         self.assertEqual(kinds,(3,0,4))
         self.assertEqual([next_bracket(kinds,i) for i in (None,3,0,4,1)],[3,0,4,3,3])
         self.assertIsNone(next_bracket(bracket_order(hidden=list(IDS))))
+
+
+    def test_format_buttons_join_after_ruler_with_only_bold_visible(self):
+        self.assertEqual(IDS[IDS.index('ruler')+1:IDS.index('ruler')+5],
+            ('format_bold','format_italic','format_underline','format_overstrike'))
+        self.assertEqual(IDS[IDS.index('format_overstrike')+1],'bracket_parens')
+        # A saved order from before the buttons existed (the brackets reordered).
+        saved=['first','last','bookmark_previous','bookmark_next','quote','list',
+               'quick','word_book','bulk_insert','ruler','bracket_single',
+               'bracket_parens','bracket_double','bracket_black','bracket_quotes',
+               'layout_split','layout_unified']
+        order,hidden=normalized(saved,[])
+        start=order.index('ruler')
+        self.assertEqual(order[start:start+6],['ruler','format_bold','format_italic',
+            'format_underline','format_overstrike','bracket_single'])
+        self.assertEqual(order[-2:],['layout_split','layout_unified'])
+        self.assertEqual(hidden,set(DEFAULT_HIDDEN))
+        # Once saved with the new buttons, the user's own choice is kept.
+        order,hidden=normalized(order,['format_bold'])
+        self.assertEqual(hidden,{'format_bold'})
 
 
 class ToolbarWidgetTests(unittest.TestCase):
@@ -91,7 +111,8 @@ class ToolbarWidgetTests(unittest.TestCase):
         self.assertLess(self.a._toolbar.winfo_y(),self.editor.winfo_y())
         self.a._bracket_buttons[3].event_generate('<Enter>');self.root.update()
         self.assertTrue(self.hint.endswith('F5'))
-        p.reset();self.root.update();self.assertEqual(p.order,list(IDS));self.assertFalse(p.hidden)
+        p.reset();self.root.update();self.assertEqual(p.order,list(IDS))
+        self.assertEqual(p.hidden,set(DEFAULT_HIDDEN))
         p.close();self.assertIsNone(p.window)
 
 

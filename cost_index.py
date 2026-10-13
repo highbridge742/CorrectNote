@@ -1,5 +1,5 @@
 """Exact derived cost tables; stale or absent data uses the source parser."""
-import gzip,hashlib,io,pickle
+import gc,gzip,hashlib,io,pickle
 SOURCE_SHA256 = 'bd9efabf65d326ad46de7757d5ed331a7424b450aa72786f2b629eedb578073e'
 INDEX_SHA256 = 'f2cdc9478fa3f6140418aaacacd48800cc6da605a0999f04c519cf576038d1d2'
 
@@ -16,7 +16,15 @@ def load(source_path,index_path):
         with open(index_path,'rb') as stream:packed=stream.read()
         # Pin the complete bundled bytes before decompression/deserialization.
         if hashlib.sha256(packed).hexdigest()!=INDEX_SHA256:return None
-        saved=_PrimitiveOnly(io.BytesIO(gzip.decompress(packed))).load()
+        # The pinned public index consists only of primitive acyclic tables.
+        # Avoid scanning these new containers on every generation-0 threshold.
+        # Restore the caller's collector state even if deserialization fails.
+        collecting=gc.isenabled()
+        try:
+            if collecting:gc.disable()
+            saved=_PrimitiveOnly(io.BytesIO(gzip.decompress(packed))).load()
+        finally:
+            if collecting:gc.enable()
         if not isinstance(saved,dict) or saved.get('schema')!=1 or saved.get('source_sha256')!=SOURCE_SHA256:return None
         tables=tuple(saved[key] for key in ('readings','costs','surfaces'))
         if not all(isinstance(table,dict) for table in tables):return None

@@ -211,7 +211,12 @@ class Runtime:
             return bool(text and len(text)>=2 and
                         (self.store.has_reading(text) or text in known))
         from analysis_work import current_input
-        results=[];original_units=[];corrected_units=[]
+        results=[];original_units=[];corrected_units=[];navigation={}
+        from text_navigation import plans
+        def collect_navigation(line,corrected):
+            texts=(line,corrected[0]) if corrected is not None else (line,)
+            missing=[text for text in dict.fromkeys(texts) if text not in navigation]
+            navigation.update(plans(missing,self.tokenize))
         from analysis_context import check_current_request
         from quick_row_reuse import restored
         for index,line in enumerate(task['lines']):
@@ -219,6 +224,8 @@ class Runtime:
             reused=restored(task,index)
             if reused is not None:
                 result,units,corrected=reused
+                with tokenization_scope(),resource_scope():
+                    collect_navigation(line,corrected)
                 results.append(result);original_units.append(units);corrected_units.append(corrected)
                 continue
             if not line:
@@ -228,34 +235,38 @@ class Runtime:
             if literal_only(line):
                 results.append(literal_result(line));original_units.append([]);corrected_units.append(literal_units(line))
                 continue
-            with tokenization_scope(),resource_scope(),current_input(line,task.get('readings',{}).get(index,())):
-                # The same source-local native lemma/inflection proof as the
-                # main entry. It never changes tokenization of trial outputs.
-                tokenize=source_tokenizer(line,self.tokenize)
-                result=corrector.correct_line(line,self.store,tokenize,
-                    find_known_readings_flex,decisions=self.decisions,
-                    input_method=task['input_method'],context_vec=self.context_vec,
-                    dict_index=self.index)
-                result=apply_to_result(result,task['calculations'].get(index,()),
-                                     self.decisions,tokenize,self.index)
-                original_units.append(build_suspect_units(result,tokenize,
-                                      self.choices,known_kana)[1])
-                corrected_units.append(build_line_units(result,tokenize,
-                                       self.choices,known_kana))
-                results.append(result)
-        return dict(results=results,units=original_units,corrected_units=corrected_units)
+            with tokenization_scope(),resource_scope():
+                with current_input(line,task.get('readings',{}).get(index,())):
+                    # The same source-local native lemma/inflection proof as the
+                    # main entry. It never changes tokenization of trial outputs.
+                    tokenize=source_tokenizer(line,self.tokenize)
+                    result=corrector.correct_line(line,self.store,tokenize,
+                        find_known_readings_flex,decisions=self.decisions,
+                        input_method=task['input_method'],context_vec=self.context_vec,
+                        dict_index=self.index)
+                    result=apply_to_result(result,task['calculations'].get(index,()),
+                                         self.decisions,tokenize,self.index)
+                    original_units.append(build_suspect_units(result,tokenize,
+                                          self.choices,known_kana)[1])
+                    corrected_units.append(build_line_units(result,tokenize,
+                                           self.choices,known_kana))
+                    results.append(result)
+                # Reuse the same native row scope after original-input evidence
+                # ends. Navigation uses the ordinary tokenizer, as before.
+                collect_navigation(line,corrected_units[-1])
+        return dict(results=results,units=original_units,corrected_units=corrected_units,
+                    navigation=navigation)
 
     def prepare_tables(self):
         if getattr(self,'tables_ready',False):return
         from analysis_context import check_current_request
         from corrector import _table_readings_for_surface
         from familiar_nominal import families
-        import oddness,seed_japanese,loanword,reading_likelihood
-        # The same immutable bundled resources used by ordinary correction.
-        # Each completed stage can be reused if a newer request interrupts us.
+        import oddness,seed_japanese
+        # Keep common preparation small. Optional language resources retain
+        # their ordinary demand loaders when a particular row needs them.
         for load in (families,lambda:_table_readings_for_surface(''),
-                     seed_japanese.available,oddness._load,
-                     loanword._english_seed,reading_likelihood._distributions):
+                     seed_japanese.available,oddness._load):
             check_current_request()
             load()
         self.tables_ready=True
@@ -285,6 +296,10 @@ class Runtime:
                 # request interrupts its dictionary walk; normal preparation
                 # never waits for an index the current text may not need.
                 from analysis_context import check_current_request
+                import loanword,reading_likelihood
+                for load in (loanword._english_seed,reading_likelihood._distributions):
+                    check_current_request()
+                    load()
                 check_current_request()
                 from contextual_repair import _native_written_nominal_readings,_seed_context
                 from ngram_yomi import _bigram_counts
@@ -342,16 +357,26 @@ class Runtime:
         from analysis_context import signature
         inputs=(signature(task.get('nearby',()),task.get('readings',()),task.get('calculations',()))
                 if kind=='line' else result.get('_input_signature'))
+        from text_navigation import plans
+        navigation=plans((result['original'],result['corrected'],original_units[0],corrected_units[0]),self.tokenize)
         return dict(result=result,prepared=prepared,context_evidence=evidence,input_signature=inputs,
                     ime_evidence=ime_evidence,
+                    navigation=navigation,
                     corrected_units=corrected_units,original_units=original_units)
 
 
 def _serve(inbox,outbox):
+    from tsf_worker import worker_connection_scope
+    with worker_connection_scope() as connection_owner:
+        _serve_requests(inbox,outbox,connection_owner)
+
+
+def _serve_requests(inbox,outbox,connection_owner):
     from analysis_context import request_scope,check_current_request,SupersededAnalysis
     runtime=Runtime();no_request=object();pending=no_request
     while True:
-        request=inbox.get() if pending is no_request else pending
+        if not connection_owner.pump():return
+        request=connection_owner.get(inbox) if pending is no_request else pending
         pending=no_request
         if request is None:return
         pending_state=request.get('state')

@@ -528,6 +528,11 @@ PREDICATE_GROUPS=(
  ('food ingredient object material writing_surface text depiction body_part place','焼く'),
  # 48-AIW: physical cutting, including food, cloth and paper.
  ('food object writing_surface body_part','切る 刻む 切り刻む'),
+ # 48-CU / AI の判断 / 2026-10-12: 物・お金・機器・書類をなくす・落とす・
+ # 忘れる（鍵をなくしました・財布を落とした・傘を忘れた）。忘れる は
+ # 情報（名前を忘れる）も取る。ほかの意味を否定しない。
+ ('object money device text','無くす 失くす 失う 落とす'),
+ ('object money device text information','忘れる'),
  ('text sound','続ける'),
  # 48-ACT / GPT-6 Astra / 2026-09-14: switching display/content is an
  # ordinary operation. Counterexamples: read paper, switch audio, not
@@ -1149,8 +1154,20 @@ def classified_nominal_action(surface, reading):
 
 
 @lru_cache(maxsize=4096)
+def _case_roster(case):
+    """格ごとの述語の意味の表。
+
+    48-CR（2026-10-11）: が の項は**主語**なので、主語の表
+    （`SUBJECT_VERB_ROLES`）を引く。いままで が の行は格の表に無く、
+    `にもつがとどきました`・`パソコンがこわれました` のような自動詞の文は
+    主語の意味の証明が立たず、壊れた述語（`とどきしまた`）を直せなかった。
+    """
+    if case=='が':return SUBJECT_VERB_ROLES
+    return CASE_VERB_ROLES.get(case,{})
+
+
 def predicate_roles(surface, following='', before='', case=None):
-    roster=VERB_ROLES if case is None else CASE_VERB_ROLES.get(case,{})
+    roster=VERB_ROLES if case is None else _case_roster(case)
     if surface in roster:return frozenset(roster[surface])
     from morphology import tokenize,dictionary_inflections
     parts=[t for t in tokenize(before+surface+following) if t.start>=len(before)]
@@ -1358,7 +1375,7 @@ def native_verb_roles(surface, form, reading, subject=False, case=None, tail=Non
     inflection (書く versus 嗅ぐ). The output never chooses these spellings.
     """
     from morphology import dictionary_inflections
-    roster=CASE_VERB_ROLES.get(case,{}) if case is not None else (SUBJECT_VERB_ROLES if subject else VERB_ROLES)
+    roster=_case_roster(case) if case is not None else (SUBJECT_VERB_ROLES if subject else VERB_ROLES)
     kana=surface==reading and all('ぁ'<=c<='ゖ' for c in surface)
     roles=set();lexemes=set(native_verb_lexemes(surface,form,reading))
     for lexeme in lexemes:
@@ -1583,6 +1600,8 @@ def preserves_nominal_spelling_argument(line,start,end,surface):
     if surface_for_reading(original)==surface:return True
     from context_meaning import preserves_nominal_spelling_context
     if not preserves_nominal_spelling_context(line,start,end,surface):return False
+    from reading_segments import preserves_reopened_verb_case_spelling
+    if not preserves_reopened_verb_case_spelling(line,start,end,surface):return False
     before,following=line[:start],line[end:]
     proof=candidate_nominal_spelling_evidence(before,original,following)
     return not proof or bool(candidate_nominal_spelling_evidence(before,surface,following))
@@ -2229,6 +2248,13 @@ def _terminal_predicate_tail(text, tokens, edge, last_form, independent_next=Fal
                             for pos,form,base,reading in dictionary_inflections(following[0]) or ())):
                 edge=following[4];last_form=following[6]
                 continue
+            # 48-CY: 節の目的語（形式名詞 の）では、い の抜けた て＋られ
+            # （待ってられない＝待っていられない）も同じ動作の続き。
+            if (object_word=='の' and connected and following and len(following)>=7
+                    and following[5] and following[0] in ('られ','られる')
+                    and following[1].startswith('動詞:接尾')):
+                edge=following[4];last_form=following[6]
+                continue
             # A native sentence-final te/de is a request, not an open
             # connective whose object could belong to an unseen predicate.
             # Final particles may soften the same request. Commas, quotes
@@ -2269,6 +2295,11 @@ def _terminal_predicate_tail(text, tokens, edge, last_form, independent_next=Fal
             edge=token[4];last_form=''
         elif token[1].startswith('助詞:終助詞'):
             edge = token[4]
+        elif (object_word=='の' and finite() and token[5]
+                and token[0] in ('ので','のに','けど','けれど','けれども')
+                and token[1].startswith('助詞:接続助詞')):
+            # 48-CY: 〜ので／のに で閉じる従属節の中の「〜のを」は、その述語の目的語。
+            return True
         else:
             # 句点で終わった述語だけ。読点や閉じ括弧を文末と取り違えない。
             return finite() and token[0] in ('。', '！', '？', '!', '?')
@@ -2373,6 +2404,12 @@ _OBJECT_CONFLICT_ROLES.update({p:frozenset(('disorder',)) for p in _GATHERING_PR
 _OBJECT_CONFLICT_ROLES.update({p:frozenset(('person',)) for p in _PHYSICAL_OPENING_PREDICATES})
 _OBJECT_CONFLICT_ROLES.update({p:frozenset(('schedule','text','presentation','reference','device'))
                               for p in _BIOLOGICAL_STATE_PREDICATES})
+# 48-CY / AI の判断 / 2026-10-12: 舞う は 舞・踊り（または通り道）を取る動作で、
+# 「〜するのを」のような節（形式名詞 の）を目的語に取らない。
+# 例 補正が適用されるのを舞って（→待って）。名詞の目的語には何も言わない。
+_OBJECT_CONFLICT_ROLES['舞う']=frozenset(('clause',))
+# 48-CY: 「〜のを」の節を目的語に取る、ふつうの動作（正の証拠）。
+CLAUSE_OBJECT_PREDICATES=frozenset('待つ 見る 聞く 知る 忘れる 手伝う 止める やめる 防ぐ 楽しむ 見守る 感じる 嫌がる 喜ぶ 確認 期待 確かめる 覚える'.split())
 
 
 
@@ -2418,6 +2455,8 @@ def conflicting_object_predicates(text,tokens):
     rows=_closed_object_predicate_spans(text,tokens,
         frozenset(_OBJECT_CONFLICT_ROLES) | _BORROWED_RETURN_PREDICATES)
     def source_roles(noun):
+        # 48-CY: 形式名詞 の だけの目的語は、前の節そのもの。
+        if noun=='の':return frozenset(('clause',))
         if noun and all('ぁ'<=c<='ゖ' or c=='ー' for c in noun):
             # The source case establishes a noun slot, even when its kana
             # best parse is an adverb. Reuse the same exact nominal readings
@@ -2468,6 +2507,11 @@ def changed_object_conflict_allowed(original, changed):
         fitting=False
         for noun,lemma,a,b in rows:
             if a!=position:continue
+            # 48-CY: 節の目的語は、節を取る動作で受けたときだけ合う。
+            if obj=='の' and noun=='の':
+                if lemma in CLAUSE_OBJECT_PREDICATES:
+                    fitting=True;break
+                continue
             evidence=candidate_evidence(noun,changed[a:b],changed[b:],changed[:a])
             if evidence and evidence['shared_roles']:
                 source_case=_borrowed_return_case_conflict(original,source_tokens,obj,predicate,start)
@@ -2509,13 +2553,19 @@ SUBJECT_PREDICATE_GROUPS=(
  ('device','起動 稼働 動作 停止 故障'),
  ('text information','届く 残る 消える'),
  ('money','増える 減る 足りる 余る'),
+ # 48-CR / AI の判断（2026-10-11）: 物が届く・着く、機器や物が壊れる・
+ # 直る、機器が動く・止まる。主語の意味の肯定の証明だけで、綴りの組も
+ # 異様の規則も足さない（`にもつがとどきしまた`・`パソコンがこわれまとた`）。
+ ('object','届く 着く'),
+ ('device repairable_device object','壊れる 直る'),
+ ('device repairable_device','動く 止まる'),
 )
 SUBJECT_VERB_ROLES={}
 for roles,words in SUBJECT_PREDICATE_GROUPS:
     for word in words.split():SUBJECT_VERB_ROLES.setdefault(word,set()).update(roles.split())
 
 
-def subject_before(context,start,tokenize):
+def subject_before(context,start,tokenize, *, allow_direct_topic=False):
     """Keep a proved whole subject across the shared native argument seam.
 
     This is the same original boundary used by object/case readers.
@@ -2533,6 +2583,12 @@ def subject_before(context,start,tokenize):
     if len(parts)<2:return ''
     noun,particle=parts[-2:]
     actual_ga=particle[0]=='が' and particle[1].startswith('助詞:格助詞')
+    # Only a caller that already proved the whole original reading may
+    # use its literal unbound topic as a subject spelling constraint.
+    # Ordinary source interpretation keeps the stricter object frame.
+    direct_topic=bool(allow_direct_topic and edge==object_edge
+        and particle[0] in ('は','も') and particle[1]=='助詞:係助詞'
+        and particle[2]==particle[0] and particle[5])
     topic_heads=()
     if (not actual_ga and edge<object_edge and particle[0] in ('は','も')
             and particle[1]=='助詞:係助詞' and particle[2]==particle[0]
@@ -2543,19 +2599,19 @@ def subject_before(context,start,tokenize):
                 object_start=object_begin if edge<object_begin else None)
             if begin==edge and case==particle[0] and cut==object_edge
             for head in heads)
-    if (particle[4]!=edge or not (actual_ga or topic_heads) or noun[4]!=particle[3]
+    if (particle[4]!=edge or not (actual_ga or direct_topic or topic_heads) or noun[4]!=particle[3]
             or not noun[5] or not noun[1].startswith('名詞')
             or '固有名詞' in noun[1]):
         return ''
     # Share the whole classified argument used by object and case readers.
     # A productive suffix must not become either a bare noun or no subject.
     whole=_classified_argument_head(context,parts,len(parts)-2)
-    if whole:return whole[0] if actual_ga or whole[0] in topic_heads else ''
+    if whole:return whole[0] if actual_ga or direct_topic or whole[0] in topic_heads else ''
     if '接尾' in noun[1]:return ''
     # Do not read only the last part of a compound as the whole subject.
     if len(parts)>2 and parts[-3][4]==noun[3] and parts[-3][1].startswith(('名詞','接頭詞')):
         return ''
-    return noun[0] if actual_ga or noun[0] in topic_heads else ''
+    return noun[0] if actual_ga or direct_topic or noun[0] in topic_heads else ''
 
 
 @lru_cache(maxsize=4096)

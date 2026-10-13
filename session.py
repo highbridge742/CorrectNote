@@ -55,13 +55,36 @@ import file_format as file_formats
 SESSION_VERSION = 1
 
 
+TEXT_STYLE_KEYS = ('bold', 'italic', 'underline', 'overstrike')
+
+
+def clean_text_styles(value):
+    """書式の控え {書式: [[行, 桁, 行, 桁], ...]}。壊れた値は捨てる。"""
+    result = {}
+    if not isinstance(value, dict):
+        return result
+    for key in TEXT_STYLE_KEYS:
+        ranges = []
+        items = value.get(key)
+        for item in items if isinstance(items, (list, tuple)) else ():
+            if (isinstance(item, (list, tuple)) and len(item) == 4
+                    and all(type(n) is int and n >= 0 for n in item)
+                    and item[0] >= 1 and item[2] >= 1
+                    and (item[0], item[1]) < (item[2], item[3])):
+                ranges.append([item[0], item[1], item[2], item[3]])
+        if ranges:
+            result[key] = ranges[:10000]
+    return result
+
+
 def clean_ruler_rows(rows):
     if not isinstance(rows,(list,tuple,set,frozenset)):return []
     return sorted({row for row in rows if type(row) is int and row>=1})
 
 
 def new_tab(text='', path=None, saved=True, cursor='1.0', scroll=0.0,
-            title=None, bookmarks=None, top=None, file_format=None, calculations=None,ruler_rows=None):
+            title=None, bookmarks=None, top=None, file_format=None, calculations=None,ruler_rows=None,
+            text_styles=None):
     """タブ1つぶんの控えを作る。
 
     top: 画面のいちばん上に見えていた**行番号**（1始まり）。
@@ -85,6 +108,8 @@ def new_tab(text='', path=None, saved=True, cursor='1.0', scroll=0.0,
     from quote_calculator import clean_calculations
     records = clean_calculations(text, calculations)
     if records:tab['calculations'] = records
+    styles = clean_text_styles(text_styles)
+    if styles:tab['text_styles'] = styles
     return tab
 
 
@@ -283,6 +308,7 @@ class SessionStore:
                 file_format=metadata,
                 calculations=t.get('calculations'),
                 ruler_rows=t.get('ruler_rows'),
+                text_styles=t.get('text_styles'),
             ))
         if not clean:
             return False

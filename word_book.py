@@ -21,6 +21,35 @@ def word_book_position(app_bounds, window_size, work_area, gap=6, number_left=No
     return int(x), int(y)
 
 
+def caption_width(window, hwnd=None):
+    """Client width at which the title bar's icon clears its buttons.
+
+    Windows draws the caption buttons over the icon when the window is
+    narrower (2026-10-13 うにさん). Measured from the mapped window; None
+    elsewhere or when Windows does not report the buttons."""
+    if os.name != 'nt':
+        return None
+    import ctypes
+    from ctypes import wintypes
+    try:
+        if not hwnd:
+            hwnd = ctypes.WinDLL('user32').GetAncestor(window.winfo_id(), 2)
+        rect = wintypes.RECT()
+        # DWMWA_CAPTION_BUTTON_BOUNDS: the buttons' box in window coordinates.
+        if ctypes.WinDLL('dwmapi').DwmGetWindowAttribute(
+                wintypes.HWND(hwnd), 5, ctypes.byref(rect), ctypes.sizeof(rect)):
+            return None
+        icon = ctypes.WinDLL('user32').GetSystemMetrics(49)    # SM_CXSMICON
+    except (OSError, AttributeError, ValueError, tk.TclError):
+        return None
+    buttons = rect.right - rect.left
+    if buttons <= 0:
+        return None
+    # The frame's border sits outside the client width on both sides; the
+    # icon has about 8px of margin before it and after it, plus 8px spare.
+    return buttons + max(0, icon) + 24
+
+
 class _WordBookNative:
     """Remember the preceding foreground window without polling or reading text."""
     def __init__(self, window, previous=None):
@@ -276,6 +305,13 @@ class WordBook:
         self.render()
         win.deiconify()
         win.update_idletasks()
+        floor = caption_width(win, getattr(self._native, 'hwnd', None))
+        if floor:
+            win.minsize(floor, 1)
+            if self.width < floor:
+                self.width = floor
+                win.geometry('%dx%d' % (floor, win.winfo_height()))
+                win.update_idletasks()
         self._place()
         self.app.word_book_btn.config(relief='sunken', fg=accent)
         self.save()

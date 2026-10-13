@@ -47,7 +47,7 @@ def child():
                 assert a.session.active==tab and a._scroll_inertia.job is not None
                 assert a.editor.yview()[0]==start
                 pump(.035);middle=a.editor.yview()[0]
-                until(lambda:a._scroll_inertia.job is None,seconds=1.2);end=a.editor.yview()[0]
+                until(lambda:a._scroll_inertia.job is None,seconds=2);end=a.editor.yview()[0]
                 assert start<middle<end,(layout,start,middle,end)
                 assert a._scroll_inertia.job is None
                 if layout=='split':assert abs(a.result_view.yview()[0]-end)<.0001
@@ -63,6 +63,13 @@ def child():
                 at=a.editor.yview();pump(.15)
                 assert a.editor.yview()==at and a._scroll_inertia.job is None
                 cases.append(layout+'_key_cancels_tail')
+                position();wheel(a.editor,delta=-600)
+                assert a._scroll_inertia.job is not None
+                a.editor.event_generate('<ButtonPress-1>',x=4,y=4);root.update()
+                at=a.editor.yview();pump(.15)
+                assert a.editor.yview()==at and a._scroll_inertia.job is None
+                a.editor.event_generate('<ButtonRelease-1>',x=4,y=4);root.update()
+                cases.append(layout+'_click_cancels_tail')
             # Inertia is on, but a tab-strip wheel must still switch at once.
             label=a._tab_widgets[a.session.active]['label'];tab=a.session.active
             wheel(label);root.update()

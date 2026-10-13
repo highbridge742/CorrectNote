@@ -127,6 +127,9 @@ class LastChoiceStore:
         self.path = path
         self._readings = {}
         self._units = {}
+        # 同音の語どうしの選び直し（買える→変える）は**前後の語ごと**に持つ
+        # （うにさんの指定・2026-10-12）。{(前, 元の語, 後): 選んだ表記}
+        self._contexts = {}
         # 枠が変わった回数（項目48-QQ）。`loanword` の控えの見分けに使う
         # ——語彙が動かなくても**枠が変われば直し先の中身は変わる**。
         self._revision = 0
@@ -150,12 +153,56 @@ class LastChoiceStore:
     # ------------------------------------------------------------
     def record(self, original, chosen, reading=None, prev=None, next=None):
         """
-        旧 `ChoiceStore.record` と同じ呼び方の口（`prev`/`next` は見ない）。
+        旧 `ChoiceStore.record` と同じ呼び方の口。
+
+        **同音の語どうしの選び直し**（`買える` → `変える`）は、語だけでも
+        読みだけでも覚えない（うにさんの指定・2026-10-12）:
+
+            「モードによって買える」と変換ミスしたものを「買える→変える」と
+            学習した場合、「金で買える」が通らなくなる。「モードによって
+            買える→モードによって変える」と学習するならよい。
+
+        そのときだけ `prev` / `next`（前後の語）ごと覚える。それ以外は
+        前どおり `remember`（前後の語は見ない）。
 
         戻り値: 何か書いたら True（旧 `record` は「新規なら True」を
         返していたが、読んでいる側は無い）。
         """
+        if self._is_homophone_swap(original, chosen, reading):
+            key = (prev or '', original, next or '')
+            if self._contexts.get(key) == chosen:
+                return False
+            self._contexts[key] = chosen
+            self._revision += 1
+            return True
         return self.remember(original, chosen, reading)
+
+    def _is_homophone_swap(self, original, chosen, reading):
+        """書いてあった表記と選んだ表記が、同じ読みの別の語か（買える／変える）。"""
+        if not (isinstance(original, str) and isinstance(chosen, str)
+                and original and chosen and original != chosen):
+            return False
+        if all('ぁ' <= c <= 'ゖ' or c == 'ー' for c in original):
+            return False                 # かなを変換した＝IME の選び方（読みの枠でよい）
+        mine = self._reading_of(original)
+        return bool(mine) and mine == (reading or self._reading_of(chosen))
+
+    def _reading_of(self, surface):
+        """表記の読み（語彙の逆引き → 形態素の読み）。分からなければ None。"""
+        try:
+            got = self._store.reading_of(surface) if self._store is not None else None
+        except Exception:
+            got = None
+        if got:
+            return got
+        try:
+            from morphology import tokenize
+            parts = list(tokenize(surface))
+        except Exception:
+            return None
+        if not parts or not all(t.has_reading and t.reading for t in parts):
+            return None
+        return ''.join(t.reading for t in parts)
 
     def remember(self, original, chosen, reading=None,
                  store=None, dict_index=None):
@@ -224,6 +271,11 @@ class LastChoiceStore:
         """一覧から選んだ1件を消す（読みの枠も語の枠もここから）。"""
         if not isinstance(rec, dict):
             return False
+        if rec.get('kind') == 'context':
+            gone = self._contexts.pop(tuple(rec.get('key') or ()), None) is not None
+            if gone:
+                self._revision += 1
+            return gone
         if rec.get('kind') == 'reading':
             return self.forget_reading(rec.get('original'))
         return self.forget_unit(rec.get('original'))
@@ -251,6 +303,10 @@ class LastChoiceStore:
         """
         if not isinstance(original, str) or len(original) <= 1:
             return None
+        if self._contexts:
+            got = self._contexts.get((prev or '', original, next or ''))
+            if got:
+                return got
         return self._units.get(original)
 
     def has(self, original):
@@ -279,10 +335,17 @@ class LastChoiceStore:
         for og in sorted(self._units):
             out.append({'kind': 'unit', 'original': og,
                         'chosen': self._units[og]})
+        # 前後の語ごとの選び直しは、前後を付けた形で見せる
+        # （`モードによって買える → モードによって変える`）
+        for key in sorted(self._contexts):
+            pv, og, nx = key
+            out.append({'kind': 'context', 'key': list(key),
+                        'original': pv + og + nx,
+                        'chosen': pv + self._contexts[key] + nx})
         return out
 
     def __len__(self):
-        return len(self._readings) + len(self._units)
+        return len(self._readings) + len(self._units) + len(self._contexts)
 
     # ------------------------------------------------------------
     # 保存
@@ -295,6 +358,9 @@ class LastChoiceStore:
             'readings': {k: self._readings[k] for k in sorted(self._readings)},
             'units': {k: self._units[k] for k in sorted(self._units)},
         }
+        if self._contexts:
+            data['contexts'] = [[pv, og, nx, self._contexts[(pv, og, nx)]]
+                                for pv, og, nx in sorted(self._contexts)]
         tmp = path + '.tmp'
         with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=1)
@@ -315,6 +381,9 @@ class LastChoiceStore:
                           if isinstance(k, str) and isinstance(v, str) and v}
         self._units = {k: v for k, v in (data.get('units') or {}).items()
                        if isinstance(k, str) and isinstance(v, str) and v}
+        self._contexts = {(r[0], r[1], r[2]): r[3] for r in (data.get('contexts') or ())
+                          if isinstance(r, list) and len(r) == 4
+                          and all(isinstance(x, str) for x in r) and r[1] and r[3]}
         self._revision += 1
 
 

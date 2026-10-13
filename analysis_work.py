@@ -247,8 +247,20 @@ def observe_text(widget,on_edit=None,on_cursor=None,on_before_edit=None,track_ch
             if args[0]=='delete' and len(args)>3:discard=True
         from contextlib import nullcontext
         track=callbacks.get('track') if mutation else None
+        inserted=None;span=None
+        if (len(args)>1 and args[0] in ('insert','delete','replace') and callbacks.get('changed')
+                and not (args[0]=='delete' and len(args)>3)):
+            # Where the edit starts and how many rows it adds or removes, so
+            # row-keyed presentation can follow the text instead of resetting.
+            try:span=(int(str(widget.tk.call(original,'index',args[1])).split('.')[0]),
+                      int(str(widget.tk.call(original,'index','end')).split('.')[0]))
+            except Exception:span=None
+        if len(args)>2 and args[0]=='insert' and callbacks.get('inserted'):
+            inserted=(widget.tk.call(original,'index',args[1]),''.join(str(chunk) for chunk in args[2::2]))
         with replay_scope(discard) as replay, (track() if track is not None else nullcontext()) as commit:
             result=invoke(*args)
+            if inserted is not None:
+                for callback in tuple(callbacks.get('inserted',())):callback(*inserted)
             if mutation:
                 after=widget.tk.call(original,'get','1.0','end-1c')
                 if after!=before or args[:2] in (('edit','undo'),('edit','redo')):
@@ -267,11 +279,22 @@ def observe_text(widget,on_edit=None,on_cursor=None,on_before_edit=None,track_ch
                 or args[0] in ('insert','delete','replace')
                 or args[:2] in (('edit','undo'),('edit','redo'))):
             callbacks['cursor']()
+        if args and (args[:3]==('mark','set','insert')
+                or args[0] in ('insert','delete','replace')
+                or args[:2] in (('edit','undo'),('edit','redo'))):
+            for moved in tuple(callbacks.get('moved',())):moved()
         if args and (args[0] in ('insert','delete','replace')
                 or args[:2] in (('edit','undo'),('edit','redo'))):
+            if span is not None:
+                try:span=(span[0],int(str(widget.tk.call(original,'index','end')).split('.')[0])-span[1])
+                except Exception:span=None
+            widget._correctnote_last_edit=span
             for changed in tuple(callbacks.get('changed',())):changed(args)
         if len(args)>1 and args[0] in ('xview','yview'):
             for viewed in tuple(callbacks.get('viewed',())):viewed()
+        if args and ((len(args)>1 and args[0] in ('xview','yview')) or args[0]=='see'):
+            # Synchronous, before Tk redraws the moved view at idle time.
+            for scrolled in tuple(callbacks.get('scrolled',())):scrolled()
         return result
     # 48-ACO: native Tcl errors must return to Tcl without becoming an
     # uncaught Python callback error. Otherwise even a caller's handled cget

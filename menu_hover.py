@@ -6,6 +6,9 @@ from ctypes import wintypes as W
 class NativeMenuHover:
     def __init__(self, bounds, current):
         self.bounds, self.current, self.pending = bounds, current, None
+        # The open menu's own title was clicked: Windows ends the menu, then
+        # still hands that press to the title, which would open it again.
+        self.closed_by_title = False
         self.user = u = c.WinDLL('user32', use_last_error=True)
         kernel = c.WinDLL('kernel32')
         kernel.GetCurrentThreadId.argtypes = []; kernel.GetCurrentThreadId.restype = W.DWORD
@@ -22,6 +25,8 @@ class NativeMenuHover:
                 msg = c.cast(lp, c.POINTER(W.MSG)).contents
                 if msg.message in (0x0200, 0x00a0):
                     self.select_point(msg.pt.x, msg.pt.y)
+                elif msg.message in (0x0201, 0x00a1):  # (NC)LBUTTONDOWN
+                    self.note_press(msg.pt.x, msg.pt.y)
             return u.CallNextHookEx(None, code, wp, lp)
         self.callback = self.callback_type(filtered)
         self.hook = u.SetWindowsHookExW(-1, self.callback, None, kernel.GetCurrentThreadId())
@@ -35,6 +40,14 @@ class NativeMenuHover:
                     self.pending = name
                     # No Tk calls inside the native callback. MbPost returns
                     # after EndMenu; its Python caller can then post the next.
+                    self.user.EndMenu()
+                break
+
+    def note_press(self, x, y):
+        for name, left, top, right, bottom in self.bounds:
+            if left <= x < right and top <= y < bottom:
+                if name == self.current:
+                    self.closed_by_title = True
                     self.user.EndMenu()
                 break
 

@@ -88,7 +88,8 @@ def main(exe_path):
     assert engine_stamp in strings(pyz.extract('analysis_cache')), (
         'ENGINE_STAMP missing from EXE', engine_stamp)
     for module in ('contextual_repair', 'ime_colloquial', 'seed_japanese',
-                   'word_book', 'menu_hover'):
+                   'word_book', 'menu_hover', 'tsf_worker',
+                   'boundary_colors', 'pos_font'):
         assert module in pyz.toc, ('module missing from EXE', module)
     assert 'seed_japanese.txt.gz' in archive.toc, (
         'seed lexicon missing from EXE', exe)

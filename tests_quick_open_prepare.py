@@ -18,7 +18,9 @@ class QuickOpenPrepareTests(base.QuickCompositionPrepareTests):
         self.assertEqual(self.worker.submit.call_args[0][0],{'kind':'quick_prepare'})
         self.app._finish_quick_analysis.assert_not_called()
         self.assertIsNone(getattr(self.app,'_quick_job',None))
-        Q.schedule_prepare(self.app);self.assertEqual(self.app.root.after.call_count,1)
+        Q.schedule_prepare(self.app)
+        # Preparation and the existing optional idle warmup have separate timers.
+        self.assertEqual([call.args[0] for call in self.app.root.after.call_args_list],[40,1200])
     def test_replaced_widget_makes_the_pending_callback_inert(self):
         ready=self.scheduled();self.app._quick_text=asynchronous.Widget('別の窓');ready()
         self.worker.submit.assert_not_called();self.snapshot.assert_not_called()

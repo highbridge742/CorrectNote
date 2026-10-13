@@ -53,7 +53,7 @@ class SubjectRoleTests(unittest.TestCase):
         t=M.Token('届い','動詞','届く','とどい',0,2,True,'自立',infl_form='連用タ接続')
         with patch.object(S,'_action_head',return_value='届いた'),patch.object(M,'tokenize',return_value=[t]), \
              patch.object(M,'dictionary_inflections',return_value=(('動詞,自立,*,*','連用タ接続','届く','とどい'),)):
-            self.assertEqual(S._subject_predicate_roles('届いた','')[1],frozenset({'text','information'}))
+            self.assertEqual(S._subject_predicate_roles('届いた','')[1],frozenset(S.SUBJECT_VERB_ROLES['届く']))
 
     def test_positive_role_lookup_does_not_call_anomaly_detection(self):
         with patch.object(S,'_subject_predicate_roles',return_value=('解決',frozenset({'issue'}))), \
