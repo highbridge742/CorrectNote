@@ -54,7 +54,11 @@ from settings import (Settings, effective_hotkeys, DEFAULT_EDITOR_FONT,
                       FONT_SIZE_MIN, FONT_SIZE_MAX, editor_font,
                       LAYOUT_LABELS, LAYOUT_SPLIT, LAYOUT_UNIFIED,
                       INPUT_METHOD_LABELS, INPUT_KANA, INPUT_ROMAJI,
+                      KEYBOARD_LAYOUT_LABELS, KEYBOARD_SHAPE_LABELS,
+                      KANA_LAYOUT_LABELS,
                       MEMORY_LABELS, MEMORY_LOW, MEMORY_HIGH)
+import keyboard_layout
+import appearance
 from hotkeys import GlobalHotkeys, HOTKEY_LABELS
 from ime_readings import IMEReadings, is_kana_reading as ime_readings_kana
 import analysis_work_app as input_work
@@ -227,8 +231,81 @@ def _stable_text_index(widget, index):
     return f'{row}.0+{column}c'
 
 
+# メニューのチェック・ラジオの項目で、ラベルの1文字目の左が欠ける
+# （うにさん・2026-10-15「メニューを展開すると1文字目の左側が見切れています」。
+# 「UTF-8」が「JTF-8」、「CapsLock」の C が欠ける）。Tk 8.6.9 は Windows で
+# チェックの印を、自分が空けた欄より幅広く描き（表示の倍率 1.33 で測った）、
+# 印の付いた項目だけラベルの頭に重なる。ラベルの左に透明な絵を置いて字を逃がす。
+# ラベルの文字は変えない（entrycget('label') で項目を探す所がある）。
+# どのメニュー・どのモジュールで足した項目にも掛かるよう、Menu.add/insert で入れる。
+_MENU_CHECK_GAP = {}
+
+
+def _menu_check_gap(menu):
+    root = menu._root()
+    image = _MENU_CHECK_GAP.get(id(root))
+    if image is None or str(image) not in root.image_names():
+        try:
+            scale = float(root.tk.call('tk', 'scaling'))
+        except Exception:
+            scale = 1.0
+        image = tk.PhotoImage(master=root, width=max(2, round(2.25 * scale)), height=1)
+        _MENU_CHECK_GAP[id(root)] = image
+    return image
+
+
+def _input_message_time():
+    """いま処理している Windows の知らせに OS が付けた時刻（ms）。Windows 以外は None。"""
+    if sys.platform != 'win32':
+        return None
+    try:
+        import ctypes
+        return int(ctypes.windll.user32.GetMessageTime()) & 0xffffffff
+    except Exception:
+        return None
+
+
+# 横に開く項目（cascade）の右の矢印が見えない（うにさん・2026-10-15「メニュー内の
+# 横に展開するアイコンが見えません」）。Tk 8.6.9 は Windows 11 でこの矢印を描かない
+# （素の Tk のメニューで、明るい地でも暗い地でも出なかった）。右端の欄（accelerator）に
+# 矢印の字を置く。字はメニューの文字の色で描かれるので、配色を変えても見える。
+# 頭の半角幅の空きは、いちばん長いラベルに矢印がくっつかないため。
+MENU_CASCADE_ARROW = '\u2002\u276f'
+
+
+def _with_check_gap(menu, item_type, cnf, kw):
+    given = cnf if isinstance(cnf, dict) else {}
+    if (sys.platform == 'win32' and item_type in ('checkbutton', 'radiobutton')
+            and 'image' not in kw and 'image' not in given):
+        kw = dict(kw, image=_menu_check_gap(menu), compound='left')
+    if (sys.platform == 'win32' and item_type == 'cascade'
+            and 'accelerator' not in kw and 'accelerator' not in given):
+        kw = dict(kw, accelerator=MENU_CASCADE_ARROW)
+    return kw
+
+
+if not getattr(tk.Menu, '_correctnote_check_gap', False):
+    _native_menu_add, _native_menu_insert = tk.Menu.add, tk.Menu.insert
+
+    def _menu_add(self, itemType, cnf={}, **kw):
+        return _native_menu_add(self, itemType, cnf, **_with_check_gap(self, itemType, cnf, kw))
+
+    def _menu_insert(self, index, itemType, cnf={}, **kw):
+        return _native_menu_insert(self, index, itemType, cnf, **_with_check_gap(self, itemType, cnf, kw))
+
+    tk.Menu.add, tk.Menu.insert = _menu_add, _menu_insert
+    tk.Menu._correctnote_check_gap = True
+
+
 from correction_entry import correct_line
 from seed_vocabulary import load_seed
+
+# 窓の縁と中身の間（px）。うにさん（2026-10-15）「行の左にある枠の外から、ウインドウの
+# 左端までの余白が勿体ないので、その余白を詰めます。右端もスクロールバーから右と
+# ウインドウ右端までに余白があるので詰めます」。前は 16。OUTER_PADX は本文の2欄と
+# スクロールバーの帯、BAND_PADX はタブ・ボタン・ステータスの行（揃えて見えるほう）。
+OUTER_PADX = 2
+BAND_PADX = 2
 
 # 画面に表示するアプリ名（タイトルバー・ダイアログのタイトル等）。
 # 内部の設計上の呼び名（コード中のコメントやファイル名の
@@ -257,7 +334,7 @@ APP_TITLE = 'CorrectNote'
 # 「判断に迷った箇所」から**「不自然な文字列」**へ入れ替え（既定オン・
 # 補正が入った範囲には付けない）、**かな書きのアルファベット読みを
 # 英字に直す**（`エフ2 → F2`）、スクロール後の反映（項目48-IZ〜）。
-APP_VERSION = '1.13.14'
+APP_VERSION = '1.13.15'
 
 # 同梱する説明書のファイル名。exe の中に入れて持ち歩き、
 # 初回起動時に exe と同じフォルダへ書き出す
@@ -666,6 +743,24 @@ def ime_result_needs_help(text):
     return any(ord(c) > 0xFFFF or 0xD800 <= ord(c) <= 0xDFFF for c in text or '')
 
 
+def ime_result_once(text):
+    """The emoji panel's pick, once.
+
+    Picking one emoji in the Windows emoji panel (Win+.) gives this window an
+    IME result string with that emoji twice (2026-10-14 うにさん「Windows+.で
+    絵文字をクリックすると、連続して2つ入力されます」; measured with the real
+    panel: GCS_RESULTSTR = 3dd812de3dd812de for one 😒,
+    tools_local/v114_release/panel_probe.py). Only a result that is exactly
+    one emoji repeated twice is shortened; anything else is kept as given."""
+    if not text or len(text) % 2:
+        return text
+    half = text[:len(text) // 2]
+    if half * 2 != text:
+        return text
+    from emoji_color import emoji_spans
+    return half if emoji_spans(half) == [(0, len(half))] else text
+
+
 def app_dir():
     """
     データファイル（語彙・判断・選び直し・辞書索引）を置く場所。
@@ -959,6 +1054,10 @@ DARK_PALETTE = {
     'WS_TAB_A': '#2b3036', 'WS_TAB_B': '#333a41',
 }
 
+# 外見の配色（appearance.THEMES・2026-10-15）を切り替えると FIXED_FG も変わる。
+# 標準のライト・ダークの色（同じ色）をここに控える。
+_STANDARD_FIXED_FG = FIXED_FG
+
 
 def is_kana(ch):
     """ひらがな（濁点・小書き含む）かどうか"""
@@ -997,6 +1096,24 @@ class LineNumberGutter(tk.Canvas):
     ダブルクリックでのブックマーク表示もここで受け持つ
     （どちらも「行の位置を知っている」ことが前提の機能のため）。
     """
+
+    # 数字の左の余白と、数字の右端からガターの右端までの間（px）。
+    # うにさん（2026-10-15）「行番号の左の余白を詰めます。…今よりも間を詰めます」:
+    # 幅 48 固定（10pt で 1 桁なら左に 30px・2 桁で 23px が空いていた）をやめ、
+    # いちばん大きい行番号の桁数と本文の字から幅を決める（左 12 ＋ 数字 ＋ 右 10）。
+    # 桁は最低 3 桁分を取る（うにさんの選択・2026-10-15「3桁分を確保」）: 9→10・99→100 行で
+    # 幅が変わって本文が 7px ずれないように。1〜999 行は同じ幅で、4 桁から広がる。
+    # 数字は右詰め（うにさん・2026-10-15「行番号の数字は、右詰めにしてください」。
+    # 詰めたいのは欄の中ではなく、窓の縁と本文欄の枠の間＝OUTER_PADX）。
+    # 右の 10 は変えない（数字の右と本文の間は今までどおり。本文の padx 14 と
+    # 合わせて 24px）。桁が増えたとき・字を変えたときは redraw が幅を広げるので、
+    # 数字が欠けない。ブックマークの丸（8px）は左の余白に入る（x 2〜10）。
+    # 左を 10 にすると、いちばん桁の多い行では丸が数字に触れた（2026-10-15 の写真）ので 12。
+    LEFT_PAD = 12
+    RIGHT_GAP = 10
+    MIN_DIGITS = 3
+    # 外見の装飾の模様（appearance.GutterBackdrop）。app が置く。無ければ描かない。
+    backdrop = None
 
     def __init__(self, parent, target, bookmarks=None,
                 on_toggle_bookmark=None, width=48,
@@ -1071,8 +1188,14 @@ class LineNumberGutter(tk.Canvas):
 
     def redraw(self):
         """ペア先の今の描画内容に合わせて、見えている行番号を引き直す。"""
-        self.delete('all')
+        # 装飾の模様（cn_backdrop）だけは残す。消すと Tk が絵のファイルを
+        # 読み直す（行番号は打鍵・スクロールのたびに引き直すので重い）。
+        self.delete('!cn_backdrop')
         target = self.target
+        # 文字の裏の絵（appearance.Paper）も、行の場所が変わったかもしれない
+        paper = getattr(target, '_correctnote_paper', None)
+        if paper is not None:
+            paper.queue()
         try:
             line_count = int(target.index('end-1c').split('.')[0])
             self._cursor_row = (str(self.active_row()) if self.active_row is not None
@@ -1081,6 +1204,17 @@ class LineNumberGutter(tk.Canvas):
             return
 
         width = int(self['width'])
+        needed = self.fit_width(line_count)
+        if needed != width:
+            # 桁が増えた・字が変わった: 幅を合わせる（<Configure> でもう一度引く）
+            self.configure(width=needed)
+            width = needed
+        backdrop = getattr(self, 'backdrop', None)
+        if backdrop is not None:
+            try:
+                backdrop.draw(self, width)
+            except Exception:
+                pass
         # 48-VV: 画面外の全行へ dlineinfo を問い合わせない。
         try:
             top = int(target.index('@0,0').split('.')[0])
@@ -1108,7 +1242,7 @@ class LineNumberGutter(tk.Canvas):
             if current:
                 self.create_rectangle(0, y, width, y + h, outline='',
                     fill=LINE_NUM_ACTIVE_BG, tags=('cursor_line',))
-            self.create_text(width - 10, y + h / 2, anchor='e',
+            self.create_text(width - self.RIGHT_GAP, y + h / 2, anchor='e',
                              text=str(line_idx), fill=INK if current else LINE_NUM_FG,
                              font=self._number_font(line_idx, width), tags=('num',))
             if self.row_status is not None:
@@ -1119,8 +1253,21 @@ class LineNumberGutter(tk.Canvas):
                                           tags=('analysis_state','analysis_'+state,'analysis_row_'+str(line_idx)))
 
             if line_idx in self.bookmarks:
-                self.create_oval(4, y + h / 2 - 4, 12, y + h / 2 + 4,
+                self.create_oval(2, y + h / 2 - 4, 10, y + h / 2 + 4,
                                  fill='#3a72c4', outline='', tags=('mark',))
+
+    def fit_width(self, line_count):
+        """いちばん大きい行番号が本文の字で収まる幅（左 LEFT_PAD ＋ 数字 ＋ 右 RIGHT_GAP）。
+        桁は MIN_DIGITS より少なくしない（1〜999 行で幅を変えない）。
+
+        `font measure` は字の名前にも組にも効くので Font の部品は作らない
+        （redraw のたびに呼ぶ）。測れないときは今の幅のまま。"""
+        digits = max(self.MIN_DIGITS, len(str(max(1, int(line_count)))))
+        try:
+            text_width = int(self.tk.call('font', 'measure', self.font, '9' * digits))
+        except Exception:
+            return int(self['width'])
+        return self.LEFT_PAD + max(1, text_width) + self.RIGHT_GAP
 
     def _number_font(self, number, width):
         """Fit only the number; text font and gutter width remain stable."""
@@ -1130,7 +1277,7 @@ class LineNumberGutter(tk.Canvas):
             font = tkfont.Font(root=self, font=self.font)
             size = font.actual('size')
             sample = '9' * key[1]
-            while font.measure(sample) > max(1, width - 16) and abs(size) > 1:
+            while font.measure(sample) > max(1, width - self.LEFT_PAD - self.RIGHT_GAP) and abs(size) > 1:
                 size += -1 if size > 0 else 1
                 font.configure(size=size)
             self._number_fonts = {k:v for k,v in self._number_fonts.items()
@@ -1360,9 +1507,54 @@ class CorrectNoteApp:
             return
         def refresh():
             self._icon_after_id = None
+            if getattr(self, '_icons_wait_for_map', False):
+                # An idle pass inside __init__ (update_idletasks) also runs
+                # this; touching the HWND there would show the window early.
+                # Wait for the root's own <Map>, which queues this again.
+                try:
+                    if not self.root.winfo_ismapped():
+                        return
+                except tk.TclError:
+                    return
             self._icons_wait_for_map = False
             self._set_window_icons_win32()
+            calls, self._after_map_calls = getattr(self, '_after_map_calls', []), []
+            for call in calls:
+                try:
+                    call()
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+            if getattr(self, '_align_after_map', False):
+                self._align_after_map = False
+                try:
+                    self._align_pane_rows()
+                except Exception:
+                    pass
         self._icon_after_id = self.root.after_idle(refresh)
+
+    def _run_after_first_map(self, call):
+        """起動中（本体の窓が出る前）なら、窓が出たあとに呼ぶ。
+
+        窓の HWND を取る処理（update_idletasks）は、__init__ の途中で
+        本体の窓を出してしまう。応答できないうちにタスクバーのボタンが
+        作られると、絵が空のまま残る（tools_local/v114_taskbar_icon）。"""
+        if getattr(self, '_icons_wait_for_map', False):
+            self._after_map_calls = getattr(self, '_after_map_calls', [])
+            self._after_map_calls.append(call)
+        else:
+            call()
+
+    def _restore_word_book_after_map(self, event=None):
+        """前回開いていた単語帳を、本体の窓が最初に出たあとで開く。"""
+        if event is not None and getattr(event, 'widget', None) is not self.root:
+            return
+        if not getattr(self, '_word_book_restore_pending', False):
+            return
+        self._word_book_restore_pending = False
+        book = getattr(self, '_word_book', None)
+        if book is not None:
+            self.root.after_idle(book.restore)
 
     def _apply_window_icon(self):
         """
@@ -1700,6 +1892,17 @@ class CorrectNoteApp:
 
         # グローバルホットキー（アプリが非アクティブでも簡易入力を呼べる）
         self.settings = Settings(SETTINGS_FILE)
+        # キーボードの配列と形（項目48-KB・2026-10-14）。画面側のプロセスも
+        # 補正の表を引く（候補の根拠・簡易入力の候補）ので、ここで当てる。
+        # 解析の子には task['keyboard'] で届く（analysis_async・quick_analysis）。
+        keyboard_layout.apply_spec(keyboard_layout.spec(self.settings))
+        # メモリ使用量「低」では、補正の子が大きな表を小さな形で持つ
+        # （compact_tables）。子は起動時の環境を受け継ぐので、どの子より先に。
+        try:
+            import memory_usage
+            memory_usage.export_env(self)
+        except Exception:
+            pass
 
         # **IME が確定した「表記 → 打った読み」の対**（設計25）。
         #
@@ -1792,9 +1995,13 @@ class CorrectNoteApp:
         # ハンドルを取れないことがある。mainloop に入る前のこの時点
         # ではまだ実体化が済んでいない場合があるため、ウィジェットの
         # 色は即座に、タイトルバーだけ少し遅らせて行う。
-        if self.settings.get('dark_mode'):
-            self._apply_theme(True, titlebar_immediate=False)
-            self.root.after(50, lambda: self._apply_titlebar_theme(True))
+        # 外見（2026-10-15）: 抹茶・空などライト系でも塗り直す。
+        theme = self._saved_theme()
+        if theme != 'light' or BG != LIGHT_PALETTE['BG']:
+            dark = theme in appearance.DARK_THEMES
+            self._apply_theme(dark, titlebar_immediate=False, theme=theme)
+            if dark:
+                self.root.after(50, lambda: self._apply_titlebar_theme(True))
         # タイトルバーを隠す設定の反映（実体化後でないと効かない）
         self.root.after(150, self._apply_titlebar_visibility)
         # 窓のアイコン（Alt+Tab が見るほう・項目48-LY）も、実体化を
@@ -1817,7 +2024,12 @@ class CorrectNoteApp:
         from word_book import WordBook
         self._word_book = WordBook(self, os.path.join(app_dir(), 'word_book.json'),
             lambda: (PANEL, INK, ACCENT), self._word_book_initial_width, monitor_work_area)
-        self._word_book.restore()
+        # 前回開いていた単語帳は、本体の窓が出てから開く（2026-10-14 うにさん
+        # 「タスクバーで本体のアイコンが消えた（単語帳にはある）」）。ここで
+        # 開くと、単語帳の update_idletasks が本体の窓を __init__ の途中で
+        # 出してしまい、_icons_wait_for_map の待ちを迂回していた。
+        # 結び付けは下の <Map> の束（add なしの束より後）で行う。
+        self._word_book_restore_pending = True
         # ★★ **本文に残っていない打鍵の記録を、起動時にも落とす**
         # （項目48-QM・2026-09-05）。古いファイルに溜まった対は
         # ここで消える＝**移行を兼ねる**（`ime_readings.json` は
@@ -1853,6 +2065,7 @@ class CorrectNoteApp:
             '<Map>',
             self._queue_window_icons,
             add='+')
+        self.root.bind('<Map>', self._restore_word_book_after_map, add='+')
 
         self.editor.focus_set()
         # **変換の見張り**を始める（設計25(甲)・Windows のみ）。
@@ -1861,7 +2074,9 @@ class CorrectNoteApp:
         self._start_native_f5()
         # **ファイルのドロップを受ける**（項目48-TO）。同じ理由で
         # ここ——`winfo_id()` が取れてからでないと窓に手を掛けられない。
-        self._setup_file_drop()
+        # 窓の HWND を取ると本体の窓が出てしまうので、窓が出たあとで
+        # 掛ける（起動中に出るとタスクバーの絵が空になる・2026-10-14）。
+        self._run_after_first_map(self._setup_file_drop)
         _t_before_analyze = time.monotonic()
         # 最初の解析は起動処理の中では行わない。janome の辞書
         # 読み込みとメモ全文の形態素解析が重く、画面が出るまで
@@ -2502,26 +2717,17 @@ class CorrectNoteApp:
                     self.dict_index.ensure_built()
                 except Exception:
                     pass
-                # **「1語として在るか」の表もここで読む**（項目48-FC）。
-                #
-                # 100万語あって、読むのに **0.62秒** かかる（実測）。
-                # 遅延読み込みのままにすると、**最初の解析の途中で
-                # 0.6秒止まる**（門から呼ばれた瞬間に読まれるため）。
-                # `familiarity` や `dict_index` と同じで、
-                # **重い同梱物は裏で先に読む**のが筋。
-                # 表が無ければ何も起きない（読み手が「意見なし」を返す）。
+                # 「1語として在るか」の表（seed_japanese・項目48-FC・100万語で
+                # 0.62秒）と異様さの表（oddness・項目48-IR・1.35秒）も裏で先に
+                # 読む。最初の解析の途中で止まらないように（表が無ければ
+                # 読み手が「意見なし」を返すだけ）。ただしメモリ使用量
+                # 「低」では読まない（2026-10-14 うにさん「低にしているのに
+                # 約1500MB」）。解析は子プロセスがするので、本体でこの2つを
+                # 使うのは右クリックの候補・説明だけで、そのときに自分で読む
+                # （本体で約120MB少ない・最初の1回だけ約0.6秒待つ）。
                 try:
-                    import seed_japanese
-                    seed_japanese.available()
-                except Exception:
-                    pass
-                # **異様さの表もここで読む**（項目48-IR）。同梱の表から
-                # 漢字の隣接ペアを作るのに **1.35秒**（実測）。最初の解析の
-                # 途中で止まらないよう、裏で先に。読み終わるまで呼ばれたら
-                # 「意見なし」（色が付かないだけ）。
-                try:
-                    import oddness
-                    oddness.available()
+                    import memory_usage
+                    memory_usage.preload_tables(self)
                 except Exception:
                     pass
                 try:
@@ -2932,7 +3138,8 @@ class CorrectNoteApp:
                 self.settings.get('input_method'), recent, store=self.store,
                 context_vec=self.context_vec, dict_index=self.dict_index,
                 decisions=self.decisions, choices=self.choices,
-                ime_readings=getattr(self, 'ime_readings', None))
+                ime_readings=getattr(self, 'ime_readings', None),
+                keyboard=keyboard_layout.spec(self.settings))
             state = analysis_async.state_key(self)
             stale = getattr(self, '_analysis_stale', ())
             dependencies = getattr(self, '_analysis_cache_dependencies', {})
@@ -4258,8 +4465,7 @@ class CorrectNoteApp:
                 self.root.update_idletasks()
                 hwnd = ctypes.windll.user32.GetParent(
                     self.root.winfo_id())
-            dark = bool(self.settings.get('dark_mode'))
-            rgb = 0x1e2124 if dark else 0xf6f4ee   # BG と同じ色
+            rgb = int(BG[1:], 16)   # BG と同じ色（外見の配色ごとに変わる）
             colorref = (((rgb & 0xFF) << 16) | (rgb & 0xFF00)
                         | (rgb >> 16))
             v = ctypes.c_uint32(colorref)
@@ -4769,16 +4975,61 @@ class CorrectNoteApp:
             pass    # 非対応の Windows バージョン等。失敗しても致命的ではない
 
     def _on_toggle_dark_mode(self):
-        dark = self.dark_mode_var.get()
+        """「ダークモード」は、ライト系とダーク系の配色を行き来する
+        （それぞれ最後に選んだ配色へ戻る・外見）。"""
+        self._set_theme(self._family_theme(bool(self.dark_mode_var.get())))
+
+    def _family_theme(self, dark):
+        """ライト系（dark=False）またはダーク系の、今の・最後に選んだ配色。"""
+        settings = getattr(self, 'settings', None)
+        for key in ('theme', 'theme_dark' if dark else 'theme_light'):
+            theme = settings.get(key) if settings is not None else None
+            if theme in appearance.THEME_NAMES and (theme in appearance.DARK_THEMES) == bool(dark):
+                return theme
+        return 'dark' if dark else 'light'
+
+    def _saved_theme(self):
+        """保存してある配色。無ければダークモードの設定から決める。"""
+        settings = getattr(self, 'settings', None)
+        theme = settings.get('theme') if settings is not None else None
+        if theme in appearance.THEME_NAMES:
+            return theme
+        return self._family_theme(bool(settings.get('dark_mode')) if settings is not None else False)
+
+    def _set_theme(self, theme):
+        """配色を選ぶ（外見のメニュー・ダークモードの切り替え）。"""
+        if theme not in appearance.THEME_NAMES:
+            return
+        dark = theme in appearance.DARK_THEMES
+        self.settings.set('theme', theme)
+        # dark_mode は配色から決まる。品詞の色・F2 の色・リンクの色など、
+        # dark_mode を読む所が _apply_theme の中で読むので、先に書く。
         self.settings.set('dark_mode', dark)
+        self.settings.set('theme_dark' if dark else 'theme_light', theme)
         self.settings.save()
-        self._apply_theme(dark)
+        self._apply_theme(dark, theme=theme)
 
-    def _apply_theme(self, dark, titlebar_immediate=True):
-        if titlebar_immediate:
-            self._apply_titlebar_theme(dark)
-
-        pal = DARK_PALETTE if dark else LIGHT_PALETTE
+    def _apply_theme(self, dark, titlebar_immediate=True, theme=None, menus=True):
+        # 外見の配色（appearance.py）。dark だけ渡されたら、その系統の
+        # 今の・最後に選んだ配色（無ければ標準のライト・ダーク）。
+        # menus=False は外見のメニューの試し: メニューは塗らず、メニューの印も変えない
+        # （Windows では、開いているメニューの色や印を変えるとメニューが組み直される）。
+        if theme not in appearance.THEME_NAMES:
+            theme = self._family_theme(bool(dark))
+        pal, dark = appearance.theme_palette(theme, LIGHT_PALETTE, DARK_PALETTE,
+                                             _STANDARD_FIXED_FG)
+        # **いま画面にある色**（前の配色）。ライトとダークの2つしか無かった
+        # ころは「反対側の配色」を前の色としていたが、配色が6つになると
+        # 抹茶→夜のような切り替えで部品の色が拾えない。
+        old = {k: globals()[k] for k in _PALETTE_KEYS}
+        # 案内線の点滅中は、カーソルの色が点滅の色になっている。置き換えの
+        # 前に戻す（後で戻すと前の配色の色が残る）。
+        guides = getattr(self, '_editor_guides', None)
+        if guides is not None:
+            try:
+                guides.restore()
+            except Exception:
+                pass
         # **名簿（`_PALETTE_KEYS`）から回す**（項目48-IF・2026-08-21）。
         #
         # ここは以前、色の名前を左辺・右辺に**手で並べて**いた。
@@ -4794,17 +5045,34 @@ class CorrectNoteApp:
         # そこから回せば**足し忘れようがない**
         # （`bundle_manifest.py` を名簿1つにしたのと同じ考え・48-GS）。
         globals().update({k: pal[k] for k in _PALETTE_KEYS})
+        # 自動で直した字の色は、部品の色の置き換えに入れない（検索の「見つから
+        # ない」の字が同じ色の固定値を使っている）。タグは下で個別に塗る。
+        globals()['FIXED_FG'] = pal['FIXED_FG']
+        self._theme_id = theme
+        # タイトルバーと窓の枠は、新しい BG で塗る（グローバルを替えた後）
+        if titlebar_immediate:
+            self._apply_titlebar_theme(dark)
 
         # 既に画面にある部品は、いま設定されている色を古い配色の値と
         # 突き合わせて、対応する新しい値に置き換える。
         # こうしておけば、部品ごとに個別の書き換えコードを
         # 用意しなくても、色を持つ部品ならたいてい拾える。
         old_to_new = {}
-        other = LIGHT_PALETTE if dark else DARK_PALETTE
         for key in _PALETTE_KEYS:
-            old_to_new[other[key]] = pal[key]
+            if old[key] != pal[key]:
+                old_to_new[old[key]] = pal[key]
+        # メニューは、メニューを最後に塗った配色から置き換える。外見の試しの間は塗らない
+        # （試しの後に選ぶと、メニューだけ前の配色のまま残っている）。
+        menu_old = getattr(self, '_menus_palette', None) or old
+        menu_map = {}
+        if menus:
+            for key in _PALETTE_KEYS:
+                if menu_old[key] != pal[key]:
+                    menu_map[menu_old[key]] = pal[key]
+            menu_old = {k: pal[k] for k in _PALETTE_KEYS}
+        self._menus_palette = menu_old
 
-        self._restyle_widget(self.root, old_to_new)
+        self._restyle_widget(self.root, old_to_new, menu_map)
         if getattr(self,'_ruler_icon',None) is not None:
             self._ruler_icon.put(INK,to=(2,12,22,14))
         formatter=getattr(getattr(self,'editor',None),'_correctnote_text_format',None)
@@ -4820,7 +5088,7 @@ class CorrectNoteApp:
                               activeforeground=PANEL)
         except Exception:
             pass
-        for menu in getattr(self, '_menus', []):
+        for menu in (getattr(self, '_menus', []) if menus else ()):
             try:
                 menu.configure(bg=PANEL, fg=INK,
                               activebackground=ACCENT,
@@ -4865,6 +5133,9 @@ class CorrectNoteApp:
         # 最中にテーマを切り替えても、そのまま塗り直される。
         self.editor.tag_configure('quick_sent_a', background=QUICK_SENT_BG_A)
         self.editor.tag_configure('quick_sent_b', background=QUICK_SENT_BG_B)
+        # 箇条書きで分けたあとも残す色（同じ2色・_keep_quick_sent_listed）。
+        self.editor.tag_configure('quick_listed_a', background=QUICK_SENT_BG_A)
+        self.editor.tag_configure('quick_listed_b', background=QUICK_SENT_BG_B)
         self._refresh_list_button()
         # 目に見えない空白の印（項目48-IF）。テーマを切り替えても
         # そのまま塗り直される。
@@ -4885,6 +5156,8 @@ class CorrectNoteApp:
                 qt.tag_configure('suspect', background=SUSPECT_BG)
                 qt.tag_configure('hover', background=HOVER_BG)
                 qt.tag_configure('sel', background=EDITOR_SEL_BG)
+                qt.tag_configure('autofixed', foreground=FIXED_FG)
+                qt.tag_configure('autochosen', foreground=ACCENT)
             except Exception:
                 pass
         self.result_view.tag_configure('sel', background=RESULT_SEL_BG)
@@ -4917,8 +5190,272 @@ class CorrectNoteApp:
 
         self._refresh_title()
 
+        # 外見のメニューの印（試しの間は変えない）と、装飾の色（欄の地の色から決まる）
+        for name, value in ((('theme_var', theme), ('dark_mode_var', dark)) if menus else ()):
+            var = getattr(self, name, None)
+            if var is not None:
+                try:
+                    var.set(value)
+                except Exception:
+                    pass
+        try:
+            self._apply_decor()
+        except Exception:
+            pass
+        # 単語帳の見出しの色は欄の色から計算した値で、配色の値の置き換えでは拾えない
+        book = getattr(self, '_word_book', None)
+        if book is not None and getattr(book, 'window', None) is not None:
+            try:
+                book.render()
+            except Exception:
+                pass
+        # 品詞の色を付けていなかった配色（ダーク系の色を全部「変えない」にしているなど）から
+        # 戻ったとき、その間に解析が済んだ行にも色を付ける（BoundaryColors は、色を付けない
+        # 間に届いた行を、付けるようになっても自分からは塗り直さない）。
+        for pane in (getattr(self, 'editor', None), getattr(self, 'result_view', None),
+                     getattr(self, '_quick_text', None)):
+            colors = getattr(pane, '_correctnote_boundary_colors', None)
+            if colors is not None:
+                try:
+                    colors.queue()
+                except Exception:
+                    pass
+
+    def _saved_decor(self):
+        """保存してある装飾と濃さ（知らない値は既定の 波・薄い）。"""
+        settings = getattr(self, 'settings', None)
+        decor = settings.get('decor') if settings is not None else None
+        strength = settings.get('decor_strength') if settings is not None else None
+        if decor not in appearance.DECOR_NAMES:
+            decor = appearance.DEFAULT_DECOR
+        if strength not in appearance.STRENGTH_NAMES:
+            strength = appearance.DEFAULT_STRENGTH
+        return decor, strength
+
+    def _install_appearance(self):
+        """本文の欄の裏の絵と、行番号の欄の模様を置く（外見の装飾）。"""
+        for pane in (self.editor, self.result_view):
+            if getattr(pane, '_correctnote_paper', None) is None:
+                appearance.Paper(pane)
+        for gutter in (self.editor_gutter, self.result_gutter):
+            if getattr(gutter, 'backdrop', None) is None:
+                gutter.backdrop = appearance.GutterBackdrop()
+        self._apply_decor()
+
+    def _flush_paper(self):
+        """裏の絵の描き直しを今すぐ済ませる。update_idletasks で画面を先に描かせる所
+        （行への移動・中央寄せ・左右の行合わせ）の前に呼ぶ（appearance.Paper.flush）。"""
+        for pane in (getattr(self, 'editor', None), getattr(self, 'result_view', None)):
+            paper = getattr(pane, '_correctnote_paper', None)
+            if paper is not None:
+                paper.flush()
+
+    def _apply_decor(self, decor=None, strength=None):
+        """装飾を今の配色で掛け直す（選んだとき・配色を変えたとき）。decor・strength を
+        渡すとそれを当てる（外見のメニューの試し。保存はしない）。
+
+        絵の点の色は、欄の地の色から文字の色へ少し寄せた色（濃さで割合が変わる）。"""
+        saved_decor, saved_strength = self._saved_decor()
+        decor = decor if decor in appearance.DECOR_NAMES else saved_decor
+        strength = strength if strength in appearance.STRENGTH_NAMES else saved_strength
+        for pane in (getattr(self, 'editor', None), getattr(self, 'result_view', None)):
+            paper = getattr(pane, '_correctnote_paper', None)
+            if paper is not None:
+                bg = str(pane.cget('bg'))
+                paper.set(decor, appearance.paper_color(bg, INK, strength), bg)
+        for gutter in (getattr(self, 'editor_gutter', None), getattr(self, 'result_gutter', None)):
+            backdrop = getattr(gutter, 'backdrop', None)
+            if backdrop is not None:
+                backdrop.set(decor, appearance.gutter_color(str(gutter.cget('bg')),
+                                                            LINE_NUM_FG, strength))
+                gutter.redraw()
+        # 折り返しの境目のタブは、装飾があると帯も四角消しも付けない（_paint_whitespace）
+        if getattr(self, 'editor', None) is not None:
+            try:
+                self._schedule_whitespace_paint()
+            except Exception:
+                pass
+
+    def _choose_theme(self):
+        theme = self.theme_var.get()
+        self._end_look_preview('theme')
+        if theme == self.settings.get('theme'):
+            if getattr(self, '_theme_id', theme) != theme:
+                self._apply_theme(theme in appearance.DARK_THEMES, theme=theme)
+            return
+        self._set_theme(theme)
+
+    def _choose_decor(self):
+        """外見の「装飾」「装飾の濃さ」を選んだ。"""
+        decor = self.decor_var.get()
+        strength = self.decor_strength_var.get()
+        self._end_look_preview('decor')
+        if decor not in appearance.DECOR_NAMES or strength not in appearance.STRENGTH_NAMES:
+            self._apply_decor()
+            return
+        if (decor, strength) == self._saved_decor():
+            self._apply_decor()
+            return
+        self.settings.set('decor', decor)
+        self.settings.set('decor_strength', strength)
+        self.settings.save()
+        self._apply_decor()
+
+    # 外見のメニューの試し（うにさん 2026-10-15「外見内の項目をオンマウスしたら、
+    # 一時的に適用するようにする」）。選ばずに閉じたら保存してある外見へ戻す。
+    LOOK_PREVIEW_MS = 90        # 項目の上で止まってから当てるまで（なぞっただけでは当てない）
+    LOOK_POLL_MS = 250          # 閉じたかを見に行く間（Windows のメニューは閉じても知らせが無い）
+
+    def _install_look_preview(self, menus, parents=()):
+        """menus は [(メニュー, 'theme' か 'decor' か 'strength'), ...]。parents はそれを開く
+        メニュー（そこの項目へ移ったら、試しを戻す）。"""
+        self._look_menus = list(menus)
+        self._look_menu = None              # 最後に項目を選んだ外見のメニュー (メニュー, 種類)
+        self._look_preview = None           # 当てている試し (種類, 値)
+        self._look_preview_job = None
+        self._look_poll_job = None
+        for menu, kind in self._look_menus:
+            menu.bind('<<MenuSelect>>',
+                      lambda event, current=(menu, kind): self._on_look_hover(current), add='+')
+        for menu in parents:
+            menu.bind('<<MenuSelect>>', lambda event: self._on_look_hover(None), add='+')
+        # 外見と関係の無いメニュー（メニューバーで隣へ移ったときなど）の項目へ移ったら、すぐ戻す
+        self._look_menu_names = ({str(menu) for menu, _kind in self._look_menus}
+                                 | {str(menu) for menu in parents})
+        self.root.bind_class('Menu', '<<MenuSelect>>', self._on_other_menu_select, add='+')
+
+    def _on_other_menu_select(self, event):
+        """外見と関係の無いメニューの項目へ移った。試しは待たずに戻す（0.09 秒・0.25 秒を
+        待つ間に品詞の色の窓などを開くと、試している配色の dark_mode で色を読んでしまう）。"""
+        if (getattr(self, '_look_preview', None) is None
+                and getattr(self, '_look_preview_job', None) is None):
+            return
+        if str(event.widget) in getattr(self, '_look_menu_names', ()):
+            return
+        self._look_menu = None
+        job, self._look_preview_job = self._look_preview_job, None
+        if job is not None:
+            try:
+                self.root.after_cancel(job)
+            except Exception:
+                pass
+        self._preview_look(None)
+
+    def _hovered_look(self):
+        """いまマウスが乗っている（キーで選んでいる）外見の項目 (種類, 値)。無ければ None。
+
+        見るのは最後に知らせが来たメニューだけ。ほかのメニューの選んでいた項目は、
+        そのメニューを離れた後や閉じた後も残っていることがある（X11・Windows とも）。"""
+        current = getattr(self, '_look_menu', None)
+        if current is None:
+            return None
+        menu, kind = current
+        try:
+            # X11 では閉じたメニューにも選んでいた項目が残る（Windows は閉じると消える）
+            if menu.tk.call('tk', 'windowingsystem') == 'x11' and not menu.winfo_ismapped():
+                return None
+            index = menu.index('active')
+            if index is None or menu.type(index) != 'radiobutton':
+                return None
+            return kind, str(menu.entrycget(index, 'value'))
+        except Exception:
+            return None
+
+    def _on_look_hover(self, current=None):
+        self._look_menu = current
+        job = getattr(self, '_look_preview_job', None)
+        if job is not None:
+            try:
+                self.root.after_cancel(job)
+            except Exception:
+                pass
+        self._look_preview_job = self.root.after(self.LOOK_PREVIEW_MS, self._run_look_preview)
+        self._ensure_look_poll()
+
+    def _run_look_preview(self):
+        self._look_preview_job = None
+        self._preview_look(self._hovered_look())
+
+    def _ensure_look_poll(self):
+        if getattr(self, '_look_poll_job', None) is None:
+            self._look_poll_job = self.root.after(self.LOOK_POLL_MS, self._poll_look_preview)
+
+    def _poll_look_preview(self):
+        self._look_poll_job = None
+        hovered = self._hovered_look()
+        if hovered != self._look_preview and self._look_preview_job is None:
+            self._preview_look(hovered)
+        if self._look_preview is not None or self._look_preview_job is not None:
+            self._ensure_look_poll()
+
+    def _preview_look(self, hovered):
+        """hovered (種類, 値) を一時的に当てる。None なら保存してある外見へ戻す。"""
+        saved_theme = self._saved_theme()
+        saved = dict(theme=saved_theme, decor=self._saved_decor()[0], strength=self._saved_decor()[1])
+        names = dict(theme=appearance.THEME_NAMES, decor=appearance.DECOR_NAMES,
+                     strength=appearance.STRENGTH_NAMES)
+        if hovered is not None and (hovered[1] not in names.get(hovered[0], ())
+                                    or hovered[1] == saved[hovered[0]]):
+            hovered = None
+        old = getattr(self, '_look_preview', None)
+        if hovered == old:
+            return
+        self._look_preview = hovered
+        try:
+            if old is not None and old[0] == 'theme' and (hovered is None or hovered[0] != 'theme'):
+                self._preview_theme(saved_theme)
+            if old is not None and old[0] != 'theme' and (hovered is None or hovered[0] == 'theme'):
+                self._apply_decor()
+            if hovered is not None:
+                kind, value = hovered
+                if kind == 'theme':
+                    self._preview_theme(value)
+                elif kind == 'decor':
+                    self._apply_decor(decor=value)
+                else:
+                    self._apply_decor(strength=value)
+        except Exception:
+            pass
+
+    def _preview_theme(self, theme):
+        """配色を当てる（保存しない）。試しの間は dark_mode もその配色の値にしておく
+        （品詞の色などは dark_mode を読み、裏の解析が終わって塗り直すときにも読む）。
+        戻すときは保存してある配色をこれで当てるので、dark_mode も保存してある値に戻る。
+        試しの間に設定が保存されても、dark_mode は次の起動で配色から決め直す（settings.load）。
+        メニュー（開いている）は塗らず、メニューの印も保存してある配色のまま（menus=False）。"""
+        dark = theme in appearance.DARK_THEMES
+        self.settings.set('dark_mode', dark)
+        if getattr(self, '_theme_id', None) == theme:
+            return
+        self._apply_theme(dark, theme=theme, menus=False)
+
+    def _end_look_preview(self, kind):
+        """外見を選んだ。試しを止める。選んだのと違う種類の試しは戻す。"""
+        for name in ('_look_preview_job', '_look_poll_job'):
+            job = getattr(self, name, None)
+            if job is not None:
+                try:
+                    self.root.after_cancel(job)
+                except Exception:
+                    pass
+            setattr(self, name, None)
+        self._look_menu = None
+        old, self._look_preview = getattr(self, '_look_preview', None), None
+        if old is None:
+            return
+        try:
+            if old[0] == 'theme' and kind != 'theme':
+                self._preview_theme(self._saved_theme())
+            elif old[0] == 'theme':
+                # 配色を選んだ。当てるのは _choose_theme。dark_mode は保存してある値へ戻しておく
+                self.settings.set('dark_mode', self._saved_theme() in appearance.DARK_THEMES)
+            elif kind == 'theme':
+                self._apply_decor()
+        except Exception:
+            pass
+
     @staticmethod
-    def _restyle_widget(widget, old_to_new):
+    def _restyle_widget(widget, old_to_new, menu_map=None):
         """
         widget とその子孫について、いま設定されている色が
         旧配色の値と一致するものを、対応する新しい値に差し替える。
@@ -4926,6 +5463,10 @@ class CorrectNoteApp:
         Frame/Label/Button/Text/Canvas など、色の option 名が
         部品ごとに違うので、よく使われる名前を一通り試す。
         """
+        # menu_map を渡すと、メニュー（とその中のメニュー）はそちらで置き換える
+        # （外見の試しでは {} で、開いているメニューを塗らない）。
+        if menu_map is not None and isinstance(widget, tk.Menu):
+            old_to_new, menu_map = menu_map, None
         option_names = ('bg', 'fg', 'background', 'foreground',
                         'insertbackground', 'selectbackground', 'inactiveselectbackground',
                         'buttonbackground',
@@ -4938,7 +5479,7 @@ class CorrectNoteApp:
                     cur = widget.cget(opt)
                 except Exception:
                     continue
-                new = old_to_new.get(cur)
+                new = old_to_new.get(cur if isinstance(cur, str) else str(cur))
                 if new is not None:
                     try:
                         widget.configure(**{opt: new})
@@ -4952,7 +5493,7 @@ class CorrectNoteApp:
         except Exception:
             children = []
         for child in children:
-            CorrectNoteApp._restyle_widget(child, old_to_new)
+            CorrectNoteApp._restyle_widget(child, old_to_new, menu_map)
 
     # ------------------------------------------------------------
     # 簡易入力ウィンドウ（グローバルホットキーで呼び出す）
@@ -5013,6 +5554,13 @@ class CorrectNoteApp:
                     self._place_quick_window(win)
                     self._focus_quick_window(win, self._quick_text, incoming_mode)
                     self.status.config(text='簡易入力ウィンドウの最小化を解除しました')
+                elif not self._quick_window_is_active(win):
+                    # 開いているが前に無い（本体や別のアプリが前）: 最小化せず前に出す
+                    # （2026-10-15 うにさん「簡易入力が開いているが非アクティブの時に、
+                    # 簡易入力を開くショートカットキーを実行したら、簡易入力ウインドウを
+                    # アクティブにする」）。前に出ているときは今までどおり最小化する。
+                    self._focus_quick_window(win, self._quick_text, incoming_mode)
+                    self.status.config(text='簡易入力ウィンドウを前に出しました')
                 else:
                     win.iconify()
                     self.status.config(text='簡易入力ウィンドウを最小化しました')
@@ -5285,6 +5833,55 @@ class CorrectNoteApp:
         except Exception:
             pass
 
+    @staticmethod
+    def _quick_window_is_active(win):
+        """簡易入力の窓が、いまキーボードを受ける前面の窓か。"""
+        if sys.platform == 'win32':
+            try:
+                import ctypes
+                user32 = ctypes.windll.user32
+                user32.GetForegroundWindow.restype = ctypes.c_void_p
+                return (user32.GetForegroundWindow() or 0) == int(win.wm_frame(), 16)
+            except Exception:
+                pass
+        try:
+            focus = win.focus_get()
+            return focus is not None and focus.winfo_toplevel() is win
+        except Exception:
+            return False
+
+    @staticmethod
+    def _bring_window_forward_win32(win):
+        """Windows で窓を前面にしてキーボードを渡す。別のアプリが前面のとき
+        SetForegroundWindow は断られることがあるので、前面の窓の糸に一時だけ
+        入力をつないでから前に出す（つなぎはすぐ外す）。"""
+        if sys.platform != 'win32':
+            return False
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+            user32.GetForegroundWindow.restype = ctypes.c_void_p
+            user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            user32.SetForegroundWindow.argtypes = [ctypes.c_void_p]
+            user32.BringWindowToTop.argtypes = [ctypes.c_void_p]
+            hwnd = int(win.wm_frame(), 16)
+            if user32.SetForegroundWindow(hwnd) and user32.GetForegroundWindow() == hwnd:
+                return True
+            front = user32.GetForegroundWindow()
+            other = user32.GetWindowThreadProcessId(front, None) if front else 0
+            mine = kernel32.GetCurrentThreadId()
+            attached = bool(other and other != mine and user32.AttachThreadInput(mine, other, True))
+            try:
+                user32.BringWindowToTop(hwnd)
+                user32.SetForegroundWindow(hwnd)
+            finally:
+                if attached:
+                    user32.AttachThreadInput(mine, other, False)
+            return user32.GetForegroundWindow() == hwnd
+        except Exception:
+            return False
+
     def _focus_quick_window(self, win, text, incoming_mode=None):
         """
         簡易入力ウィンドウを前に出し、すぐ打ち始められる状態にする。
@@ -5313,6 +5910,11 @@ class CorrectNoteApp:
             win.attributes('-topmost', True)
         except Exception:
             pass
+        try:
+            win.update_idletasks()
+        except Exception:
+            pass
+        self._bring_window_forward_win32(win)
         try:
             win.focus_force()
         except Exception:
@@ -5469,8 +6071,13 @@ class CorrectNoteApp:
         self._quick_hint_frame = None
         self._quick_source = None
         self._quick_units = []
+        # 開く前に入力欄があった別アプリへ、フォーカスを戻す（quick_return。
+        # 2026-10-14 うにさん）。貼り付けは中身があって設定がオンのときだけ。
+        back = getattr(self, '_quick_return', None)
+        self._quick_return = None
 
         if not content.strip():
+            self._quick_give_focus_back(back, paste=False)
             self.status.config(text='簡易入力を閉じました（内容は空でした）')
             return
 
@@ -5497,7 +6104,21 @@ class CorrectNoteApp:
         except Exception:
             pass
         self._on_change()
-        self.status.config(text='簡易入力の内容をクリップボードとメモに追加しました')
+        if self._quick_give_focus_back(
+                back, paste=bool(self.settings.get('quick_paste_back'))):
+            self.status.config(text='簡易入力の内容をクリップボードとメモに追加し、元の入力欄へ戻しました')
+        else:
+            self.status.config(text='簡易入力の内容をクリップボードとメモに追加しました')
+
+    def _quick_give_focus_back(self, target, paste):
+        """簡易入力を開く前の別アプリの入力欄へ戻す（貼り付けは paste のとき）。"""
+        if target is None:
+            return False
+        try:
+            import quick_return
+            return quick_return.restore(target, self.root, paste=paste)
+        except Exception:
+            return False
 
     def _mark_quick_sent(self, start, length):
         """
@@ -5537,9 +6158,49 @@ class CorrectNoteApp:
         except Exception:
             pass
 
+    def _keep_quick_sent_listed(self, items=()):
+        """箇条書きで行を分けたあとも、送った文字の色を残す（2026-10-14 うにさん
+        「簡易入力から本体アプリに送って箇条書きで行を分けた時点では、まだ
+        一時的な背景色を残しておく」）。
+
+        色は同じ2色の `quick_listed_a/b` へ移す。箇条書きの段取り
+        （`_list_quick_sent_plan`）は `quick_sent_a/b` だけを見るので、分けた
+        行がもう一度分けられることはない。消えるのはふだんと同じ
+        `_clear_quick_sent`（本体で文字を打ったとき）。
+
+        `items` は、移し替えて入れ直した行の (始まり, 終わり, 元の色の名前)。"""
+        editor = self.editor
+        try:
+            # 起動時に _apply_theme を通らない道もあるので、ここで色を置く
+            # （_mark_quick_sent も送るたびに置いている）。
+            editor.tag_configure('quick_listed_a', background=QUICK_SENT_BG_A)
+            editor.tag_configure('quick_listed_b', background=QUICK_SENT_BG_B)
+            for sent in ('quick_sent_a', 'quick_sent_b'):
+                listed = sent.replace('sent', 'listed')
+                ranges = editor.tag_ranges(sent)
+                for start, end in zip(ranges[::2], ranges[1::2]):
+                    editor.tag_add(listed, start, end)
+                editor.tag_remove(sent, '1.0', 'end')
+            for start, end, sent in items:
+                if editor.compare(start, '<', end):
+                    editor.tag_add(sent.replace('sent', 'listed'), start, end)
+            for listed in ('quick_listed_a', 'quick_listed_b'):
+                try:
+                    editor.tag_lower(listed, 'suspect')
+                except tk.TclError:
+                    pass
+            editor.tag_raise('sel')
+        except tk.TclError:
+            pass
+        # 次に送るときは、また1色目（緑）から始める。
+        self._quick_sent_flip = 1
+        self._refresh_list_button()
+
     def _clear_quick_sent(self):
-        """簡易入力から送った文字の色を、まとめて消す。"""
-        for t in ('quick_sent_a', 'quick_sent_b'):
+        """簡易入力から送った文字の色を、まとめて消す。
+
+        箇条書きで分けたあとに残した色（quick_listed_a/b）も、ここで消える。"""
+        for t in ('quick_sent_a', 'quick_sent_b', 'quick_listed_a', 'quick_listed_b'):
             try:
                 self.editor.tag_remove(t, '1.0', 'end')
             except Exception:
@@ -6056,6 +6717,19 @@ class CorrectNoteApp:
         n_display = self._displaylines_between(text_widget, '1.0', 'end')
         if n_display <= 0:
             n_display = len(lines)
+        # Text(height=N) は基準フォントの N 行ぶん。品詞ごとのサイズで大きい
+        # 字のある行は背が高いので、行数で数えると足りず、Tk がカーソルの
+        # 行を見せようとして1行目を上へ送っていた（2026-10-14 うにさん
+        # 「簡易入力で2回改行したら、1行目の上半分が見切れている」）。
+        # 実際の高さ（ypixels）を基準の行の高さで割って、多いほうを採る。
+        try:
+            got = text_widget.count('1.0', 'end', 'ypixels')
+            if isinstance(got, (tuple, list)):
+                got = got[0] if got else 0
+            linespace = max(1, int(font.metrics('linespace')))
+            n_display = max(n_display, -(-int(got or 0) // linespace))
+        except Exception:
+            pass
         n_lines = max(self.QUICK_MIN_LINES,
                       min(n_display, self.QUICK_MAX_LINES))
         try:
@@ -6074,6 +6748,15 @@ class CorrectNoteApp:
                 # A size-only request preserves even a not-yet-applied position.
                 # Resetting geometry then reusing stale winfo_x/y could jump back.
                 win.geometry(f'{win.winfo_reqwidth()}x{win.winfo_reqheight()}')
+            except Exception:
+                pass
+        # 全部が入る高さなら、上へ送られたままにしない（広げる前に Tk が
+        # カーソルを見せようとして送った分を戻す）。
+        if n_lines < self.QUICK_MAX_LINES:
+            try:
+                win.update_idletasks()
+                if text_widget.yview()[0] > 0:
+                    text_widget.yview_moveto(0)
             except Exception:
                 pass
 
@@ -6536,7 +7219,7 @@ class CorrectNoteApp:
     def _build_tab_bar(self):
         self._tab_reveal_job = None
         self._tab_viewport = tk.Canvas(self.root, bg=BG, highlightthickness=0, height=29, width=1)
-        self._tab_viewport.pack(fill='x', padx=16, pady=(2, 0))
+        self._tab_viewport.pack(fill='x', padx=BAND_PADX, pady=(2, 0))
         self.tab_bar = tk.Frame(self._tab_viewport, bg=BG)
         self._tab_window = self._tab_viewport.create_window(0, 0, window=self.tab_bar, anchor='nw')
         for widget in (self._tab_viewport, self.tab_bar):
@@ -6588,7 +7271,25 @@ class CorrectNoteApp:
             # と分かるほうが、項目ごと消えるより親切（48-RG の精神）
             items.append(('  エクスプローラで選択（まだ保存していません）',
                           None))
+        # 2026-10-15 うにさん「ファイルタブを右クリックしたメニューに、「先頭のタブに移動」を
+        # 追加し、クリックで最も左にあるタブに移動してタブ上ではそのシートが映るようにする」。
+        # 並びは変えずに、いちばん左のタブへ切り替える（もう開いていれば押せない灰色）。
+        active = max(0, min(self.session.active, len(tabs) - 1)) if tabs else 0
+        if len(tabs) > 1 and active != 0:
+            items.append(('  先頭のタブに移動', self._switch_to_first_tab))
+        else:
+            items.append(('  先頭のタブに移動（いま開いています）', None))
         return items
+
+    def _switch_to_first_tab(self):
+        """いちばん左のタブへ切り替え、タブの並びを左端まで送って見せる。"""
+        if not (self.session.tabs or []):
+            return
+        self._switch_tab(0)
+        try:
+            self._queue_tab_reveal()
+        except Exception:
+            pass
 
     def _on_tab_right_press(self, event, index):
         """タブを右クリック。一覧を出す（項目48-TQ）。"""
@@ -6903,6 +7604,17 @@ class CorrectNoteApp:
                 for _owner in list(_parked):
                     if _owner not in _live:
                         _parked.pop(_owner, None)
+                # 低（2026-10-15）: いま離れるタブの分だけ残す。別タブの基準は
+                # 6タブで約 67MB だった（memory_usage.completed_tabs）。戻ったタブは
+                # 解析し直す——答えは同じで、遅くなるだけ。
+                try:
+                    import memory_usage
+                    if memory_usage.completed_tabs(self) is not None:
+                        for _owner in list(_parked):
+                            if _owner != _fg_owner:
+                                _parked.pop(_owner, None)
+                except Exception:
+                    pass
                 _kl = _fg_key.split('\n')
                 old_units, old_suspect = previous_units
                 tab_analysis.park_background(self, dict(text=_fg_key, lines=_kl,
@@ -6965,7 +7677,8 @@ class CorrectNoteApp:
             pair = ({}, {})
         else:
             pair = parked.pop(self._analysis_key(text), ({}, {}))
-        while len(parked) > 3:
+        # 低 0・中 3・高は全タブ分（2026-10-15。memory_usage.units_cache_tabs）
+        while len(parked) > self._units_cache_tabs():
             parked.pop(next(iter(parked)))
         self._units_cache, self._suspect_units_cache = pair
 
@@ -7321,6 +8034,47 @@ class CorrectNoteApp:
             variable=self.input_method_auto_var,
             command=self._on_toggle_input_method_auto,
             selectcolor=ACCENT)
+        # --- キーボードの配列と形（項目48-KB・2026-10-14）---
+        # うにさんの指定「オプションにキーボード配列を追加して、QWERTY以外や、
+        # 他に配列が変わるもの、左右で分割されたキーボードなどの選択を
+        # 用意してください。これは隣接キーに影響します」。
+        # 配列はローマ字入力・英字の隣接に、形（左右分割・格子）はかな入力の
+        # 隣接にも効く。表と意味は keyboard_layout.py。既定（QWERTY JIS・
+        # 標準）は今までどおり。
+        # 3つの組: 英字の配列（ローマ字入力・英語）／かなの配列（かな入力。
+        # JIS・親指シフト・新JIS。うにさんがカードで「用意する」）／形。
+        # 組の見出しは選べない行（state='disabled'）で入れる。
+        m_keyboard = tk.Menu(m_view, tearoff=0)
+        m_keyboard.add_command(label='英字の配列（ローマ字入力・英語）', state='disabled')
+        self.keyboard_layout_var = tk.StringVar(
+            value=self.settings.get('keyboard_layout'))
+        for key, label in KEYBOARD_LAYOUT_LABELS.items():
+            m_keyboard.add_radiobutton(
+                label=label, value=key,
+                variable=self.keyboard_layout_var,
+                command=self._on_choose_keyboard_layout,
+                selectcolor=ACCENT)
+        m_keyboard.add_separator()
+        m_keyboard.add_command(label='かなの配列（かな入力）', state='disabled')
+        self.kana_layout_var = tk.StringVar(
+            value=self.settings.get('kana_layout'))
+        for key, label in KANA_LAYOUT_LABELS.items():
+            m_keyboard.add_radiobutton(
+                label=label, value=key,
+                variable=self.kana_layout_var,
+                command=self._on_choose_kana_layout,
+                selectcolor=ACCENT)
+        m_keyboard.add_separator()
+        m_keyboard.add_command(label='形', state='disabled')
+        self.keyboard_shape_var = tk.StringVar(
+            value=self.settings.get('keyboard_shape'))
+        for key, label in KEYBOARD_SHAPE_LABELS.items():
+            m_keyboard.add_radiobutton(
+                label=label, value=key,
+                variable=self.keyboard_shape_var,
+                command=self._on_choose_keyboard_shape,
+                selectcolor=ACCENT)
+        m_view.add_cascade(label='キーボードの配列と形', menu=m_keyboard)
         m_view.add_separator()
         self.hide_titlebar_var = tk.BooleanVar(
             value=self.settings.get('hide_titlebar'))
@@ -7448,6 +8202,16 @@ class CorrectNoteApp:
             variable=self.quick_hint_var,
             command=self._on_toggle_quick_hint,
             selectcolor=ACCENT)
+        # 閉じたら、開く前の入力欄へ戻して貼り付ける（2026-10-14 うにさん）
+        self.quick_paste_back_var = tk.BooleanVar(
+            value=self.settings.get('quick_paste_back'))
+        m_view.add_checkbutton(
+            label='簡易入力を閉じたら、元の入力欄へ貼り付ける',
+            variable=self.quick_paste_back_var,
+            command=lambda: (self.settings.set(
+                'quick_paste_back', bool(self.quick_paste_back_var.get())),
+                self.settings.save()),
+            selectcolor=ACCENT)
         if not self.hotkeys.supported:
             m_view.add_command(
                 label='（この環境ではグローバルホットキーは使えません）',
@@ -7490,6 +8254,39 @@ class CorrectNoteApp:
                 variable=self.memory_usage_var, command=self._choose_memory_usage,
                 selectcolor=ACCENT)
         m_about.add_cascade(label='メモリ使用量', menu=m_memory)
+        # 外見（配色・装飾・装飾の濃さ）。うにさん 2026-10-14「このアプリに
+        # ついての中に、外見のメニューを追加し、アプリ全体のテーマを切り替える」。
+        m_look = tk.Menu(m_about, tearoff=0)
+        m_theme = tk.Menu(m_look, tearoff=0)
+        self.theme_var = tk.StringVar(value=self._saved_theme())
+        for key in appearance.THEME_ORDER:
+            if key == 'dark':
+                m_theme.add_separator()     # ここからダーク系
+            m_theme.add_radiobutton(label=appearance.THEME_NAMES[key], value=key,
+                variable=self.theme_var, command=self._choose_theme,
+                selectcolor=ACCENT)
+        decor, strength = self._saved_decor()
+        m_decor = tk.Menu(m_look, tearoff=0)
+        self.decor_var = tk.StringVar(value=decor)
+        for key in appearance.DECOR_ORDER:
+            m_decor.add_radiobutton(label=appearance.DECOR_NAMES[key], value=key,
+                variable=self.decor_var, command=self._choose_decor,
+                selectcolor=ACCENT)
+            if key == 'none':
+                m_decor.add_separator()
+        m_strength = tk.Menu(m_look, tearoff=0)
+        self.decor_strength_var = tk.StringVar(value=strength)
+        for key in appearance.STRENGTH_ORDER:
+            m_strength.add_radiobutton(label=appearance.STRENGTH_NAMES[key], value=key,
+                variable=self.decor_strength_var, command=self._choose_decor,
+                selectcolor=ACCENT)
+        m_look.add_cascade(label='配色', menu=m_theme)
+        m_look.add_cascade(label='装飾', menu=m_decor)
+        m_look.add_cascade(label='装飾の濃さ', menu=m_strength)
+        # 項目にマウスを乗せると一時的に当てる（選ばずに閉じたら戻す）
+        self._install_look_preview([(m_theme, 'theme'), (m_decor, 'decor'),
+                                    (m_strength, 'strength')], parents=(m_look, m_about))
+        m_about.add_cascade(label='外見', menu=m_look)
         m_about.add_separator()
         m_about.add_command(label=f'バージョン {APP_VERSION}',
                             state='disabled')
@@ -7513,8 +8310,9 @@ class CorrectNoteApp:
                             command=self.rebuild_dict_index)
         m_learn.add_cascade(label='辞書と語彙の管理', menu=m_maint)
 
-        self._menus = [m_file, m_encoding, self._recent_files_menu, m_edit, m_word_sets, m_view, self._buttons_menu, m_font, m_font_size,
-                       m_about, m_memory, m_learn, m_maint]
+        self._menus = [m_file, m_encoding, self._recent_files_menu, m_edit, m_word_sets, m_view, m_keyboard, self._buttons_menu, m_font, m_font_size,
+                       m_about, m_memory, m_look, m_theme, m_decor, m_strength,
+                       m_learn, m_maint]
         # A posted native Windows menu can capture Motion/Enter events before
         # the adjacent Menubutton sees them.  Watch the pointer only while a
         # menu is posted; Tk timers continue during its native menu loop.
@@ -7533,20 +8331,21 @@ class CorrectNoteApp:
 
     def _choose_memory_usage(self):
         mode = self.memory_usage_var.get()
-        if mode not in MEMORY_LABELS or mode == self.settings.get('memory_usage'):
+        previous = self.settings.get('memory_usage')
+        if mode not in MEMORY_LABELS or mode == previous:
             return
         self.settings.set('memory_usage', mode)
         self.settings.save()
         import memory_usage
-        if mode == MEMORY_LOW:
-            self._stop_background_tabs()
-            memory_usage.apply_low(self)
-        else:
-            memory_usage.cancel_releases(self)
-            analysis_async.prewarm(self)
-            analysis_async.queue_idle_prewarm(self)
-            import quick_analysis
-            quick_analysis.schedule_prepare(self)
+        # 低に入る・低から出るときは、表の形が変わるので、仕事中でない
+        # 子を閉じて次の子から新しい形にする。
+        memory_usage.switch_tables(self, previous)
+        # 裏の歩みは預けて止め（項目48-RE）、新しい段のやり方で再開する
+        # （高: 先読みの子／中: 表のタブの子が空いたときに同じ子で／低: 無し。
+        # 2026-10-15 うにさん「中は高に寄せた処理で1500前後に」）。
+        self._stop_background_tabs()
+        memory_usage.apply_tier(self)
+        if memory_usage.background_tabs(self):
             self._queue_background_tabs()
 
     def _post_menu_bar(self, event):
@@ -7878,7 +8677,7 @@ class CorrectNoteApp:
 
     def open_pos_font_dialog(self):
         import tkinter as tk
-        from pos_font import (POS_LABELS, POS_FONT_DEFAULTS, color_defaults,
+        from pos_font import (POS_DIALOG_ROWS, POS_FONT_DEFAULTS, color_defaults,
                               normalize_multipliers, current_colors,
                               MULTIPLIER_MIN, MULTIPLIER_MAX)
         previous=getattr(self,'_pos_font_dialog',None)
@@ -7938,7 +8737,7 @@ class CorrectNoteApp:
             if color is not None:colors[key]=color
             self._choose_pos_font_colors(colors,save=False)
 
-        for row,(key,label) in enumerate(POS_LABELS,1):
+        for row,(key,label) in enumerate(POS_DIALOG_ROWS,1):
             tk.Label(form,text=label,bg=BG,fg=INK,anchor='w').grid(
                 row=row,column=0,sticky='w',pady=1)
             var=tk.StringVar(master=dlg,value=f'{current[key]:.1f}')
@@ -8482,7 +9281,7 @@ class CorrectNoteApp:
         #   実機からの指定）。空いた分、ブックマークボタンをこの行に
         # 詰めて、引用・レイアウトのボタンと高さを揃える。
         toolbar = tk.Frame(self.root, bg=BG)
-        toolbar.pack(fill='x', padx=16, pady=(2, 6))
+        toolbar.pack(fill='x', padx=BAND_PADX, pady=(2, 6))
 
         for name, label, last in (
                 ('first_line_btn', '1行目', False),
@@ -8617,7 +9416,7 @@ class CorrectNoteApp:
 
         # --- 本体: 左右2ペイン（幅を1:1に固定） ---
         body = tk.Frame(self.root, bg=BG)
-        body.pack(fill='both', expand=True, padx=16, pady=(0, 8))
+        body.pack(fill='both', expand=True, padx=OUTER_PADX, pady=(0, 8))
         self._body = body
         # grid で列の重みを揃え、左右がぴったり同じ幅になるようにする
         body.grid_columnconfigure(0, weight=1, uniform='pane')
@@ -9091,6 +9890,8 @@ class CorrectNoteApp:
         from emoji_color import install as install_emoji_color
         install_emoji_color(self.editor)
         install_emoji_color(self.result_view)
+        # 外見の装飾（本文の欄の裏の絵・行番号の欄の模様。appearance.py）
+        self._install_appearance()
         # 改行で分かれた行は、左右の行そろえの余白を引き継がない。
         from text_layout import strip_inserted_rows
         for pane in (self.editor, self.result_view):
@@ -9207,6 +10008,13 @@ class CorrectNoteApp:
         self.root.bind_all(
             '<Control-h>',
             lambda e: (self._open_find_dialog_guarded(True), 'break')[1])
+        # Ctrl+G: 行番号か文字列を入れて移る小さな欄（goto_box.py・2026-10-15 うにさん）。
+        # 本体の窓にだけ張る（簡易入力・検索窓などの別の窓では効かない）。
+        try:
+            import goto_box
+            goto_box.install(self)
+        except Exception:
+            pass
         # F3＝Enter。**IME が確定した `r` は keysym が F3 に化ける**
         # ので、各入口で本物のキー操作かを見分ける（項目48-EH）。
         # 見分けないと、確定文字でEnterや検索が実行される。
@@ -9279,7 +10087,7 @@ class CorrectNoteApp:
                                on_change=self._queue_status_visibility,
                                font=('Consolas', 9), anchor='w')
         # Reserve the footer before the expanding editor takes the remaining space.
-        self.status.pack(side='bottom', fill='x', padx=16, pady=(0, 10), before=self._body)
+        self.status.pack(side='bottom', fill='x', padx=BAND_PADX, pady=(0, 10), before=self._body)
         self.root.bind('<Configure>',self._queue_status_visibility,add=True)
         self._queue_status_visibility()
         self._install_editor_guides()
@@ -9655,6 +10463,7 @@ class CorrectNoteApp:
         for widget in (self.editor,self.result_view):
             for tag in ('navigation_head','navigation_tail'):
                 widget.tag_remove(tag,'1.0','end')
+            self._unmask_navigation_margins(widget)
 
     def _release_navigation_padding(self):
         """A subsequent user scroll leaves the one-time centered destination."""
@@ -9664,7 +10473,7 @@ class CorrectNoteApp:
         was_syncing=self._syncing;self._syncing=True
         try:
             self._clear_navigation_padding()
-            widget.yview(index);widget.update_idletasks()
+            widget.yview(index);self._flush_paper();widget.update_idletasks()
             after=widget.dlineinfo(index)
             if before and after:
                 # Preserve the visible text baseline, including wrapped rows.
@@ -9672,6 +10481,7 @@ class CorrectNoteApp:
                 widget.yview_scroll((after[1]+after[4])-(before[1]+before[4]),'pixels')
             if not self._layout_is_unified():
                 self._sync_partner_to_line(widget,self.result_view)
+            self._flush_paper()
             self.root.update_idletasks()
         finally:self._syncing=was_syncing
 
@@ -9686,6 +10496,7 @@ class CorrectNoteApp:
         widget.tag_add('navigation_head','1.0','1.0+1c')
         widget.tag_add('navigation_tail','end-2c linestart','end')
         widget.yview(index)
+        self._flush_paper()
         widget.update_idletasks()
         info = widget.dlineinfo(index)
         if info:
@@ -9693,6 +10504,75 @@ class CorrectNoteApp:
             linespace = int(widget.tk.call('font','metrics',widget.cget('font'),'-linespace'))
             glyph_center = info[1]+info[4]-ascent+linespace/2
             widget.yview_scroll(round(glyph_center-middle),'pixels')
+        self._mask_navigation_margins(widget)
+
+    def _mask_navigation_margins(self, widget):
+        """Cover the centring margins with the pane's own colour.
+
+        Tk paints a tag's background over the whole line height, so a purple
+        (odd) or highlighted first/last row filled the margin above/below it
+        (2026-10-14 うにさん「1行目にブックマーク移動すると、上の端から中央まで
+        背景色が伸びてしまう」). The strips sit only on the empty margin;
+        pointer input on them goes on to the pane."""
+        import tkinter as tk
+        self._unmask_navigation_margins(widget)
+        try:
+            self._flush_paper()
+            widget.update_idletasks()
+            height = widget.winfo_height()
+            border = int(widget.cget('borderwidth')) + int(widget.cget('highlightthickness'))
+            strips = []
+            # The margin ends where the first row's characters begin, and
+            # begins where the last row's characters end (dlineinfo clips its
+            # height at the window edge, so the spacing cannot be used).
+            if widget.tag_ranges('navigation_head') and widget.dlineinfo('1.0'):
+                glyph = widget.bbox('1.0')
+                if glyph:
+                    strips.append((border, glyph[1]))
+            if widget.tag_ranges('navigation_tail') and widget.dlineinfo('end-1c'):
+                glyph = widget.bbox('end-1c')
+                if glyph:
+                    strips.append((glyph[1] + glyph[3], height - border))
+            strips = [(max(border, top), min(height - border, bottom) - max(border, top))
+                      for top, bottom in strips]
+            strips = [(top, size) for top, size in strips if size > 0]
+        except tk.TclError:
+            return
+        masks = []
+        paper = getattr(widget, '_correctnote_paper', None)
+        for top, size in strips:
+            # 外見の装飾があるときは、覆いにも裏の絵を同じ場所に描く（appearance.Paper.cover）
+            mask = paper.cover(top, size, border) if paper is not None else None
+            if mask is None:
+                mask = tk.Frame(widget, bg=widget.cget('bg'), bd=0, highlightthickness=0,
+                                cursor=str(widget.cget('cursor')) or 'xterm')
+            mask.place(x=border, y=top, width=max(1, widget.winfo_width() - 2 * border),
+                       height=size, bordermode='outside')
+            for sequence in ('<ButtonPress>', '<ButtonRelease>', '<Motion>', '<MouseWheel>'):
+                mask.bind(sequence, lambda event, s=sequence: self._forward_from_mask(widget, event, s))
+            masks.append(mask)
+        widget._correctnote_navigation_masks = masks
+
+    def _unmask_navigation_margins(self, widget):
+        for mask in getattr(widget, '_correctnote_navigation_masks', ()):
+            try:mask.destroy()
+            except Exception:pass
+        widget._correctnote_navigation_masks = []
+
+    def _forward_from_mask(self, widget, event, sequence):
+        options = dict(x=event.x_root - widget.winfo_rootx(), y=event.y_root - widget.winfo_rooty(),
+                       rootx=event.x_root, rooty=event.y_root, state=event.state)
+        # 押した時刻も渡す（右の二度押しの判定 _right_press_is_double は時刻で見る。
+        # 付けないと event_generate が別の時刻を付け、覆いの上の二度押しが縮小にならない）
+        try:options['time'] = int(event.time)
+        except Exception:pass
+        if sequence == '<MouseWheel>':
+            options['delta'] = event.delta
+        elif sequence in ('<ButtonPress>', '<ButtonRelease>'):
+            sequence = '<%s-%s>' % (sequence[1:-1], event.num)
+        try:widget.event_generate(sequence, **options)
+        except Exception:pass
+        return 'break'
 
     def _goto_line(self, line, centered=True):
         """Move the cursor and place the destination at the window's middle."""
@@ -9711,6 +10591,7 @@ class CorrectNoteApp:
             else:
                 for widget in (self.editor,self.result_view):widget.yview(idx)
             # Drain our scroll notifications while partner feedback is off.
+            self._flush_paper()
             self.root.update_idletasks()
         finally:self._syncing = was_syncing
         self.editor_gutter.redraw()
@@ -10756,7 +11637,7 @@ class CorrectNoteApp:
         progress=text.startswith(('解析中','表示準備中','解析の準備中'))
         show=active or self.root.state()=='zoomed' or bool(text and not progress)
         if show and not self.status.winfo_manager():
-            self.status.pack(side='bottom',fill='x',padx=16,pady=(0,10),before=self._body)
+            self.status.pack(side='bottom',fill='x',padx=BAND_PADX,pady=(0,10),before=self._body)
         elif not show and self.status.winfo_manager():self.status.pack_forget()
 
     def _line_analysis_state(self, row):
@@ -11143,7 +12024,8 @@ class CorrectNoteApp:
                 store=self.store, context_vec=self.context_vec,
                 dict_index=self.dict_index, decisions=self.decisions,
                 choices=self.choices,
-                ime_readings=getattr(self, 'ime_readings', None))
+                ime_readings=getattr(self, 'ime_readings', None),
+                keyboard=keyboard_layout.spec(self.settings))
             self._analysis_cache = analysis_cache.load(
                 ANALYSIS_CACHE_FILE, fp)
             self._analysis_cache_dependencies = {key: analysis_async.state_key(self)
@@ -11776,12 +12658,19 @@ class CorrectNoteApp:
                 # 英文の多い文書で 20ms 使っていた仕事が、ここで消える。
                 edges = (self._wrap_edge_columns(w, li)
                          if '\t' in line else ())
+                # 四角消しは欄の地の色で塗るので、裏の絵（外見の装飾）を
+                # そこから右端まで消してしまう。装飾があるときは、境目の
+                # タブには帯を付けない（帯が伸びないので四角消しも要らない）。
+                paper = getattr(w, '_correctnote_paper', None)
+                no_edge_band = paper is not None and paper.decor is not None
                 n = 0
                 prev = -2
                 for ci, kind in cols:
                     n = n + 1 if ci == prev + 1 else 1
                     prev = ci
                     tag = f'{kind}_{"ab"[(n - 1) % 2]}'
+                    if ci in edges and kind == 'ws_tab' and no_edge_band:
+                        continue
                     batch.setdefault(tag, []).extend(
                         (f'{li}.0+{ci}c', f'{li}.0+{ci + 1}c'))
                     if ci in edges and kind == 'ws_tab':
@@ -11839,7 +12728,15 @@ class CorrectNoteApp:
                                  enabled=not self._layout_is_unified(),
                                  partners=self._pane_row_partners())
             if changed:
-                self.editor.update_idletasks()
+                if getattr(self, '_icons_wait_for_map', False):
+                    # 起動中（__init__ の間）は窓を出さない: ここの
+                    # update_idletasks が本体の窓を先に出し、応答できない
+                    # 間にタスクバーのボタンが作られて絵が空になっていた
+                    # （2026-10-14）。窓が出たあとで揃え直す。
+                    self._align_after_map = True
+                else:
+                    self._flush_paper()
+                    self.editor.update_idletasks()
                 if not self._layout_is_unified():
                     self._sync_partner_to_line(self.editor, self.result_view)
                 self.editor_gutter.redraw()
@@ -12500,6 +13397,28 @@ class CorrectNoteApp:
     # 全部持っても軽い（1000行ぶんでも数百KB）。
     ANALYSIS_CACHE_TABS = 12
 
+    def _analysis_cache_tabs(self):
+        """解析結果の控えを持つタブの数。メモリ使用量「低」では、いま見ている
+        タブの分だけ（2026-10-14。6タブで本体が約80MB増えていた）。ほかのタブは
+        見に行ったときに解析し直す——答えは同じで、遅くなるだけ。
+        「高」では開いている全タブ分（2026-10-15 うにさん「高も何かひとつ追加して
+        よい」。12 を超えるタブでも、戻ったタブを解析し直さない）。"""
+        try:
+            import memory_usage
+            return memory_usage.cache_tabs(self, self.ANALYSIS_CACHE_TABS)
+        except Exception:
+            pass
+        return self.ANALYSIS_CACHE_TABS
+
+    def _units_cache_tabs(self):
+        """別のタブの描画の控え（単位）を持つ数。低 1・中 3・高は開いている全タブ分
+        （2026-10-15。戻ったタブの単位を作り直さない）。"""
+        try:
+            import memory_usage
+            return memory_usage.units_cache_tabs(self)
+        except Exception:
+            return 3
+
     def _restore_pending_scroll(self, final=False):
         """
         タブを開いたときの表示位置を当て直す（項目48-N）。
@@ -12625,8 +13544,8 @@ class CorrectNoteApp:
                 or getattr(self, '_analyze_pos', 0) < len(getattr(self, '_analyze_todo', ())))
 
     def _queue_background_tabs(self, delay=1500):
-        from memory_usage import low
-        if low(self):return
+        import memory_usage
+        if not memory_usage.background_tabs(self):return
         job = getattr(self, '_bg_start_job', None)
         if job is not None:
             return  # Repeated edits must not postpone the first dispatch.
@@ -12636,8 +13555,8 @@ class CorrectNoteApp:
         self._bg_start_job = self.root.after(delay, start)
 
     def _start_background_tabs(self):
-        from memory_usage import low
-        if low(self):return
+        import memory_usage
+        if not memory_usage.background_tabs(self):return
         import analysis_work_app as input_work
         if (getattr(self, '_closing', False)
                 or getattr(self, '_initial_setup', None) is not None
@@ -12689,6 +13608,13 @@ class CorrectNoteApp:
     def _bg_step_once(self):
         import analysis_work_app as input_work
         try:
+            import memory_usage
+            if memory_usage.shares_worker(self) and memory_usage.foreground_busy(self):
+                # 中（2026-10-15）: 子は1つ。表のタブが使っている間は裏は待つ。
+                # 裏の求めが出ていても、表の新しい求めに追い越されていて答えは
+                # 来ないので捨て、空いたら出し直す（analysis_async._poll も同じ判定）。
+                self._async_background_request = None
+                return True
             if self._bg is None:
                 if not getattr(self, '_bg_texts', None):
                     return False
@@ -12732,7 +13658,7 @@ class CorrectNoteApp:
                         self._analysis_cache_dependencies = deps
                         parked=getattr(self,'_tab_units_cache',{})
                         parked[st['text']]=(st.get('units',{}),st.get('suspect_units',{}))
-                        while len(parked)>3:parked.pop(next(iter(parked)))
+                        while len(parked)>self._units_cache_tabs():parked.pop(next(iter(parked)))
                         self._tab_units_cache=parked
                     try:
                         self._analysis_stale.discard(st['text'])
@@ -12743,7 +13669,7 @@ class CorrectNoteApp:
                         (getattr(self, '_bg_parked', None) or {}).pop(st['owner'], None)
                     except Exception:
                         pass
-                    while len(self._analysis_cache) > self.ANALYSIS_CACHE_TABS:
+                    while len(self._analysis_cache) > self._analysis_cache_tabs():
                         self._analysis_cache.pop(next(iter(self._analysis_cache)))
                 else:
                     # Keep completed rows when another row is unfinished.
@@ -12858,7 +13784,7 @@ class CorrectNoteApp:
             # ★★ **同じタブの古い本文の控えを先に落とす**（項目48-SH・
             # 2026-09-06）——下の「古いものから落とす」より前に
             self._prune_analysis_cache(keep=key)
-            while len(cache) > self.ANALYSIS_CACHE_TABS:
+            while len(cache) > self._analysis_cache_tabs():
                 cache.pop(next(iter(cache)))    # 古いものから落とす
         except Exception:
             pass
@@ -14175,6 +15101,9 @@ class CorrectNoteApp:
             return
         self.settings.set('input_method', method)
         self.settings.save()
+        # かな配列はかな入力のときだけ効く（keyboard_layout.spec が見る）ので、
+        # 入力方式が変わったら配列も当て直す（項目48-KB・2026-10-15）。
+        keyboard_layout.apply_spec(keyboard_layout.spec(self.settings))
         # 検査方向が変わるので、全行を解析し直す。
         # 行キャッシュ（_prev_lines）が残っていると「変わっていない
         # 行」として使い回されてしまうため、必ず捨てる。
@@ -14194,6 +15123,62 @@ class CorrectNoteApp:
         self.settings.set('input_method_auto',
                           bool(self.input_method_auto_var.get()))
         self.settings.save()
+
+    def _on_choose_keyboard_layout(self):
+        """表示メニューでキーボードの配列を選んだ（項目48-KB）。"""
+        layout = self.keyboard_layout_var.get()
+        if layout not in KEYBOARD_LAYOUT_LABELS:
+            return
+        if layout == 'custom':
+            # 段を字で受ける（Hunspell の KEY と同じ形）。読めなければ元に戻す
+            from tkinter import simpledialog
+            rows = simpledialog.askstring(
+                'キーボードの配列',
+                '段ごとの字を左から順に書いてください。段は | で区切ります。\n'
+                '例: qwertyuiop|asdfghjkl|zxcvbnm\n'
+                '（数字の段は省けます。4段書くときは最初が数字の段）',
+                initialvalue=(self.settings.get('keyboard_custom_rows')
+                              or 'qwertyuiop|asdfghjkl|zxcvbnm'),
+                parent=self.root)
+            if rows is None or keyboard_layout.parse_rows(rows) is None:
+                if rows is not None:
+                    messagebox.showinfo(
+                        'キーボードの配列',
+                        '配列として読めませんでした（英字が 20 字以上・段は | で区切る）。',
+                        parent=self.root)
+                self.keyboard_layout_var.set(self.settings.get('keyboard_layout'))
+                return
+            self.settings.set('keyboard_custom_rows', rows)
+        elif layout == self.settings.get('keyboard_layout'):
+            return
+        self.settings.set('keyboard_layout', layout)
+        self._apply_keyboard_setting()
+
+    def _on_choose_kana_layout(self):
+        """表示メニューでかな入力の配列（JIS・親指シフト・新JIS）を選んだ。"""
+        kana = self.kana_layout_var.get()
+        if (kana not in KANA_LAYOUT_LABELS
+                or kana == self.settings.get('kana_layout')):
+            return
+        self.settings.set('kana_layout', kana)
+        self._apply_keyboard_setting()
+
+    def _on_choose_keyboard_shape(self):
+        """表示メニューでキーボードの形（標準・左右分割・格子）を選んだ。"""
+        shape = self.keyboard_shape_var.get()
+        if (shape not in KEYBOARD_SHAPE_LABELS
+                or shape == self.settings.get('keyboard_shape')):
+            return
+        self.settings.set('keyboard_shape', shape)
+        self._apply_keyboard_setting()
+
+    def _apply_keyboard_setting(self):
+        """配列・かな配列・形を保存して当て、全行を解析し直す（入力方式を変えたときと同じ道）。"""
+        self.settings.save()
+        keyboard_layout.apply_spec(keyboard_layout.spec(self.settings))
+        # 隣接キーが変わるので、控えを捨てて全行を解析し直す
+        # （`_on_choose_input_method` と同じく `_reanalyze_all` を通す・項目48-CO）
+        self._reanalyze_all()
 
     def _auto_detect_input_method(self):
         """
@@ -14246,6 +15231,8 @@ class CorrectNoteApp:
             return
         self.settings.set('input_method', detected)
         self.settings.save()
+        # かな配列はかな入力のときだけ効く（項目48-KB・2026-10-15）
+        keyboard_layout.apply_spec(keyboard_layout.spec(self.settings))
         try:
             self.input_method_var.set(detected)
         except Exception:
@@ -15675,6 +16662,49 @@ class CorrectNoteApp:
             except Exception:
                 pass
 
+    # 右の二度押しと見なす間（ms）と、ずれ（px）。Tk の `<Double-Button-3>` と同じ値
+    RIGHT_DOUBLE_MS = 500
+    RIGHT_DOUBLE_PX = 5
+
+    def _right_press_is_double(self, event, widget):
+        """
+        右の押し下げが、同じ欄での二度押しの2回目かを自分で見分ける。
+
+        うにさん（2026-10-15）「表示準備中のとき、縮小モードにならない」
+        「しばらく待ったあとも、縮小ができたりできなかったりする」。
+        Tk は二度押しを、最後の 30 個の知らせの中に1回目の押し下げが残って
+        いるかで見分ける。解析の結果を当てている間は、絵文字の色の札
+        （子の窓）を置き直すたびに知らせが数十個たまり、1回目の押し下げが
+        押し出されて、0.15 秒の二度押しでも `<Double-Button-3>` にならな
+        かった（本物の右ボタンで 3/11。札を15枚置くだけで再現する）。
+        ここでは知らせの数に関係なく、時刻と位置だけで見る。
+
+        1回目の離しで候補一覧を開く間（0.3〜0.7 秒）や解析の一区切りの間に
+        押した2回目は、遅れて処理される（Tk の time は処理した時刻）。その
+        ときのために、Windows がその押し下げに付けた時刻（GetMessageTime）
+        でも同じ間で見る。（前は候補一覧を開いた時間を間から引いていたが、
+        開き終わってからゆっくり押した2回目まで二度押しになるので外した。）
+        """
+        prev = getattr(self, '_r3_last', None)
+        try:
+            now = (widget, int(event.time), int(event.x_root), int(event.y_root),
+                   _input_message_time())
+        except Exception:
+            self._r3_last = None
+            return False
+        self._r3_last = now
+        if prev is None or prev[0] is not widget:
+            return False
+        by_tk = 0 <= now[1] - prev[1] <= self.RIGHT_DOUBLE_MS
+        by_input = (now[4] is not None and prev[4] is not None
+                    and ((now[4] - prev[4]) & 0xffffffff) <= self.RIGHT_DOUBLE_MS)
+        if ((by_tk or by_input)
+                and abs(now[2] - prev[2]) <= self.RIGHT_DOUBLE_PX
+                and abs(now[3] - prev[3]) <= self.RIGHT_DOUBLE_PX):
+            self._r3_last = None        # 3回目は新しい1回目
+            return True
+        return False
+
     def _on_right_double(self, event, widget):
         """
         右クリックのダブルクリック（2回目の押し下げ）で俯瞰に入る。
@@ -16646,12 +17676,28 @@ class CorrectNoteApp:
         editor.focus_set()
         self._on_change()
 
+    @staticmethod
+    def _list_gap_after(editor, end):
+        """箇条書きで並べた最後の行のすぐ次の行に字があれば、間に空白行を1行入れる
+        （2026-10-15 うにさん「簡易入力を送ってから箇条書きボタンで新しい行に送った
+        文字が、その次の行に別の文字があったら、間に空白行を1行挿入し、別の文字と
+        間隔を開ける」）。次の行が空白だけ・文書の終わりなら何もしない。"""
+        row = int(editor.index(end).split('.')[0])
+        last = int(editor.index('end-1c').split('.')[0])
+        if row >= last:
+            return False
+        if not editor.get(f'{row + 1}.0', f'{row + 1}.end').strip():
+            return False
+        editor.insert(f'{row}.end', '\n')
+        return True
+
     def _list_from_quick_sent(self):
         editor = self.editor
         mode, chunks = self._list_quick_sent_plan()
         if not chunks:
             return False
         mark = '_list_batch_anchor'
+        moved = []
         if mode == 'split':
             # The first line-start chunk stays exactly where it was. Only
             # its contiguous alternating-colour neighbours move below it.
@@ -16666,7 +17712,9 @@ class CorrectNoteApp:
                     have = len(before) - len(before.rstrip('\n'))
                     if have < need:
                         editor.insert(start, '\n' * (need - have))
-                editor.mark_set('insert', mark)
+                end = _stable_text_index(editor, mark)
+                self._list_gap_after(editor, end)
+                editor.mark_set('insert', end)
                 editor.tag_remove('sel', '1.0', 'end')
         else:
             # Keep the original cursor-row rule for mid-sentence input.
@@ -16684,10 +17732,19 @@ class CorrectNoteApp:
                             else '\n\n' if '\n' in text else '\n')
                     for i, text in enumerate(items))
                 editor.insert(start, value)
+                # 入れ直した各行の位置（色を残すため）。
+                offset = len(prefix)
+                for i, text in enumerate(items):
+                    moved.append((f'{start}+{offset}c', f'{start}+{offset + len(text)}c',
+                                  chunks[i][4]))
+                    offset += len(text) + (0 if i == len(items) - 1
+                                           else 2 if '\n' in text else 1)
+                moved = [(editor.index(a), editor.index(b), tag) for a, b, tag in moved]
+                self._list_gap_after(editor, f'{start}+{len(value)}c')
                 editor.mark_set('insert', f'{start}+{len(value)}c')
                 editor.tag_remove('sel', '1.0', 'end')
         editor.mark_unset(mark)
-        self._clear_quick_sent()
+        self._keep_quick_sent_listed(moved)
         editor.see('insert')
         editor.focus_set()
         self._on_change()
@@ -18310,6 +19367,9 @@ class CorrectNoteApp:
         右ボタンを押した。ここではまだ何もせず、
         動かされたらスクロール、動かさず離されたら候補一覧とする。
         """
+        if self._right_press_is_double(event, self.editor):
+            self._on_right_double(event, self.editor)
+            return 'break'
         self._close_dropdown()
         self._drag_press(event, self.editor, True)
         # 押した場所を控える（項目48-TA。離しが「クリック」か「動かした」かを
@@ -20524,6 +21584,9 @@ class CorrectNoteApp:
         self._on_change()
 
     def _on_result_press(self, event):
+        if getattr(event, 'num', 1) == 3 and self._right_press_is_double(event, self.result_view):
+            self._on_right_double(event, self.result_view)
+            return 'break'
         # ドロップダウンが開いていれば閉じる。
         # break せずに返して、Text 標準のドラッグ選択を活かす。
         self._close_dropdown()
@@ -22049,8 +23112,11 @@ class CorrectNoteApp:
                 if msg in taskbar_messages:
                     self._drop_icon_pending = True
                 if msg == 0x010F and lparam & 0x0800:   # WM_IME_COMPOSITION・GCS_RESULTSTR
-                    text = _ime_result(hwnd)
-                    if text and ime_result_needs_help(text):
+                    given = _ime_result(hwnd)
+                    text = ime_result_once(given)
+                    # Tk drops emoji outside the BMP, and the emoji panel's
+                    # pick comes twice (also ❤️): those are typed in here.
+                    if text and (text != given or ime_result_needs_help(text)):
                         # Tk はこの字を捨てるので、ここで受け取って積む
                         # （**ここで Tk を触らない**。入れるのは見回りの中）。
                         try:
@@ -22183,15 +23249,17 @@ class CorrectNoteApp:
 
     DROP_POLL_MS = 120
 
-    def _insert_ime_text(self, text):
+    def _insert_ime_text(self, text, widget=None):
         """IME で確定した絵文字などを、いま焦点のある欄へ打ち込む。
 
         Tk の打ち込みと同じ `tk::TextInsert` を使う（選んでいる字は置き換わり、
-        取り消しの区切りもふつうの打鍵と同じ）。読み取り専用の欄には入れない。"""
-        try:
-            widget = self.root.focus_get()
-        except Exception:
-            widget = None
+        取り消しの区切りもふつうの打鍵と同じ）。読み取り専用の欄には入れない。
+        単語帳のボタンは、直前に焦点のあった欄を widget で渡す（2026-10-14）。"""
+        if widget is None:
+            try:
+                widget = self.root.focus_get()
+            except Exception:
+                widget = None
         # 欄の種類ごとに Tk 自身の打ち込みの手続き（検索欄などの Entry も）。
         insert = {'Text': 'tk::TextInsert', 'Entry': 'tk::EntryInsert',
                   'TEntry': 'ttk::entry::Insert'}.get(

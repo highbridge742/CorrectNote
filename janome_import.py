@@ -30,6 +30,7 @@ janome は辞書を sysdic/ 以下に Python モジュールとして持って�
 """
 
 import importlib
+import sys
 import re
 import os
 
@@ -613,45 +614,64 @@ def iter_janome_entries(min_len=2, max_len=12, pos_prefix=None):
     from analysis_context import check_current_request
     for part in range(10):
         check_current_request()
+        names = (f'janome.sysdic.entries_compact{part}',
+                 f'janome.sysdic.entries_extra{part}')
+        # 読み終えたら手放す（2026-10-14・メモリ使用量）。辞書の本体は
+        # janome が mmap で引くので、この20個の Python モジュール（計 約190MB）
+        # は全体を見渡すときにしか使わない。見渡しの結果は呼ぶ側が表に
+        # しているので、残しておくと補正の子にも本体にも丸ごと居座っていた。
+        # ほかの誰かが先に読んでいたモジュールは手放さない。
+        ours = [name for name in names if name not in sys.modules]
         try:
-            compact = importlib.import_module(
-                f'janome.sysdic.entries_compact{part}')
-            extra = importlib.import_module(
-                f'janome.sysdic.entries_extra{part}')
-        except Exception:
+            yield from _iter_part(names, min_len, max_len, pos_prefix,
+                                  check_current_request)
+        finally:
+            for name in ours:
+                sys.modules.pop(name, None)
+                package = sys.modules.get('janome.sysdic')
+                if package is not None:
+                    package.__dict__.pop(name.rsplit('.', 1)[1], None)
+
+
+def _iter_part(names, min_len, max_len, pos_prefix, check_current_request):
+    """One compact/extra pair of janome's dictionary modules."""
+    try:
+        compact = importlib.import_module(names[0])
+        extra = importlib.import_module(names[1])
+    except Exception:
+        return
+
+    compact_data = _find_data(compact)
+    extra_data = _find_data(extra)
+    if compact_data is None:
+        return
+
+    for offset,(key,comp) in enumerate(_iter_items(compact_data)):
+        # A newer document must not wait for a whole dictionary scan.
+        # Cancellation propagates before any partial index can be cached.
+        if offset and offset % 512 == 0:check_current_request()
+        surface, pos_full, cost = _parse_compact(comp)
+        if not surface or not (min_len <= len(surface) <= max_len):
             continue
 
-        compact_data = _find_data(compact)
-        extra_data = _find_data(extra)
-        if compact_data is None:
+        extra_item = _get_item(extra_data, key) if extra_data is not None else None
+        # **品詞は extra 側から取る**（_parse_extra_pos の説明）。
+        if not pos_full:
+            pos_full = _parse_extra_pos(extra_item)
+        # Narrow class indices need no reading extraction for other words.
+        if pos_prefix is not None and not pos_full.startswith(pos_prefix):
             continue
+        reading = _parse_extra(extra_item) if extra_item is not None else ''
+        if not reading:
+            continue
+        parts = pos_full.split(',') if pos_full else []
+        pos = parts[0] if parts else ''
+        sub_pos = parts[1] if len(parts) > 1 else ''
+        sub_sub_pos = parts[2] if len(parts) > 2 else ''
 
-        for offset,(key,comp) in enumerate(_iter_items(compact_data)):
-            # A newer document must not wait for a whole dictionary scan.
-            # Cancellation propagates before any partial index can be cached.
-            if offset and offset % 512 == 0:check_current_request()
-            surface, pos_full, cost = _parse_compact(comp)
-            if not surface or not (min_len <= len(surface) <= max_len):
-                continue
-
-            extra_item = _get_item(extra_data, key) if extra_data is not None else None
-            # **品詞は extra 側から取る**（_parse_extra_pos の説明）。
-            if not pos_full:
-                pos_full = _parse_extra_pos(extra_item)
-            # Narrow class indices need no reading extraction for other words.
-            if pos_prefix is not None and not pos_full.startswith(pos_prefix):
-                continue
-            reading = _parse_extra(extra_item) if extra_item is not None else ''
-            if not reading:
-                continue
-            parts = pos_full.split(',') if pos_full else []
-            pos = parts[0] if parts else ''
-            sub_pos = parts[1] if len(parts) > 1 else ''
-            sub_sub_pos = parts[2] if len(parts) > 2 else ''
-
-            yield (surface, katakana_to_hiragana(reading),
-                   pos, sub_pos, sub_sub_pos,
-                   cost if cost is not None else 99999)
+        yield (surface, katakana_to_hiragana(reading),
+               pos, sub_pos, sub_sub_pos,
+               cost if cost is not None else 99999)
 
 
 def collect_import_entries(limit=DEFAULT_MAX_WORDS, min_len=2, max_len=12, progress=None):

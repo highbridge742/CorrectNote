@@ -53,6 +53,12 @@ class SelectionOpening:
         import quick_ime
         source=self.snapshot();mode=quick_ime.foreground_fullwidth_mode()
         if source is not None and source!=self.snapshot():return
+        # The text box to give the focus back to on closing (quick_return).
+        try:
+            import quick_return
+            app._quick_return=quick_return.capture(source)
+        except Exception:
+            app._quick_return=None
         if source is None or source.process==os.getpid():
             value=local_selection(app,source)
             app._show_quick_capture(trigger,mode,value);return

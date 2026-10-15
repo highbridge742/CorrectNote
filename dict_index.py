@@ -379,9 +379,30 @@ class DictIndex:
             self._world = set(data.get('world') or ())
             self._band = {r: set(v) for r, v
                           in (data.get('band') or {}).items()}
+            self._compact()
             return True
         except Exception:
             return False
+
+    def _compact(self):
+        """メモリ使用量「低」（2026-10-15）: 読み込んだ索引を小さな形で持つ
+        （compact_tables。約 48MB → 約 12MB。鍵・値・順序は同じで、引くのは
+        二分探索・約 12µs）。本体も解析の子も、索引はキャッシュから読むので
+        どちらにも効く。形を変えられないとき（印の字が混じる等）は辞書のまま。"""
+        try:
+            import compact_tables
+            if not compact_tables.enabled() or not self._by_reading:
+                return
+            by_reading = compact_tables.CompactLists.of(self._by_reading)
+            by_surface = compact_tables.CompactLists.of(self._by_surface)
+            inflected = compact_tables.CompactLists.of(self._inflected)
+            world = compact_tables.CompactWords.of(self._world or ())
+            band = compact_tables.CompactLists.of(
+                {r: sorted(v) for r, v in (self._band or {}).items()})
+        except Exception:
+            return
+        self._by_reading, self._by_surface = by_reading, by_surface
+        self._inflected, self._world, self._band = inflected, world, band
 
     def stats(self):
         """索引の状態（診断用）。"""

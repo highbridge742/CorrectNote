@@ -19,6 +19,18 @@ class ImeResultNeedsHelpTests(unittest.TestCase):
         for text in ('', None, 'あ', '漢字', 'abc', '★☆♪'):
             self.assertFalse(app.ime_result_needs_help(text), text)
 
+    def test_the_emoji_panels_doubled_pick_is_taken_once(self):
+        # Measured with the real panel: one pick gives the emoji twice
+        # (GCS_RESULTSTR 3dd812de3dd812de for one smiley; 64270ffe64270ffe for a heart).
+        self.assertEqual(app.ime_result_once('\U0001F612\U0001F612'),'\U0001F612')
+        self.assertEqual(app.ime_result_once('\u2764\ufe0f\u2764\ufe0f'),'\u2764\ufe0f')
+        family='\U0001F468\u200d\U0001F469\u200d\U0001F467'
+        self.assertEqual(app.ime_result_once(family*2),family)
+        # Anything else stays as given.
+        for text in ('','あ','ああ','ab'*2,'\U0001F600','\U0001F600\U0001F44D',
+                     '笑\U0001F600笑\U0001F600','\U0001F600'*3):
+            self.assertEqual(app.ime_result_once(text),text,ascii(text))
+
 
 class InsertImeTextTests(unittest.TestCase):
     def setUp(self):

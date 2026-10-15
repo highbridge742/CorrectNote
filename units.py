@@ -247,9 +247,10 @@ def build_suspect_units(result, tokenize_fn, choice_store=None,
         # 補正の色になる」と報告された）。区切りが分からなくても
         # 補正の位置（original_spans）は分かっているので、
         # スパンの内外で分割して、色は該当箇所だけに付ける。
-        return text, _merge_functional_runs(_merge_kana_runs(
-            _units_from_spans(text, suspect_spans, details, 'suspect'),
-            known_kana_word))
+        return text, _with_latin_context(text, _merge_functional_runs(
+            _merge_kana_runs(
+                _units_from_spans(text, suspect_spans, details, 'suspect'),
+                known_kana_word)))
 
     units = []
     for i, tok in enumerate(tokens):
@@ -304,8 +305,37 @@ def build_suspect_units(result, tokenize_fn, choice_store=None,
             'known': bool(tok[5]),
         })
 
-    return text, _merge_stem_with_tail(_merge_functional_runs(
-        _merge_kana_runs(units, known_kana_word)))
+    return text, _with_latin_context(text, _merge_stem_with_tail(
+        _merge_functional_runs(_merge_kana_runs(units, known_kana_word))))
+
+
+def _with_latin_context(text, units):
+    """
+    **英字だけの単位に、行の文脈を持たせる**（2026-10-15・うにさん
+    「右クリックの品詞判定に、判定した品詞を表示するようにして
+    ください」）。
+
+    画面の品詞ごとの色は、英字の語の品詞を**行の中の前後の語**から
+    選ぶ（`pos_font._join_latin` → `en_pos.judge`。`the state` の
+    state は名詞）。右クリックの品詞判定は単位の字と隣の単位
+    （たいてい空白）しか受け取らないので、そのままでは前後の語が
+    見えず、色と違う品詞を言いうる。ドラッグ範囲の単位と同じ
+    `analysis_context`（行の字・始まり・終わり）を、**英字だけの
+    単位にだけ**付ける——日本語の単位の判定の道は今までどおり。
+    """
+    try:
+        from pos_font import _LATIN
+    except Exception:
+        return units
+    for unit in units:
+        if 'analysis_context' in unit:
+            continue
+        start, end = unit.get('start'), unit.get('end')
+        shown = unit.get('text') or ''
+        if (shown and isinstance(start, int) and isinstance(end, int)
+                and text[start:end] == shown and _LATIN.fullmatch(shown)):
+            unit['analysis_context'] = (text, start, end)
+    return units
 
 
 def _merge_kana_runs(units, known):
@@ -1723,8 +1753,9 @@ def build_line_units(result, tokenize_fn, choice_store=None,
              known=bool(_tok[5]) if _whole else False)
         src_pos = frag_end
 
-    return ''.join(out), _merge_functional_runs(
-        _merge_kana_runs(units, known_kana_word))
+    shown_text = ''.join(out)
+    return shown_text, _with_latin_context(shown_text, _merge_functional_runs(
+        _merge_kana_runs(units, known_kana_word)))
 
 
 def make_range_unit(line_text, units, start, end):

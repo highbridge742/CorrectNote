@@ -1,14 +1,16 @@
 # -*- coding: utf-8 -*-
 # CorrectNote — Copyright (C) 2026 Takahashi Yuu
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Real isolated workers preserve all outputs after low-mode cold restarts."""
+"""All tiers give the same outputs: real workers (high; mid with cold restarts;
+low with cold restarts and compact tables, 2026-10-14)."""
+import os
 from types import SimpleNamespace
 import unittest
 
 import analysis_async as A
 import analysis_worker as W
 import memory_usage as M
-from settings import MEMORY_HIGH, MEMORY_LOW
+from settings import MEMORY_HIGH, MEMORY_LOW, MEMORY_MID
 from tests_analysis_async import initial, wait
 from tests_memory_usage import Timers
 
@@ -23,8 +25,12 @@ class MemoryRuntimeTests(unittest.TestCase):
                  '😀書類を作成しました。', 'kouendearukisoudesu\t',
                  '橋を渡ります。', 'x = "kouendearukisoudesu"']
         values = {}
-        for mode in (MEMORY_HIGH, MEMORY_LOW):
+        saved_env = os.environ.get('CN_COMPACT_TABLES')
+        self.addCleanup(lambda: os.environ.pop('CN_COMPACT_TABLES', None) if saved_env is None
+                        else os.environ.__setitem__('CN_COMPACT_TABLES', saved_env))
+        for mode in (MEMORY_HIGH, MEMORY_MID, MEMORY_LOW):
             app.settings['memory_usage'] = mode
+            M.export_env(app)       # low: the worker uses compact tables
             try:
                 if mode == MEMORY_HIGH:
                     A.prewarm(app)
@@ -46,9 +52,23 @@ class MemoryRuntimeTests(unittest.TestCase):
                         app.root.run(app._memory_foreground_job)
                         self.assertFalse(worker.process.is_alive())
                         self.assertIsNone(app._worker_state)
+                    elif mode == MEMORY_MID:
+                        # 2026-10-15: mid keeps the open tab's child ready, and the
+                        # other tabs' rows go to that same child (no second process).
+                        worker = app._correction_worker
+                        M.queue_release(app, 'foreground')
+                        self.assertFalse(hasattr(app, '_memory_foreground_job') and app._memory_foreground_job)
+                        self.assertTrue(worker.process.is_alive())
+                        identifier = A._request(app, task, ('background row', index), background=True)
+                        self.assertIs(app._correction_worker, worker)
+                        self.assertIsNone(getattr(app, '_prefetch_worker', None))
+                        shared = wait(worker, identifier)
+                        app._async_background_request = None
+                        self.assertEqual(shared, rows[-1])
                 values[mode] = (prepared, rows)
             finally:
                 A.close(app)
+        self.assertEqual(values[MEMORY_MID], values[MEMORY_HIGH])
         self.assertEqual(values[MEMORY_LOW], values[MEMORY_HIGH])
         self.assertTrue(all(row['result']['analysis_status'] == 'complete'
                             for row in values[MEMORY_LOW][1]))
@@ -57,7 +77,9 @@ class MemoryRuntimeTests(unittest.TestCase):
                     input_method='romaji', attested=(), readings={}, calculations={})
         outputs = {}
         for mode in (MEMORY_HIGH, MEMORY_LOW):
-            worker = W.Worker()
+            app.settings['memory_usage'] = mode
+            M.export_env(app)
+            worker = W.Worker()     # low: compact tables (CN_COMPACT_TABLES=1)
             try:
                 state = W.snapshot(app)
                 if mode == MEMORY_HIGH:

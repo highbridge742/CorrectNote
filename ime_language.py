@@ -6,7 +6,8 @@ factory. No key events, commits, SetResult, or dictionary writes occur.
 """
 import ctypes as C
 
-from ime_candidates import GUID, HRESULT, _guid, _method, _ole32, _oleaut32, _release
+from ime_candidates import (GUID, HRESULT, _faulting_thread_reports_only, _guid,
+                            _method, _ole32, _oleaut32, _release)
 
 _imeapi_path = r'C:\Windows\System32\IME\IMEJP\IMJPAPI.DLL'
 try:
@@ -128,6 +129,7 @@ class JapaneseIME:
         self._morph_cache = {}
 
     def __enter__(self):
+        _faulting_thread_reports_only()
         from ime_session import retain
         shared,self._retained=retain(self)
         if shared is not self or self._com:return shared

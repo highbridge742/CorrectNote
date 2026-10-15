@@ -49,6 +49,9 @@ class TypingPointer:
             pointer = self.root.winfo_containing(*self.root.winfo_pointerxy())
         except tk.TclError:
             return
+        # The art below a pane's last line (appearance.Paper) is part of the pane.
+        if getattr(pointer, '_correctnote_paper_below', False):
+            pointer = pointer.master
         # Hiding is limited to text panes under the pointer, never the root/menu.
         if pointer not in widgets:
             return

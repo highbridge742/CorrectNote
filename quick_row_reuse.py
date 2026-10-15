@@ -5,7 +5,7 @@ from copy import deepcopy
 
 
 def row_key(task,index):
-    return (task['lines'][index],task['input_method'],
+    return (task['lines'][index],task['input_method'],task.get('keyboard'),
             tuple(task.get('readings',{}).get(index,())),
             tuple(task.get('calculations',{}).get(index,())))
 

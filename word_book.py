@@ -5,6 +5,10 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import font as tkfont
 
+# After giving the window back, wait this long before typing into it.
+INSERT_DELAY_MS = 80
+INSERT_TRIES = 12
+
 
 def word_book_position(app_bounds, window_size, work_area, gap=6, number_left=None):
     """Outer-frame coordinates, including negative-coordinate monitors."""
@@ -78,7 +82,11 @@ class _WordBookNative:
             fn = getattr(cc, name); fn.argtypes = args; fn.restype = result
         self.hwnd = u.GetAncestor(window.winfo_id(), 2)
         self.previous = None
+        # (top-level, control) that last had the keyboard focus outside us.
+        self.focus = None
+        self.return_focus = None
         self.event_hook = None
+        self.focus_hook = None
         self.hook_error = None
         self._remember(previous)
 
@@ -117,15 +125,30 @@ class _WordBookNative:
             # only a handle/PID pair; never enter Tk from a native callback.
             if self.hwnd and self.event_hook and event == 3:
                 self._remember(hwnd)
+            elif self.hwnd and self.focus_hook and event == 0x8005:
+                self._remember_focus(hwnd)
         self.foreground_proc = self.event_type(foreground)
         self.event_hook = u.SetWinEventHook(3, 3, None, self.foreground_proc, 0, 0, 0)
         if not self.event_hook:
             self.hook_error = c.get_last_error()
+        # EVENT_OBJECT_FOCUS: the control that had the focus before a click
+        # on the word book, so its text can be put back there (2026-10-14).
+        self.focus_hook = u.SetWinEventHook(0x8005, 0x8005, None,
+                                            self.foreground_proc, 0, 0, 0)
 
     def _remove_foreground_hook(self):
-        if self.event_hook:
-            hook, self.event_hook = self.event_hook, None
-            self.user.UnhookWinEvent(hook)
+        for name in ('event_hook', 'focus_hook'):
+            hook = getattr(self, name, None)
+            if hook:
+                setattr(self, name, None)
+                self.user.UnhookWinEvent(hook)
+
+    def _remember_focus(self, hwnd):
+        if not hwnd or not self.user.IsWindow(hwnd):
+            return
+        top = self.user.GetAncestor(hwnd, 2)
+        if top and top != self.hwnd:
+            self.focus = (top, hwnd)
 
     def _remember(self, hwnd):
         if not hwnd or not self.user.IsWindow(hwnd):
@@ -156,7 +179,91 @@ class _WordBookNative:
         from ctypes import wintypes as W
         pid = W.DWORD()
         u.GetWindowThreadProcessId(hwnd, self.c.byref(pid))
+        # Keep the control as it was before the word book was clicked: the
+        # window's own activation may report its frame as focused next.
+        self.return_focus = self.focus if self.focus and self.focus[0] == hwnd else None
         return bool(pid.value == owner and u.SetForegroundWindow(hwnd))
+
+    def _refocus(self, hwnd, thread):
+        """Give the remembered control of that window its focus back.
+
+        Most apps restore it themselves on activation; a plain window with
+        an EDIT child does not, so it is set here like quick_return does —
+        only once that window is in front, or its own activation would
+        move the focus again afterwards."""
+        remembered = getattr(self, 'return_focus', None)
+        if not remembered or remembered[0] != hwnd:
+            return
+        control = remembered[1]
+        if control == hwnd or not self.user.IsWindow(control):
+            return
+        if self.user.GetAncestor(control, 2) != hwnd:
+            return
+        try:
+            import quick_return
+            u = quick_return._user()
+            me = self.c.WinDLL('kernel32').GetCurrentThreadId()
+            attached = bool(u.AttachThreadInput(me, thread, True))
+            try:
+                u.SetFocus(control)
+            finally:
+                if attached:
+                    u.AttachThreadInput(me, thread, False)
+        except (OSError, ImportError, AttributeError, ValueError):
+            pass
+
+    def focused_text_box(self, hwnd):
+        """True when hwnd is in front and its focused control takes text."""
+        if not hwnd or self.user.GetForegroundWindow() != hwnd:
+            return False
+        try:
+            import quick_return
+            from quick_ime import _api, _GuiInfo
+            thread = self.user.GetWindowThreadProcessId(hwnd, None)
+            info = _GuiInfo()
+            info.cbSize = self.c.sizeof(info)
+            if not _api().GetGUIThreadInfo(thread, self.c.byref(info)):
+                return False
+            if info.hwndCaret:
+                return True
+            return bool(info.hwndFocus) and quick_return.is_text_class(
+                quick_return.class_name(info.hwndFocus))
+        except (OSError, ImportError, AttributeError, ValueError):
+            return False
+
+    def _active(self, hwnd):
+        """The thread of hwnd has handled its activation (else None)."""
+        try:
+            from quick_ime import _api, _GuiInfo
+            info = _GuiInfo()
+            info.cbSize = self.c.sizeof(info)
+            thread = self.user.GetWindowThreadProcessId(hwnd, None)
+            if _api().GetGUIThreadInfo(thread, self.c.byref(info)):
+                return info.hwndActive == hwnd and bool(info.hwndFocus)
+        except (OSError, ImportError, AttributeError, ValueError):
+            pass
+        return False
+
+    def paste(self, hwnd):
+        """Ctrl+V into hwnd's focused text box (no Enter). True if sent.
+
+        None means "not yet": the window is in front but has not finished
+        its activation, which may still move the focus (ask again)."""
+        if not hwnd or self.user.GetForegroundWindow() != hwnd:
+            return False
+        if not self._active(hwnd):
+            return None
+        try:
+            import quick_return
+            u = quick_return._user()
+            self._refocus(hwnd, u.GetWindowThreadProcessId(hwnd, None))
+            if not self.focused_text_box(hwnd):
+                return False
+        except (OSError, ImportError):
+            return False
+        for vk, flags in ((0x11, 0), (0x56, 0), (0x56, 2), (0x11, 2)):
+            u.keybd_event(vk, 0, flags, 0)
+        return True
 
     def detach(self):
         self._remove_foreground_hook()
@@ -177,6 +284,8 @@ class WordBook:
         self._save_job = None
         self._native = None
         self._focus_job = None
+        self._insert_job = None
+        self._pending_text = None
         self._drag_anchor = None
         try:
             value = json.loads(self.path.read_text(encoding='utf-8'))
@@ -417,6 +526,10 @@ class WordBook:
             button.place(x=0, y=0, relwidth=1, relheight=1)
             button.bind('<Button-3>', lambda e, i=index: self.remove_menu(e, i))
             button.bind('<MouseWheel>', self._wheel)
+            # 左ドラッグで並べ替え（数ピクセル動かしてから。手前ではクリックのまま）
+            button.bind('<ButtonPress-1>', lambda e, i=index: self._order_press(e, i), add='+')
+            button.bind('<B1-Motion>', self._order_motion, add='+')
+            button.bind('<ButtonRelease-1>', self._order_release)
             self.buttons.append(button)
         self.add_button = tk.Button(self.rows, text='追加', command=self.app._start_word_book_add,
             bg=bg, fg=accent, relief='flat', font=self.app._editor_font(), padx=8, pady=3,
@@ -447,23 +560,207 @@ class WordBook:
         self.app.root.clipboard_clear()
         self.app.root.clipboard_append(text)
         self.app.status.config(text='単語帳の文字をコピーしました')
-        if self._focus_job is not None:
-            self.app.root.after_cancel(self._focus_job)
+        self._pending_text = text
+        for name in ('_focus_job', '_insert_job'):
+            job = getattr(self, name, None)
+            if job is not None:
+                self.app.root.after_cancel(job)
+                setattr(self, name, None)
         self._focus_job = self.app.root.after_idle(self._restore_previous)
 
     def _restore_previous(self):
         self._focus_job = None
-        if self._native is not None:
-            self._native.restore_previous()
+        native = self._native
+        if native is None:
+            return
+        target = native.previous
+        if not native.restore_previous() or not target:
+            return
+        # 2026-10-14 うにさん: also put the word into the text box that had
+        # the focus (the memo or another app's box). Insert only, no Enter.
+        # Wait for the activation to settle before looking at the focus.
+        text = self._pending_text
+        self._insert_job = self.app.root.after(
+            INSERT_DELAY_MS, lambda: self._insert_into(target, text))
+
+    def _insert_into(self, target, text, tries=INSERT_TRIES):
+        self._insert_job = None
+        native = self._native
+        if native is None or not text:
+            return False
+        hwnd, owner = target
+        # Windows hands the foreground over asynchronously: for a moment
+        # nothing (or still the word book) is in front. Wait for it, but
+        # never when the user has gone to some third window.
+        front = native.user.GetForegroundWindow()
+        if front != hwnd and tries > 0 and (
+                not front or front == getattr(native, 'hwnd', None)):
+            self._insert_job = self.app.root.after(
+                INSERT_DELAY_MS // 2, lambda: self._insert_into(target, text, tries - 1))
+            return False
+        if front != hwnd:
+            return False
+        if owner == os.getpid():
+            done = self._insert_into_app(hwnd, text)
+        else:
+            done = native.paste(hwnd)
+            if done is None and tries > 0:
+                self._insert_job = self.app.root.after(
+                    INSERT_DELAY_MS // 2, lambda: self._insert_into(target, text, tries - 1))
+                return False
+        if done:
+            self.app.status.config(text='単語帳の文字を入れました（コピーもしています）')
+        return done
+
+    def _insert_into_app(self, hwnd, text):
+        """Insert into CorrectNote's own focused field with Tk's typing path."""
+        if self._native.user.GetForegroundWindow() != hwnd:
+            return False
+        root = self.app.root
+        top = None
+        for widget in [root] + root.winfo_children():
+            if not isinstance(widget, (tk.Tk, tk.Toplevel)) or widget is self.window:
+                continue
+            try:
+                if self._native.user.GetAncestor(widget.winfo_id(), 2) == hwnd:
+                    top = widget
+                    break
+            except tk.TclError:
+                continue
+        if top is None:
+            return False
+        try:
+            field = top.focus_lastfor()
+        except tk.TclError:
+            return False
+        insert = getattr(self.app, '_insert_ime_text', None)
+        return bool(insert and field is not None and insert(text, field))
 
     def remove_menu(self, event, index):
         menu = tk.Menu(self.window, tearoff=False)
         menu.add_command(label='消す', command=lambda: self.remove(index))
+        # 2026-10-15 うにさん「単語帳の登録した単語を右クリックしたメニューに、「ひとつ上と
+        # 入れ替え」を追加し、クリックで上の項目と位置を入れ替える」
+        menu.add_command(label='ひとつ上と入れ替え', command=lambda: self.move(index, index - 1),
+                         state='normal' if index > 0 else 'disabled')
         self._menu = menu
         try:
             menu.tk_popup(event.x_root, event.y_root)
         finally:
             menu.grab_release()
+        return 'break'
+
+    def move(self, index, to):
+        """index の項目を to の位置へ移す（並び順は保存に残る）。動いたら True。"""
+        words = self.words
+        if not (0 <= index < len(words)) or not (0 <= to < len(words)) or index == to:
+            return False
+        words.insert(to, words.pop(index))
+        self.save()
+        try:
+            top = self.canvas.yview()[0] if self.window is not None else None
+        except (AttributeError, tk.TclError):
+            top = None
+        self.render()
+        if top is not None:
+            try:
+                self.canvas.yview_moveto(top)
+            except tk.TclError:
+                pass
+        return True
+
+    # ---- 左ドラッグで並べ替え（2026-10-15 うにさん「左クリックのドラッグ操作でも位置を
+    # 入れ替えられるようにする」）。押して ORDER_DRAG_PX 動かしたら並べ替えに入る。手前では
+    # 今までどおりのクリック（コピー・入れる）。入る場所に線を出す。離した所へ移す。
+    # Esc か一覧の外で離したら元のまま。
+    ORDER_DRAG_PX = 6
+
+    def _order_press(self, event, index):
+        self._order = {'index': index, 'y': event.y_root, 'active': False, 'gap': None}
+
+    def _order_gap(self, y_root):
+        """指の高さに入る隙間の番号（0..項目数）。一覧の外なら None。"""
+        rows = [b.master for b in getattr(self, 'buttons', [])]
+        if not rows or self.window is None:
+            return None
+        try:
+            canvas = self.canvas
+            top = canvas.winfo_rooty()
+            if not (top - 4 <= y_root <= top + canvas.winfo_height() + 4):
+                return None
+            gap = 0
+            for row in rows:
+                if y_root >= row.winfo_rooty() + row.winfo_height() / 2:
+                    gap += 1
+            return gap
+        except tk.TclError:
+            return None
+
+    def _order_motion(self, event):
+        state = getattr(self, '_order', None)
+        if state is None:
+            return None
+        if not state['active']:
+            if abs(event.y_root - state['y']) < self.ORDER_DRAG_PX:
+                return None
+            state['active'] = True
+            try:
+                # Esc で取りやめ（押している間はこの窓がキーを受ける）
+                self.window.bind('<Escape>', self._order_cancel)
+            except tk.TclError:
+                pass
+            try:
+                button = self.buttons[state['index']]
+                button.configure(relief='flat')
+                button.configure(cursor='sb_v_double_arrow')
+            except (IndexError, tk.TclError):
+                pass
+        if state.get('cancelled'):
+            return 'break'
+        gap = self._order_gap(event.y_root)
+        state['gap'] = gap
+        self._order_mark(gap)
+        return 'break'
+
+    def _order_mark(self, gap):
+        """入る場所の線（gap が None なら消す）。"""
+        line = getattr(self, '_order_line', None)
+        if gap is None:
+            if line is not None:
+                line.place_forget()
+            return
+        try:
+            if line is None or not line.winfo_exists():
+                line = self._order_line = tk.Frame(self.rows, height=2, bg=self.colors()[2])
+            rows = [b.master for b in self.buttons]
+            if gap < len(rows):
+                y = rows[gap].winfo_y()
+            else:
+                y = rows[-1].winfo_y() + rows[-1].winfo_height()
+            line.place(x=0, y=max(0, y - 1), relwidth=1, height=2)
+            line.lift()
+        except (IndexError, tk.TclError):
+            pass
+
+    def _order_release(self, event):
+        state = getattr(self, '_order', None)
+        self._order = None
+        if state is None or not state['active']:
+            return None              # ただのクリック: 今までどおり
+        self._order_mark(None)
+        gap = None if state.get('cancelled') else self._order_gap(event.y_root)
+        index = state['index']
+        to = None if gap is None else (gap if gap <= index else gap - 1)
+        if to is None or not self.move(index, to):
+            self.render()            # Esc・一覧の外で離した: 元のまま（押した見た目も戻す）
+        return 'break'               # 並べ替えに入ったときはコピーしない
+
+    def _order_cancel(self, event=None):
+        state = getattr(self, '_order', None)
+        if state is None or not state['active']:
+            return None
+        state['cancelled'] = True
+        self._order_mark(None)
         return 'break'
 
     def remove(self, index):
@@ -485,9 +782,11 @@ class WordBook:
     def shutdown(self):
         # Application shutdown retains visibility for the next launch.
         self._end_drag()
-        if self._focus_job is not None:
-            self.app.root.after_cancel(self._focus_job)
-            self._focus_job = None
+        for name in ('_focus_job', '_insert_job'):
+            job = getattr(self, name, None)
+            if job is not None:
+                self.app.root.after_cancel(job)
+                setattr(self, name, None)
         if self._native is not None:
             self._native.detach()
             self._native = None

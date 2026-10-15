@@ -55,10 +55,60 @@ INPUT_METHOD_LABELS = {
 }
 INPUT_METHOD_CHOICES = tuple(INPUT_METHOD_LABELS)
 
+# キーボードの配列と形（項目48-KB・2026-10-14・うにさんの指定
+# 「オプションにキーボード配列を追加して、QWERTY以外や、他に配列が変わる
+#   もの、左右で分割されたキーボードなどの選択を用意してください。
+#   これは隣接キーに影響します」）。
+# 配列はローマ字入力・英字の隣接キーに、形（左右分割・格子）はかな入力の
+# 隣接キーにも効く。表と意味は keyboard_layout.py。名前は同じものを使う。
+KEYBOARD_LAYOUT_LABELS = {
+    'qwerty_jis': 'QWERTY（日本語配列・JIS）',
+    'qwerty_us': 'QWERTY（英語配列・US）',
+    'dvorak': 'Dvorak',
+    'colemak': 'Colemak',
+    'colemak_dh': 'Colemak-DH',
+    'workman': 'Workman',
+    'eucalyn': 'Eucalyn',
+    'azerty': 'AZERTY（フランス語）',
+    'qwertz': 'QWERTZ（ドイツ語）',
+    'custom': 'その他（段を文字で指定）…',
+}
+KEYBOARD_LAYOUT_CHOICES = tuple(KEYBOARD_LAYOUT_LABELS)
+KEYBOARD_SHAPE_LABELS = {
+    'standard': '標準（段が少しずつずれている）',
+    'split': '左右に分割（段ずれあり）',
+    'ortho': '格子（縦横まっすぐに並ぶ）',
+    'split_ortho': '左右に分割・格子',
+}
+KEYBOARD_SHAPE_CHOICES = tuple(KEYBOARD_SHAPE_LABELS)
+# かな入力の配列（項目48-KB・かな配列・2026-10-14。うにさんがカードで
+# 「用意する」）。かな入力の隣接キーに効く。表と意味は kana_layout.py。
+KANA_LAYOUT_LABELS = {
+    'jis': 'JISかな（標準）',
+    'nicola': '親指シフト（NICOLA）',
+    'shin_jis': '新JIS配列',
+}
+KANA_LAYOUT_CHOICES = tuple(KANA_LAYOUT_LABELS)
+
 MEMORY_LOW = 'low'
+MEMORY_MID = 'mid'
 MEMORY_HIGH = 'high'
-MEMORY_LABELS = {MEMORY_LOW: '低', MEMORY_HIGH: '高'}
+# 2026-10-14 うにさん「低・中・高の3段階にし、低は700MB、中は1400、高は2100
+# （上限）。デフォルトは高」。中身は memory_usage.py の頭に書いてある。
+MEMORY_LABELS = {MEMORY_LOW: '低（解析は遅い）',
+                 MEMORY_MID: '中',
+                 MEMORY_HIGH: '高（速い）'}
 MEMORY_CHOICES = tuple(MEMORY_LABELS)
+
+# 外見（2026-10-14〜15 うにさん「このアプリについての中に、外見のメニューを
+# 追加し、アプリ全体のテーマを切り替える」）。名前・配色・絵は appearance.py。
+# **`dark_mode` は配色から決まる**（ダーク系の配色なら真）。読み込むとき
+# `theme` の無い古いファイルは、`dark_mode` から配色を決める（下の load）。
+# `theme_light` / `theme_dark` は「ダークモード」の切り替えで戻る先。
+from appearance import (THEME_ORDER as THEME_CHOICES, DARK_THEMES, LIGHT_THEMES,
+                        DECOR_ORDER as DECOR_CHOICES,
+                        STRENGTH_ORDER as DECOR_STRENGTH_CHOICES,
+                        DEFAULT_DECOR, DEFAULT_STRENGTH)
 
 DEFAULT_EDITOR_FONT = ('Yu Mincho', 10)
 FONT_SIZE_MIN = 6
@@ -106,10 +156,20 @@ DEFAULTS = {
     # 簡易入力ウィンドウに、呼び出したホットキーについての
     # 説明文を出すかどうか（一時解除ボタン自体は説明文とは別に常に出す）
     'show_quick_hint': True,
+    # 簡易入力を閉じたら、開く前の別アプリの入力欄へフォーカスを戻し、
+    # 閉じた文を貼り付ける（2026-10-14 うにさん。古い設定でも既定オン）。
+    'quick_paste_back': True,
     'capslock_backspace_enabled': True,
     'insert_quote_enabled': True,
     # ダークモード。既定はオフ（既存の見た目を変えないため）
     'dark_mode': False,
+    # 外見（配色・装飾・装飾の濃さ）。配色の既定は今までと同じ（標準のライト）。
+    # 装飾の既定は 波・薄い（うにさん 2026-10-15。appearance.DEFAULT_DECOR）。
+    'theme': 'light',
+    'theme_light': 'light',
+    'theme_dark': 'dark',
+    'decor': DEFAULT_DECOR,
+    'decor_strength': DEFAULT_STRENGTH,
     'editor_font_family': DEFAULT_EDITOR_FONT[0],
     'editor_font_size': DEFAULT_EDITOR_FONT[1],
     # 品詞ごとの表示倍率。本文と補正欄の文字サイズだけに使い、
@@ -146,6 +206,15 @@ DEFAULTS = {
     # メニューの選択と補正の検査方向を自動で切り替える。
     # ペーストは判定できないので、その場合は現在の設定のまま。
     'input_method_auto': True,
+    # キーボードの配列と形（項目48-KB・2026-10-14）。既定は QWERTY（JIS）・
+    # 標準の形で、今までと同じ隣接キー。'custom' のときは
+    # keyboard_custom_rows の段（`qwertyuiop|asdfghjkl|zxcvbnm` の形。
+    # 段は | で区切る）を使う。
+    'keyboard_layout': 'qwerty_jis',
+    'keyboard_shape': 'standard',
+    'keyboard_custom_rows': '',
+    # かな入力の配列（JIS・親指シフト・新JIS）。既定は JIS で今までどおり。
+    'kana_layout': 'jis',
     # 検索ダイアログのチェックボックス。
     # 一度設定したら、同じ検索中はもちろん、次にアプリを
     # 開き直したときも同じ条件で検索できるようにする
@@ -277,7 +346,15 @@ class Settings:
         # ここに無い値が書かれていたら、既定値のまま動かす。
         allowed = {'layout': LAYOUT_CHOICES,
                    'input_method': INPUT_METHOD_CHOICES,
-                   'memory_usage': MEMORY_CHOICES}
+                   'keyboard_layout': KEYBOARD_LAYOUT_CHOICES,
+                   'keyboard_shape': KEYBOARD_SHAPE_CHOICES,
+                   'kana_layout': KANA_LAYOUT_CHOICES,
+                   'memory_usage': MEMORY_CHOICES,
+                   'theme': THEME_CHOICES,
+                   'theme_light': LIGHT_THEMES,
+                   'theme_dark': DARK_THEMES,
+                   'decor': DECOR_CHOICES,
+                   'decor_strength': DECOR_STRENGTH_CHOICES}
 
         for key, default in DEFAULTS.items():
             if key not in data:
@@ -324,6 +401,13 @@ class Settings:
             # 版で保存されるのでそのまま残る。
             self.values['show_ctrl_boundaries'] = True
             self.values['ctrl_boundaries_defaults'] = CTRL_BOUNDARIES_DEFAULTS_VERSION
+        # 外見より前のファイル（`theme` が無い）は、ダークモードから配色を決める。
+        # あれば配色が勝つ（`dark_mode` は配色から決まる）。
+        if data.get('theme') not in THEME_CHOICES:
+            self.values['theme'] = 'dark' if self.values.get('dark_mode') else 'light'
+        theme = self.values['theme']
+        self.values['dark_mode'] = theme in DARK_THEMES
+        self.values['theme_dark' if theme in DARK_THEMES else 'theme_light'] = theme
 
 
 def _move_to_new_pos_defaults(values, data):

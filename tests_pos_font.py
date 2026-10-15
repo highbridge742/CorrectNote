@@ -1,5 +1,6 @@
 # CorrectNote — Copyright (C) 2026 Takahashi Yuu; GPL-3.0-or-later.
 # -*- coding: utf-8 -*-
+import gzip
 import json
 import unittest
 from unittest.mock import mock_open, patch
@@ -58,7 +59,8 @@ class PosFontTests(unittest.TestCase):
         def kind(fragment,start=0):
             i=text.index(fragment,start)
             return {m for m,a,z in runs if a<i+len(fragment) and z>i}
-        self.assertEqual(kind('Note'),{'英字'})
+        # An English word takes its part of speech (en_pos, 2026-10-14).
+        self.assertEqual(kind('Note'),{'名詞'})
         self.assertEqual(kind('file_name.txt'),{'英字'})
         self.assertEqual(kind('e.g.'),{'英字'})
         self.assertEqual(kind('＿ＡＢ．'),{'英字'})
@@ -72,6 +74,83 @@ class PosFontTests(unittest.TestCase):
         self.assertIn('英字',POS_CATEGORIES)
         self.assertEqual(normalize_multipliers({})['英字'],1.0)
         self.assertEqual(normalize_colors({'名詞':'#112233','英字':''})['英字'],'')
+
+    def test_english_words_take_their_part_of_speech(self):
+        # 2026-10-14 うにさん「英文の品詞判定」: English words use the rows of
+        # the dialog; unknown words (names, code) keep 英字.
+        from pos_font import _join_latin
+        def kinds(text):
+            return [(k,text[a:z].strip()) for k,a,z in _join_latin(text,[('名詞',0,len(text))])
+                    if text[a:z].strip()]
+        self.assertEqual(kinds('I can run to the big park quickly and read a good book.'),
+            [('名詞','I'),('助動詞','can'),('動詞','run'),('助詞','to'),('連体詞','the'),
+             ('形容詞','big'),('名詞','park'),('副詞','quickly'),('接続詞','and'),
+             ('動詞','read'),('連体詞','a'),('形容詞','good'),('名詞','book.')])
+        # The same word by its neighbours: noun after an article, verb after a pronoun.
+        self.assertEqual(kinds('The work is done. We work hard.')[:5],
+            [('連体詞','The'),('名詞','work'),('助動詞','is'),('動詞','done.'),('名詞','We')])
+        self.assertEqual(kinds('We work hard.')[1],('動詞','work'))
+        # Unknown words, and words with a period or underscore inside, stay 英字.
+        self.assertEqual(kinds('Tokyo GitHub e.g. file_name.txt'),
+            [('英字','Tokyo'),('英字','GitHub'),('英字','e.g.'),('英字','file_name.txt')])
+        # Number words are numerals (数詞), as Japanese numbers are (2026-10-14b).
+        self.assertEqual(kinds('I have two cats and twenty dogs.'),
+            [('名詞','I'),('動詞','have'),('数詞','two'),('名詞','cats'),('接続詞','and'),
+             ('数詞','twenty'),('名詞','dogs.')])
+        # Everyday words added from the review (train/traffic as nouns).
+        self.assertEqual(kinds('the train')[1],('名詞','train'))
+        self.assertEqual(kinds('the traffic')[1],('名詞','traffic'))
+        # Full-width letters are looked up as ASCII.
+        self.assertEqual(kinds('ｔｈｅ'),[('連体詞','ｔｈｅ')])
+
+    def test_everyday_english_words_and_contractions(self):
+        # 2026-10-15 うにさん「品詞ごとの判定は正しいですか」: ordinary words were
+        # その他英字 because the dictionary missed them. WordNet 3.0 fills them in
+        # (en_pos 2026-10-15a); names still stay 英字, and a contraction split at
+        # the apostrophe (don't, it's, o'clock) is looked up whole.
+        from pos_font import _join_latin
+        def kinds(text):
+            return [(k,text[a:z].strip()) for k,a,z in _join_latin(text,[('記号',0,len(text))])
+                    if text[a:z].strip()]
+        self.assertEqual(kinds('In general the history of this state is a simple story.'),
+            [('助詞','In'),('名詞','general'),('連体詞','the'),('名詞','history'),('助詞','of'),
+             ('連体詞','this'),('名詞','state'),('動詞','is'),('連体詞','a'),
+             ('形容詞','simple'),('名詞','story.')])
+        self.assertEqual(kinds("I don't think it's the state of the power."),
+            [('名詞','I'),('助動詞','don'),('記号',"'"),('助動詞','t'),('動詞','think'),
+             ('名詞','it'),('記号',"'"),('助動詞','s'),('連体詞','the'),('名詞','state'),
+             ('助詞','of'),('連体詞','the'),('名詞','power.')])
+        self.assertEqual(kinds("We’re home at ten o'clock."),
+            [('名詞','We'),('記号','’'),('助動詞','re'),('名詞','home'),('助詞','at'),
+             ('数詞','ten'),('副詞','o'),('記号',"'"),('副詞','clock.')])
+        # Names (capitalised only in WordNet) and Roman numerals stay 英字.
+        self.assertEqual(kinds('London ii'),[('英字','London'),('英字','ii')])
+        import en_pos
+        with open(en_pos._path(),'rb') as handle:
+            data=json.loads(gzip.decompress(handle.read()).decode('utf-8'))
+        self.assertIn('Princeton University',data['license'])
+        self.assertGreater(len(data['words']),60000)
+
+    def test_dialog_rows_name_the_english_parts_and_put_eiji_last(self):
+        # 2026-10-14 うにさん「英字を、その他英字として下へ移す。見出しに、
+        # 代名詞や前置詞、冠詞も書き加える」. Keys and tags keep their order.
+        from pos_font import POS_DIALOG_ROWS
+        labels=dict(POS_DIALOG_ROWS)
+        self.assertEqual(POS_DIALOG_ROWS[-1],('英字','その他英字'))
+        self.assertEqual(labels['名詞'],'名詞・代名詞')
+        self.assertEqual(labels['助詞'],'助詞・前置詞')
+        self.assertEqual(labels['連体詞'],'連体詞・冠詞')
+        self.assertEqual(sorted(labels),sorted(POS_CATEGORIES))
+        self.assertEqual(POS_CATEGORIES[3],'英字')
+
+    def test_english_dictionary_is_bundled_and_readable(self):
+        import en_pos
+        from bundle_manifest import NAMES
+        self.assertIn('en_pos.json.gz',[str(n) for n in NAMES])
+        self.assertTrue(en_pos.available())
+        words=en_pos.words()
+        self.assertGreater(len(words),30000)
+        self.assertEqual(words['the'],'D');self.assertIn('V',words['run'])
 
     def test_sahen_nouns_have_an_independent_display_bucket(self):
         text='勉強を開始する'

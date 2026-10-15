@@ -229,6 +229,13 @@ def observe_text(widget,on_edit=None,on_cursor=None,on_before_edit=None,track_ch
             widget._correctnote_replay_depth=depth
             replays.pop()
     def command(*args):
+        if args[:2] in (('edit','undo'),('edit','redo')):
+            # Steps that are not text edits (text_format: bold, underline...)
+            # take their turn in the same Ctrl+Z / Ctrl+Y history.
+            for hook in tuple(callbacks.get('undo_hooks',())):
+                if hook(args[1]):
+                    if callbacks['cursor'] is not None:callbacks['cursor']()
+                    return ''
         on_edit=callbacks['edit']
         mutation=(on_edit is not None and not getattr(widget,'_correctnote_display_depth',0) and args and (args[0] in ('insert','delete','replace')
                             or args[:2] in (('edit','undo'),('edit','redo'))))
@@ -292,6 +299,10 @@ def observe_text(widget,on_edit=None,on_cursor=None,on_before_edit=None,track_ch
             for changed in tuple(callbacks.get('changed',())):changed(args)
         if len(args)>1 and args[0] in ('xview','yview'):
             for viewed in tuple(callbacks.get('viewed',())):viewed()
+        if len(args)>1 and args[0]=='tag' and args[1] in ('add','remove','configure','raise','lower','delete'):
+            # Fonts and spacing may move rows without an edit or a scroll
+            # (emoji_color lays its labels again: 2026-10-15).
+            for tagged in tuple(callbacks.get('tagged',())):tagged()
         if args and ((len(args)>1 and args[0] in ('xview','yview')) or args[0]=='see'):
             # Synchronous, before Tk redraws the moved view at idle time.
             for scrolled in tuple(callbacks.get('scrolled',())):scrolled()
@@ -303,7 +314,14 @@ def observe_text(widget,on_edit=None,on_cursor=None,on_before_edit=None,track_ch
     from tkinter import TclError
     def forward(*args):
         try:
-            return (0,command(*args),())
+            # BackSpace/Delete next to an emoji must not remove only half of
+            # it (text_edit.pair_safe_delete); widened before the edit span
+            # is measured, so analysis sees the real edit.
+            from text_edit import pair_safe_delete
+            args,marks=pair_safe_delete(widget,original,args)
+            try:return (0,command(*args),())
+            finally:
+                if marks:widget.tk.call(original,'mark','unset',*marks)
         except TclError as error:
             options=widget.tk.call('dict','create','-code',1,'-level',0,
                 '-errorcode',widget.tk.getvar('::errorCode'),

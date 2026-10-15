@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Nonblocking quick-input correction, owned by the current widget and edit generation."""
+import keyboard_layout
 import traceback
 import math
 import time
@@ -90,7 +91,7 @@ def _cancel_idle_release(app):
 
 def queue_idle_prewarm(app,delay=1200):
     """Use quiet time for public resources; never replace a pending correction."""
-    if memory_usage.low(app):
+    if not memory_usage.retains(app, 'quick'):
         memory_usage.queue_release(app, 'quick')
         return
     widget=getattr(app,'_quick_text',None);worker=getattr(app,'_quick_worker',None)
@@ -100,7 +101,7 @@ def queue_idle_prewarm(app,delay=1200):
     def ready():
         if getattr(app,'_quick_prewarm_after_id',None)!=identifier:return
         app._quick_prewarm_after_id=None
-        if (memory_usage.low(app) or getattr(app,'_closing',False) or getattr(app,'_quick_text',None) is not widget
+        if (not memory_usage.retains(app, 'quick') or getattr(app,'_closing',False) or getattr(app,'_quick_text',None) is not widget
                 or getattr(app,'_quick_worker',None) is not worker
                 or not worker.process.is_alive()
                 or getattr(worker,'_quick_idle_prewarm_submitted',False) is True
@@ -121,7 +122,7 @@ def queue_idle_prewarm(app,delay=1200):
 
 
 def _prepare_composition(app):
-    if memory_usage.low(app):return
+    if not memory_usage.quick_prepare(app):return
     # Opening the quick window or its first IME composition gives the child
     # time to prepare public lexical evidence. No text is analysed.
     if getattr(app,'_quick_composition_prepared',False):return
@@ -150,7 +151,7 @@ def prepare(app):
 
 
 def schedule_prepare(app):
-    if memory_usage.low(app):return
+    if not memory_usage.quick_prepare(app):return
     widget=getattr(app,'_quick_text',None)
     if widget is None:return
     _cancel_idle_release(app)
@@ -205,6 +206,7 @@ def start(app):
                        for record,row in app._autofix_live_records(w=app._quick_text)}
             lines=scope.source.split('\n');doc=input_work.quick_document(app,scope.source)
             task=dict(kind='quick',lines=lines,input_method=(app.settings.get('input_method') or 'kana'),
+                      keyboard=keyboard_layout.spec(app.settings),
                       attested=tuple(getattr(app,'_attested_surfaces',{}) or ()),
                       readings={i:doc.row_readings(i,line) for i,line in enumerate(lines)},
                       calculations={i:doc.row_calculations(i,line)+displayed.get(i+1,())
@@ -257,7 +259,7 @@ def start(app):
 
 def close(app,keep_idle_worker=False):
     memory_usage.cancel_release(app, 'quick')
-    keep_idle_worker = keep_idle_worker and not memory_usage.low(app)
+    keep_idle_worker = keep_idle_worker and memory_usage.retains(app, 'quick')
     input_work.close_quick_readings(app)
     _cancel_idle_release(app)
     for name in ('_quick_after_id','_quick_prepare_after_id','_quick_prewarm_after_id'):

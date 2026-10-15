@@ -71,11 +71,21 @@ ITEMS = (
     Item('seed_japanese_index.pickle.gz', None,
          '元費用表と同じ派生索引がなく、従来の表解析へ戻る',
          False),
+    # メモリ使用量「低」の補正の子が読む、費用表の小さな形（2026-10-14・
+    # compact_tables.py。生成は `python compact_tables.py build`）。
+    Item('seed_japanese_compact.bin.gz', None,
+         'メモリ使用量「低」でも費用表を元の形で読み、子のメモリが約150MB増える',
+         False),
     Item('seed_japanese_compounds.json.gz', None,
          '元語表と同じ派生表がなく、複合語の分割を再集計する',
          False),
     Item('nominal_public_indices.json.gz', 'public_nominal_cache',
          '公開名詞索引の派生表がなく、初回の構築が長くなる',
+         False),
+    # 英文の品詞（2026-10-14・en_pos.py。生成は tools_local/en_pos/build_en_pos.py）。
+    # 補正側（英文の空白の補正）も同じ表を読む。
+    Item('en_pos.json.gz', 'en_pos',
+         '英単語の品詞が分からず、英単語がすべて「英字」の大きさと色で出る',
          False),
     Item('NOTICE_sudachi.txt', None,
          'SudachiDict（Apache-2.0）の表示が配布物から落ちる',

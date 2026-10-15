@@ -328,6 +328,9 @@ def _engine_source_stamp(app_dir):
                  # 触らない語を広げたら `callout` の扱いが変わった）。
                  # 中身だけ差し替えたときに気付けるよう、ここに置く。
                  'seed_english.py', 'seed_katakana.py',
+                 # 英文のスペースの入れ忘れ（項目48-ES）と、その名簿。
+                 # キーボードの配列の表（項目48-KB）
+                 'en_space.py', 'seed_english_names.py', 'keyboard_layout.py',
                  # **1語として在るかの表**（項目48-FC）。
                  # 差し替えると補正の答えが変わるので見張る。
                  'seed_japanese.py', 'seed_japanese.txt.gz'):
@@ -366,9 +369,19 @@ def _morphology_backend():
         return 'fallback'
 
 
+def _keyboard_stamp(keyboard):
+    """キーボードの配列と形（項目48-KB）。隣接キーが変わるので控えも別。"""
+    try:
+        import keyboard_layout
+        return keyboard_layout.spec_text(keyboard)
+    except Exception:
+        return 'qwerty_jis/standard'
+
+
 def build_fingerprint(app_dir, app_version, input_method, recent_words,
                       store=None, context_vec=None, dict_index=None,
-                      decisions=None, choices=None, ime_readings=None):
+                      decisions=None, choices=None, ime_readings=None,
+                      keyboard=None):
     """
     「この控えを作ったときの状況」をひとまとめにする。
 
@@ -384,6 +397,7 @@ def build_fingerprint(app_dir, app_version, input_method, recent_words,
         'app_version': app_version,
         'engine_sources': _engine_source_stamp(app_dir),
         'input_method': input_method,
+        'keyboard': _keyboard_stamp(keyboard),
         'morphology_backend': _morphology_backend(),
         'vocab': _vocab_stamp(store),
         'context_vec': _context_vec_stamp(context_vec),

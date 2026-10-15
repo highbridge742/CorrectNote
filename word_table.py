@@ -56,10 +56,25 @@ def _cached(path,modified,size):
     check_current_request()
     return value
 
+@lru_cache(maxsize=2)
+def _compact_cached(path,modified,size):
+    import compact_tables
+    return compact_tables.words_from_seed(path)
+
 def read_word_sets(path):
     from analysis_context import check_current_request
     check_current_request()
     path=os.path.normcase(os.path.abspath(path))
+    # メモリ使用量「低」: 同じ語の小さな形（compact_tables）。形が違えば従来どおり。
+    import compact_tables
+    if compact_tables.enabled():
+        try:info=os.stat(path)
+        except OSError:info=None
+        if info is not None:
+            value=_compact_cached(path,info.st_mtime_ns,info.st_size)
+            if value is not None:
+                check_current_request()
+                return value
     try:info=os.stat(path)
     except OSError:value=_read(path)
     else:value=_cached(path,info.st_mtime_ns,info.st_size)
@@ -99,6 +114,17 @@ def read_compound_tables(source_path, index_path=None):
         check_current_request()
         if (not isinstance(saved,dict) or saved.get('schema')!=1
                 or saved.get('source_sha256')!=_COMPOUND_SOURCE_SHA256):return publish(None)
+        import compact_tables
+        if compact_tables.enabled():
+            # メモリ使用量「低」（2026-10-15）: 割れた組 50,944 と前後の回数を小さな形で
+            # （約 16MB → 約 3MB）。`(a, b) in pairs`・`right.get(word, 0)`・len は同じ答え。
+            try:
+                result=(compact_tables.CompactCosts.of(saved['left']),
+                        compact_tables.CompactCosts.of(saved['right']),
+                        compact_tables.CompactTuples.of(map(tuple,saved['pairs'])))
+                return publish(result)
+            except (ValueError,TypeError):
+                pass
         result=Counter(saved['left']),Counter(saved['right']),set(map(tuple,saved['pairs']))
         return publish(result)
     except (OSError,EOFError,ValueError,TypeError,KeyError):

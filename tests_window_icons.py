@@ -87,5 +87,34 @@ class StartupIconWaitTests(unittest.TestCase):
         hwnd=self.a._window_hwnd_win32(self.root)
         self.assertTrue(u.SendMessageW(hwnd,127,0,0))   # WM_GETICON ICON_SMALL
         self.assertTrue(u.SendMessageW(hwnd,127,1,0))   # ICON_BIG
+    def test_handle_work_waits_for_the_first_map(self):
+        # 2026-10-14: the drop setup (and the word book) took the HWND inside
+        # __init__, which showed the window early while it could not answer
+        # the taskbar. They now run after the window has appeared.
+        calls=[]
+        self.root.bind('<Map>',self.a._queue_window_icons,add='+')
+        self.a._run_after_first_map(lambda:calls.append(self.root.winfo_ismapped()))
+        self.assertEqual(calls,[])
+        # An idle pass before the window is mapped keeps waiting.
+        self.a._queue_window_icons()
+        self.root.withdraw();self.root.update_idletasks()
+        self.assertEqual(calls,[]);self.assertTrue(self.a._icons_wait_for_map)
+        self.root.deiconify()
+        for _ in range(5):self.root.update()
+        self.assertEqual(calls,[1]);self.assertFalse(self.a._icons_wait_for_map)
+        # Once shown, work runs at once.
+        self.a._run_after_first_map(lambda:calls.append('now'))
+        self.assertEqual(calls,[1,'now'])
+    def test_word_book_opens_once_after_the_root_map(self):
+        from types import SimpleNamespace as E
+        opened=[]
+        self.a._word_book=E(restore=lambda:opened.append(1));self.a._word_book_restore_pending=True
+        other=tk.Toplevel(self.root)
+        self.a._restore_word_book_after_map(E(widget=other))
+        self.root.update();self.assertEqual(opened,[])
+        self.a._restore_word_book_after_map(E(widget=self.root))
+        self.a._restore_word_book_after_map(E(widget=self.root))
+        self.root.update();self.assertEqual(opened,[1])
+        self.a._word_book=None;other.destroy();other=None
 
 if __name__=='__main__':unittest.main()

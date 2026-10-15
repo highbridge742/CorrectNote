@@ -91,6 +91,14 @@ def _save(app,owner,text,results,prepared,units,suspect,dependencies,readings,ca
         suspect={k:v for k,v in suspect.items() if k[:2] in pairs})
     # This cache has one entry per open tab. _registry drops closed tabs;
     # evicting a live owner makes an unchanged tab run correction again.
+    # Memory usage low (2026-10-15) keeps only the open tab's entry: the
+    # other tabs run correction again when visited (same answers, slower;
+    # about 40MB for five other long tabs in the main process).
+    import memory_usage
+    limit=memory_usage.completed_tabs(app)
+    if limit is not None:
+        for other in [name for name in cache if name!=owner][:max(0,len(cache)-limit)]:
+            cache.pop(other,None)
     return True
 
 

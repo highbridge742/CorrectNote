@@ -2,7 +2,9 @@
 # CorrectNote — Copyright (C) 2026 Takahashi Yuu; GPL-3.0-or-later.
 """Bold, italic, underline and strikethrough as presentation tags.
 
-The text itself, the analysis and the undo history never change. The styles
+The text itself and the analysis never change. Style changes on a selection
+take their turn in Ctrl+Z / Ctrl+Y next to the text edits (2026-10-14
+うにさん「ボールドや下線などの編集を履歴として持つ」). The styles
 are Tk tags on the input pane and are kept per tab in the session (rows and
 Python character columns of the source text), not in the saved text file.
 """
@@ -124,6 +126,9 @@ class TextFormat:
         self._font_signature = None
         self._font_tags_used = False
         self.listeners = []
+        # (text when changed, styles before, styles after), newest last.
+        self.history = []
+        self.redo = []
         widget.tag_configure(STYLE_TAGS['underline'], underline=1)
         widget.tag_configure(STYLE_TAGS['overstrike'], overstrike=1)
         if not editable:
@@ -135,6 +140,7 @@ class TextFormat:
         from analysis_work import observe_text
         observe_text(widget)
         widget._correctnote_observers.setdefault('changed', []).append(self.changed)
+        widget._correctnote_observers.setdefault('undo_hooks', []).append(self.undo_step)
         for key, (sequences) in (
                 ('bold', ('<Control-b>', '<Control-B>', '<Control-Key-2>')),
                 ('italic', ('<Control-i>', '<Control-I>', '<Control-Key-3>')),
@@ -270,11 +276,13 @@ class TextFormat:
         selection = self._selection()
         if selection is not None:
             start, end = selection
+            before = self.capture()
             if self._covers(tag, start, end):
                 w.tag_remove(tag, start, end)
             else:
                 w.tag_add(tag, start, end)
             self.paint(start, end)
+            self._record(before)
         else:
             self.pending[key] = not self.active(key)
             w.mark_set('fmt_typing_anchor', 'insert')
@@ -282,6 +290,34 @@ class TextFormat:
         self.refresh_buttons()
         self._notify()
         return 'break'
+
+    # --- undo / redo -------------------------------------------------
+    HISTORY_LIMIT = 200
+
+    def _text(self):
+        return self.widget.get('1.0', 'end-1c')
+
+    def _record(self, before):
+        after = self.capture()
+        if after == before:
+            return
+        self.history.append((self._text(), before, after))
+        del self.history[:-self.HISTORY_LIMIT]
+        self.redo.clear()
+
+    def undo_step(self, kind):
+        """Take one Ctrl+Z / Ctrl+Y step if a style change is next in line.
+
+        A style change is next when the text is as it was when the change was
+        made: text edits after it are undone first, those before it after."""
+        stack, other = (self.history, self.redo) if kind == 'undo' else (self.redo, self.history)
+        if not stack or stack[-1][0] != self._text():
+            return False
+        entry = stack.pop()
+        self.restore(entry[1] if kind == 'undo' else entry[2])
+        other.append(entry)
+        self._schedule_save()
+        return True
 
     def shortcut(self, event, key):
         self.toggle(key)
@@ -296,6 +332,10 @@ class TextFormat:
             self.pending.clear()
 
     def changed(self, args=None):
+        if (self.redo and args and args[0] in ('insert', 'delete', 'replace')
+                and not getattr(self.widget, '_correctnote_replay_depth', 0)):
+            # A new edit ends what can be redone, as for text.
+            self.redo.clear()
         if not self.pending or not args or args[0] not in ('insert', 'replace'):
             return
         w = self.widget

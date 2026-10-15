@@ -23,7 +23,7 @@ class ToolbarModelTests(unittest.TestCase):
     def test_saved_visibility_and_order_survive_reopen_without_changing_other_preferences(self):
         with tempfile.TemporaryDirectory() as directory:
             path=str(Path(directory)/'synthetic-settings.json')
-            settings=Settings(path);settings.set('dark_mode',True)
+            settings=Settings(path);settings.set('theme','dark')  # dark_mode は配色から決まる（外見）
             settings.set('toolbar_order',['last','first']);settings.set('toolbar_hidden',['bracket_single'])
             settings.save();loaded=Settings(path)
             self.assertEqual(loaded.get('toolbar_order'),['last','first'])

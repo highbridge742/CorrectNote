@@ -7,6 +7,7 @@ work. Results carry request ids and are accepted by the UI's document checks.
 """
 import multiprocessing as mp
 import sys
+import keyboard_layout
 import queue
 import traceback
 from collections import defaultdict
@@ -19,7 +20,9 @@ def state_key(app):
             getattr(app,'_analysis_state_revision',0), id(getattr(app,'dict_index',None)),
             bool(getattr(getattr(app,'dict_index',None),'ready',False)),
             id(getattr(app,'context_vec',None)),
-            (app.settings.get('input_method') or 'kana'),
+            # 入力方式とキーボードの配列・形（項目48-KB）は1つの要素に
+            # まとめる（same_model_state は要素数 10 を見る）
+            ((app.settings.get('input_method') or 'kana'),keyboard_layout.spec(app.settings)),
             tuple(app.recent_words.words()) if getattr(app,'recent_words',None) is not None else (),
             (id(getattr(app,'ime_readings',None)),
              app.ime_readings.revision() if getattr(app,'ime_readings',None) is not None else 0))
@@ -203,6 +206,7 @@ class Runtime:
         from vocabulary import find_known_readings_flex
         from ime_session import resource_scope
         from ime_colloquial import source_tokenizer
+        keyboard_layout.apply_spec(task.get('keyboard'))   # 変わらなければ無料
         from morphology import tokenization_scope
         from quote_calculator import apply_to_result
         from units import build_line_units,build_suspect_units
@@ -328,6 +332,7 @@ class Runtime:
             from correction_entry import correct_line
             from analysis_context import Reads
             tracked=Reads(task['context'])
+            keyboard_layout.apply_spec(task.get('keyboard'))   # 配列・形（48-KB）
             self._ime_queries={}
             try:
                 result=correct_line(task['line'],self.store,context_vocab=tracked,

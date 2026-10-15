@@ -611,11 +611,13 @@ def candidate_pos_line(surface, tokenize_fn):
     return name
 
 
-def pos_lines(text, tokenize_fn=None, store=None, pos_hint=None,
-              infl_hint='', atomic_hint=False, known_hint=True,
-              prev_text='', next_text='', dict_index=None, source_context=None):
+def _pos_lines(text, tokenize_fn=None, store=None, pos_hint=None,
+               infl_hint='', atomic_hint=False, known_hint=True,
+               prev_text='', next_text='', dict_index=None,
+               source_context=None):
     """
     **選んだ範囲の品詞**（「－ 品詞判定 －」の中身）を行の一覧で返す。
+    英字の語の言い直しは外側の `pos_lines` が受け持つ。
 
     語が2つ以上に割れたときは**1語ずつ1行**にする。**割れたこと
     自体が分析の材料**なので、代表の1つに丸めない
@@ -835,6 +837,151 @@ def pos_lines(text, tokenize_fn=None, store=None, pos_hint=None,
         except Exception:
             pass
     return lines
+
+
+# ============================================================
+# 英語の品詞（2026-10-15・うにさん「右クリックの品詞判定に、
+# 判定した品詞を表示するようにしてください」）
+# ============================================================
+#
+# 英字の語は janome が知らないので、上の判定は
+# 「英字（解析は品詞を言えない）」としか言えなかった。だが画面の
+# 品詞ごとの色は en_pos で**英語の品詞**を付けている（名詞・動詞…）。
+# 右クリックが色と違うことを言うと、どちらを信じればよいか
+# 分からない。**色と同じ判定を1か所（`en_pos.judge`）で引き**、
+# その結果を言う。文脈（前後の語）も色と同じく**行**で見る——
+# 単位が `analysis_context`（行の字・始まり・終わり）を持っていれば
+# それを、無ければ隣の単位の字だけで見る。
+
+def _english_spans(text, prev_text='', next_text='', source_context=None):
+    """`text` に掛かる英字の並びごとに `(始まり, 終わり, 並び, 判定)`。
+
+    位置は `text` の中の位置。判定は `en_pos.judge` の1組。
+    英字が無ければ []。"""
+    try:
+        from pos_font import _LATIN
+        import en_pos
+    except Exception:
+        return []
+    line, offset = None, 0
+    if source_context is not None and len(source_context) == 3:
+        source, start, end = source_context
+        if (isinstance(source, str) and isinstance(start, int)
+                and isinstance(end, int) and source[start:end] == text):
+            line, offset = source, start
+    if line is None:
+        prev_text, next_text = prev_text or '', next_text or ''
+        line, offset = prev_text + text + next_text, len(prev_text)
+    spans = [m.span() for m in _LATIN.finditer(line)]
+    stop = offset + len(text)
+    # 範囲に英字が無ければ辞書を引かない（日本語の語の右クリックで
+    # 英語の品詞辞書を読み込まない）
+    if not any(a < stop and z > offset for a, z in spans):
+        return []
+    try:
+        judged = en_pos.judge(line, spans)
+    except Exception:
+        judged = [('', '', '')] * len(spans)
+    found = []
+    for (a, z), info in zip(spans, judged):
+        if z <= offset or a >= stop:
+            continue
+        found.append((max(a, offset) - offset, min(z, stop) - offset,
+                      line[a:z], info))
+    return found
+
+
+def english_pos_name(written, info):
+    """英字の並び1つの判定を、品詞判定の1行の言い方にする。
+
+    written: 行の中の英字の並び（`state`・`book.`・`file_name`）
+    info: `en_pos.judge` の `(符号, 選んだ符号, 短縮形まるごと)`
+    """
+    try:
+        import en_pos
+    except Exception:
+        return '英字'
+    word = written.strip('._．＿')
+    if not word.isalpha():
+        return '英字（. や _ を含む並び——英語の語としては見ない）'
+    codes, code, whole = (tuple(info) + ('', '', ''))[:3]
+    if not code:
+        if not en_pos.available():
+            return '英字（英語の品詞辞書を読めない）'
+        return '英字（英語の品詞辞書に無い語）'
+    name = en_pos.NAMES.get(code, en_pos.UNKNOWN)
+    if code == 'D' and en_pos._key(word) in en_pos.ARTICLES:
+        name = '冠詞'
+    notes = ['英語']
+    if whole:
+        notes.append(f'{whole} の一部')
+    row = en_pos.CATEGORY.get(code, en_pos.UNKNOWN)
+    if row != name:
+        notes.append(f'色は{row}の行')
+    others = []
+    for other in codes:
+        label = en_pos.NAMES.get(other, '')
+        if other != code and label and label not in others and label != name:
+            others.append(label)
+    if others:
+        notes.append('ほかの読み：' + '・'.join(others))
+    return f'{name}（{"。".join(notes)}）'
+
+
+def pos_lines(text, tokenize_fn=None, store=None, pos_hint=None,
+              infl_hint='', atomic_hint=False, known_hint=True,
+              prev_text='', next_text='', dict_index=None, source_context=None):
+    """
+    **選んだ範囲の品詞**（「－ 品詞判定 －」の中身）を行の一覧で返す
+    （中身は `_pos_lines`）。
+
+    **英字の語は、画面の色と同じ英語の品詞を言う**（2026-10-15）。
+    範囲がまるごと英字の並び1つなら、その1行だけ。日本語と混ざった
+    範囲や、英字を2語以上含む範囲は、語ごとの行（`state ＝ …`）の
+    英字の行だけを言い直す。
+    """
+    text = text or ''
+    english = _english_spans(text, prev_text, next_text, source_context)
+    if english:
+        from pos_font import _LATIN
+        if _LATIN.fullmatch(text) and len(english) == 1:
+            return [english_pos_name(english[0][2], english[0][3])]
+    lines = _pos_lines(text, tokenize_fn, store, pos_hint, infl_hint,
+                       atomic_hint, known_hint, prev_text, next_text,
+                       dict_index, source_context)
+    if not english:
+        return lines
+    return _relabel_english(text, lines, english)
+
+
+def _relabel_english(text, lines, english):
+    """`surface ＝ 品詞` の行のうち、英字の語の行を英語の品詞で言い直す。
+
+    行の語は範囲の頭から順に並んでいるので、`text` の中を前から
+    探して位置を合わせる（同じ語が2回出ても取り違えない）。"""
+    from pos_font import _LATIN
+    result = []
+    cursor = 0
+    for line in lines:
+        surface, separator, _label = line.partition(' ＝ ')
+        if not separator or not surface:
+            result.append(line)
+            continue
+        at = text.find(surface, cursor)
+        if at < 0:
+            result.append(line)
+            continue
+        cursor = at + len(surface)
+        if not _LATIN.fullmatch(surface):
+            result.append(line)
+            continue
+        hit = next((item for item in english
+                    if item[0] <= at < item[1]), None)
+        if hit is None:
+            result.append(line)
+            continue
+        result.append(f'{surface} ＝ {english_pos_name(hit[2], hit[3])}')
+    return result
 
 
 def pos_label(text, tokenize_fn=None):

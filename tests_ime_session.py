@@ -109,6 +109,39 @@ assert not native.available
                 release.assert_not_called();self.assertTrue(obj._com)
             obj._owner=None;obj._com=False
 
+    def test_enabled_faulthandler_reports_only_the_faulting_thread_during_com(self):
+        # 2026-10-15: with all_threads=True, faulthandler's Windows handler
+        # walked running Python threads from an RPC thread while COM handled
+        # its own RPC error during Release, and the walk itself crashed.
+        import faulthandler,sys
+        for module,kind in ((L,L.JapaneseIME),(S,S.SearchCandidates)):
+            with patch.object(module,'_faulting_thread_reports_only') as guard:
+                with kind():pass
+                guard.assert_called_once_with()
+        with patch.object(sys,'platform','win32'), \
+             patch.object(faulthandler,'is_enabled',return_value=True), \
+             patch.object(faulthandler,'enable') as enable, \
+             patch.object(faulthandler,'disable') as disable:
+            S._faulting_thread_reports_only()
+            enable.assert_called_once_with(file=sys.stderr,all_threads=False)
+            disable.assert_not_called()
+            enable.reset_mock();enable.side_effect=[ValueError('no fileno'),None]
+            S._faulting_thread_reports_only()
+            self.assertEqual(enable.call_args_list[-1].kwargs,
+                             dict(file=sys.__stderr__,all_threads=False))
+            enable.reset_mock();enable.side_effect=ValueError('no stream')
+            S._faulting_thread_reports_only()
+            disable.assert_called_once_with()
+        # Ordinary runs (faulthandler off) and other platforms are untouched.
+        with patch.object(sys,'platform','win32'), \
+             patch.object(faulthandler,'is_enabled',return_value=False), \
+             patch.object(faulthandler,'enable') as enable:
+            S._faulting_thread_reports_only();enable.assert_not_called()
+        with patch.object(sys,'platform','linux'), \
+             patch.object(faulthandler,'is_enabled',return_value=True), \
+             patch.object(faulthandler,'enable') as enable:
+            S._faulting_thread_reports_only();enable.assert_not_called()
+
     def test_engine_scope_survives_nested_entry_and_final_contract(self):
         import corrector as engine
         visited=[]

@@ -6156,12 +6156,15 @@ def key_repairs(reading, before='', after=''):
                 key+keys[i+1], keys[i+1]+key, 1.0)
         # A missed voicing key is one physical insertion, not an adjacent
         # replacement of the base kana or an invented Shift press.
-        if k.mark_slip_enabled() and key not in '゛゜' and (i+1==len(keys) or keys[i+1] not in '゛゜'):
+        if (k.mark_slip_enabled() and k.marks_are_keys() and key not in '゛゜'
+                and (i+1==len(keys) or keys[i+1] not in '゛゜')):
             for mark in '゛゜':
                 if len(_render((key,mark)))==1:
                     add(keys[:i+1]+(mark,)+keys[i+1:],'omission',i+1,'',mark,k.MISSING_KEY_COST)
-        if key in k.SHIFT_KANA_PAIR:
-            other = k.SHIFT_KANA_PAIR[key]
+        # 同じキーの別の面（JIS: Shift の小書き・を。親指シフト: 同手と
+        # クロスの2つ、濁音もここ・項目48-KB）。JIS では SHIFT_KANA_PAIR の
+        # 相方1つと同じ中身。
+        for other in k.same_key_kana_alternatives(key):
             add(keys[:i]+(other,)+keys[i+1:], 'shift', i, key, other, 0.4)
     # 48-DL / 2026-10-12: 濁点のかな（じ＝し＋゛）は2打でも、並べ違いは字の単位で
     # 起きる（そじう＝そうじ）。打鍵1つずつの入れ替えでは届かないので、隣り合う

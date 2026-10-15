@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Tk-side scheduling for the isolated engine. Only completed values cross back."""
+import keyboard_layout
 import traceback
 import analysis_context
 import memory_usage
@@ -7,10 +8,18 @@ import analysis_work_app as input_work
 from analysis_worker import Worker,WorkerExitedError,snapshot,state_key
 
 
-def _worker_fields(background):
-    if background:
+def _worker_fields(background,app=None):
+    if background and not (app is not None and memory_usage.shares_worker(app)):
         return '_prefetch_worker', '_prefetch_worker_state', '_async_background_request'
+    if background:
+        # Mid (2026-10-15): the other tabs use the open tab's child while it is
+        # idle, so only the request slot differs; the snapshot state is shared.
+        return '_correction_worker', '_worker_state', '_async_background_request'
     return '_correction_worker', '_worker_state', '_async_request'
+
+
+def _shared(background,worker_name):
+    return background and worker_name=='_correction_worker'
 
 
 def prewarm(app):
@@ -19,7 +28,7 @@ def prewarm(app):
     Main-thread stores can still be warming. The first real request supplies
     their completed state normally; this never reads the editor or user files.
     """
-    if memory_usage.low(app) or getattr(app,'_closing',False) or getattr(app,'_correction_worker',None) is not None:
+    if not memory_usage.prewarm(app) or getattr(app,'_closing',False) or getattr(app,'_correction_worker',None) is not None:
         return
     worker=None
     try:
@@ -34,7 +43,7 @@ def prewarm(app):
 
 def queue_idle_prewarm(app, delay=1200):
     """One optional retry after the document settles, never ahead of new input."""
-    if memory_usage.low(app):
+    if not memory_usage.prewarm(app):
         memory_usage.queue_release(app, 'foreground')
         return
     if getattr(app, '_closing', False) or getattr(app, '_idle_prewarm_job', None) is not None:
@@ -45,7 +54,7 @@ def queue_idle_prewarm(app, delay=1200):
     def start():
         app._idle_prewarm_job = None
         worker = getattr(app, '_correction_worker', None)
-        if (memory_usage.low(app) or getattr(app, '_closing', False) or app._foreground_analysis_pending()
+        if (not memory_usage.prewarm(app) or getattr(app, '_closing', False) or app._foreground_analysis_pending()
                 or getattr(app, '_async_request', None) is not None
                 or getattr(app, '_worker_state', None) is None
                 or worker is None or not worker.process.is_alive()
@@ -61,7 +70,12 @@ def queue_idle_prewarm(app, delay=1200):
 
 def _request(app, task, scope, background=False):
     if not background:memory_usage.cancel_release(app, 'foreground')
-    worker_name,state_name,request_name=_worker_fields(background)
+    worker_name,state_name,request_name=_worker_fields(background,app)
+    if _shared(background,worker_name) and memory_usage.foreground_busy(app):
+        # The open tab owns the one child (mid); a background request now
+        # would supersede its work. The background step asks again when the
+        # open tab is idle.
+        return None
     worker=getattr(app,worker_name,None)
     if worker is not None and not worker.process.is_alive():
         worker.close();worker=None;setattr(app,state_name,None)
@@ -78,11 +92,15 @@ def _request(app, task, scope, background=False):
 
 def _cancel_request(app,background):
     """Stop only a request the UI has already decided not to consume."""
-    worker_name,_,request_name=_worker_fields(background)
+    worker_name,_,request_name=_worker_fields(background,app)
     pending=getattr(app,request_name,None)
     setattr(app,request_name,None)
     worker=getattr(app,worker_name,None)
     if pending is None or worker is None or getattr(worker,'closed',False) is True:return
+    # A shared child (mid) runs only its newest request. A background request
+    # that the open tab has already superseded must not be cancelled: the
+    # cancel would interrupt the newer, foreground work instead.
+    if _shared(background,worker_name) and pending[1]!=getattr(worker,'serial',pending[1]):return
     try:
         if worker.process.is_alive():worker.submit(dict(kind='cancel'))
     except Exception:
@@ -100,10 +118,17 @@ def cancel_foreground_request(app):
 
 
 def _poll(app, scope, background=False):
-    worker_name,_,request_name=_worker_fields(background)
+    worker_name,_,request_name=_worker_fields(background,app)
     pending=getattr(app,request_name,None)
     if not pending or pending[0]!=scope:return False,None
-    result=getattr(app,worker_name).poll(pending[1])
+    worker=getattr(app,worker_name,None)
+    if worker is None:
+        setattr(app,request_name,None);return False,None
+    if _shared(background,worker_name) and pending[1]!=getattr(worker,'serial',pending[1]):
+        # Superseded by the open tab's newer request on the one child (mid):
+        # no answer will come for this id. Ask again when the child is idle.
+        setattr(app,request_name,None);return False,None
+    result=worker.poll(pending[1])
     if result is not None:
         setattr(app,request_name,None)
         if not background:memory_usage.queue_release(app, 'foreground')
@@ -137,7 +162,7 @@ def cached_context(app, text):
 def _save_context(app, text, value):
     cache=getattr(app,'_async_contexts',{})
     cache[(state_key(app),text.rstrip('\n'))]=value
-    while len(cache)>4:cache.pop(next(iter(cache)))
+    while len(cache)>memory_usage.context_cache_size(app):cache.pop(next(iter(cache)))
     app._async_contexts=cache
 
 
@@ -239,6 +264,7 @@ def line_step(app,count):
             if not present:
                 task=dict(kind='units' if units_only else 'line',line=lines[i],result=res,
                     context=app._analyze_ctx,input_method=(app.settings.get('input_method') or 'kana'),
+                    keyboard=keyboard_layout.spec(app.settings),
                     nearby=() if units_only else app._nearby_words_for(i),
                     lines=lines if units_only else None,
                     recent=app.recent_words.words() if getattr(app,'recent_words',None) is not None else (),
@@ -305,6 +331,7 @@ def background_step(app,st):
             nearby=build_nearby_words(len(lines),i,lambda k:words.get(lines[k],[]) if 0<=k<len(lines) else [])
             _request(app,dict(kind='units' if units_only else 'line',line=lines[i],result=st['results'][i],
                 context=st['ctx'],input_method=(app.settings.get('input_method') or 'kana'),
+                keyboard=keyboard_layout.spec(app.settings),
                 nearby=nearby,attested=st['attested'],
                 recent=app.recent_words.words() if getattr(app,'recent_words',None) is not None else (),
                 readings=_background_readings(st,i),calculations=_background_readings(st,i,'calculations')),scope,background=True)
@@ -327,7 +354,7 @@ def background_step(app,st):
 
 def close(app,keep_prewarmed=False):
     memory_usage.cancel_releases(app)
-    keep_prewarmed = keep_prewarmed and not memory_usage.low(app)
+    keep_prewarmed = keep_prewarmed and memory_usage.retains(app, 'foreground')
     job = getattr(app, '_idle_prewarm_job', None)
     if job is not None:
         app.root.after_cancel(job)
@@ -335,7 +362,7 @@ def close(app,keep_prewarmed=False):
 
     import quick_analysis
     quick_analysis.close(app)
-    for worker_name,state_name,request_name in (_worker_fields(False),_worker_fields(True)):
+    for worker_name,state_name,request_name in (_worker_fields(False),_worker_fields(True),_worker_fields(True,app)):
         worker=getattr(app,worker_name,None)
         # Initial dictionary import changes stores in the parent. A worker
         # with no snapshot or document request can finish its public-table

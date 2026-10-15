@@ -62,8 +62,36 @@ class TextFormatTests(unittest.TestCase):
             self.assertNotIn(STYLE_TAGS[key], self.names('1.0+1c'))
         self.assertNotIn(font_tag(None, 'bi'), self.names('1.0+1c'))
         self.assertEqual(w.get('1.0', 'end-1c'), text)
+        # The eight style changes are now Ctrl+Z steps of their own (2026-10-14
+        # うにさん「ボールドや下線などの編集を履歴として持つ」); the text never changes.
+        for key in reversed(('bold', 'italic', 'underline', 'overstrike')):
+            w.edit_undo()
+            self.assertIn(STYLE_TAGS[key], self.names('1.0+1c'))
+        for key in reversed(('bold', 'italic', 'underline', 'overstrike')):
+            w.edit_undo()
+            self.assertNotIn(STYLE_TAGS[key], self.names('1.0+1c'))
+        self.assertEqual(w.get('1.0', 'end-1c'), text)
         with self.assertRaises(tk.TclError):
             w.edit_undo()
+        self.assertEqual(self.errors, [])
+
+    def test_undo_and_redo_take_style_changes_in_turn_with_typing(self):
+        w = self.w
+        text = w.get('1.0', 'end-1c')
+        w.edit_separator()
+        w.tag_add('sel', '1.0', '1.0+2c'); self.f.toggle('bold'); w.tag_remove('sel', '1.0', 'end')
+        w.insert('end', 'XY'); w.edit_separator()
+        bold = lambda: STYLE_TAGS['bold'] in self.names('1.0')
+        w.edit_undo(); self.assertEqual(w.get('1.0', 'end-1c'), text); self.assertTrue(bold())
+        w.edit_undo(); self.assertEqual(w.get('1.0', 'end-1c'), text); self.assertFalse(bold())
+        w.edit_redo(); self.assertTrue(bold()); self.assertEqual(w.get('1.0', 'end-1c'), text)
+        w.edit_redo(); self.assertEqual(w.get('1.0', 'end-1c'), text + 'XY'); self.assertTrue(bold())
+        # A new edit after an undone style ends its redo, as for text.
+        w.edit_undo(); w.edit_undo(); self.assertFalse(bold())
+        w.insert('end', 'Z')
+        with self.assertRaises(tk.TclError):
+            w.edit_redo()
+        self.assertFalse(bold())
         self.assertEqual(self.errors, [])
 
     def test_partly_bold_selection_becomes_all_bold(self):

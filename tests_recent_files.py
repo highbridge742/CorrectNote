@@ -20,7 +20,7 @@ class RecentFilesModelTests(unittest.TestCase):
 
     def test_latest_success_first_and_path_only_settings_roundtrip(self):
         with tempfile.TemporaryDirectory(prefix='correctnote-recent-') as folder:
-            p=str(Path(folder)/'generated-settings.json');s=Settings(p);s.set('dark_mode',True)
+            p=str(Path(folder)/'generated-settings.json');s=Settings(p);s.set('theme','dark')  # dark_mode は配色から決まる（外見）
             a,b,c=[str(Path(folder)/(name+'.txt')) for name in 'abc']
             remember(s,[a,b]);self.assertEqual(s.get('recent_files'),[b,a])
             remember(s,[c,b]);self.assertEqual(s.get('recent_files'),[b,c,a])

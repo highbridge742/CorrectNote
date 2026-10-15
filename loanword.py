@@ -1454,6 +1454,13 @@ def learn_english_words(text, store, category='英語'):
                 continue
         except Exception:
             pass
+        # スペースの入れ忘れ（Thisisa）も覚えない（項目48-ES）
+        try:
+            import en_space
+            if en_space.would_split(word, store):
+                continue
+        except Exception:
+            pass
         try:
             store.add(english_reading(word), word, category)
             known.add(word.lower())
@@ -1636,26 +1643,35 @@ def _english_vocabulary(store, min_count=1):
     return out
 
 
-_QWERTY_ROWS = ('qwertyuiop', 'asdfghjkl', 'zxcvbnm')
-_QWERTY_POS = {ch: (r, c)
-               for r, row in enumerate(_QWERTY_ROWS)
-               for c, ch in enumerate(row)}
+# 英字の隣接の表は `keyboard_layout` が持つ（項目48-KB・2026-10-14）。
+# ここにあった QWERTY 3段の書き下しと、既定では1組も変わらない。
+# `_QWERTY_POS` は a〜z だけ（直し先の候補を回す `for alt in _QWERTY_POS`
+# が記号を回らないように）。配列・形を切り替えると差し替わる。
+import keyboard_layout as _KEYBOARD
+_QWERTY_POS = {}
+_QWERTY_NEAR = frozenset()
+_QWERTY_INTRUSION_NEAR = frozenset()
 _EN_VOWEL_SET = frozenset('aeiou')
 
 
+def _rebuild_keyboard():
+    global _QWERTY_POS, _QWERTY_NEAR, _QWERTY_INTRUSION_NEAR
+    _QWERTY_POS = dict(_KEYBOARD.letter_positions())
+    _QWERTY_NEAR = _KEYBOARD.letter_near_pairs()
+    _QWERTY_INTRUSION_NEAR = _KEYBOARD.letter_intrusion_pairs()
+
+
+_KEYBOARD.on_change(_rebuild_keyboard)
+
+
 def _qwerty_near(a, b):
-    """QWERTY 配列で隣り合うキーか（corrector._qwerty_adjacent と同じ形）。"""
-    pa, pb = _QWERTY_POS.get(a), _QWERTY_POS.get(b)
-    if pa is None or pb is None or a == b:
-        return False
-    return pa[0]==pb[0] and abs(pa[1]-pb[1])==1
+    """いまの配列で隣り合う英字か（corrector._qwerty_adjacent と同じ形）。"""
+    return (a, b) in _QWERTY_NEAR
 
 
 def _qwerty_intrusion_near(a,b):
     """Keep the existing English extra-key neighbourhood independently."""
-    pa,pb=_QWERTY_POS.get(a),_QWERTY_POS.get(b)
-    return bool(pa is not None and pb is not None and a!=b
-                and abs(pa[0]-pb[0])<=1 and abs(pa[1]-pb[1])<=1)
+    return (a,b) in _QWERTY_INTRUSION_NEAR
 
 
 def typo_explains_seed_english(typed, known):
@@ -1744,9 +1760,24 @@ def _english_seed_all():
     if _seed_english_all_cache is not None:
         return _seed_english_all_cache
     out = set(_english_seed())
+    seed_english = None
     try:
         import seed_english
         out |= set(getattr(seed_english, 'EXTRA_WORDS', ()))
+    except Exception:
+        pass
+    try:
+        import compact_tables
+        if compact_tables.enabled():
+            # メモリ使用量「低」（2026-10-15）: 236,938 語を1本の文字列で持つ
+            # （約 18MB → 約 3MB。引くのは二分探索）。答えは同じ。読み終えた
+            # 種の表（EXTRA_WORDS）はこの名簿にしか要らないので手放す
+            # （ENGLISH_WORDS は `_english_seed` の直し先として残る）。
+            _seed_english_all_cache = compact_tables.CompactWords.of(out)
+            del out
+            if seed_english is not None and hasattr(seed_english, 'EXTRA_WORDS'):
+                seed_english.EXTRA_WORDS = ()
+            return _seed_english_all_cache
     except Exception:
         pass
     _seed_english_all_cache = frozenset(out)

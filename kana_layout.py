@@ -59,7 +59,7 @@ _MARK_KEY_ADJ = (os.environ.get('CN_MARK_KEY_ADJ', '0') != '0')
 #          ち と し は き く ま の り れ け む
 #  下段:   Z  X  C  V  B  N  M  ,  .  /  \
 #          つ さ そ ひ こ み も ね る め ろ
-KANA_POSITIONS = {
+_JIS_KANA_POSITIONS = {
     # 数字段
     'ぬ': (0, 0), 'ふ': (0, 1), 'あ': (0, 2), 'う': (0, 3), 'え': (0, 4),
     'お': (0, 5), 'や': (0, 6), 'ゆ': (0, 7), 'よ': (0, 8), 'わ': (0, 9),
@@ -98,10 +98,81 @@ KANA_POSITIONS = {
     # `さへいりょう ⇒ ざいりょう` は へ→゛ の取り違え）。
     '゛': (1, 10), '゜': (1, 11),
 }
+# **いま選ばれているかな配列**の位置（項目48-KB・かな配列・2026-10-14）。
+# 既定は JIS で、中身は上の表そのまま。親指シフト（NICOLA）・新JIS を選ぶと
+# `set_kana_layout` が**中身を入れ替える**（辞書そのものは差し替えない——
+# `from kana_layout import KANA_POSITIONS` で持った先にも効くように）。
+KANA_POSITIONS = dict(_JIS_KANA_POSITIONS)
 
 # 各段の横方向のずれ。実際のキーボードは下の段ほど右にずれている。
 # これを入れないと、斜め方向の隣接判定が実態と合わない。
-ROW_OFFSET = {0: 0.0, 1: 0.5, 2: 0.75, 3: 1.25}
+# **形が「格子」のときは全部 0 になる**（下の `set_shape`・項目48-KB）。
+# 中身を入れ替えるだけで辞書そのものは差し替えない（`ROW_OFFSET.get`
+# で引いている先が全部そのまま効くように）。
+_ROW_OFFSET_STAGGERED = {0: 0.0, 1: 0.5, 2: 0.75, 3: 1.25}
+ROW_OFFSET = dict(_ROW_OFFSET_STAGGERED)
+
+# --- キーボードの形（項目48-KB・2026-10-14）---
+# うにさんの指定「左右で分割されたキーボードなどの選択を用意してください。
+# これは隣接キーに影響します」。選ぶのは `keyboard_layout.apply`、ここは
+# 位置の物差し（隣か・距離）を形に合わせるだけ。かなの位置そのもの
+# （KANA_POSITIONS）は JIS のまま動かさない。
+#
+#   standard     段ずれあり（既定・今までどおり）
+#   split        左右に分かれている（段ずれあり）。別の手の側は隣でない
+#   ortho        格子。段ずれ 0、上下の隣は同じ列だけ（斜めは隣でない）
+#   split_ortho  左右に分かれた格子
+#
+# 分割の境は字の段では t|y・g|h・b|n（列 4|5）。数字の段は、段ずれの
+# ある分割（Barocco・Freestyle・Keychron Q11）では 6 が左に付くので 6|7
+# （列 5|6）、格子の分割（ErgoDox・Corne・Lily58）では 5|6（列 4|5）。
+SHAPES = ('standard', 'split', 'ortho', 'split_ortho')
+_SHAPE = 'standard'
+_ORTHO = False
+_SPLIT_LEFT_MAX = None          # 段 → 左手の右端の列。None なら分割なし
+_SPLIT_LEFT_MAX_STAGGERED = {0: 5, 1: 4, 2: 4, 3: 4}
+_SPLIT_LEFT_MAX_ORTHO = {0: 4, 1: 4, 2: 4, 3: 4}
+
+
+def current_shape():
+    return _SHAPE
+
+
+def is_ortho():
+    return _ORTHO
+
+
+def same_half(p1, p2):
+    """分割キーボードで、2つの位置が同じ手の側か（分割でなければ常に真）。"""
+    if _SPLIT_LEFT_MAX is None:
+        return True
+    return ((p1[1] <= _SPLIT_LEFT_MAX.get(p1[0], 4))
+            == (p2[1] <= _SPLIT_LEFT_MAX.get(p2[0], 4)))
+
+
+def set_shape(shape):
+    """形を変える。変わったら真を返し、位置に依る控えを全部捨てる。
+
+    知らない名前は standard。`keyboard_layout.apply` から呼ばれる。
+    """
+    global _SHAPE, _ORTHO, _SPLIT_LEFT_MAX
+    if shape not in SHAPES:
+        shape = 'standard'
+    if shape == _SHAPE:
+        return False
+    _SHAPE = shape
+    _ORTHO = shape in ('ortho', 'split_ortho')
+    if shape == 'split':
+        _SPLIT_LEFT_MAX = dict(_SPLIT_LEFT_MAX_STAGGERED)
+    elif shape == 'split_ortho':
+        _SPLIT_LEFT_MAX = dict(_SPLIT_LEFT_MAX_ORTHO)
+    else:
+        _SPLIT_LEFT_MAX = None
+    ROW_OFFSET.clear()
+    ROW_OFFSET.update({r: 0.0 for r in _ROW_OFFSET_STAGGERED} if _ORTHO
+                      else _ROW_OFFSET_STAGGERED)
+    clear_caches()
+    return True
 
 # 小書き <-> 清音 の対応（Shiftの押し忘れ／余分な押下）
 SMALL_KANA_PAIR = {
@@ -112,7 +183,9 @@ SMALL_KANA_PAIR = {
 }
 
 # Printed kana on the same physical key, including JIS Shift+0.
-SHIFT_KANA_PAIR = dict(SMALL_KANA_PAIR, **{'わ': 'を', 'を': 'わ'})
+_JIS_SHIFT_KANA_PAIR = dict(SMALL_KANA_PAIR, **{'わ': 'を', 'を': 'わ'})
+# 同じ物理キーの別の面の字（かな配列ごとに `set_kana_layout` が入れ替える）。
+SHIFT_KANA_PAIR = dict(_JIS_SHIFT_KANA_PAIR)
 
 # 濁点・半濁点付き -> ベースとなる清音キー
 # かな入力では「清音キー + ゛キー」の2打鍵なので、
@@ -131,11 +204,14 @@ DAKUTEN_BASE = {
 # **2打鍵**なので、どちらの打鍵が要るのかを字ごとに持っておく。
 # `DAKUTEN_BASE` は「どのキーか」しか言わないので、
 # 濁点と半濁点（ば と ぱ）を見分けられなかった。
-MARK_OF = {}
+_JIS_MARK_OF = {}
 for _c in 'がぎぐげござじずぜぞだぢづでどばびぶべぼゔ':
-    MARK_OF[_c] = '゛'
+    _JIS_MARK_OF[_c] = '゛'
 for _c in 'ぱぴぷぺぽ':
-    MARK_OF[_c] = '゜'
+    _JIS_MARK_OF[_c] = '゜'
+# いまのかな配列で**印のキーが要る字**。JIS・新JIS は上の表、親指シフトは
+# 濁音・半濁音が親指との同時打鍵（1打）なので**空**（`set_kana_layout`）。
+MARK_OF = dict(_JIS_MARK_OF)
 
 
 def keystrokes(kana):
@@ -149,9 +225,13 @@ def keystrokes(kana):
 
     かな入力の誤打を「何回の誤りか」で数えるための土台。
     """
-    base = DAKUTEN_BASE.get(kana, kana)
+    # 印のキーが要らない字（清音・小書き、親指シフトの濁音）は1打のまま。
+    # DAKUTEN_BASE は五十音の表なので、印が要るときだけ清音へ開く
+    # （親指シフトで が を か に潰さない・項目48-KB）。
     mark = MARK_OF.get(kana, '')
-    return (base, mark) if mark else (base,)
+    if not mark:
+        return (kana,)
+    return (DAKUTEN_BASE.get(kana, kana), mark)
 
 
 # 48-XC・2026-09-10: 未入力キーの補充は、隣接・巻き込み・転置より後。
@@ -172,8 +252,14 @@ def _single_key_drop_positions(typed, restored):
 
 # Only the directly neighboring printable key on each side of a JIS Shift.
 # The source must actually require Shift; a hypothetical changed kana does not.
-_SHIFT_NEIGHBORS = {'left': frozenset('つ'), 'right': frozenset('ろ')}
-_SHIFT_KANA = frozenset('ぁぃぅぇぉっゃゅょを')
+_JIS_SHIFT_NEIGHBORS = {'left': frozenset('つ'), 'right': frozenset('ろ')}
+_JIS_SHIFT_KANA = frozenset('ぁぃぅぇぉっゃゅょを')
+# いまのかな配列の分（`set_kana_layout` が入れ替える）。親指シフトでは
+# 「Shift」は親指キーで、面は 左親指 'L'・右親指 'R' の2つ。
+_SHIFT_NEIGHBORS = dict(_JIS_SHIFT_NEIGHBORS)
+_SHIFT_KANA = _JIS_SHIFT_KANA
+# 字 → 面（'' 単独・'S' Shift・'L' 左親指・'R' 右親指）。無い字は ''。
+_LAYER_OF = {c: 'S' for c in _JIS_SHIFT_KANA}
 
 
 @functools.lru_cache(maxsize=None)
@@ -396,9 +482,9 @@ def same_key_characters(ch):
         key = _KEY_OF_CHAR.get(_WIDE_TO_ASCII.get(ch, ''))
     if key is None:
         return []
-    plain, shift, kana, kana_shift = key
+    plain, shift, *kanas = key          # かなの面は配列により 2つか 3つ
     out = []
-    for cand in (kana, kana_shift, plain, shift):
+    for cand in tuple(kanas) + (plain, shift):
         if not cand:
             continue
         for form in (cand, _ASCII_TO_WIDE.get(cand, '')):
@@ -422,18 +508,22 @@ def physical_intrusion_keys_adjacent(p1, p2):
     Rows include the number row. The QWERTY/ASDF pair has only vertical
     neighbours; the other row pairs also allow the lower key to the left.
     Shift variants share positions but are not a different adjacent key.
+    形（項目48-KB）: 分割では別の手の側は隣でない。格子では上下は同じ列だけ。
     """
     if p1 is None or p2 is None or p1 == p2:return False
+    if not same_half(p1, p2):return False
     if p1[0] == p2[0]:return abs(p1[1]-p2[1]) == 1
     upper,lower=sorted((p1,p2))
     if lower[0]-upper[0] != 1:return False
+    if _ORTHO:return lower[1] == upper[1]
     return lower[1] == upper[1] or (upper[0] != 1 and lower[1] == upper[1]-1)
 
 
 def physical_keys_adjacent(p1, p2):
     """Substitution uses only the immediately left/right key on one row."""
     return bool(p1 is not None and p2 is not None
-                and p1[0]==p2[0] and abs(p1[1]-p2[1])==1)
+                and p1[0]==p2[0] and abs(p1[1]-p2[1])==1
+                and same_half(p1, p2))
 
 
 @functools.lru_cache(maxsize=None)
@@ -457,6 +547,9 @@ def _intrusion_base_distance(c1, c2):
     p1 = KANA_POSITIONS.get(c1)
     p2 = KANA_POSITIONS.get(c2)
     if p1 is None or p2 is None:
+        return FAR
+    # 分割キーボードの別の手の側は、押し間違えない（項目48-KB）
+    if not same_half(p1, p2):
         return FAR
 
     row_diff = abs(p1[0] - p2[0])
@@ -520,11 +613,16 @@ def kana_key_distance(c1, c2, *, intrusion=False):
     # A different base key may not also change Shift state. The user
     # excludes small ゅ -> large よ; composing Shift and a neighbor slip
     # must not bring it back. Same-key Shift repairs are handled above.
-    if (c1 in _SHIFT_KANA) != (c2 in _SHIFT_KANA):
+    # 面（JIS: Shift の有無。親指シフト: 単独・左親指・右親指）が違う
+    # 2字は、キーも違えば2回の誤り。JIS では _SHIFT_KANA の判定と同じ。
+    if _LAYER_OF.get(c1, '') != _LAYER_OF.get(c2, ''):
         return FAR
 
-    base1 = DAKUTEN_BASE.get(c1, c1)
-    base2 = DAKUTEN_BASE.get(c2, c2)
+    # 位置の表に**そのまま載っている字はそのキー**で測る。載っていない
+    # 濁音・半濁音（JIS・新JIS）は清音キー＋印に開く。親指シフトでは
+    # 濁音も表に載っている（ぽ は い のキー）ので五十音の表で引き直さない。
+    base1 = c1 if c1 in KANA_POSITIONS else DAKUTEN_BASE.get(c1, c1)
+    base2 = c2 if c2 in KANA_POSITIONS else DAKUTEN_BASE.get(c2, c2)
     mark1 = MARK_OF.get(c1, '')
     mark2 = MARK_OF.get(c2, '')
     has_mark1 = bool(mark1)
@@ -820,8 +918,15 @@ def mark_key_neighbors(mark='゛', max_dist=1.05):
     項目48-DR「起動ごとに答えが変わる」の再発防止）。
     """
     out = []
+    if not marks_are_keys():        # 親指シフト: 濁音は印のキーで打たない
+        return ()
     for c in ALL_KANA:
         if c == mark or c in ('゛', '゜'):
+            continue
+        # 同じキーの別の面（新JIS の ゛ と わ）は隣ではなく Shift の話。
+        # 面が違う隣（Shift が要る字）は、印を狙って隣を叩いた1回の誤りでは
+        # 出ない（JIS では ゛゜ の段に Shift の字が無いので同じ答え）。
+        if same_physical_key(c, mark) or _LAYER_OF.get(c, '') != _LAYER_OF.get(mark, ''):
             continue
         if _base_distance(c, mark) <= max_dist:
             out.append(c)
@@ -842,9 +947,9 @@ def mark_slip_candidates(base, pressed, max_dist=1.05):
     for marked, plain in DAKUTEN_BASE.items():
         if plain != base:
             continue
-        mark=MARK_OF[marked]
-        if pressed == mark:
-            continue  # 表記の結合であり、隣接誤打ではない。
+        mark=MARK_OF.get(marked)
+        if not mark or pressed == mark:
+            continue  # 表記の結合であり、隣接誤打ではない（印のキーが無い配列は空）。
         distance=_base_distance(pressed,mark)
         if distance <= min(max_dist,1.05):
             out.append((marked,distance))
@@ -870,3 +975,270 @@ if __name__ == '__main__':
         hit = '○' if want in chars else '×'
         shown = ' '.join(f'{c}({d:.2f})' for c, d in cands[:8])
         print(f'{i+1}. {ch} -> {shown}   [期待{want} {hit}]')
+
+
+def clear_caches():
+    """位置・隣接に依る控え（lru_cache）を全部捨てる（項目48-KB）。
+
+    配列か形を変えたとき `keyboard_layout.apply` が呼ぶ。ふだんは1度も
+    呼ばれない（既定のまま使う人には何も起きない）。
+
+    **他のモジュールが持つ、かなの位置に依る控え**も捨てる（控えが残ると
+    切り替えた前の配列で答える）。読み込まれていないモジュールには
+    控えも無いので、`sys.modules` に在るものだけ触る。
+    """
+    for fn in (intrusion_key_distance, multiple_key_drop_adjacency,
+               _base_distance, _intrusion_base_distance, kana_key_distance,
+               _romaji_pairs, nearby_candidates, mark_key_neighbors,
+               mark_slip_candidates):
+        fn.cache_clear()
+    import sys
+    for name, attrs in _FOREIGN_CACHES:
+        mod = sys.modules.get(name)
+        if mod is None:
+            continue
+        for attr in attrs:
+            obj = getattr(mod, attr, None)
+            if obj is None:
+                continue
+            if hasattr(obj, 'cache_clear'):
+                obj.cache_clear()
+            elif isinstance(obj, dict):
+                obj.clear()
+    mod = sys.modules.get('vocabulary')
+    if mod is not None and hasattr(mod, '_CHAR_FLOOR'):
+        mod._CHAR_FLOOR = None
+
+
+# かなの位置・距離から作った控えを持つ他のモジュール（名前, 属性）。
+# lru_cache なら cache_clear、辞書なら clear。
+_FOREIGN_CACHES = (
+    ('contextual_repair', ('_key_neighbors', 'sahen_omission_repairs',
+                           '_cached_whole_written_nominal_omissions')),
+    ('vocabulary', ('_sub_cost', '_SIM_CACHE', '_FLEX_CACHE')),
+)
+
+
+# ============================================================
+# かな配列の選択（項目48-KB・かな配列・2026-10-14）
+# ============================================================
+# うにさんの指定（2026-10-14・カードで「用意する」）: かな入力の配列として
+# **親指シフト（NICOLA）** と **新JIS（JIS X 6004）** を選べるようにする。
+# 既定は JIS で、選ばなければ上の表は1字も動かない。
+#
+# 配列ごとに違うもの:
+#
+#   位置          どのキーにどのかなが刻まれているか（KANA_POSITIONS）
+#   面            JIS・新JIS は Shift の有無（'' / 'S'）。親指シフトは
+#                 単独・左親指・右親指の3面（'' / 'L' / 'R'）。
+#                 **面が違い、キーも違う2字は2回の誤り**（FAR）。
+#                 同じキーの別の面は Shift（親指）の押し違い（0.3）。
+#   濁音の打鍵    JIS・新JIS は 清音＋゛（2打。新JIS の ゛ は中段の L、
+#                 ゜ は Shift＋W）。**親指シフトは濁音・半濁音も1打**
+#                 （反対の手の親指と同時に押す＝クロスシフト）なので
+#                 MARK_OF は空、keystrokes は1つ、印の隣の誤り
+#                 （mark_key_neighbors・mark_slip_candidates）は出ない。
+#   Shift の隣    JIS: 左 Shift の隣 つ・右 Shift の隣 ろ。新JIS: す・れ。
+#                 親指シフト: 親指キー（無変換・変換）の上の ふ へ／め そ。
+#
+# 表の出どころ:
+#   NICOLA  親指シフト道場「親指シフト入力のキーボードレイアウト」
+#           （forum.pc5bai.com/work/oya/layout/）の段ごとの一覧と、
+#           NICOLA 規格書の例（は のキー: 右親指で み、左親指で ぱ 系）。
+#           ぱぴぷぺぽ は ら・，・め・ね・い のキーを左親指と同時に押す
+#           （Wikipedia「親指シフト」の記述と一致）。
+#   新JIS   JIS X 6004 の無シフト面（Wikipedia「新JIS配列」の候補1の表＝
+#           採用された配列）と、シフト面（新JIS の解説記事・
+#           maborotopia の親指新JIS の左親指面と一致）。
+#
+# 半角の表（halfwidth.HALFWIDTH_TO_KANA / SHIFT_TO_KANA）は
+# `halfwidth_tables()` を `on_kana_layout_change` で受け取って追う。
+
+KANA_LAYOUTS = ('jis', 'nicola', 'shin_jis')
+DEFAULT_KANA_LAYOUT = 'jis'
+_KANA_LAYOUT = DEFAULT_KANA_LAYOUT
+_kana_listeners = []
+
+# 刻印の表（JIS の記号キーと同じ物理キーに乗せる）。
+# 段ごとに (段番号, 面ごとの字の並び…)。並びの n 文字目が列 n のキー。
+# 全角空白は「その面に字が無い」。かな以外（。．，・？）は位置の表には
+# 入れず、同じキーの文字の表（same_key_characters）にだけ載せる。
+_NICOLA_ROWS = (
+    #    単独                     左親指                   右親指
+    (1, '。かたこさらちくつ，', 'ぁえりゃれぱぢぐづぴ', '゜がだござよにるまぇ'),
+    (2, 'うしてけせはときいん', 'をあなゅもばどぎぽ　', 'ゔじでげぜみおのょっ'),
+    (3, '．ひすふへめそねほ・', 'ぅーろやぃぷぞぺぼ゛', '　びずぶべぬゆむわぉ'),
+)
+_SHIN_JIS_ROWS = (
+    #    無シフト                  シフト
+    (1, 'そけせてょつんのをりち', 'ぁ゜ほふめひえみやぬ　'),
+    (2, 'はかしとたくうい゛きな', 'ぃへらゅよまおもわゆ　'),
+    (3, 'すこにさあっる、。れ',   'ぅぇぉねゃむろ・ー？'),
+)
+_KANA_LAYOUT_TABLES = {
+    'nicola': {'rows': _NICOLA_ROWS, 'layers': ('', 'L', 'R'), 'marks': False,
+               'shift_neighbors': {'left': frozenset('ふへ'),
+                                   'right': frozenset('めそ')}},
+    'shin_jis': {'rows': _SHIN_JIS_ROWS, 'layers': ('', 'S'), 'marks': True,
+                 'shift_neighbors': {'left': frozenset('す'),
+                                     'right': frozenset('れ')}},
+}
+
+# JIS のキーの表を段ごとに切る（半角の刻印を位置から引くため）。
+# 数字段 13・上段 12・中段 12・下段 11。
+_JIS_ROW_LENGTHS = (13, 12, 12, 11)
+_JIS_KEY_AT = {}
+_i = 0
+for _row, _n in enumerate(_JIS_ROW_LENGTHS):
+    for _col in range(_n):
+        _JIS_KEY_AT[(_row, _col)] = _JIS_KEYS[_i]
+        _i += 1
+assert _i == len(_JIS_KEYS)
+
+# いまのかな配列のキーの表（same_key_characters が引く）。
+_KEYS = list(_JIS_KEYS)
+# 同じキーの別の面のかな（かな → 組）。JIS では SHIFT_KANA_PAIR と同じ中身。
+_SAME_KEY_ALTS = {}
+
+
+def _is_kana_char(ch):
+    return bool(ch) and ('ぁ' <= ch <= 'ゖ' or ch in 'ー゛゜')
+
+
+def _generated_layout(table):
+    """刻印の段の並びから 位置・面・キーの表・Shift の相方 を作る。"""
+    layers = table['layers']
+    positions, layer_of, keys, pair = {}, {}, [], {}
+    for col in range(_JIS_ROW_LENGTHS[0]):          # 数字段: 数字と記号だけ
+        plain, shift = _JIS_KEY_AT[(0, col)][:2]
+        keys.append((plain, shift) + ('',) * len(layers))
+    for row, *faces in table['rows']:
+        for col in range(_JIS_ROW_LENGTHS[row]):
+            plain, shift = _JIS_KEY_AT[(row, col)][:2]
+            chars = []
+            for face in faces:
+                ch = face[col] if col < len(face) else ''
+                chars.append('' if ch in (' ', '　') else ch)
+            keys.append((plain, shift) + tuple(chars))
+            for layer, ch in zip(layers, chars):
+                if _is_kana_char(ch) and ch not in positions:
+                    positions[ch] = (row, col)
+                    layer_of[ch] = layer
+            unshifted = chars[0]
+            shifted = [ch for ch in chars[1:] if _is_kana_char(ch)]
+            for ch in shifted:
+                if unshifted:
+                    pair.setdefault(ch, unshifted)
+            if _is_kana_char(unshifted) and shifted:
+                pair.setdefault(unshifted, shifted[0])
+    layer_of = {c: l for c, l in layer_of.items() if l}
+    return positions, layer_of, keys, pair
+
+
+def current_kana_layout():
+    return _KANA_LAYOUT
+
+
+def marks_are_keys():
+    """濁点・半濁点を**印のキー**で打つ配列か（JIS・新JIS は真、親指シフトは偽）。"""
+    return bool(MARK_OF)
+
+
+def kana_layer(kana):
+    """字の面（'' 単独・'S' Shift・'L' 左親指・'R' 右親指）。"""
+    return _LAYER_OF.get(kana, '')
+
+
+def same_key_kana_alternatives(kana):
+    """同じ物理キーの**別の面**のかな（JIS: あ→(ぁ,)・わ→(を,)。親指シフト: か→(え, が)）。"""
+    return _SAME_KEY_ALTS.get(kana, ())
+
+
+def halfwidth_tables():
+    """半角のまま打ったときの表（半角 → かな, Shift つき半角 → かな）。
+
+    JIS では None（halfwidth.py の書き下しをそのまま使う）。他の配列では
+    無シフトの面を半角から、Shift 面を Shift つきの半角から引く。親指シフトの
+    親指の面は IME が切れていると出ないので、無シフトの面だけ。
+    """
+    if _KANA_LAYOUT == DEFAULT_KANA_LAYOUT:
+        return None
+    plain, shift = {}, {}
+    for key in _KEYS:
+        ascii_plain, ascii_shift, *kanas = key
+        if kanas and _is_kana_char(kanas[0]):
+            plain.setdefault(ascii_plain, kanas[0])
+        if len(kanas) > 1 and _LAYER_OF.get(kanas[1]) == 'S' and _is_kana_char(kanas[1]):
+            shift.setdefault(ascii_shift, kanas[1])
+    return plain, shift
+
+
+def on_kana_layout_change(callback):
+    """かな配列が変わったら呼んでほしい側（halfwidth）が登録する。すぐ1回呼ぶ。"""
+    if callback not in _kana_listeners:
+        _kana_listeners.append(callback)
+    callback()
+
+
+def _install_tables(positions, layer_of, keys, pair, marks, shift_neighbors):
+    global _SHIFT_KANA
+    KANA_POSITIONS.clear()
+    KANA_POSITIONS.update(positions)
+    _LAYER_OF.clear()
+    _LAYER_OF.update(layer_of)
+    _SHIFT_KANA = frozenset(layer_of)
+    SHIFT_KANA_PAIR.clear()
+    SHIFT_KANA_PAIR.update(pair)
+    MARK_OF.clear()
+    MARK_OF.update(marks)
+    _SHIFT_NEIGHBORS.clear()
+    _SHIFT_NEIGHBORS.update(shift_neighbors)
+    ALL_KANA[:] = list(dict.fromkeys(list(KANA_POSITIONS) + list(DAKUTEN_BASE)))
+    _KEYS[:] = keys
+    _KEY_OF_CHAR.clear()
+    for key in _KEYS:
+        for ch in key:
+            if ch and ch not in _KEY_OF_CHAR:
+                _KEY_OF_CHAR[ch] = key
+    _SAME_KEY_ALTS.clear()
+    by_pos = {}
+    for ch, pos in KANA_POSITIONS.items():
+        by_pos.setdefault(pos, []).append(ch)
+    for ch, pos in KANA_POSITIONS.items():
+        # 印のキー（親指シフトの Q・／ のクロス面）は「別の面の字」に数えない
+        others = tuple(c for c in by_pos[pos] if c != ch and c not in '゛゜')
+        if others and ch not in '゛゜':
+            _SAME_KEY_ALTS[ch] = others
+
+
+def set_kana_layout(name):
+    """かな配列を変える。変わったら真。知らない名前は JIS。
+
+    `keyboard_layout.apply` から呼ばれる（設定の 'kana_layout'）。
+    """
+    global _KANA_LAYOUT
+    if name not in KANA_LAYOUTS:
+        name = DEFAULT_KANA_LAYOUT
+    if name == _KANA_LAYOUT and _SAME_KEY_ALTS:
+        return False
+    changed = name != _KANA_LAYOUT
+    _KANA_LAYOUT = name
+    if name == DEFAULT_KANA_LAYOUT:
+        _install_tables(_JIS_KANA_POSITIONS, {c: 'S' for c in _JIS_SHIFT_KANA},
+                        list(_JIS_KEYS), _JIS_SHIFT_KANA_PAIR, _JIS_MARK_OF,
+                        _JIS_SHIFT_NEIGHBORS)
+    else:
+        table = _KANA_LAYOUT_TABLES[name]
+        positions, layer_of, keys, pair = _generated_layout(table)
+        _install_tables(positions, layer_of, keys, pair,
+                        _JIS_MARK_OF if table['marks'] else {},
+                        table['shift_neighbors'])
+    if changed:
+        clear_caches()
+        for callback in list(_kana_listeners):
+            callback()
+    return changed
+
+
+# 既定（JIS）の表を同じ道で据える（_SAME_KEY_ALTS を作る。中身は1字も動かない）。
+set_kana_layout(DEFAULT_KANA_LAYOUT)

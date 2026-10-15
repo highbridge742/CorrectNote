@@ -7,6 +7,7 @@ candidate grammar/meaning checks. Nothing calls SetResult or sends keys.
 """
 import ctypes as C
 from ctypes import wintypes as W
+import sys
 import uuid
 
 
@@ -62,6 +63,39 @@ def _release(pointer):
         _method(pointer, 2)(pointer)
 
 
+def _faulting_thread_reports_only():
+    """Keep an enabled faulthandler from walking other threads during COM use.
+
+    On Windows, faulthandler reports every first-chance SEH exception. COM
+    raises and handles RPC errors itself while these IME objects are released
+    (0x8001010E on the calling thread, 0x80010108 on an RPC thread). With
+    all_threads=True the handler then reads the frames of running Python
+    threads from that native thread, can fault there (access violation) and
+    kill a process whose COM call had succeeded. Ordinary CorrectNote runs
+    never enable faulthandler; tests and measurements (-X faulthandler, which
+    multiprocessing passes to the analysis child, or faulthandler.enable())
+    do. Their reports stay, for the faulting Python thread only (2026-10-15).
+    """
+    if sys.platform != 'win32':
+        return
+    try:
+        import faulthandler
+        if not faulthandler.is_enabled():
+            return
+    except Exception:
+        return
+    for target in (sys.stderr, sys.__stderr__):
+        try:
+            faulthandler.enable(file=target, all_threads=False)
+            return
+        except Exception:
+            continue
+    try:
+        faulthandler.disable()
+    except Exception:
+        pass
+
+
 
 class _ThreadManagerConnection:
     """Native connection only; never retains a query or candidate tuple."""
@@ -99,6 +133,7 @@ class SearchCandidates:
         self._connection_bad = False
 
     def __enter__(self):
+        _faulting_thread_reports_only()
         from analysis_context import check_current_request
         check_current_request()
         from ime_session import retain

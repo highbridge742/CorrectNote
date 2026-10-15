@@ -20,17 +20,21 @@ class WordBookFocusTests(unittest.TestCase):
         self.native=W._WordBookNative(self.root)
         native=self.native;hook=native.event_hook
         self.assertTrue(hook,native.hook_error)
+        # The focus hook (word book inserts into the last focused box) is
+        # released alongside, each exactly once.
+        hooks=sorted(h for h in (hook,native.focus_hook) if h)
         with patch.object(native.user,'UnhookWinEvent',wraps=native.user.UnhookWinEvent) as unhook:
             native.detach();native.detach()
-            unhook.assert_called_once_with(hook)
+            self.assertEqual(sorted(c.args[0] for c in unhook.call_args_list),hooks)
         import tkinter as tk
         win=tk.Toplevel(self.root);win.update_idletasks()
         other=W._WordBookNative(win);hook=other.event_hook
         self.assertTrue(hook)
+        hooks=sorted(h for h in (hook,other.focus_hook) if h)
         with patch.object(other.user,'UnhookWinEvent',wraps=other.user.UnhookWinEvent) as unhook:
             win.destroy();other.detach()
-            unhook.assert_called_once_with(hook)
-        self.assertIsNone(other.event_hook);self.assertIsNone(other.hwnd)
+            self.assertEqual(sorted(c.args[0] for c in unhook.call_args_list),hooks)
+        self.assertIsNone(other.event_hook);self.assertIsNone(other.focus_hook);self.assertIsNone(other.hwnd)
 
     def test_unavailable_event_hook_retains_window_message_fallback(self):
         import word_book as W

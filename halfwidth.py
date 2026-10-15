@@ -195,6 +195,40 @@ def _is_keyboard_chord(text):
                for a,b in keyboard_chord_ranges(text))
 
 
+_HEX_DIGITS = frozenset('0123456789abcdefABCDEF')
+
+
+_GUID_RE = None
+
+
+def _has_hex_identifier(text, min_len=12):
+    """
+    16進の ID の形を含むか（2026-10-15）。
+
+    - 記号で区切られた英数字の1かたまりが12字以上で、0-9 と a-f だけ・
+      数字も英字も2字以上（ハッシュ、ログの ID、GUID の末尾の12字）。
+    - GUID の形（8-4-4-4-12 の16進）。
+    かな入力で日本語を打つと、a〜f（ち こ そ し い は）と数字段
+    （ぬ ふ あ う え お や ゆ よ わ）のキーだけが記号を挟まずに12打続く
+    ことはまず無い（測った: 同梱の読み 266,950 件と、うにさんの材料の
+    文 2,385 区切りをかなキーに戻して、10打以上でも当たり 0）。
+    """
+    import re
+    global _GUID_RE
+    if _GUID_RE is None:
+        _GUID_RE = re.compile(r'[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-'
+                              r'[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}')
+    if _GUID_RE.search(text):
+        return True
+    for m in re.finditer(r'[0-9A-Za-z]+', text):
+        run = m.group()
+        if (len(run) >= min_len and all(ch in _HEX_DIGITS for ch in run)
+                and sum(ch.isdigit() for ch in run) >= 2
+                and sum(ch.isalpha() for ch in run) >= 2):
+            return True
+    return False
+
+
 def _side_of_join(run):
     """
     記号の片側が「語」または「数」として立っているか。
@@ -330,6 +364,18 @@ def looks_like_halfwidth_input(text, min_len=4):
         return False
     if any(_is_dictionary_english(m.group()) for m in re.finditer(
             r'(?<![A-Za-z0-9])[A-Za-z]{4,}(?![A-Za-z0-9])', text)):
+        return False
+    # 2026-10-15: 英字の名前・ID の形（実機で、貼り付けた英文の中の
+    # 利用者名と ID がかなに化けた）。どちらも意味の判定より先に形で止める
+    # （IME が手元にあると、かなに戻した列が漢字に化けて読めてしまうため）。
+    #  - 英字の名前の中の英単語（x7controls の controls）。上の判定は数字を
+    #    境に数えない（数字段もかなキーなので）。ここは同梱の英語辞書
+    #    （6字以上だけ）に丸ごと載る英字の並びに限って、数字を境に認める。
+    #  - 16進の ID（ハッシュ・GUID）。`_has_hex_identifier` を見よ。
+    if any(_is_dictionary_english(m.group()) for m in re.finditer(
+            r'(?<![A-Za-z])[A-Za-z]{6,}(?![A-Za-z])', text)):
+        return False
+    if _has_hex_identifier(text):
         return False
 
     # 日本語を含む場合は、半角モードの打ち間違いではなく
@@ -1496,3 +1542,38 @@ def kana_to_kanji_where_possible(kana, store, min_word_len=2,
             break
         text, pieces = text2, pieces2
     return _finish(text, pieces)
+
+
+# ============================================================
+# かな配列に追う（項目48-KB・かな配列・2026-10-14）
+# ============================================================
+# 上の表は JIS かなの書き下し。親指シフト（NICOLA）・新JIS を選んだときは
+# `kana_layout.halfwidth_tables()` の表に**中身を入れ替える**（辞書そのもの
+# は差し替えない——`from halfwidth import HALFWIDTH_TO_KANA` で持った先にも
+# 効くように）。JIS に戻せば上の書き下しに戻る。`AMBIGUOUS_KEYS` は
+# JIS の ろ／ー の話なのでそのまま。
+_JIS_HALFWIDTH_TO_KANA = dict(HALFWIDTH_TO_KANA)
+_JIS_SHIFT_TO_KANA = dict(SHIFT_TO_KANA)
+
+
+def _follow_kana_layout():
+    import kana_layout
+    tables = kana_layout.halfwidth_tables()
+    if tables is None:
+        plain, shift = _JIS_HALFWIDTH_TO_KANA, _JIS_SHIFT_TO_KANA
+    else:
+        plain, shift = tables
+    HALFWIDTH_TO_KANA.clear()
+    HALFWIDTH_TO_KANA.update(plain)
+    SHIFT_TO_KANA.clear()
+    SHIFT_TO_KANA.update(shift)
+    KANA_TO_HALFWIDTH.clear()
+    for _half, _kana in HALFWIDTH_TO_KANA.items():
+        KANA_TO_HALFWIDTH.setdefault(_kana, _half)
+
+
+try:
+    import kana_layout as _kana_layout
+    _kana_layout.on_kana_layout_change(_follow_kana_layout)
+except Exception:
+    pass

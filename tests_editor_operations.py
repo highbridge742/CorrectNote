@@ -172,13 +172,14 @@ def child():
             w.mark_set('insert','1.2')
             a._mark_quick_sent('1.1',1);a._mark_quick_sent('1.3',1)
             a.toggle_list_mode()
-            assert text()=='前中後\n\n甲\n乙\n既存行',text()
+            # 2026-10-15: the row below the list has text, so one blank row parts them.
+            assert text()=='前中後\n\n甲\n乙\n\n既存行',text()
             assert a._pick_mode is None and not w.tag_ranges('quick_sent_a') and not w.tag_ranges('quick_sent_b')
             w.edit_undo();assert text()=='前甲中乙後\n既存行'
             # At line start, keep the first A and split only the contiguous A/B/A run.
             set_text('甲乙丙\n前丁後\n次');w.mark_set('insert','2.1')
             for index in ('1.0','1.1','1.2','2.1'):a._mark_quick_sent(index,1)
-            a.toggle_list_mode();assert text()=='甲\n乙\n丙\n前丁後\n次',text()
+            a.toggle_list_mode();assert text()=='甲\n乙\n丙\n\n前丁後\n次',text()
             assert a.store.revision()==baseline,'Initial vocabulary changed'
             assert not errors,errors
             print('EDITOR_OPERATIONS_PASSED',flush=True)

@@ -26,6 +26,17 @@ POS_LABELS = (
     ('その他', 'その他'),
 )
 POS_CATEGORIES = tuple(key for key, _label in POS_LABELS)
+# Rows of the per-POS dialog: the headings also name the English parts of
+# speech each row takes (en_pos), and 英字 — now only the English words the
+# dictionary does not know — is shown last as その他英字 (2026-10-14 うにさん
+# 「英字を、その他英字として下へ移す。見出しに、代名詞や前置詞、冠詞も書き加える」).
+# Keys, tags and saved settings keep the order and names above.
+POS_DIALOG_LABELS = {'名詞': '名詞・代名詞', '助詞': '助詞・前置詞',
+                     '連体詞': '連体詞・冠詞', '英字': 'その他英字'}
+POS_DIALOG_ROWS = tuple(
+    (key, POS_DIALOG_LABELS.get(key, label))
+    for key, label in [item for item in POS_LABELS if item[0] != '英字']
+    + [item for item in POS_LABELS if item[0] == '英字'])
 POS_LABEL_BY_KEY = dict(POS_LABELS)
 POS_FONT_TAGS = {key: 'pos_font_' + str(index)
                  for index, key in enumerate(POS_CATEGORIES)}
@@ -247,9 +258,10 @@ def spans(text, tokens):
 _NUMBER = re.compile(r'[0-9０-９]+(?:[.,．，][0-9０-９]+)+')
 
 
-# Latin letters are shown as 英字 whatever POS the tokenizer gave them (it
-# calls most of them nouns), with the periods and underscores joined to them
-# (``file_name.txt``, ``e.g.``). Digits keep 数詞 (2026-10-13 うにさん).
+# Latin letters are shown by their English part of speech (en_pos), or as
+# 英字 when unknown, whatever POS the tokenizer gave them (it calls most of
+# them nouns), with the periods and underscores joined to them
+# (``file_name.txt``, ``e.g.`` stay 英字). Digits keep 数詞 (2026-10-13 うにさん).
 _LETTER = 'A-Za-zＡ-Ｚａ-ｚÀ-ÖØ-öø-ÿ'
 _LATIN = re.compile(r'[._．＿]*[{0}]+(?:[._．＿]+[{0}]+)*[._．＿]*'.format(_LETTER))
 
@@ -258,19 +270,27 @@ def _join_latin(text, runs):
     words = [match.span() for match in _LATIN.finditer(text)]
     if not words:
         return tuple(runs)
+    # English words take their own part of speech (en_pos: noun → 名詞,
+    # verb → 動詞, preposition → 助詞, ...); unknown words stay 英字
+    # (2026-10-14 うにさん「英文の品詞判定」).
+    try:
+        from en_pos import categories
+        kinds = categories(text, words)
+    except Exception:
+        kinds = ['英字'] * len(words)
     result = []
     for major, start, end in runs:
         if major == '数詞':
             result.append((major, start, end))
             continue
         position = start
-        for a, z in words:
+        for (a, z), kind in zip(words, kinds):
             a, z = max(a, start), min(z, end)
             if a >= z:
                 continue
             if position < a:
                 result.append((major, position, a))
-            result.append(('英字', a, z))
+            result.append((kind, a, z))
             position = z
         if position < end:
             result.append((major, position, end))

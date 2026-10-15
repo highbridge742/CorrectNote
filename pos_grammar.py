@@ -1751,6 +1751,7 @@ def _broken_polite_end_frames(line, dict_index):
     from reading_segments import completed_native_reading
     from literal_examples import protected_ranges, overlaps
     out = []
+    parts = None
     n = len(line)
     i = 0
     while i < n:
@@ -1766,9 +1767,108 @@ def _broken_polite_end_frames(line, dict_index):
         frame = _broken_polite_end_of_run(run, dict_index)
         if frame:
             k, tail = frame
+            if parts is None:
+                from morphology import tokenize
+                parts = tokenize(line)
+            if _written_te_auxiliary(line, start + k, j, parts):
+                continue
+            if _written_nominal_de_iru(line, start + k, j, tail, parts):
+                continue
             if not overlaps(start + k, j, protected_ranges(line)):
                 out.append((start + k, j, tail))
     return tuple(out)
+
+
+# 2026-10-15（説明書の更新で、初期状態に自然な文「花びらが水面に浮かんでいた」を
+# 入れると でいた に紫）: 動詞の て形（浮かん・楽しん・揺らい）の後ろの
+# て／で＋補助動詞（いた・みた・いました）は、書いたとおりで文法どおり。
+# でした は動詞の て形には付かないので、1打違いの「崩れ」と見る根拠が無い。
+# 判定は行の語の区切りで見る（並びだけでは 浮か｜ん の かん を缶・勘と読む）。
+_TE_AUXILIARY_VERBS = frozenset(('いる', 'おる', 'ある', 'みる', 'しまう', 'おく', 'いく', 'ゆく',
+                                 'くる', 'もらう', 'いただく', 'くれる', 'くださる', 'あげる',
+                                 'やる', 'みせる'))
+
+
+def _auxiliary_chain_ok(text, verbs=_TE_AUXILIARY_VERBS):
+    """text（て・で の後ろ）が 補助動詞＋助動詞の正しい活用の連なりか（いた・いました）。"""
+    from morphology import tokenize, dictionary_inflections
+    parts = tokenize(text)
+    if (not parts or parts[0].start != 0 or parts[-1].end != len(text)
+            or parts[0].pos != '動詞'):
+        return False
+    # 補助動詞として辞書に在る形か（単独で切ると しまった を しまる と読むので、
+    # 解析の札ではなく辞書の 非自立 の活用で見る）
+    head = parts[0]
+    if not any(pos.startswith('動詞,非自立') and base in verbs
+               and form == head.infl_form
+               for pos, form, base, _reading in dictionary_inflections(head.surface) or ()):
+        return False
+    for before, part in zip(parts, parts[1:]):
+        if not (part.has_reading and before.end == part.start):
+            return False
+        form = before.infl_form or ''
+        if part.pos == '助動詞':
+            base = part.base_form
+            if base in ('た', 'たい'):
+                ok = form.startswith('連用')
+            elif base == 'ます':
+                ok = before.pos == '動詞' and form.startswith('連用')
+            elif base in ('ない', 'ぬ', 'ん', 'う', 'よう'):
+                ok = form.startswith('未然')
+            else:
+                ok = False
+        elif part.pos == '助詞':
+            ok = part is parts[-1] and part.pos_sub.startswith('終助詞') and form.startswith('基本')
+        else:
+            ok = False
+        if not ok:
+            return False
+    return parts[0].has_reading
+
+
+def _written_te_auxiliary(line, a, b, parts):
+    """書いた語尾 line[a:b] が、動詞の て形の後ろの て／で＋補助動詞か。"""
+    written = line[a:b]
+    if len(written) < 2 or written[0] not in 'てで':
+        return False
+    head = next((t for t in parts if t.end == a), None)
+    if (head is None or head.pos != '動詞' or not head.has_reading
+            or not (head.infl_form or '').startswith('連用')):
+        return False
+    # 読ん・泳い は で、書い・食べ・し は て（行の解析が て形と見た形と合うものだけ）
+    voiced = head.surface.endswith('ん') or (head.surface.endswith('い')
+                                            and head.base_form.endswith('ぐ'))
+    if written[0] != ('で' if voiced else 'て'):
+        return False
+    if not any(t.start == a for t in parts):
+        return False
+    return _auxiliary_chain_ok(written[1:])
+
+
+# 同日（うにさんの選択「紫を消す」）: 名詞・形容動詞の語幹の後ろの で＋いる
+# （ひとりでいた・きれいでいた・へいきでいた・がくせいでいます）も、書いたとおりの
+# 自然な文として崩れと見ない。書いた語尾が で＋いる・おる の正しい活用の連なりで、
+# 頭が名詞のとき。名詞かどうかは2通りで見る:
+#   ・崩れの候補が でした（名詞の後ろに付く語尾。へいき＋でした が読める）——
+#     かなだけの名詞は行の解析が切り損ねる（へいき を へ＋いき）ので、候補の読みで見る
+#   ・行の解析が頭を名詞・副詞と読む（はだし・がくせい。候補は ています でも、
+#     がくせ＋い を いる の連用形と見ただけ）
+# でした の打ち間違い（あめでいた）とは見分けられないが、それも紫を付けない
+# （うにさんが選んだ側）。名詞の後ろは いる・おる だけ（で＋みた は 一人で見た の
+# ように別の語になるので候補のまま）。頭を動詞と読む行（わすれでいます）は候補のまま。
+_NOMINAL_STATE_VERBS = frozenset(('いる', 'おる'))
+
+
+def _written_nominal_de_iru(line, a, b, tail, parts):
+    """書いた語尾 line[a:b] が、名詞の後ろの で＋いる・おる の連なりか。"""
+    written = line[a:b]
+    if (len(written) < 2 or written[0] != 'で'
+            or not _auxiliary_chain_ok(written[1:], _NOMINAL_STATE_VERBS)):
+        return False
+    if tail.startswith('で'):
+        return True
+    head = next((t for t in parts if t.end == a), None)
+    return head is not None and head.has_reading and head.pos in ('名詞', '副詞')
 
 
 # 48-DM / 2026-10-12: な は形容動詞の語幹のあとに付く。ただの名詞＋な＋名詞

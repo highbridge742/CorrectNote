@@ -262,7 +262,7 @@ class FontTkTests(unittest.TestCase):
         try:
             self.root.deiconify();dlg.deiconify();dlg.update()
             label=next(w for w in descendants(dlg) if isinstance(w,tk.Label)
-                       and w.cget('text')=='名詞')
+                       and w.cget('text')=='名詞・代名詞')
             form=label.master;row=int(label.grid_info()['row'])
             spinbox=form.grid_slaves(row=row,column=1)[0]
             swatch=form.grid_slaves(row=row,column=2)[0]

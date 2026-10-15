@@ -13,7 +13,7 @@ import analysis_async as A
 import analysis_worker as W
 import memory_usage as M
 import quick_analysis as Q
-from settings import Settings, MEMORY_HIGH, MEMORY_LOW
+from settings import Settings, MEMORY_HIGH, MEMORY_LOW, MEMORY_MID
 
 
 class Timers:
@@ -61,7 +61,7 @@ class MemorySettingsTests(unittest.TestCase):
             path = str(Path(directory) / 'synthetic_settings.json')
             settings = Settings(path)
             settings.set('input_method', 'kana')
-            settings.set('dark_mode', True)
+            settings.set('theme', 'dark')   # dark_mode は配色から決まる（外見）
             for mode in (MEMORY_LOW, MEMORY_HIGH):
                 settings.set('memory_usage', mode)
                 settings.save()
@@ -232,7 +232,13 @@ class MemoryWorkerRetentionTests(unittest.TestCase):
         self.assertEqual(app.root.calls, {})
 
     def test_switch_low_parks_background_first_and_releases_only_optional_work(self):
+        import os
+        import compact_tables
         from app import CorrectNoteApp
+        saved = os.environ.get(compact_tables.ENV)
+        # _choose_memory_usage exports the table form into this process; put it back
+        self.addCleanup(lambda: os.environ.pop(compact_tables.ENV, None) if saved is None
+                        else os.environ.__setitem__(compact_tables.ENV, saved))
         app, worker = owner(MEMORY_HIGH)
         app.memory_usage_var = SimpleNamespace(get=lambda: MEMORY_LOW)
         app.settings.save = Mock()
@@ -305,6 +311,242 @@ class MemoryQuickTests(unittest.TestCase):
         worker.close.assert_called_once()
         self.assertIsNone(app._quick_worker)
         self.assertIsNone(app._quick_worker_state)
+
+
+class MemoryTierTests(unittest.TestCase):
+    """2026-10-14 うにさん: low/mid/high with upper limits 700/1400/2100MB;
+    default high, a saved choice is kept as it is."""
+    def test_three_tiers_default_high_and_saved_choices_kept(self):
+        from settings import MEMORY_MID, MEMORY_CHOICES
+        self.assertEqual(MEMORY_CHOICES, (MEMORY_LOW, MEMORY_MID, MEMORY_HIGH))
+        self.assertEqual(Settings().get('memory_usage'), MEMORY_HIGH)
+        with tempfile.TemporaryDirectory(dir=Path(__file__).absolute().parent) as directory:
+            path = Path(directory) / 'synthetic_settings.json'
+            for value in (MEMORY_LOW, MEMORY_MID, MEMORY_HIGH):
+                path.write_text(json.dumps({'memory_usage': value}), encoding='utf8')
+                self.assertEqual(Settings(str(path)).get('memory_usage'), value)
+
+    def test_saving_and_compact_by_tier(self):
+        # 2026-10-15 うにさん「中は高に寄せた処理で1500前後に」: 中は表のタブの
+        # 子を残して温め、本体も表を先読みし、裏のタブは同じ子で進める。
+        # 簡易入力の子は閉じる。低だけが小さな表で、何も残さない。
+        from settings import MEMORY_MID
+        for value, expect in (
+                (MEMORY_LOW, dict(low=True, compact=True, fg=False, quick=False, shared=False,
+                                  prefetch=False, background=False, prewarm=False, preload=False, qprep=False)),
+                (MEMORY_MID, dict(low=False, compact=False, fg=True, quick=False, shared=True,
+                                  prefetch=False, background=True, prewarm=True, preload=True, qprep=False)),
+                (MEMORY_HIGH, dict(low=False, compact=False, fg=True, quick=True, shared=False,
+                                   prefetch=True, background=True, prewarm=True, preload=True, qprep=True))):
+            app, _ = owner(value)
+            got = dict(low=M.low(app), compact=M.compact(app), fg=M.retains(app, 'foreground'),
+                       quick=M.retains(app, 'quick'), shared=M.shares_worker(app),
+                       prefetch=M.prefetch_worker(app), background=M.background_tabs(app),
+                       prewarm=M.prewarm(app), preload=M.preloads(app), qprep=M.quick_prepare(app))
+            self.assertEqual(got, expect, value)
+        app, _ = owner(MEMORY_HIGH)
+        app.settings.set('memory_usage', 'unknown')
+        self.assertEqual(M.mode(app), MEMORY_HIGH)
+
+    def test_cache_sizes_by_tier(self):
+        from settings import MEMORY_MID
+        for value, tabs, cache, units, contexts in (
+                (MEMORY_LOW, 20, 1, 0, 4), (MEMORY_MID, 20, 12, 3, 4),
+                (MEMORY_HIGH, 20, 20, 20, 20), (MEMORY_HIGH, 2, 12, 3, 4)):
+            app, _ = owner(value)
+            app.session = SimpleNamespace(tabs=[object()] * tabs)
+            self.assertEqual((M.cache_tabs(app, 12), M.units_cache_tabs(app), M.context_cache_size(app)),
+                             (cache, units, contexts), value)
+        self.assertEqual((M.completed_tabs(owner(MEMORY_LOW)[0]), M.completed_tabs(owner(MEMORY_MID)[0]),
+                          M.completed_tabs(owner(MEMORY_HIGH)[0])), (1, None, None))
+
+    def test_low_keeps_completed_values_for_the_open_tab_only(self):
+        import tab_analysis as T
+        import analysis_work_app as work
+        for value, kept in ((MEMORY_LOW, 1), (MEMORY_MID, 3), (MEMORY_HIGH, 3)):
+            with self.subTest(value=value):
+                app, _ = owner(value)
+                owners = [object(), object(), object()]
+                app.session = SimpleNamespace(tabs=[{'text': 'a'}, {'text': 'b'}, {'text': 'c'}])
+                app._completed_tabs = {}
+                with patch.object(work, 'owner_for_tab', side_effect=lambda app, tab: owners['abc'.index(tab['text'])]):
+                    dependencies = W.state_key(app)
+                    for tab_owner, text in zip(owners, 'abc'):
+                        result = {'original': text, 'corrected': text, 'analysis_status': 'complete'}
+                        self.assertTrue(T._save(app, tab_owner, text, [result], {}, {(text, text): (text, [])},
+                                                {(text, text, False): (text, [])}, dependencies, ()))
+                self.assertEqual(len(app._completed_tabs), kept)
+                self.assertIn(owners[-1], app._completed_tabs)
+
+    def test_mid_keeps_the_open_tabs_child_and_releases_quick(self):
+        from settings import MEMORY_MID
+        app, worker = owner(MEMORY_MID)
+        M.queue_release(app, 'foreground')
+        self.assertEqual(app.root.calls, {})
+        self.assertIs(app._correction_worker, worker)
+        quick = Mock()
+        app._quick_worker = quick
+        app._quick_worker_state = ('quick model',)
+        M.queue_release(app, 'quick')
+        app.root.run(app._memory_quick_job)
+        quick.close.assert_called_once()
+        self.assertIsNone(app._quick_worker)
+        self.assertIs(app._correction_worker, worker)
+
+    def test_mid_background_shares_the_open_tabs_child(self):
+        from settings import MEMORY_MID
+        app, worker = owner(MEMORY_MID)
+        self.assertEqual(A._worker_fields(True, app),
+                         ('_correction_worker', '_worker_state', '_async_background_request'))
+        self.assertEqual(A._worker_fields(False, app), ('_correction_worker', '_worker_state', '_async_request'))
+        high, _ = owner(MEMORY_HIGH)
+        self.assertEqual(A._worker_fields(True, high),
+                         ('_prefetch_worker', '_prefetch_worker_state', '_async_background_request'))
+        self.assertEqual(A._worker_fields(True), A._worker_fields(True, high))
+        # 表のタブが使っている間は、裏の求めを出さない（追い越して壊さない）
+        app._worker_state = W.state_key(app)
+        app._async_request = ('row', 9)
+        with patch.object(A, 'snapshot', side_effect=AssertionError('same model')):
+            self.assertIsNone(A._request(app, {'kind': 'prepare', 'lines': ['資料']}, ('bg',), background=True))
+        worker.submit.assert_not_called()
+        self.assertIsNone(getattr(app, '_async_background_request', None))
+        # 空いたら同じ子へ、同じ状態のまま（写しは送らない）
+        app._async_request = None
+        with patch.object(A, 'snapshot', side_effect=AssertionError('same model')):
+            A._request(app, {'kind': 'prepare', 'lines': ['資料']}, ('bg',), background=True)
+        worker.submit.assert_called_once_with({'kind': 'prepare', 'lines': ['資料']}, None)
+        self.assertEqual(app._async_background_request, (('bg',), 9))
+        self.assertIsNone(getattr(app, '_prefetch_worker', None))
+
+    def test_shared_background_request_superseded_by_the_open_tab_is_asked_again(self):
+        from settings import MEMORY_MID
+        app, worker = owner(MEMORY_MID)
+        worker.serial = 12
+        worker.poll.return_value = None
+        app._async_background_request = (('bg',), 9)       # the open tab submitted 10..12 since
+        self.assertEqual(A._poll(app, ('bg',), background=True), (False, None))
+        self.assertIsNone(app._async_background_request)
+        worker.poll.assert_not_called()
+        # a cancel for the superseded request would interrupt the newer foreground work
+        app._async_background_request = (('bg',), 9)
+        A.cancel_background_request(app)
+        worker.submit.assert_not_called()
+        self.assertIsNone(app._async_background_request)
+        # the newest request is polled and may be cancelled as before
+        app._async_background_request = (('bg',), 12)
+        worker.poll.return_value = {'done': True}
+        self.assertEqual(A._poll(app, ('bg',), background=True), (True, {'done': True}))
+        app._async_background_request = (('bg',), 12)
+        A.cancel_background_request(app)
+        worker.submit.assert_called_once_with({'kind': 'cancel'})
+
+    def test_apply_tier_keeps_or_releases_per_tier(self):
+        from settings import MEMORY_MID
+        for value, fg_timer, quick_timer, prefetch_closed, warm in (
+                (MEMORY_LOW, True, True, True, False), (MEMORY_MID, False, True, True, True),
+                (MEMORY_HIGH, False, False, False, True)):
+            with self.subTest(value=value):
+                app, worker = owner(value)
+                app._quick_worker = Mock()
+                app._quick_worker_state = ('q',)
+                prefetched = Mock()
+                app._prefetch_worker = prefetched
+                app._async_background_request = ('bg', 1)
+                with patch.object(A, 'prewarm') as prewarm, patch.object(A, 'queue_idle_prewarm') as idle, \
+                        patch.object(Q, 'schedule_prepare') as prepare:
+                    M.apply_tier(app)
+                self.assertEqual(getattr(app, '_memory_foreground_job', None) is not None, fg_timer)
+                self.assertEqual(getattr(app, '_memory_quick_job', None) is not None, quick_timer)
+                self.assertEqual(prefetched.close.called, prefetch_closed)
+                if prefetch_closed:
+                    self.assertIsNone(app._prefetch_worker)
+                    self.assertIsNone(app._async_background_request)
+                else:
+                    self.assertIs(app._prefetch_worker, prefetched)
+                self.assertEqual(prewarm.called, warm)
+                self.assertEqual(idle.called, warm)
+                self.assertEqual(prepare.called, value == MEMORY_HIGH)
+                worker.close.assert_not_called()
+
+    def test_env_tells_new_workers_the_table_form(self):
+        import os
+        import compact_tables
+        from settings import MEMORY_MID
+        saved = os.environ.get(compact_tables.ENV)
+        try:
+            for value, expected in ((MEMORY_LOW, '1'), (MEMORY_MID, None), (MEMORY_HIGH, None)):
+                app, _ = owner(value)
+                M.export_env(app)
+                self.assertEqual(os.environ.get(compact_tables.ENV), expected, value)
+                self.assertEqual(compact_tables.enabled(), expected == '1')
+        finally:
+            if saved is None:
+                os.environ.pop(compact_tables.ENV, None)
+            else:
+                os.environ[compact_tables.ENV] = saved
+
+    def test_tier_change_into_or_out_of_low_replaces_idle_workers(self):
+        import os
+        import compact_tables
+        from settings import MEMORY_MID
+        saved = os.environ.get(compact_tables.ENV)
+        try:
+            app, worker = owner(MEMORY_MID)
+            M.switch_tables(app, MEMORY_HIGH)       # mid <- high: same form, kept
+            worker.close.assert_not_called()
+            app.settings.set('memory_usage', MEMORY_LOW)
+            app._async_request = ('busy', 1)        # a busy worker finishes first
+            M.switch_tables(app, MEMORY_MID)
+            worker.close.assert_not_called()
+            app._async_request = None
+            M.switch_tables(app, MEMORY_MID)        # low <- mid: idle worker goes
+            worker.close.assert_called_once_with()
+            self.assertIsNone(app._correction_worker)
+            self.assertEqual(os.environ.get(compact_tables.ENV), '1')
+        finally:
+            if saved is None:
+                os.environ.pop(compact_tables.ENV, None)
+            else:
+                os.environ[compact_tables.ENV] = saved
+
+
+class MemoryPreloadTests(unittest.TestCase):
+    """2026-10-14 うにさん「低にしているのに約1500MB」: low does not preload
+    the optional public tables into the main process; they load on first use.
+    2026-10-15: mid preloads them like high (「中は高に寄せた処理で」)."""
+    def test_mid_preloads_like_high(self):
+        from settings import MEMORY_MID
+        app, _ = owner(MEMORY_MID)
+        loaded, importer = self._tables()
+        with importer:
+            self.assertEqual(M.preload_tables(app), M.OPTIONAL_PRELOAD)
+        self.assertEqual(loaded, list(M.OPTIONAL_PRELOAD))
+
+    def _tables(self):
+        loaded = []
+        modules = {name: SimpleNamespace(available=lambda name=name: loaded.append(name) or True)
+                   for name in M.OPTIONAL_PRELOAD}
+        return loaded, patch('importlib.import_module', side_effect=lambda name: modules[name])
+
+    def test_high_preloads_the_optional_tables(self):
+        app, _ = owner(MEMORY_HIGH)
+        loaded, importer = self._tables()
+        with importer:
+            self.assertEqual(M.preload_tables(app), M.OPTIONAL_PRELOAD)
+        self.assertEqual(loaded, list(M.OPTIONAL_PRELOAD))
+
+    def test_low_leaves_them_for_first_use(self):
+        app, _ = owner(MEMORY_LOW)
+        loaded, importer = self._tables()
+        with importer:
+            self.assertEqual(M.preload_tables(app), ())
+        self.assertEqual(loaded, [])
+
+    def test_the_tables_still_load_themselves_on_demand(self):
+        import oddness
+        import seed_japanese
+        for module in (seed_japanese, oddness):
+            self.assertTrue(callable(getattr(module, '_load', None)), module.__name__)
 
 
 if __name__ == '__main__':

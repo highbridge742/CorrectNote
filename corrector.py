@@ -2226,29 +2226,37 @@ _KANA_TO_ROMAJI = {
     'ぅ': 'u', 'ぇ': 'e', 'ぉ': 'o', 'っ': 't', 'ー': '-',
 }
 
-_QWERTY_ROWS = ('1234567890-^¥', 'qwertyuiop@[', 'asdfghjkl;:]', 'zxcvbnm,./\\')
-
+# キーボードの配列と形は `keyboard_layout` が1か所で持つ（項目48-KB・
+# 2026-10-14・うにさんの指定「オプションにキーボード配列を追加して、
+# QWERTY以外や…左右で分割されたキーボードなどの選択を用意してください。
+# これは隣接キーに影響します」）。既定は今までどおり QWERTY（JIS）・
+# 標準の形で、下の3つの表の中身は1組も変わらない。配列か形を切り替えると
+# `_rebuild_keyboard` が呼ばれて表が差し替わる。
+#
 # キーの位置は**一度だけ作る**（項目48-BO）。
 # 以前は `_qwerty_adjacent` の中で毎回26件の表を作り直していた。
 # ローマ字入力の人のメモ120行を測ったら、この関数が **451,910回**
 # 呼ばれていて、表づくりだけで解析時間の **31%** を使っていた。
-# 中身は変えていないので、答えは1つも変わらない。
-_QWERTY_POS = {ch: (row_i, col_i)
-               for row_i, row in enumerate(_QWERTY_ROWS)
-               for col_i, ch in enumerate(row)}
-
+import keyboard_layout as _KEYBOARD
 # Share physical directions with kana, after resolving the input method
 # to its own keys. Cache pairs once rather than comparing positions per edit.
 from kana_layout import physical_keys_adjacent, physical_intrusion_keys_adjacent
-_QWERTY_NEAR = frozenset(
-    (a, b)
-    for a, pa in _QWERTY_POS.items()
-    for b, pb in _QWERTY_POS.items()
-    if physical_keys_adjacent(pa, pb))
+_QWERTY_ROWS = _KEYBOARD.rows()
+_QWERTY_POS = {}
+_QWERTY_NEAR = frozenset()
+_QWERTY_INTRUSION_NEAR = frozenset()
 
-_QWERTY_INTRUSION_NEAR = frozenset(
-    (a,b) for a,pa in _QWERTY_POS.items() for b,pb in _QWERTY_POS.items()
-    if physical_intrusion_keys_adjacent(pa,pb))
+
+def _rebuild_keyboard():
+    """いまの配列・形の表を受け取る（登録時に1回、切り替えのたびに1回）。"""
+    global _QWERTY_ROWS, _QWERTY_POS, _QWERTY_NEAR, _QWERTY_INTRUSION_NEAR
+    _QWERTY_ROWS = _KEYBOARD.rows()
+    _QWERTY_POS = dict(_KEYBOARD.positions())
+    _QWERTY_NEAR = _KEYBOARD.near_pairs()
+    _QWERTY_INTRUSION_NEAR = _KEYBOARD.intrusion_pairs()
+
+
+_KEYBOARD.on_change(_rebuild_keyboard)
 
 
 def _qwerty_intrusion_adjacent(a,b):
@@ -16860,6 +16868,13 @@ def _table_readings_for_surface(surface):
             path = _os.path.join(here, 'seed_japanese_cost.txt.gz')
             if not _os.path.exists(path):
                 path = 'seed_japanese_cost.txt.gz'
+            # メモリ使用量「低」: 同じ鍵・同じ値の小さな形（compact_tables）。
+            import compact_tables as _compact
+            if _compact.enabled():
+                compact=_compact.load_cost_tables(path,_os.path.join(here,_compact.FILE_NAME))
+                if compact is not None:
+                    _TABLE_READINGS,_TABLE_COST,_TABLE_SURFACES=compact
+                    return [rd for _c,rd in _TABLE_READINGS.get(surface,())[:4]]
             from cost_index import load as _load_cost_index
             indexed=_load_cost_index(path,_os.path.join(here,'seed_japanese_index.pickle.gz'))
             if indexed is not None:
@@ -27718,6 +27733,20 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                 _trace('英語', f'{e_run!r} → {fixed!r}')
                 replacements.append((e_s, e_e, fixed, '英語'))
                 _loan_taken.append((e_s, e_e))
+        # 英文の半角スペースの入れ忘れ（Thisis → This is・項目48-ES）。
+        # **隣接キー・順番の直し（上の段）が済んだあと**に考える
+        # （うにさんの指定・2026-10-13）。
+        try:
+            import en_space as _ENSP
+            for sp_s, sp_e, sp_fix in _ENSP.find_missing_spaces(line, store):
+                if _loan_overlaps(sp_s, sp_e):
+                    continue
+                _trace('英語', f'{line[sp_s:sp_e]!r} → {sp_fix!r}'
+                               f'（スペースの入れ忘れ・順番・項目48-ES）')
+                replacements.append((sp_s, sp_e, sp_fix, '英語'))
+                _loan_taken.append((sp_s, sp_e))
+        except Exception:
+            pass
 
     # --- 記号のつもりで打った、同じキーのかな（項目48-EG）---
     # 行末の1文字だけを見る。`（→ゆ` の逆向き。
