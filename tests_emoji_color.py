@@ -169,6 +169,33 @@ class ClusterCursorTests(unittest.TestCase):
         self.assertEqual(plain.index(self.root.tk.call('::tk::TextClosestGap',plain._w,x+1,y+2)),'1.1')
 
 
+# test_a_selector_takes_no_room_of_its_own, in a process of its own (EmojiOverlayTests' pane).
+_SELECTOR_CHILD=r'''
+import json,sys,tkinter as tk
+sys.path.insert(0,'.')
+import emoji_color
+root=tk.Tk();root.geometry('420x160+40+40')
+w=tk.Text(root,font=('Meiryo',11),padx=14,pady=12,bg='#f0f0ed');w.pack(fill='both',expand=True)
+overlay=emoji_color.install(w);root.update()
+def placed():
+    overlay.refresh();overlay.refresh();root.update()
+    return [l for l in overlay.labels if l.winfo_ismapped()]
+w.insert('1.0','a❤️b\na\U0001F600b\na❤︎b')
+first=placed();counts=[len(first)];widths=[l.winfo_width() for l in first]
+text=w.get('1.0','end-1c')
+w.insert('end','\na\U0001F468‍\U0001F469‍\U0001F467b')
+labels=placed();counts.append(len(labels))
+if len(labels)>2:widths.append(labels[2].winfo_width())
+touch=[]
+for row in (1,3):
+    w.mark_set('letter','%d.0 lineend -1c'%row)
+    base=w.bbox('%d.1'%row);letter=w.bbox('letter')
+    touch.append([base[0]+base[2],letter[0]])
+print('RESULT '+json.dumps(dict(counts=counts,widths=widths,text=text,touch=touch),ensure_ascii=False))
+root.destroy()
+'''
+
+
 @unittest.skipUnless(sys.platform=='win32','Direct2D on Windows')
 class EmojiOverlayTests(unittest.TestCase):
     def setUp(self):
@@ -212,20 +239,26 @@ class EmojiOverlayTests(unittest.TestCase):
     def test_a_selector_takes_no_room_of_its_own(self):
         # 2026-10-15 うにさん「絵文字が2つ幅でした」: ❤️ is as wide as 😀; the
         # selector is only hidden, the text keeps it.
-        self.w.insert('1.0','a❤️b\na\U0001F600b\na❤︎b')
-        labels=self.placed();self.assertEqual(len(labels),2)
-        heart,smile=labels
-        self.assertLessEqual(abs(heart.winfo_width()-smile.winfo_width()),1)
-        self.assertEqual(self.w.get('1.0','end-1c'),'a❤️b\na\U0001F600b\na❤︎b')
+        # In a fresh process, as the app starts: in Tk 8.6.12+ an emoji keeps,
+        # for the whole process, the room of the font that first showed it,
+        # and earlier tests show 😀 in plain ＭＳ ゴシック Texts (2026-10-17,
+        # emoji_color.prime; tests_emoji_room_20261017 covers those fonts).
+        import json,os,subprocess
+        run=subprocess.run([sys.executable,'-B','-X','utf8','-c',_SELECTOR_CHILD],
+                           cwd=os.path.dirname(os.path.abspath(__file__)),stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT,encoding='utf8',timeout=120)
+        line=next((l for l in run.stdout.splitlines() if l.startswith('RESULT ')),None)
+        self.assertIsNotNone(line,run.stdout[-2000:])
+        got=json.loads(line[7:])
+        self.assertEqual(got['counts'],[2,3])
+        heart,smile,family=got['widths']
+        self.assertLessEqual(abs(heart-smile),1)
+        self.assertEqual(got['text'],'a❤️b\na\U0001F600b\na❤︎b')
         # A joined emoji takes one emoji's room too (👨‍👩‍👧 was three).
-        self.w.insert('end','\na\U0001F468‍\U0001F469‍\U0001F467b')
-        labels=self.placed();self.assertEqual(len(labels),3)
-        self.assertLessEqual(abs(labels[2].winfo_width()-smile.winfo_width()),1)
-        for row in (1,3):
-            self.w.mark_set('letter','%d.0 lineend -1c'%row)
+        self.assertLessEqual(abs(family-smile),1)
+        for row,(edge,letter) in zip((1,3),got['touch']):
             # the base and the letter after it touch: no blank for the selector
-            base=self.w.bbox('%d.1'%row);letter=self.w.bbox('letter')
-            self.assertEqual(base[0]+base[2],letter[0],row)
+            self.assertEqual(edge,letter,row)
     def test_the_pane_is_drawn_again_after_its_view_moves(self):
         # 2026-10-15 うにさん「スクロール時に絵文字が変です」「スクロールした瞬間
         # だけです」・選択「色を保つ」: Tk scrolls by copying pixels, labels

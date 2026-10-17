@@ -78,6 +78,11 @@ class BulkInsertDialog:
                             exportselection=False, bg=panel, fg=ink, insertbackground=ink,
                                  selectbackground=accent, selectforeground=ink)
         self.text.pack(fill='x', pady=(4, 8))
+        # The same observer as the other panes (Unicode-safe edits, and an
+        # emoji is first measured in the emoji font: in Tk 8.6.12+ this pane's
+        # ＭＳ ゴシック would otherwise give it one em for the whole process).
+        from analysis_work import observe_text
+        observe_text(self.text)
         self.text.insert('1.0', self.app.settings.get('bulk_insert_text') or '')
         self.message = tk.Label(body, text='本文の選択部分を行ごとに処理します。縦線が挿入位置です。',
                                 bg=panel, fg=ink, anchor='w', wraplength=400)

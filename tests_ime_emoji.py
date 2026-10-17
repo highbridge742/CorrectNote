@@ -9,6 +9,10 @@ import sys,time,unittest
 from unittest.mock import Mock
 import tkinter as tk
 import app
+# Panes the app types into are observed (text_edit); so are these, or 😀
+# would first be laid out in a plain ＭＳ ゴシック Text and keep one em for the
+# rest of the process in Tk 8.6.12+ (emoji_color.prime, 2026-10-17).
+from analysis_work import observe_text
 
 
 class ImeResultNeedsHelpTests(unittest.TestCase):
@@ -40,8 +44,13 @@ class InsertImeTextTests(unittest.TestCase):
         self.focus=None;self.root.focus_get=lambda:self.focus
     def tearDown(self):
         self.root.destroy()
+        # The observed Texts hold Tcl commands back to Python: drop them here,
+        # on the Tk thread (a later collection elsewhere ended Tk 8.6.9 with
+        # Tcl_AsyncDelete).
+        from tests_tk_keys import release_tk_fixture
+        release_tk_fixture(self,'a','root','focus')
     def test_inserts_at_the_cursor_and_replaces_the_selection(self):
-        w=tk.Text(self.root);w.pack();w.insert('1.0','前後');w.mark_set('insert','1.1')
+        w=tk.Text(self.root);w.pack();observe_text(w);w.insert('1.0','前後');w.mark_set('insert','1.1')
         self.focus=w
         self.assertTrue(self.a._insert_ime_text('\U0001F600'))
         self.assertEqual(w.get('1.0','end-1c'),'前\U0001F600後')
@@ -53,7 +62,7 @@ class InsertImeTextTests(unittest.TestCase):
         self.focus=e
         self.assertTrue(self.a._insert_ime_text('\U0001F600'))
         self.assertEqual(e.get(),'a\U0001F600b')
-        w=tk.Text(self.root);w.pack();w.insert('1.0','x');w.config(state='disabled')
+        w=tk.Text(self.root);w.pack();observe_text(w);w.insert('1.0','x');w.config(state='disabled')
         self.focus=w
         self.assertFalse(self.a._insert_ime_text('\U0001F600'))
         self.assertEqual(w.get('1.0','end-1c'),'x')
@@ -79,7 +88,7 @@ class ImeEmojiThroughTheWindowTests(unittest.TestCase):
         self.a._on_files_dropped=Mock()
         self.a._setup_file_drop()
         self.assertTrue(self.a._drop_hwnds,'Native window subclass not installed')
-        self.w=tk.Text(self.root);self.w.pack();self.root.update()
+        self.w=tk.Text(self.root);self.w.pack();observe_text(self.w);self.root.update()
     def tearDown(self):
         self.a._teardown_file_drop();self.root.update_idletasks();self.root.destroy()
         from tests_tk_keys import release_tk_fixture

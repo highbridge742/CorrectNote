@@ -49,6 +49,7 @@ VS_TAG = 'correctnote_emoji_vs'
 HIDE_TAG = 'correctnote_emoji_hide_'
 FONT_TAG = 'correctnote_emoji_font'
 EMOJI_FAMILY = 'Segoe UI Emoji'
+SYMBOL_FAMILY = 'Segoe UI Symbol'
 MAX_LABELS = 240        # a screen full of emoji still stays light
 
 
@@ -70,6 +71,9 @@ def emoji_columns(widget):
     key = id(widget.tk)
     if key not in _PAIR_COLUMNS:
         import tkinter as tk
+        # The probe's font (TkFixedFont, ＭＳ ゴシック) must not be the first to
+        # ask for 😀: it would take one em for the rest of the process (prime).
+        prime(widget, '\U0001F600')
         probe = tk.Text(widget)
         try:
             probe.insert('1.0', 'a\U0001F600b')
@@ -77,6 +81,48 @@ def emoji_columns(widget):
         finally:
             probe.destroy()
     return _PAIR_COLUMNS[key]
+
+
+# Tk 8.6.12+ (Python 3.11: the released EXE and CI) keeps, for the whole
+# process and for each emoji outside the BMP, the fallback font that first
+# served it, and gives that emoji its width in every font afterwards: 21px at
+# 11pt when メイリオ, 游ゴシック or Segoe UI asked first, 19px for Meiryo UI,
+# 15px (one em) for ＭＳ ゴシック, BIZ UD ゴシック, 游明朝 or TkFixedFont, even
+# in Segoe UI Emoji (2026-10-17, CI tests_emoji_color 218: 😀 was first shown
+# in a plain Text by EmojiCursorTests and took 6px less than ❤️ and 👨‍👩‍👧).
+# So the emoji font is asked first, once per emoji and process, when the
+# emoji comes into a pane (text_edit's observer) or into emoji_columns' probe:
+# every emoji then takes the emoji font's room, as in Tk 8.6.9, whatever the
+# pane's font. A new emoji costs Tk 12-18ms once (it looks through the
+# system's fonts), so they are not all asked at start-up (about 20s). Tk 8.6.9
+# has no such memory and is left alone.
+_PRIMED = set()
+_PRIMES = {}        # id(interpreter) -> whether this Tk keeps the first font
+
+
+def prime(widget, text):
+    """Ask the emoji font first for the emoji in `text` this process has not
+    shown yet (see above)."""
+    if sys.platform != 'win32':
+        return
+    new = {ch for ch in text if '\U0001F000' <= ch <= '\U0001FAFF'} - _PRIMED
+    if not new:
+        return
+    key = id(widget.tk)
+    if key not in _PRIMES:
+        try:
+            level = tuple(int(p) for p in
+                          re.findall(r'\d+', str(widget.tk.call('info', 'patchlevel')))[:3])
+        except Exception:
+            level = ()
+        _PRIMES[key] = level >= (8, 6, 10)
+    if not _PRIMES[key]:
+        return
+    _PRIMED.update(new)
+    try:
+        widget.tk.call('font', 'measure', '{%s} 11' % EMOJI_FAMILY, ''.join(sorted(new)))
+    except Exception:
+        pass
 
 
 def _units(text):
@@ -414,11 +460,10 @@ class EmojiOverlay:
         """Hide the visible variation selectors and the later parts of a joined
         emoji (👨‍👩‍👧: Tk gives each part its own width; the colour draws the
         whole family in the first one's room). A pictograph base before U+FE0F
-        is drawn in the emoji font (see VS_TAG), and so is an emoji outside the
-        BMP: Tk picks its own fallback font for those, and the one Tk 8.6.12+
-        picks (Python 3.11, the released EXE) is narrower or wider than the emoji
-        font ❤ is drawn in (CI 2026-10-16: ❤️ 5px off 😀). With both in the
-        emoji font they take the same room in every Tk. Only the screen's rows."""
+        is drawn in a font that gives it an emoji's room (see _room_font), and
+        an emoji outside the BMP is drawn in the emoji font, which sets its
+        height (a skin tone left in the letters' font sat lower). Only the
+        screen's rows."""
         astral = any(ord(ch) > 0xffff for ch in text)
         if ('\ufe0f' not in text and '\ufe0e' not in text and '\u200d' not in text
                 and not astral):
@@ -453,9 +498,51 @@ class EmojiOverlay:
                 # Columns of the whole emoji: an emoji outside the BMP is one
                 # column in Tk 8.6.9, two (UTF-16) later.
                 self._emoji_font('%d.%d' % (row, base + width_of(line[:start])),
-                                 '%d.%d' % (row, base + width_of(line[:end])))
+                                 '%d.%d' % (row, base + width_of(line[:end])),
+                                 line[start] if ord(line[start]) <= 0xffff else None)
 
-    def _emoji_font(self, index, end=None):
+    # The room of an emoji outside the BMP is not always the emoji font's. In
+    # Tk 8.6.12+ (Python 3.11: the released EXE and CI) Tk keeps, for the whole
+    # process, the fallback font that first served the emoji: when a font like
+    # TkFixedFont (ＭＳ ゴシック) asked first, 😀 takes about one em in every
+    # font afterwards (15px at 11pt, even in Segoe UI Emoji), while ❤ in Segoe
+    # UI Emoji stays 21px. ❤️ took 6px more room than 😀 and was drawn bigger
+    # (CI 2026-10-15/17, tests_emoji_color 218, after EmojiCursorTests' plain
+    # Text). So a base in the BMP gets the font, at the letters' size, whose
+    # width for it is 😀's room now: the emoji font where it already is (Tk
+    # 8.6.9, or when Segoe UI Emoji asked first: nothing changes), else Segoe
+    # UI Symbol (❤ within 1px, same height), else the emoji font at the pixel
+    # size that gives that width (☀ ⭐ are 2-4px narrow in Segoe UI Symbol).
+    _ROOM = {}
+
+    def _room_font(self, char, size):
+        """(family, size) for the BMP emoji `char` drawn at `size`."""
+        call = self.w.tk.call
+        target = int(call('font', 'measure', '{%s} %d' % (EMOJI_FAMILY, size), '\U0001F600'))
+        key = (char, size, target)
+        got = self._ROOM.get(key)
+        if got is not None:
+            return got
+
+        def width(family, at):
+            return int(call('font', 'measure', '{%s} %d' % (family, at), char))
+        got = (EMOJI_FAMILY, size)
+        own = width(EMOJI_FAMILY, size)
+        if own != target:
+            if abs(width(SYMBOL_FAMILY, size) - target) <= 1:
+                got = (SYMBOL_FAMILY, size)
+            else:
+                best = abs(own - target)
+                for px in range(1, 4 * max(target, 1)):
+                    off = abs(width(EMOJI_FAMILY, -px) - target)
+                    if off < best:
+                        got, best = (EMOJI_FAMILY, -px), off
+                    if off == 0:
+                        break
+        self._ROOM[key] = got
+        return got
+
+    def _emoji_font(self, index, end=None, char=None):
         call = self._call
         tags = self.w.tk.splitlist(call('tag', 'names', index))
         have = [str(tag) for tag in tags if str(tag).startswith(FONT_TAG)]
@@ -476,14 +563,19 @@ class EmojiOverlay:
             size = int(self.w.tk.call('font', 'actual', font, '-size'))
         except Exception:
             return
+        family, at = (EMOJI_FAMILY, size) if char is None else self._room_font(char, size)
         name = FONT_TAG + str(size).replace('-', 'px')
+        if (family, at) != (EMOJI_FAMILY, size):
+            # Each width its own tag; the emoji font at the letters' size keeps
+            # the plain name (Tk 8.6.9 has only those).
+            name += '_' + ('sym' if family == SYMBOL_FAMILY else str(at).replace('-', 'px'))
         if have == [name]:
             return
         span = (index,) if end is None else (index, end)
         for old in have:
             call('tag', 'remove', old, *span)
         if name not in self._tags:
-            call('tag', 'configure', name, '-font', '{%s} %d' % (EMOJI_FAMILY, size))
+            call('tag', 'configure', name, '-font', '{%s} %d' % (family, at))
             self._tags.add(name)
         # Above the part-of-speech fonts (made earlier and later).
         call('tag', 'raise', name)

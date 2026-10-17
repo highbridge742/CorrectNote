@@ -122,6 +122,59 @@ class UnicodeUndoCommand:
             finally:self._raw('mark','unset',a,b)
         return self._invoke(args)
 
+    # Tk's `display lineend` can point inside a multi-byte character on the
+    # display rows of a wrapped line (Tk 8.6.9 and 8.6.18 alike: 140 of 232
+    # rows in a plain Text). End and Shift+End use it
+    # (text.tcl <<LineEnd>>/<<SelectLineEnd>>); a cursor left there splits
+    # the character on screen (」 shows as 「ã」 and two invisible ones) and
+    # typing Enter or 「 there stores the split bytes (2026-10-17 うにさん
+    # 「折り返しの行末の文字が化ける」). Where Tk answers correctly, the
+    # answer is the start of the next display row of the same line minus
+    # one character, or the line end on its last display row (78/78 and
+    # 108/108); this computes that place from indexes that never split.
+    # Only index arguments are rewritten: the text given to insert/replace
+    # and the pattern of search may say the same words.
+    _DISPLAY_LINEEND=' display lineend'
+    _INDEX_ARGS={'insert':(1,),'replace':(1,2),'search':()}
+
+    def _safe_display_lineend(self,args):
+        if not any(isinstance(a,str) and self._DISPLAY_LINEEND in a for a in args):
+            return args
+        keep=self._INDEX_ARGS.get(args[0] if args else None)
+        out=[]
+        for n,value in enumerate(args):
+            if keep is not None and n not in keep:
+                out.append(value)
+                continue
+            if isinstance(value,str) and self._DISPLAY_LINEEND in value:
+                base,_,rest=value.partition(self._DISPLAY_LINEEND)
+                safe=self._display_lineend(base)
+                if safe is not None:value=safe+rest
+            out.append(value)
+        return tuple(out)
+
+    def _display_lineend(self,base):
+        """The end of the display row at `base`, as a plain `row.col` index."""
+        try:
+            start=str(self._raw('index',base+' display linestart'))
+            nxt=str(self._raw('index',base+' + 1 display lines display linestart'))
+            if (nxt.split('.')[0]==start.split('.')[0]
+                    and self._raw('compare',nxt,'>',start)):
+                return str(self._raw('index',nxt+' -1c'))
+            return str(self._raw('index',base+' lineend'))
+        except Exception:
+            return None
+
+    def _prime_emoji(self,args):
+        """Let the emoji font be the first font Tk asks for a new emoji, before
+        this pane lays it out (emoji_color.prime: Tk 8.6.12+ keeps the first
+        font's width for the whole process; ＭＳ ゴシック gave one em)."""
+        texts=args[2::2] if args[0]=='insert' else args[3::2]
+        texts=[t for t in texts if isinstance(t,str) and t and max(t)>'￿']
+        if texts:
+            from emoji_color import prime
+            prime(self.widget,''.join(texts))
+
     def _key_step(self,index):
         """The mark Tk's Shift+Left/Right moves to: one step, off any cluster."""
         self._raw('mark','set',self._KEY,index)
@@ -179,6 +232,8 @@ class UnicodeUndoCommand:
             return ''
 
     def __call__(self,*args):
+        args=self._safe_display_lineend(args)
+        if args and args[0] in ('insert','replace'):self._prime_emoji(args)
         if (len(args)==2 and args[0]=='index' and args[1] in self._KEY_STEPS
                 and not self.depth):
             return self._key_step(args[1])

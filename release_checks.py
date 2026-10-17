@@ -92,6 +92,7 @@ def main():
         'tests_quick_input_layout',
         'tests_ime_emoji',
         'tests_emoji_color',
+        'tests_emoji_room_20261017',
         'tests_navigation_margins',
         'tests_quick_return',
         'tests_bulk_insert',
