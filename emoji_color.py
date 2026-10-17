@@ -414,34 +414,48 @@ class EmojiOverlay:
         """Hide the visible variation selectors and the later parts of a joined
         emoji (👨‍👩‍👧: Tk gives each part its own width; the colour draws the
         whole family in the first one's room). A pictograph base before U+FE0F
-        is drawn in the emoji font (see VS_TAG). Only the screen's rows."""
-        if ('\ufe0f' not in text and '\ufe0e' not in text and '\u200d' not in text):
+        is drawn in the emoji font (see VS_TAG), and so is an emoji outside the
+        BMP: Tk picks its own fallback font for those, and the one Tk 8.6.12+
+        picks (Python 3.11, the released EXE) is narrower or wider than the emoji
+        font ❤ is drawn in (CI 2026-10-16: ❤️ 5px off 😀). With both in the
+        emoji font they take the same room in every Tk. Only the screen's rows."""
+        astral = any(ord(ch) > 0xffff for ch in text)
+        if ('\ufe0f' not in text and '\ufe0e' not in text and '\u200d' not in text
+                and not astral):
             return
         call = self._call
         if VS_TAG not in self._tags:
             call('tag', 'configure', VS_TAG, '-elide', 1)
             self._tags.add(VS_TAG)
         for offset, line in enumerate(text.split('\n')):
-            if '\ufe0f' not in line and '\ufe0e' not in line and '\u200d' not in line:
+            if ('\ufe0f' not in line and '\ufe0e' not in line and '\u200d' not in line
+                    and not any(ord(ch) > 0xffff for ch in line)):
                 continue
             row = line0 + offset
             base = lead if offset == 0 else 0
             hide = {i for i, ch in enumerate(line) if ch in '\ufe0e\ufe0f'}
-            bases = set()
+            bases = {}
             for start, end in emoji_spans(line):
                 if '\u200d' in line[start:end]:
                     hide.update(range(start + 1, end))
-                if (ord(line[start]) <= 0xffff and line[start + 1:start + 2] == '\ufe0f'
+                if ord(line[start]) > 0xffff:
+                    # The whole emoji: a skin tone left in the letters' font sat
+                    # at another height and the colour was not placed (👍🏽).
+                    bases[start] = end
+                elif (line[start + 1:start + 2] == '\ufe0f'
                         and line[start] not in '0123456789#*'):
-                    bases.add(start)
+                    bases[start] = start + 1
             for i in sorted(hide):
                 index = '%d.%d' % (row, base + width_of(line[:i]))
                 if VS_TAG not in self.w.tk.splitlist(call('tag', 'names', index)):
                     call('tag', 'add', VS_TAG, index)
-            for start in bases:
-                self._emoji_font('%d.%d' % (row, base + width_of(line[:start])))
+            for start, end in bases.items():
+                # Columns of the whole emoji: an emoji outside the BMP is one
+                # column in Tk 8.6.9, two (UTF-16) later.
+                self._emoji_font('%d.%d' % (row, base + width_of(line[:start])),
+                                 '%d.%d' % (row, base + width_of(line[:end])))
 
-    def _emoji_font(self, index):
+    def _emoji_font(self, index, end=None):
         call = self._call
         tags = self.w.tk.splitlist(call('tag', 'names', index))
         have = [str(tag) for tag in tags if str(tag).startswith(FONT_TAG)]
@@ -465,14 +479,15 @@ class EmojiOverlay:
         name = FONT_TAG + str(size).replace('-', 'px')
         if have == [name]:
             return
+        span = (index,) if end is None else (index, end)
         for old in have:
-            call('tag', 'remove', old, index)
+            call('tag', 'remove', old, *span)
         if name not in self._tags:
             call('tag', 'configure', name, '-font', '{%s} %d' % (EMOJI_FAMILY, size))
             self._tags.add(name)
         # Above the part-of-speech fonts (made earlier and later).
         call('tag', 'raise', name)
-        call('tag', 'add', name, index)
+        call('tag', 'add', name, *span)
 
     def placements(self):
         """[(x, y, w, h, text, bg)] for the emoji visible now."""

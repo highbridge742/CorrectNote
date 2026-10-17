@@ -44,9 +44,9 @@ class SelectionOpening:
         self.cancel()
         if self.closed:return
         app=self.app
-        win=getattr(app,'_quick_win',None)
+        win=getattr(app,'_quick_win',None);live=False
         if win is not None:
-            try:visible=win.winfo_exists() and win.state()!='iconic'
+            try:live=bool(win.winfo_exists());visible=live and win.state()!='iconic'
             except Exception:visible=False
             if visible:
                 app._show_quick_capture(trigger,None,None);return
@@ -54,11 +54,15 @@ class SelectionOpening:
         source=self.snapshot();mode=quick_ime.foreground_fullwidth_mode()
         if source is not None and source!=self.snapshot():return
         # The text box to give the focus back to on closing (quick_return).
-        try:
-            import quick_return
-            app._quick_return=quick_return.capture(source)
-        except Exception:
-            app._quick_return=None
+        # Remembered once, when the window is first opened: bringing an open
+        # (or minimized) window back with the shortcut from another app must
+        # not replace it (2026-10-16 うにさん).
+        if not live:
+            try:
+                import quick_return
+                app._quick_return=quick_return.capture(source)
+            except Exception:
+                app._quick_return=None
         if source is None or source.process==os.getpid():
             value=local_selection(app,source)
             app._show_quick_capture(trigger,mode,value);return

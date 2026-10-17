@@ -23481,9 +23481,11 @@ def _finish_halfwidth_candidate(line, start, end, fixed, store, tokenize_fn,
 
 
 from contextual_repair import with_contextual_repair as _with_contextual_repair
+from last_keystroke import with_last_keystroke_repair as _with_last_keystroke_repair
 
 
 @_with_line_result
+@_with_last_keystroke_repair
 @_with_literal_examples
 @_with_correction_source
 @_with_contextual_repair

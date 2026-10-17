@@ -54,6 +54,53 @@ def caption_width(window, hwnd=None):
     return buttons + max(0, icon) + 24
 
 
+# 単語帳の窓は最大化しない（2026-10-15 うにさん「単語帳をドラッグしてウインドウの最上部に
+# 触れても、最大化されないようにする。できれば単語帳ウインドウから最大化ボタンを消す」）。
+# 最大化ボタン（WS_MAXIMIZEBOX）の無い窓は、上端へのスナップ・題名バーのダブルクリック・
+# Win＋↑でも最大化しない。大きさを変える枠（WS_THICKFRAME）と最小化ボタンは残す。
+GWL_STYLE = -16
+WS_MAXIMIZEBOX = 0x00010000
+WS_MINIMIZEBOX = 0x00020000
+WS_THICKFRAME = 0x00040000
+
+
+def _frame_style(window, clear=0):
+    """窓の枠（wm frame）の GWL_STYLE。clear の立っている印は外して反映する。Windows 以外は None。"""
+    if os.name != 'nt':
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user = ctypes.WinDLL('user32')
+        get, put = user.GetWindowLongPtrW, user.SetWindowLongPtrW
+        get.argtypes = [wintypes.HWND, ctypes.c_int]
+        get.restype = ctypes.c_ssize_t
+        put.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+        put.restype = ctypes.c_ssize_t
+        hwnd = int(window.wm_frame(), 16)
+        style = get(hwnd, GWL_STYLE)
+        if clear and style & clear:
+            style &= ~clear
+            put(hwnd, GWL_STYLE, style)
+            user.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                          ctypes.c_int, ctypes.c_int, wintypes.UINT]
+            # SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
+            user.SetWindowPos(hwnd, None, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020)
+        return style
+    except (OSError, AttributeError, ValueError, tk.TclError):
+        return None
+
+
+def no_maximize(window):
+    """最大化ボタンを外し、もし最大化されていたら元の大きさに戻す。何度呼んでも同じ。"""
+    _frame_style(window, clear=WS_MAXIMIZEBOX)
+    try:
+        if window.state() == 'zoomed':
+            window.state('normal')
+    except tk.TclError:
+        pass
+
+
 class _WordBookNative:
     """Remember the preceding foreground window without polling or reading text."""
     def __init__(self, window, previous=None):
@@ -410,10 +457,13 @@ class WordBook:
         self.canvas.bind('<Configure>', self._canvas_size)
         self.canvas.bind('<MouseWheel>', self._wheel)
         win.bind('<Configure>', self._resized, add=True)
+        # 出るたびに（最小化から戻る・Tk が枠を作り直す・配色の切り替えのあとも）最大化させない
+        win.bind('<Map>', lambda e: no_maximize(win) if e.widget is win else None, add=True)
         self.visible = True
         self.render()
         win.deiconify()
         win.update_idletasks()
+        no_maximize(win)
         floor = caption_width(win, getattr(self._native, 'hwnd', None))
         if floor:
             win.minsize(floor, 1)
@@ -481,7 +531,14 @@ class WordBook:
         return 'break'
 
     def _resized(self, event):
-        if event.widget is not self.window or event.width < 80:
+        if event.widget is not self.window:
+            return
+        # Tk が枠の印を作り直したとき（wm resizable など）と、何かの道で最大化されたとき
+        style = _frame_style(self.window)
+        if style is not None and (style & WS_MAXIMIZEBOX or self.window.state() == 'zoomed'):
+            no_maximize(self.window)
+            return
+        if event.width < 80:
             return
         if self.width == event.width:
             return
@@ -556,10 +613,20 @@ class WordBook:
         self.save()
         self.render()
 
+    def _to_clipboard(self):
+        """2026-10-16 うにさん: the option (default on) to put the word on the clipboard."""
+        try:
+            return bool(self.app.settings.get('word_book_clipboard'))
+        except AttributeError:
+            return True
+
     def copy(self, text):
-        self.app.root.clipboard_clear()
-        self.app.root.clipboard_append(text)
-        self.app.status.config(text='単語帳の文字をコピーしました')
+        if self._to_clipboard():
+            self.app.root.clipboard_clear()
+            self.app.root.clipboard_append(text)
+            self.app.status.config(text='単語帳の文字をコピーしました')
+        else:
+            self.app.status.config(text='単語帳の文字を選びました（クリップボードには入れません）')
         self._pending_text = text
         for name in ('_focus_job', '_insert_job'):
             job = getattr(self, name, None)
@@ -603,13 +670,28 @@ class WordBook:
         if owner == os.getpid():
             done = self._insert_into_app(hwnd, text)
         else:
+            lent = None
+            if not self._to_clipboard():
+                # Another app is reached only with Ctrl+V: lend the clipboard
+                # for this paste and put its contents back afterwards.
+                import clipboard_keep
+                lent = clipboard_keep.lend(text)
+                if lent is None:
+                    return False
             done = native.paste(hwnd)
+            if lent is not None:
+                if done:
+                    import clipboard_keep
+                    self.app.root.after(clipboard_keep.RESTORE_DELAY_MS, lent.restore)
+                else:
+                    lent.restore()
             if done is None and tries > 0:
                 self._insert_job = self.app.root.after(
                     INSERT_DELAY_MS // 2, lambda: self._insert_into(target, text, tries - 1))
                 return False
         if done:
-            self.app.status.config(text='単語帳の文字を入れました（コピーもしています）')
+            self.app.status.config(text='単語帳の文字を入れました（コピーもしています）'
+                                   if self._to_clipboard() else '単語帳の文字を入れました')
         return done
 
     def _insert_into_app(self, hwnd, text):

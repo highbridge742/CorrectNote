@@ -24,6 +24,7 @@ import tempfile
 import time
 import traceback
 import unittest
+from unittest import mock
 
 import appearance as ap
 
@@ -360,6 +361,249 @@ class PaperTkTests(unittest.TestCase):
         finally:
             self.root.geometry('700x520')
             self.settle(0.3)
+
+    def below_row(self, height=30):
+        """app の解析の進み具合の行の代わり（欄の下に出たり消えたりする。pady=(0, 10)）。"""
+        row = self.tk.Frame(self.root, height=height, bg='#cccccc')
+        self.addCleanup(row.destroy)
+        return row, height + 10
+
+    def check_edges(self, why):
+        """余白の帯は欄の本当の高さのまま（絵の位置だけ下の行のぶん下げる）。"""
+        p, t = self.paper, self.t
+        for side, (x0, y0, x1, y1) in p._edge_boxes(t.winfo_width(), t.winfo_height()):
+            cv = p._edges.get(side)
+            if cv is not None and cv.winfo_ismapped():
+                self.assertEqual((cv.winfo_y(), cv.winfo_height()), (y0, y1 - y0), (side, why))
+        self.assertTrue(p._edges['bottom'].winfo_ismapped(), why)
+
+    @mock.patch.object(ap.Paper, 'BELOW_HOLD_MS', 200)
+    def test_the_art_stays_while_the_row_below_comes_and_goes(self):
+        # 欄の下の行が出たり消えたりしても、絵は動かない（うにさん 2026-10-16）。app は
+        # reserve_below で知らせてから行を出し入れする。その間に描き直しが回っても跳ねない
+        t, p = self.t, self.paper
+        p.set('nami', '#d0d0cc', '#f0f0ed')
+        self.settle(0.3)
+        start, H0 = p._origin_used, t.winfo_height()
+        row, below = self.below_row()
+        for early in (False, True):
+            for value, show in ((below, True), (0, False)):
+                ap.reserve_below(t, value)
+                if early:
+                    p.flush()
+                    self.assertEqual(p._origin_used, start, (early, show))
+                if show:
+                    row.pack(side='bottom', fill='x', pady=(0, 10), before=t)
+                else:
+                    row.pack_forget()
+                self.root.update()
+                self.assertEqual(t.winfo_height(), H0 - below if show else H0)
+                self.assertEqual(p._origin_used, start, (early, show))
+                self.assertGreater(self.check_slices(p._geom_used), 3, (early, show))
+                self.settle(ap.Paper.BELOW_HOLD_MS / 1000.0 + 0.1)
+                self.assertIsNone(p._hold_job)
+                self.assertIsNone(p._anchor_hold)
+                self.assertEqual(p._origin_used, start, (early, show))
+                self.check_edges((early, show))
+                t.yview_scroll(5, 'pixels')
+                self.assertGreater(self.check_slices(p._geom_used), 3, (early, show))
+
+    @mock.patch.object(ap.Paper, 'BELOW_HOLD_MS', 200)
+    def test_the_row_below_and_other_height_changes(self):
+        t, p = self.t, self.paper
+        bits = ap._art('art', 'nami')
+        p.set('nami', '#d0d0cc', '#f0f0ed')
+        self.settle(0.3)
+        row, below = self.below_row()
+
+        def follows():
+            W, H = t.winfo_width(), t.winfo_height()
+            self.assertEqual(p._origin_used, p._origin(W, H + below, bits)[:2], (W, H))
+            self.assertGreater(self.check_slices(p._geom_used), 3, (W, H))
+
+        try:
+            # 窓の大きさが同時に変わったら（最大化など）待たずに新しい位置へ
+            ap.reserve_below(t, below)
+            row.pack(side='bottom', fill='x', pady=(0, 10), before=t)
+            self.root.geometry('700x600')
+            self.root.update()
+            follows()
+            # 行が出ている間も、窓の高さを変えれば絵は欄の右下（＋行のぶん）に付いて行く
+            self.root.geometry('700x480')
+            self.root.update()
+            follows()
+            # 値だけ変わって欄の高さが変わらないときは、BELOW_HOLD_MS の後で動く
+            before = p._origin_used
+            ap.reserve_below(t, 0)
+            p.flush()
+            self.assertEqual(p._origin_used, before)
+            self.settle(ap.Paper.BELOW_HOLD_MS / 1000.0 + 0.1)
+            below = 0
+            follows()
+            # reserve_below を通さずに値を入れても、次の描き直しで気付く
+            before = p._origin_used
+            t._correctnote_art_below = 25
+            p.flush()
+            self.assertEqual(p._origin_used, before)
+            self.settle(ap.Paper.BELOW_HOLD_MS / 1000.0 + 0.1)
+            below = 25
+            follows()
+        finally:
+            ap.reserve_below(t, 0)
+            self.root.geometry('700x520')
+            self.settle(0.3)
+
+    def nested(self, fixed_width=None):
+        """本体のように枠の入れ子の中にある欄と、その下に出し入れする行（別の窓）。
+        fixed_width: 欄の側の幅を決めておく（窓の幅を変えても欄の大きさは変わらない）。"""
+        import _tkinter
+        from types import SimpleNamespace
+        tk = self.tk
+        top = tk.Toplevel(self.root)
+        self.addCleanup(top.destroy)
+        top.geometry('640x480+0+0')
+        body = tk.Frame(top)
+        if fixed_width:
+            body.configure(width=fixed_width)
+            body.grid_propagate(False)
+            body.pack(side='left', fill='y', pady=(0, 8))
+        else:
+            body.pack(fill='both', expand=True, pady=(0, 8))
+        body.grid_columnconfigure(0, weight=1)
+        body.grid_rowconfigure(0, weight=1)
+        left = tk.Frame(body)
+        left.grid(row=0, column=0, sticky='nsew')
+        tk.Label(left, text='見出し', height=1, width=1).pack(fill='x')
+        wrap = tk.Frame(left)
+        wrap.pack(fill='both', expand=True)
+        inner = tk.Frame(wrap)
+        inner.pack(fill='both', expand=True, padx=1, pady=1)
+        t = tk.Text(inner, wrap='word', padx=14, pady=12, width=1, height=1,
+                    font=('TkFixedFont', 11), bg='#f0f0ed')
+        t.pack(fill='both', expand=True)
+        t.insert('1.0', '作り話の行です。\n' * 60)
+        p = ap.Paper(t)
+        p.set('nami', '#d0d0cc', '#f0f0ed')
+        row = tk.Label(top, text='進み具合の作り話', font=('TkFixedFont', 9))
+        below = row.winfo_reqheight() + 10
+
+        def run(seconds):
+            end = time.monotonic() + seconds
+            while time.monotonic() < end:
+                if not self.root.tk.dooneevent(_tkinter.ALL_EVENTS | _tkinter.DONT_WAIT):
+                    time.sleep(0.002)
+
+        def show(on):
+            ap.reserve_below(t, below if on else 0)
+            if on:
+                row.pack(side='bottom', fill='x', pady=(0, 10), before=body)
+            else:
+                row.pack_forget()
+        run(0.3)
+        return SimpleNamespace(top=top, t=t, p=p, row=row, below=below, run=run, show=show)
+
+    @mock.patch.object(ap.Paper, 'BELOW_HOLD_MS', 200)
+    def test_the_art_stays_while_the_layout_catches_up(self):
+        # 本体のように欄が枠の入れ子の中にあると、行を出し入れしてから欄の大きさが変わるまで
+        # アイドルの回が何回か掛かる。その間にもう一度出し入れしても、描き直しが回っても、
+        # 手が止まって時間が過ぎても、絵は動かない
+        n_ = self.nested()
+        t, p, below, run, show = n_.t, n_.p, n_.below, n_.run, n_.show
+        seen = []
+        redraw = p.redraw
+
+        def logged():
+            redraw()
+            seen.append(p._origin_used)
+        p.redraw = logged
+        sampling = [False]
+
+        def sample():
+            if sampling[0]:
+                seen.append(p._origin_used)
+                p.queue()
+                self.root.after_idle(sample)
+
+        def later(n, fn):
+            if n <= 0:
+                fn()
+            else:
+                self.root.after_idle(later, n - 1, fn)
+
+        start, H0 = p._origin_used, t.winfo_height()
+        self.assertIsNotNone(start)
+        hold = ap.Paper.BELOW_HOLD_MS / 1000.0
+        for shown in (False, True):
+            if shown:
+                show(True)
+                run(hold + 0.15)
+            for n in (1, 3, 5):
+                seen.clear()
+                sampling[0] = True
+                self.root.after(0, lambda n=n: (show(not shown), later(n, lambda: show(shown))))
+                self.root.after_idle(sample)
+                run(0.2)
+                sampling[0] = False
+                run(hold + 0.15)
+                self.assertTrue(seen, (shown, n))
+                self.assertEqual(set(seen), {start}, (shown, n))
+                self.assertEqual(p._origin_used, start, (shown, n))
+            # 行を出した直後に手が BELOW_HOLD_MS より長く止まる（並べ直しより先に時間が過ぎる）
+            seen.clear()
+            self.root.after(0, lambda: (show(not shown), p.flush(), time.sleep(hold + 0.1)))
+            run(0.3)
+            run(hold + 0.15)
+            self.assertEqual(set(seen), {start}, (shown, 'stall'))
+            self.assertEqual(t.winfo_height(), H0 if shown else H0 - below)
+            if not shown:
+                show(False)
+                run(hold + 0.15)
+        self.assertEqual(p._origin_used, start)
+
+    @mock.patch.object(ap.Paper, 'BELOW_HOLD_MS', 5000)
+    def test_the_row_and_a_window_resize_together(self):
+        # 最大化・元に戻すと同時に行が出入りする（app は窓の <Configure> の後で行を出し入れする）。
+        # 前の位置で待たずに、欄の大きさが変わったらすぐ新しい位置へ（BELOW_HOLD_MS より前）
+        n_ = self.nested()
+        top, t, p, row, below, run = n_.top, n_.t, n_.p, n_.row, n_.below, n_.run
+        bits = ap._art('art', 'nami')
+        H0 = t.winfo_height()
+        pending = {}
+
+        def configured(event):
+            if event.widget is top and 'show' in pending:
+                self.root.after_idle(n_.show, pending.pop('show'))
+        top.bind('<Configure>', configured, add=True)
+        for size, on in (('640x600', True), ('640x480', False)):
+            pending['show'] = on
+            top.geometry(size + '+0+0')
+            run(0.3)
+            self.root.update()
+            W, H = t.winfo_width(), t.winfo_height()
+            self.assertEqual(top.winfo_height(), int(size.split('x')[1]))
+            self.assertEqual(H, H0 + 120 - below if on else H0)
+            self.assertEqual(bool(row.winfo_manager()), on)
+            want = p._origin(W, H + (below if on else 0), bits)[:2]
+            self.assertEqual(p._origin_used, want, size)
+
+    @mock.patch.object(ap.Paper, 'BELOW_HOLD_MS', 5000)
+    def test_the_hold_when_the_window_changes_but_not_the_pane(self):
+        # 窓の大きさが変わっても、この欄の大きさが変わっていなければ（左右の欄で幅の1画素の
+        # 端数が片方にだけ行くなど）、行の出し入れが欄に届くまでは前の位置のまま
+        n_ = self.nested(fixed_width=420)
+        top, t, p, below, run = n_.top, n_.t, n_.p, n_.below, n_.run
+        start, size = p._origin_used, (t.winfo_width(), t.winfo_height())
+        top.geometry('660x480+0+0')
+        run(0.2)
+        self.root.update()
+        self.assertEqual(top.winfo_width(), 660)
+        self.assertEqual((t.winfo_width(), t.winfo_height()), size)
+        n_.show(True)
+        p.flush()
+        self.assertEqual(p._origin_used, start)
+        self.root.update()
+        self.assertEqual(t.winfo_height(), size[1] - below)
+        self.assertEqual(p._origin_used, start)
 
     def test_scrolling_while_the_width_settles_keeps_the_art_still(self):
         t = self.t

@@ -169,6 +169,22 @@ def gutter_color(gutter_bg, number_fg, strength):
     return mix(gutter_bg, number_fg, GUTTER_STRENGTH.get(strength, GUTTER_STRENGTH['normal']))
 
 
+def reserve_below(text, px):
+    """欄の下に出す行（解析の進み具合など）のぶん px を、裏の絵に知らせる（消すときは 0）。
+    app が行を出し入れする直前に呼ぶ。絵は動かない（Paper.BELOW_HOLD_MS）。"""
+    try:
+        px = max(0, int(px or 0))
+    except Exception:
+        px = 0
+    text._correctnote_art_below = px
+    paper = getattr(text, '_correctnote_paper', None)
+    if paper is not None:
+        try:
+            paper.note_below()
+        except Exception:
+            pass
+
+
 class _Bits:
     """1bit の絵（行ごとの bytes。下位ビットが左）。"""
     def __init__(self, w, h, data):
@@ -571,6 +587,15 @@ class Paper:
     SLICE_H = 32              # 切れ端の高さの刻み（_tall）
     PREWARM_SLICE_S = 0.008   # 先に作る切れ端: 1回に使う時間
     PREWARM_GAP_MS = 15       # 先に作る切れ端: 回の間（その間に操作が回る）
+    # 欄の下に出たり消えたりする行（解析の進み具合など）のぶんを、app が reserve_below で
+    # 知らせる（Text の `_correctnote_art_below`、画素）。絵の右下は「欄の高さ＋その値」の所に
+    # 合わせるので、行が出て欄が縮んでも絵は動かない（下の端が隠れるだけ。うにさん 2026-10-16）。
+    # 行を出し入れしても、欄の大きさが変わるのは入れ子の枠を1段ずつ並べ直した後（アイドルの
+    # 回が何回か後）。その間に描き直すと、欄の高さと値が食い違って絵が跳ねる。値が変わったら、
+    # そのときの絵の位置（窓の中の高さ）を BELOW_HOLD_MS とその後アイドル BELOW_HOLD_IDLE 回の
+    # 間は保つ。窓の大きさが変わったら（最大化など）すぐやめる。
+    BELOW_HOLD_MS = 600
+    BELOW_HOLD_IDLE = 8
 
     def __init__(self, text):
         self.t = text
@@ -598,6 +623,11 @@ class Paper:
         self._edges = {}           # 余白の帯の Canvas（right・bottom・left・top）
         self._edges_key = None
         self._covers = []          # [(Canvas の weakref, 置いた x, 置いた y)]
+        self._below_seen = None    # 前に見た `_correctnote_art_below`
+        self._anchor_used = None   # 前に絵の右下を合わせた高さ（欄の上から）
+        self._anchor_place = None  # そのときの _place_in_window() と欄の大きさ
+        self._anchor_hold = None   # (窓の上から絵の右下までの高さ, 窓の大きさ)。この間は保つ
+        self._hold_job = None
         self._guarded = False
         self._retry = 0
         Paper._serial = getattr(Paper, '_serial', 0) + 1
@@ -623,6 +653,8 @@ class Paper:
         if changed:
             self._drop_all()
             self._origin_used = self._geom_used = None
+            if decor is None:
+                self._anchor_used = self._anchor_place = self._anchor_hold = None
             self._prewarm_key = self._prewarm_args = None
             self._prewarm_todo = []
             self._prewarm_count = 0
@@ -784,13 +816,13 @@ class Paper:
     def _on_destroy(self, event=None):
         if event is not None and event.widget is not self.t:
             return
-        for job in (self._job, self._settle, self._rest_job, self._prewarm_job):
+        for job in (self._job, self._settle, self._rest_job, self._prewarm_job, self._hold_job):
             if job is not None:
                 try:
                     self.t.after_cancel(job)
                 except Exception:
                     pass
-        self._job = self._settle = self._rest_job = self._prewarm_job = None
+        self._job = self._settle = self._rest_job = self._prewarm_job = self._hold_job = None
         self.decor = None
         self._slots = []
         self._covers = []
@@ -847,9 +879,86 @@ class Paper:
 
     def _origin(self, W, H, bits):
         """絵の左上。絵の右下の角を欄の枠の内側の角に合わせる（右と下は枠でちょうど切れる。
-        うにさん 2026-10-15）。3つ目は枠の太さ（borderwidth＋highlightthickness）。"""
+        うにさん 2026-10-15）。3つ目は枠の太さ（borderwidth＋highlightthickness）。
+        H は欄の高さ（下に出ている行があれば、そのぶんを足した高さ。_anchor）。"""
         hl = self._ring()
         return W - hl - bits.w, H - hl - bits.h, self._border()
+
+    def _below_value(self):
+        try:
+            return max(0, int(getattr(self.t, '_correctnote_art_below', 0) or 0))
+        except Exception:
+            return 0
+
+    def _place_in_window(self):
+        """(欄の上の端の、窓の中での高さ, 窓の大きさ)。分からなければ None。"""
+        try:
+            top = self.t.winfo_toplevel()
+            return (self.t.winfo_rooty() - top.winfo_rooty(),
+                    (top.winfo_width(), top.winfo_height()))
+        except Exception:
+            return None
+
+    def note_below(self):
+        """`_correctnote_art_below` が変わっていたら、今の絵の位置を保ち始める（BELOW_HOLD_MS）。
+        reserve_below が値を入れた直後に呼ぶ。描き直しのときにも見る。"""
+        below = self._below_value()
+        if below == self._below_seen:
+            return
+        first = self._below_seen is None
+        self._below_seen = below
+        # 前に描いたときの絵の右下と窓の大きさ。その後で窓の大きさが変わっていたら（最大化と
+        # 同時に行が出るなど）、_anchor がすぐやめる
+        place = self._anchor_place
+        if first or self._anchor_used is None or place is None:
+            return
+        hold = self._anchor_hold
+        if hold is None or hold[1] != place[1]:
+            self._anchor_hold = (place[0] + self._anchor_used, place[1])
+        if self._hold_job is not None:
+            try:
+                self.t.after_cancel(self._hold_job)
+            except Exception:
+                pass
+        try:
+            self._hold_job = self.t.after(self.BELOW_HOLD_MS, self._run_hold, self.BELOW_HOLD_IDLE)
+        except Exception:
+            self._hold_job = None
+            self._anchor_hold = None
+
+    def _anchor(self, H):
+        """絵の右下を合わせる高さ（欄の上から）。欄の高さ＋下に出ている行のぶん。
+        行を出し入れした直後は、前の位置のまま（BELOW_HOLD_MS）。"""
+        self.note_below()
+        hold = self._anchor_hold
+        if hold is not None:
+            place = self._place_in_window()
+            drawn = self._anchor_place
+            if place is not None and (
+                    place[1] == hold[1]
+                    # 窓は変わったが、この欄はまだ前に描いたときのまま（並べ直しが届いていない）
+                    or (drawn is not None and (place[0], self._size) == (drawn[0], drawn[2]))):
+                return hold[0] - place[0]
+            self._anchor_hold = None      # 窓も欄も大きさが変わった: 今の欄に合わせる
+        return H + (self._below_seen or 0)
+
+    def _run_hold(self, passes=0):
+        """保つのをやめて描き直す。時間の後、アイドルを passes 回待つ（止まっていた後でも、
+        入れ子の枠の並べ直しが欄まで届いてから）。"""
+        self._hold_job = None
+        if self._anchor_hold is None:
+            return
+        if passes > 0:
+            try:
+                self._hold_job = self.t.after_idle(self._run_hold, passes - 1)
+                return
+            except Exception:
+                pass
+        self._anchor_hold = None
+        try:
+            self.redraw()
+        except Exception:
+            pass
 
     def _edge_boxes(self, W, H):
         """Text の余白（padx・pady）と枠の内側の帯 (x0, y0, x1, y1)。行は余白に描かれないので、
@@ -957,7 +1066,8 @@ class Paper:
                 Wg = -(-W // 256) * 256
             bd = self._border()
         else:
-            ox, oy, bd = self._origin(W, H, bits)
+            anchor = self._anchor(H)
+            ox, oy, bd = self._origin(W, anchor, bits)
             Wg = W
         y_top, y_bot = max(0, oy), min(H - bd, oy + bits.h)
         try:
@@ -984,6 +1094,9 @@ class Paper:
             return
         if not settling:
             self._geom_used = (ox, oy, W)
+            self._anchor_used = anchor
+            place = self._place_in_window()
+            self._anchor_place = None if place is None else place + ((W, H),)
             if self._origin_used != (ox, oy):
                 self._origin_used = (ox, oy)
                 self._refresh_covers()

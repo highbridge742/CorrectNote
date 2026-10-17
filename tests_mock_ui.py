@@ -1540,8 +1540,10 @@ def run_tab_cases():
     # 「控えからの復元」と「1.5秒ごとの自動保存」も通る工場なので、
     # そこに置くと**本人が外した印が打つたびに戻る**。
     from session import fresh_tab
-    check('新しく作るタブは1行目に印が付く',
-          fresh_tab()['bookmarks'], [1])
+    # 2026-10-16 うにさん「新規タブ作成時に、1行目をブックマークしておくのを
+    # やめる。」——新しく作るタブには印を付けない（決め所は fresh_tab のまま）
+    check('新しく作るタブに印は付かない（2026-10-16）',
+          fresh_tab()['bookmarks'], [])
     check('**素の `new_tab` は付けない**（復元と自動保存が通る道）',
           new_tab()['bookmarks'], [])
     check('呼び手が渡したら、そちらが勝つ（控えから戻す道）',
@@ -1551,15 +1553,15 @@ def run_tab_cases():
 
     st2 = SessionStore()
     st2.reset_fresh()
-    check('起動して新しく作る1枚にも印が付く',
-          st2.tabs[0]['bookmarks'], [1])
+    check('起動して新しく作る1枚にも印は付かない（2026-10-16）',
+          st2.tabs[0]['bookmarks'], [])
     # **決めているのは `fresh_tab` の1か所**——呼び手は定数を知らない
     check('`set_single` は今までどおり印を付けない（控えを戻す道）',
           SessionStore().set_single('あ', None, True) or
           None, None)
     st2.add_tab()
-    check('タブを足したら、そのタブにも印が付く',
-          st2.tabs[1]['bookmarks'], [1])
+    check('タブを足しても、そのタブに印は付かない（2026-10-16）',
+          st2.tabs[1]['bookmarks'], [])
     st2.add_tab(new_tab('控えから', bookmarks=[5]))
     check('控えを渡して足したら、その中身のまま',
           st2.tabs[2]['bookmarks'], [5])
@@ -1571,8 +1573,8 @@ def run_tab_cases():
     while len(st2.tabs) > 1:
         st2.remove_tab(len(st2.tabs) - 1)
     st2.remove_tab(0)
-    check('最後の1つを閉じた補充にも印が付く',
-          st2.tabs[0]['bookmarks'], [1])
+    check('最後の1つを閉じた補充にも印は付かない（2026-10-16）',
+          st2.tabs[0]['bookmarks'], [])
 
     # **決めているのは1か所**（48-GN）——「1行目に印を付ける」と
     # 書いてよいのは `session.fresh_tab` だけ。**app は定数を知らない**

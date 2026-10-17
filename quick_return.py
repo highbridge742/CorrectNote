@@ -99,7 +99,8 @@ def _ours_in_front():
 def restore(target, root, paste=False):
     """Bring the target window forward, focus its box, then paste if asked.
 
-    Returns True when the focus was given back."""
+    Returns True when the focus was given back: the target window is in
+    front afterwards (2026-10-16). Otherwise nothing is pasted anywhere."""
     if sys.platform != 'win32' or target is None or not target.text_box:
         return False
     u = _user()
@@ -118,6 +119,8 @@ def restore(target, root, paste=False):
     finally:
         if attached:
             u.AttachThreadInput(me, target.thread, False)
+    if u.GetForegroundWindow() != target.foreground:
+        return False        # Windows did not let it come forward: paste nowhere
     if paste:
         def send():
             if u.GetForegroundWindow() != target.foreground:

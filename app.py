@@ -6081,11 +6081,13 @@ class CorrectNoteApp:
             self.status.config(text='簡易入力を閉じました（内容は空でした）')
             return
 
-        try:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(content)
-        except Exception:
-            pass
+        to_clipboard = bool(self.settings.get('quick_close_clipboard'))
+        if to_clipboard:
+            try:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(content)
+            except Exception:
+                pass
 
         target = None
         try:
@@ -6104,11 +6106,35 @@ class CorrectNoteApp:
         except Exception:
             pass
         self._on_change()
-        if self._quick_give_focus_back(
-                back, paste=bool(self.settings.get('quick_paste_back'))):
-            self.status.config(text='簡易入力の内容をクリップボードとメモに追加し、元の入力欄へ戻しました')
+        paste = bool(self.settings.get('quick_paste_back'))
+        lent = None
+        if paste and not to_clipboard and getattr(back, 'text_box', False):
+            # ほかのアプリへの貼り付け（Ctrl+V）にだけクリップボードを貸し、
+            # 相手が読んだころに、もとの中身へ戻す（2026-10-16 うにさん）。
+            try:
+                import clipboard_keep
+                lent = clipboard_keep.lend(content)
+            except Exception:
+                lent = None
+            paste = lent is not None
+        back_given = self._quick_give_focus_back(back, paste=paste)
+        if lent is not None:
+            if back_given:
+                import clipboard_keep
+                import quick_return
+                self.root.after(quick_return.PASTE_DELAY_MS + clipboard_keep.RESTORE_DELAY_MS,
+                                lent.restore)
+            else:
+                lent.restore()
+        where = 'クリップボードとメモ' if to_clipboard else 'メモ'
+        if back_given:
+            self.status.config(text='簡易入力の内容を%sに追加し、元の入力欄へ戻しました' % where)
+        elif paste and getattr(back, 'text_box', False):
+            # 元の窓が閉じられた・前に戻せなかった（2026-10-16）。ほかの欄へは貼らない。
+            self.status.config(text='簡易入力の内容を%sに追加しました'
+                               '（元の入力欄に戻れなかったので貼り付けていません）' % where)
         else:
-            self.status.config(text='簡易入力の内容をクリップボードとメモに追加しました')
+            self.status.config(text='簡易入力の内容を%sに追加しました' % where)
 
     def _quick_give_focus_back(self, target, paste):
         """簡易入力を開く前の別アプリの入力欄へ戻す（貼り付けは paste のとき）。"""
@@ -7983,6 +8009,17 @@ class CorrectNoteApp:
         m_edit.add_cascade(label='単語帳セットを切り替える', menu=m_word_sets)
         m_edit.add_command(label='現在の単語帳をリセットする',
                            command=lambda: self._word_book.reset_current())
+        # 単語帳の語を押したらクリップボードに入れるか（2026-10-16 うにさん。既定オン）。
+        # オフでも直前の入力欄へは入れる（ほかのアプリへは貸して戻す）。
+        self.word_book_clipboard_var = tk.BooleanVar(
+            value=self.settings.get('word_book_clipboard'))
+        m_edit.add_checkbutton(
+            label='単語帳を押したら、クリップボードに入れる',
+            variable=self.word_book_clipboard_var,
+            command=lambda: (self.settings.set(
+                'word_book_clipboard', bool(self.word_book_clipboard_var.get())),
+                self.settings.save()),
+            selectcolor=ACCENT)
         m_edit.add_separator()
         self.capslock_backspace_var = tk.BooleanVar(
             value=self.settings.get('capslock_backspace_enabled'))
@@ -8210,6 +8247,17 @@ class CorrectNoteApp:
             variable=self.quick_paste_back_var,
             command=lambda: (self.settings.set(
                 'quick_paste_back', bool(self.quick_paste_back_var.get())),
+                self.settings.save()),
+            selectcolor=ACCENT)
+        # 閉じた文をクリップボードに入れるか（2026-10-16 うにさん。既定オン）。
+        # オフでも上の貼り付けはする（そのときだけ貸して戻す。clipboard_keep）。
+        self.quick_close_clipboard_var = tk.BooleanVar(
+            value=self.settings.get('quick_close_clipboard'))
+        m_view.add_checkbutton(
+            label='簡易入力を閉じたら、クリップボードに入れる',
+            variable=self.quick_close_clipboard_var,
+            command=lambda: (self.settings.set(
+                'quick_close_clipboard', bool(self.quick_close_clipboard_var.get())),
                 self.settings.save()),
             selectcolor=ACCENT)
         if not self.hotkeys.supported:
@@ -10087,6 +10135,7 @@ class CorrectNoteApp:
                                on_change=self._queue_status_visibility,
                                font=('Consolas', 9), anchor='w')
         # Reserve the footer before the expanding editor takes the remaining space.
+        self._reserve_art_below(True)
         self.status.pack(side='bottom', fill='x', padx=BAND_PADX, pady=(0, 10), before=self._body)
         self.root.bind('<Configure>',self._queue_status_visibility,add=True)
         self._queue_status_visibility()
@@ -11465,13 +11514,6 @@ class CorrectNoteApp:
         except Exception:
             pass
 
-        # 目に見えない空白の印を塗り直す（項目48-IF）。
-        # 打鍵のたびに走るので、少し待ってからまとめて。
-        try:
-            self._schedule_whitespace_paint()
-        except Exception:
-            pass
-
         # Paste changes are detected by the same pre-analysis shadow diff
         # as typed/IME input. Do not consume that diff before marking it.
 
@@ -11540,6 +11582,14 @@ class CorrectNoteApp:
         # 計算を先行し、画面への反映は従来の入力休止まで待つ。
         import analysis_input
         analysis_input.schedule(self)
+        # 目に見えない空白の印を塗り直す（項目48-IF）。
+        # 打鍵のたびに走るので、少し待ってからまとめて。
+        # 解析の予約（同じ 80ms）より**あと**に積む: 同じ時刻なら先に積んだ
+        # ほうが先に走るので、打った行の解析を空白の塗りより先にする（2026-10-16）。
+        try:
+            self._schedule_whitespace_paint()
+        except Exception:
+            pass
         self._queue_status_visibility()
         # 行番号の引き直しも打鍵ごとには行わない。
         # dlineinfo() は「今どう描画されているか」を問い合わせる呼び出しで、
@@ -11636,9 +11686,23 @@ class CorrectNoteApp:
         text=self.status.cget('text')
         progress=text.startswith(('解析中','表示準備中','解析の準備中'))
         show=active or self.root.state()=='zoomed' or bool(text and not progress)
-        if show and not self.status.winfo_manager():
-            self.status.pack(side='bottom',fill='x',padx=BAND_PADX,pady=(0,10),before=self._body)
-        elif not show and self.status.winfo_manager():self.status.pack_forget()
+        if show:
+            # 出すときは毎回測り直す（字の行数で高さが変わっても絵が動かない）
+            self._reserve_art_below(True)
+            if not self.status.winfo_manager():
+                self.status.pack(side='bottom',fill='x',padx=BAND_PADX,pady=(0,10),before=self._body)
+        elif self.status.winfo_manager():
+            self._reserve_art_below(False)
+            self.status.pack_forget()
+
+    def _reserve_art_below(self,shown):
+        """下の行（解析の進み具合）のぶんを本文の欄の裏の絵に知らせる。絵はそのぶん下に右下を
+        合わせるので、行が出たり消えたり、字の行数で高さが変わったりしても動かない
+        （appearance.reserve_below）。行を出し入れする前に呼ぶ（2026-10-16 うにさん「右下の
+        装飾が、ウインドウ最下部の解析進捗表示が出たり戻ったりするたびに、装飾が前後に動く」）。"""
+        below=self.status.winfo_reqheight()+10 if shown else 0
+        for pane in (getattr(self,'editor',None),getattr(self,'result_view',None)):
+            if pane is not None:appearance.reserve_below(pane,below)
 
     def _line_analysis_state(self, row):
         # Old rows must not look complete while a new edit/tab awaits planning.
@@ -11937,11 +12001,35 @@ class CorrectNoteApp:
             if self._analyze_pos >= len(todo):
                 self._finish_analysis()
                 return
-            self._refresh_after_analysis(learn=False)
+            if not self._typed_row_on_its_way(edited_first):
+                self._refresh_after_analysis(learn=False)
             self._schedule_analysis_chunk()
             return
+        # Send the typed row (edited_first) before the whole repaint, so the
+        # child computes while this thread paints (2026-10-16). Not for other
+        # backlogs: a tab switch or restore paints first and reuses its units.
+        if edited_first and self._analyze_pos < len(self._analyze_todo):
+            self._analyze_slice(1)
         self._refresh_after_analysis(learn=False)
         self._schedule_analysis_chunk()
+
+    def _typed_row_on_its_way(self, edited_first):
+        """打った行の答えを子が計算している最中か（分割表示だけ・2026-10-16）。
+
+        そのときの全面の塗りは、打った行がまだ空の姿を塗るだけで、子の答えが
+        届くのを本体の手で遅らせる。届けば `_analyze_chunk` が見える行の塗りを
+        出し、終わりの塗り（`_finish_analysis`）もいつもどおり走る。統合表示は
+        自動反映が字・undo の区切り・カーソルを動かすので、今のまま塗る。"""
+        if not edited_first or self._layout_is_unified():
+            return False
+        if self._analyze_pos != 0 or not self._analyze_todo:
+            return False
+        pending = getattr(self, '_async_request', None)
+        try:
+            scope = pending[0]
+            return scope[0] == 'line' and scope[4] == self._analyze_todo[0]
+        except (TypeError, IndexError):
+            return False
 
     def _analyze_slice(self, count):
         analysis_async.line_step(self,count)
@@ -12892,6 +12980,18 @@ class CorrectNoteApp:
         except Exception:
             self._view_moved_job = None
 
+    def _unpainted_rows_in_view(self, rows):
+        """まだ塗っていない行が、いま映っている範囲に掛かるか（2026-10-16）。
+
+        分割表示で、映っていない行のために全面を塗り直さない。範囲が
+        取れないとき・統合表示のときは塗る（今までどおり）。"""
+        if self._layout_is_unified():
+            return True
+        band = self._visible_band(margin=0)
+        if band is None:
+            return True
+        return any(band[0] <= i <= band[1] for i in rows)
+
     def _after_view_moved(self):
         self._view_moved_job = None
         if self._window_dragging():
@@ -12926,7 +13026,8 @@ class CorrectNoteApp:
         # あるのに、画面へ出す合図だけが無かった。
         # `_analyze_shown_visible` が立ったあとの区切りは塗らない
         # （項目48-FP）ので、ここで出さないと解析が終わるまで出ない。
-        if pos > getattr(self, '_analyze_painted_pos', 0):
+        painted = getattr(self, '_analyze_painted_pos', 0)
+        if pos > painted and self._unpainted_rows_in_view(todo[painted:pos]):
             self._analyze_painted_pos = pos
             self._analyze_last_paint_ms = time.monotonic() * 1000.0
             try:
@@ -17677,6 +17778,11 @@ class CorrectNoteApp:
         self._on_change()
 
     @staticmethod
+    def _list_item_rows(*texts):
+        """どれかの項目が2行以上か（末尾の改行は数えない）。"""
+        return any('\n' in text.rstrip('\r\n') for text in texts)
+
+    @staticmethod
     def _list_gap_after(editor, end):
         """箇条書きで並べた最後の行のすぐ次の行に字があれば、間に空白行を1行入れる
         （2026-10-15 うにさん「簡易入力を送ってから箇条書きボタンで新しい行に送った
@@ -17704,14 +17810,21 @@ class CorrectNoteApp:
             editor.mark_set(mark, chunks[-1][2])
             editor.mark_gravity(mark, 'right')
             with undo_group(editor):
-                # 改行を含む簡易入力のあとは、空白行を1つ挟む（2026-10-13 うにさん）。
+                # 改行を含む簡易入力の前と後ろに、空白行を1つずつ挟む（2026-10-13・
+                # 10-16 うにさん）。空白行は続けて2つにしない（もとからある分も数える）。
                 for k in range(len(chunks) - 1, 0, -1):
                     start = chunks[k][1]
-                    need = 2 if '\n' in chunks[k - 1][3].rstrip('\r\n') else 1
+                    need = 2 if self._list_item_rows(chunks[k - 1][3], chunks[k][3]) else 1
                     before = editor.get(f'{start}-{need}c', start)
                     have = len(before) - len(before.rstrip('\n'))
                     if have < need:
                         editor.insert(start, '\n' * (need - have))
+                # 先頭の項目が複数行で、すぐ上の行に字があれば、上にも空白行を1つ。
+                first = chunks[0][1]
+                row = int(editor.index(first).split('.')[0])
+                if (self._list_item_rows(chunks[0][3]) and row > 1
+                        and editor.get(f'{row - 1}.0', f'{row - 1}.end').strip()):
+                    editor.insert(first, '\n')
                 end = _stable_text_index(editor, mark)
                 self._list_gap_after(editor, end)
                 editor.mark_set('insert', end)
@@ -17726,19 +17839,19 @@ class CorrectNoteApp:
                     editor.delete(start, end)
                 start = _stable_text_index(editor, f'{mark} lineend')
                 items = [item[3].rstrip('\r\n') for item in chunks]
-                # 改行を含む簡易入力のあとは、空白行を1つ挟む（2026-10-13 うにさん）。
-                value = prefix + ''.join(
-                    text + ('' if i == len(items) - 1
-                            else '\n\n' if '\n' in text else '\n')
-                    for i, text in enumerate(items))
+                # 改行を含む簡易入力の前と後ろに、空白行を1つずつ挟む（2026-10-13・
+                # 10-16 うにさん）。間は多くて空白行1つ。
+                gaps = ['' if i == len(items) - 1
+                        else '\n\n' if self._list_item_rows(text, items[i + 1]) else '\n'
+                        for i, text in enumerate(items)]
+                value = prefix + ''.join(text + gap for text, gap in zip(items, gaps))
                 editor.insert(start, value)
                 # 入れ直した各行の位置（色を残すため）。
                 offset = len(prefix)
                 for i, text in enumerate(items):
                     moved.append((f'{start}+{offset}c', f'{start}+{offset + len(text)}c',
                                   chunks[i][4]))
-                    offset += len(text) + (0 if i == len(items) - 1
-                                           else 2 if '\n' in text else 1)
+                    offset += len(text) + len(gaps[i])
                 moved = [(editor.index(a), editor.index(b), tag) for a, b, tag in moved]
                 self._list_gap_after(editor, f'{start}+{len(value)}c')
                 editor.mark_set('insert', f'{start}+{len(value)}c')
@@ -22514,7 +22627,10 @@ class CorrectNoteApp:
         値だけは控えておき（将来メニュー等に出したくなった場合のため）、
         ステータス欄は他の操作の一時的な通知にだけ使う。
         """
-        n = len(self.store.to_list())
+        # 同じ数を、全件の並びを作らずに数える（描き直しのたびに走るため・2026-10-16）
+        by_reading = getattr(self.store, '_by_reading', None)
+        n = (sum(len(v) for v in by_reading.values()) if isinstance(by_reading, dict)
+             else len(self.store.to_list()))
         changed = sum(1 for r in self.line_results if r['changed'])
         from morphology import HAS_JANOME
         self._vocab_count = n

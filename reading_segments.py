@@ -9102,7 +9102,35 @@ def native_context_ranges(text):
                 remainder=clause[end:]
                 for cut in _native_counter_prefixes(remainder,tokenize(remainder)):
                     out.append((start+begin,start+end+cut))
+    # 2026-10-15 (uni's choice: no purple on a noun + でいた): a line or clause
+    # ending in noun + で + いる/おる has the proof of the same words ending in
+    # だった (あの子はむごんでいました ~ あの子はむごんだった).
+    mark=text[-1] if text[-1] in '。！？.!?' else ''
+    out.extend(_nominal_de_iru_ranges(text[:len(text)-len(mark)],mark))
+    for start,clause in _native_source_clauses(text):
+        if clause!=text[:len(text)-len(mark)]:
+            out.extend((start+lo,start+hi) for lo,hi in _nominal_de_iru_ranges(clause,''))
     return tuple(sorted(set(out)))
+
+
+def _nominal_de_iru_ranges(text,mark):
+    """Proof ranges of text (+ closing mark) borrowed from its だった form.
+
+    A range reaching the end of だった covers the original end; one ending
+    inside だった proves the noun + copula, i.e. the noun + で; one before で
+    is the same text. Empty unless text ends in noun + で + いる/おる.
+    """
+    copula=nominal_de_iru_copula(text)
+    if not copula:return ()
+    cut=len(copula)-len('だった')
+    out=[]
+    for lo,hi in native_context_ranges(copula+mark):
+        if lo>=cut:continue
+        if hi==len(copula)+len(mark) and mark:out.append((lo,len(text)+len(mark)))
+        elif hi==len(copula):out.append((lo,len(text)))
+        elif hi>cut:out.append((lo,cut+1))
+        else:out.append((lo,hi))
+    return tuple(out)
 
 
 @lru_cache(maxsize=2048)
@@ -9223,10 +9251,37 @@ def intact_native_reading(text,allow_incomplete=True):
         from contextual_repair import _unchanged_finite_connective
         retained=_unchanged_finite_connective(bare,bare)
         if retained and completed_native_reading(bare[:-len(retained)]):return True
-    return (native_kahen_derivational_source(bare)
+    if (native_kahen_derivational_source(bare)
             or completed_sahen_reading(bare,allow_nonpolite=True,allow_open_tail=True)
             or any(completed_sahen_reading(bare[cut:],allow_nonpolite=True,object_faces=faces,allow_open_tail=True)
-                   for cut,faces in native_object_predicate_frames(bare)))
+                   for cut,faces in native_object_predicate_frames(bare))):
+        return True
+    # 2026-10-15 (uni's choice: no purple on a noun + でいた): a noun or
+    # na-adjective + で (the 連用形 of だ) + いる/おる reads exactly where the
+    # same noun + だった reads (むごんでいた ~ むごんだった). Borrow that proof.
+    copula=nominal_de_iru_copula(bare)
+    return bool(copula) and intact_native_reading(copula,allow_incomplete)
+
+
+def nominal_de_iru_copula(text):
+    """text ending in noun + で + いる/おる (inflected) -> the same noun + だった.
+
+    The tail after で must be a grammatical いる/おる chain (いた, いました,
+    いない, いよう; いて/おって and いたい read as their た form, since て and
+    たい take the same 連用形). Returns None otherwise.
+    """
+    if not text or text[-1] not in 'たてるすいうん':
+        return None
+    from pos_grammar import _auxiliary_chain_ok,_NOMINAL_STATE_VERBS
+    for i in range(len(text)-2,0,-1):
+        if text[i]!='で':continue
+        tail=text[i+1:]
+        if tail.endswith('て'):tail=tail[:-1]+'た'
+        elif tail.endswith('たい'):tail=tail[:-2]+'た'
+        if _auxiliary_chain_ok(tail,_NOMINAL_STATE_VERBS):
+            return text[:i]+'だった'
+        break
+    return None
 
 
 

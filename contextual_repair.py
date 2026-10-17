@@ -6822,6 +6822,16 @@ def validate(target, surface, engine, tokenize, store, dictionary, decisions=Non
     import oddness
     if surface is None or surface == target.text:
         return False, 'unchanged'
+    # 2026-10-16: a line-initial case particle before a complete predicate
+    # (になります・にします) can continue the previous line. Only a repair
+    # that reads the particle into a word (のひっています → 残っています)
+    # explains it. Deleting, replacing or moving that kana is no proof.
+    if (target.start==0 and len(target.text)>1
+            and _orphan_case_finite_predicate(target.text)):
+        from morphology import tokenize as _tok
+        _read=''.join(t.reading if t.has_reading else t.surface for t in _tok(surface))
+        if not _read.startswith(target.text[0]):
+            return False, 'line_initial_particle_only'
     # 48-CU: 原文の丁寧の ます 類（します・しました…）は成立した語尾。
     # 直す先も同じ ます 類で閉じる（`かくんします → 確認しまい` を採らない）
     from pos_grammar import _SURU_POLITE_TAILS

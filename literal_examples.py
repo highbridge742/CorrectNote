@@ -75,6 +75,11 @@ _NAMING_AFTER = re.compile(r'\s*(?:は|が)(?:(?:登場人物|商品|作品)の)
 _DESCRIBED_AFTER = re.compile(r'\s*(?:は|が)(?:くだけた|小書きの|特殊な)?'+_SPELLING_LABEL+r'(?:です|だ|である|$)')
 _BARE_NAME = re.compile(r'([^\s、。！？!?「」『』()（）]+?)(?=という(?:名前|名称|名)(?:の|を|は|が|です|$))')
 _REWRITE_PAIR = re.compile(r'「([^「」]+)」を「([^「」]+)」に(?:直|補正|変換|書き換え)')
+# 2026-10-16: a report that one quoted spelling became another (an
+# erroneous correction or conversion) names both written forms.
+# A bare quote, or an ordinary change of state, stays correctable.
+_CHANGE_REPORT_PAIR = re.compile(r'「([^「」]+)」(?:が|は)「([^「」]+)」(?:に|へ)'
+    r'(?:誤?(?:補正|変換)|置き換わ|書き換わ|(?:なる|なった|なってしまう|変わる|変わった)例)')
 _JUDGED_REWRITE_PAIR = re.compile(
     r'[×✕✖]\s*「([^「」]+)」\s*[→⇒]\s*[○〇◯]\s*「([^「」]+)」')
 
@@ -397,7 +402,7 @@ def protected_ranges(line):
             stack.clear()
     quoted.extend((start,len(line)) for start,_ in stack)
     found.extend(m.span(1) for m in _BARE_NAME.finditer(line))
-    for pattern in (_REWRITE_PAIR,_JUDGED_REWRITE_PAIR):
+    for pattern in (_REWRITE_PAIR,_JUDGED_REWRITE_PAIR,_CHANGE_REPORT_PAIR):
         for match in pattern.finditer(line):
             found.extend((match.span(1),match.span(2)))
     found.extend(_unquoted_error_ranges(line,quoted))

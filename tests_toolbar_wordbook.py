@@ -470,10 +470,11 @@ r.after(30,tick);r.mainloop()
                     assert a._pick_mode == 'list' and content() == value
                     a._end_pick_mode()
                 # The first coloured phrase stays at the same original line start.
+                # 2026-10-15: text on the row right after the list gets one blank row before it.
                 for value, marks, expected in [
-                        ('甲乙丙後\n次', ['1.0', '1.1', '1.2'], '甲\n乙\n丙後\n次'),
-                        ('前の行\n甲乙\n次', ['2.0', '2.1'], '前の行\n甲\n乙\n次'),
-                        ('甲乙丙\n前丁後\n次', ['1.0', '1.1', '1.2', '2.1'], '甲\n乙\n丙\n前丁後\n次')]:
+                        ('甲乙丙後\n次', ['1.0', '1.1', '1.2'], '甲\n乙\n丙後\n\n次'),
+                        ('前の行\n甲乙\n次', ['2.0', '2.1'], '前の行\n甲\n乙\n\n次'),
+                        ('甲乙丙\n前丁後\n次', ['1.0', '1.1', '1.2', '2.1'], '甲\n乙\n丙\n\n前丁後\n次')]:
                     set_text(value); w.mark_set('insert', 'end-1c')
                     for first in marks: a._mark_quick_sent(first, 1)
                     assert a._has_quick_sent() and a.list_mode_btn.cget('bg') == app.QUICK_SENT_BG_A

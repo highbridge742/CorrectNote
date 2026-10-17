@@ -819,6 +819,57 @@ def _unresolved_focused_source_nominal(text,start,end):
     return not _is_native_action_unit(current,start,end,parts,action_links,actions)
 
 
+def _reading_table_cost(reading,face):
+    """The bundled table's cost of this spelling for this reading (None: absent)."""
+    import corrector as E
+    E._table_readings_for_surface('')
+    costs=[cost for cost,surface in (E._TABLE_SURFACES or {}).get(reading,()) if surface==face]
+    return min(costs) if costs else None
+
+
+UNJUDGED_RIVAL_MARGIN=10
+
+
+def _unjudged_rival(reading,face,native_nominals):
+    """An unjudged same-reading noun the bundled table finds clearly more common."""
+    import kango_tier as K
+    katakana=all('ァ'<=c<='ヺ' or c=='ー' for c in face)
+    judged=K.usage_tier_for_reading(face,reading) is not None
+    # The table lists only spellings with kanji. Its silence says nothing
+    # about a katakana word; a judgment of that word is kept as it is.
+    # An unjudged kanji spelling carries no judgment to outweigh a rival.
+    if katakana==judged:return False
+    # A count (さんまい: 三枚) is productive. The table does not list it
+    # either, so its silence says nothing against the judgment.
+    from reading_segments import native_counter_readings
+    if face in native_counter_readings().get(reading,()):return False
+    own=None if katakana else _reading_table_cost(reading,face)
+    kanji=lambda word:''.join(c for c in word if '\u4e00'<=c<='\u9fff')
+    for rival in native_nominals:
+        if rival==face or K.usage_tier_for_reading(rival,reading) is not None:continue
+        # Another okurigana of the same word (締切・締め切り) is not a sense.
+        if kanji(rival)==kanji(face):continue
+        cost=_reading_table_cost(reading,rival)
+        # A zero cost is a stem or a bare character row, not a usage measure.
+        # Close costs (検索・研削, 最後・最期) do not decide between senses.
+        if cost and (own is None or cost<own-UNJUDGED_RIVAL_MARGIN):return True
+    return False
+
+
+def _unjudged_verb_rival(reading,face,rivals):
+    """An unjudged verb sense the bundled table finds clearly more common."""
+    # The same rule as _unjudged_rival, for an inflected verb. A lemma's
+    # judgment can belong to another reading of its spelling (入る as はいる);
+    # here it meets 行っ・言っ, which the table lists for いっ while 入っ is absent.
+    own=_reading_table_cost(reading,face)
+    kanji=lambda word:''.join(c for c in word if '\u4e00'<=c<='\u9fff')
+    for rival in rivals:
+        if rival==face or kanji(rival)==kanji(face):continue
+        cost=_reading_table_cost(reading,rival)
+        if cost and (own is None or cost<own-UNJUDGED_RIVAL_MARGIN):return True
+    return False
+
+
 def project(text,store,index,decisions=None,partial=False):
     """Convert complete lexical units, retaining original grammatical tokens."""
     # No candidate loop can run without this same kana span pattern.
@@ -1231,7 +1282,7 @@ def project(text,store,index,decisions=None,partial=False):
                         compound_reading=M.native_sahen_compound_reading(face)
                         if compound_reading==rd:
                             forms+= (('名詞,サ変接続,*,*','*',face,compound_reading),)
-                        viable=[];frame_bases=set();frame_support=set();argument_proofs=set()
+                        viable=[];frame_bases=set();frame_support=set();argument_proofs=set();nominal_viable=False
                         for pos,form,base,reading in forms:
                             proved_arguments=frozenset()
                             if reading!=rd or '固有名詞' in pos:continue
@@ -1413,6 +1464,18 @@ def project(text,store,index,decisions=None,partial=False):
                                     # Equal positive senses (or no positive usage)
                                     # still stay ambiguous. Argument/choice proof
                                     # is handled above and is never overridden here.
+                                    # 2026-10-16: a judged lemma does not outweigh an
+                                    # unjudged sense the bundled table finds clearly
+                                    # more common for this reading (いってきます: 入っ
+                                    # against 行っ・言っ). The kana stays.
+                                    if K.usage_tier_for_reading(base,rd) in (1,2) and _unjudged_verb_rival(rd,face,
+                                            {f for f in (*native_lexical_reading_faces(rd),
+                                                *index.inflected_surfaces_for_reading(rd))
+                                             for p,frm,b,r in M.dictionary_inflections(f) or ()
+                                             if p.startswith('動詞,自立,') and frm==form and r==rd
+                                             and any(E.is_kanji(c) for c in b)
+                                             and K.usage_tier_for_reading(b,r) is None
+                                             and (link is None or _modern_te_allowed(f,r,link) is not False)}):continue
                                     positive=[tier for b,tier in senses if tier in (1,2)]
                                     best=min(positive) if positive else None
                                     bases={''.join(c for c in b if E.is_kanji(c))
@@ -1420,6 +1483,7 @@ def project(text,store,index,decisions=None,partial=False):
                                     if (len(bases)>1 or ''.join(c for c in base if E.is_kanji(c)) not in bases):continue
                             if ordinary:
                                 viable.append(tier or 3)
+                                if pos.startswith('名詞,'):nominal_viable=True
                                 if proved_arguments:argument_proofs.add(proved_arguments)
                         if not viable and not (face in whole and not forms and not exact):continue
                         if not viable and face in whole:
@@ -1468,6 +1532,17 @@ def project(text,store,index,decisions=None,partial=False):
                                 and ordinary_nominals and face not in ordinary_nominals
                                 and K.candidate_usage_tier(face,rd) is None
                                 and not nominal_support):continue
+                        # The converse: a judgment for one noun is not evidence
+                        # against an unjudged ordinary noun of the same reading
+                        # (数奇 against 好き, 盾 against 縦), nor is a katakana
+                        # spelling (ツケ・ハク) evidence against its usual kanji
+                        # word. Absence of a judgment never means rare. When
+                        # the bundled table finds that rival clearly more
+                        # common, the sense is unresolved: keep kana unless a
+                        # choice or the context decides. A rarer rival (飢え for
+                        # 上) does not hold the judged spelling back.
+                        if (nominal_viable and face!=remembered and not nominal_support
+                                and _unjudged_rival(rd,face,native_nominals)):continue
                         # Only independently complete native actions supply
                         # positive shared activity meaning for a closed note.
                         if action_note and after.startswith('して') and face in actions:

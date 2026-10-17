@@ -120,10 +120,11 @@ class QuickInputLayoutTests(unittest.TestCase):
         w = self.editor('甲乙', [('1.0', '1.1'), ('1.1', '1.2')])
         self.a._list_from_quick_sent()
         self.assertEqual(w.get('1.0', 'end-1c'), '甲\n乙')
-        # A multi-line last item: one blank row only (no double with the 2026-10-13 rule).
+        # A multi-line last item: one blank row above it (2026-10-16) and one below only
+        # (no double with the 2026-10-13 rule).
         w = self.editor('甲乙1\n乙2\n次', [('1.0', '1.1'), ('1.1', '2.2')])
         self.a._list_from_quick_sent()
-        self.assertEqual(w.get('1.0', 'end-1c'), '甲\n乙1\n乙2\n\n次')
+        self.assertEqual(w.get('1.0', 'end-1c'), '甲\n\n乙1\n乙2\n\n次')
 
     def test_moved_items_get_the_same_blank_row_before_the_text_below(self):
         w = self.editor('前甲乙後\n次の段落', [('1.1', '1.2'), ('1.2', '1.3')])

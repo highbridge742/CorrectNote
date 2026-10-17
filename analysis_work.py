@@ -200,6 +200,13 @@ def occurrence_readings(source,start,end):
     return tuple(dict.fromkeys(found))
 
 
+WHOLE_TEXT=('get','1.0','end-1c')
+# Text commands that never change the characters ('edit' is not here:
+# undo/redo do, and the rest are rare).
+READ_ONLY_COMMANDS=frozenset(('bbox','cget','compare','configure','count','debug','dlineinfo',
+                              'dump','get','index','mark','scan','search','see','tag','xview','yview'))
+
+
 def observe_text(widget,on_edit=None,on_cursor=None,on_before_edit=None,track_change=None):
     """Share one Tcl observer for edits, Unicode undo and cursor notifications."""
     callbacks=getattr(widget,'_correctnote_observers',None)
@@ -216,6 +223,14 @@ def observe_text(widget,on_edit=None,on_cursor=None,on_before_edit=None,track_ch
     from text_edit import UnicodeUndoCommand
     invoke=UnicodeUndoCommand(widget,original)
     replays=[]
+    # The whole text, kept between edits (2026-10-16). With the part-of-speech
+    # colours a 3000-row pane holds ~70,000 tag ranges and one native read
+    # of the whole text costs ~16 ms; one refresh read it ~10 times. Every
+    # command that may change the text passes through command() below, so
+    # any such command forgets the copy, and none is served or kept while
+    # one is running (an undo replays its edits inside it).
+    whole=dict(text=None,busy=0,changes=0,known=None,after=None)
+    widget._correctnote_whole_text=whole
     @contextmanager
     def replay_scope(enabled):
         if not enabled:
@@ -229,6 +244,24 @@ def observe_text(widget,on_edit=None,on_cursor=None,on_before_edit=None,track_ch
             widget._correctnote_replay_depth=depth
             replays.pop()
     def command(*args):
+        if args==WHOLE_TEXT:
+            if not whole['busy'] and whole['text'] is not None:return whole['text']
+            result=edit_command(*args)
+            if not whole['busy']:whole['text']=str(result)
+            return result
+        if args and args[0] in READ_ONLY_COMMANDS:return edit_command(*args)
+        whole['changes']+=1
+        whole['known']=((whole['changes'],whole['text'])
+                        if not whole['busy'] and whole['text'] is not None else None)
+        whole['text']=None;whole['after']=None;whole['busy']+=1
+        try:return edit_command(*args)
+        finally:
+            whole['busy']-=1;whole['known']=None
+            after=whole['after'];whole['after']=None
+            # Keep the text read after this edit only if nothing changed it since.
+            if not whole['busy'] and after is not None and after[0]==whole['changes']:
+                whole['text']=after[1]
+    def edit_command(*args):
         if args[:2] in (('edit','undo'),('edit','redo')):
             # Steps that are not text edits (text_format: bold, underline...)
             # take their turn in the same Ctrl+Z / Ctrl+Y history.
@@ -242,7 +275,10 @@ def observe_text(widget,on_edit=None,on_cursor=None,on_before_edit=None,track_ch
         if mutation and args[0] in ('insert','replace') and callbacks.get('before') is not None:
             prepared=callbacks['before'](args)
             if prepared is not None:args=prepared
-        before=widget.tk.call(original,'get','1.0','end-1c') if mutation else None
+        known=whole['known'];whole['known']=None
+        if not mutation:before=None
+        elif known is not None and known[0]==whole['changes']:before=known[1]
+        else:before=widget.tk.call(original,'get','1.0','end-1c')
         edit=None
         discard=args[:2] in (('edit','undo'),('edit','redo'))
         if mutation and args[0] in ('insert','delete','replace'):
@@ -270,6 +306,7 @@ def observe_text(widget,on_edit=None,on_cursor=None,on_before_edit=None,track_ch
                 for callback in tuple(callbacks.get('inserted',())):callback(*inserted)
             if mutation:
                 after=widget.tk.call(original,'get','1.0','end-1c')
+                whole['after']=(whole['changes'],str(after))
                 if after!=before or args[:2] in (('edit','undo'),('edit','redo')):
                     if after!=before and commit is not None:commit()
                     # Tk may replay undo through ordinary insert/delete

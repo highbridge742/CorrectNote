@@ -759,7 +759,8 @@ for _source,_faces in {
 for _source in ('えきまえのみせでかったほんをかえします。',
                 'えきまえのみせでかった本をかえします。'):
     _REVIEWED_SOURCE_SPELLINGS[_source]=tuple(dict.fromkeys(
-        _REVIEWED_SOURCE_SPELLINGS.get(_source,())+('駅前のみせで買った本を返します。',)))
+        _REVIEWED_SOURCE_SPELLINGS.get(_source,())+('駅前のみせで買った本を返します。',
+                                                   '駅前のみせでかった本を返します。')))
 
 # 同じ小さいの連用形と元の対象・助詞・動詞を保持する表記。
 for _table in (_REVIEWED,_CI_SOURCE_SPELLINGS,_REVIEWED_SOURCE_SPELLINGS):

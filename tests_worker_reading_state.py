@@ -38,7 +38,10 @@ class WorkerReadingStateTests(unittest.TestCase):
     if key is None:new.pop('_state_identity')
     else:new['_state_identity']=key
     r.set_state(new);self.assertIsNot(r.store,store)
-    self.assertFalse(r.prepared);self.assertFalse(r.context_lines);self.assertFalse(r.content_words)
+    self.assertFalse(r.prepared);self.assertFalse(r.context_lines)
+    # Native rows and content words read only the public dictionaries
+    # (tests_prepare_after_learning_20261016), so a model change keeps them.
+    self.assertEqual(r.content_words,{'資料です。':['資料','です']})
  def test_reading_update_restores_its_own_lookup_providers(self):
   import kanji_guess,last_choice
   a=initial();r=W.Runtime();r.set_state(self.snapshot(a));owned=r.choices

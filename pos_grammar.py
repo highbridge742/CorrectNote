@@ -1848,11 +1848,14 @@ def _written_te_auxiliary(line, a, b, parts):
 # 同日（うにさんの選択「紫を消す」）: 名詞・形容動詞の語幹の後ろの で＋いる
 # （ひとりでいた・きれいでいた・へいきでいた・がくせいでいます）も、書いたとおりの
 # 自然な文として崩れと見ない。書いた語尾が で＋いる・おる の正しい活用の連なりで、
-# 頭が名詞のとき。名詞かどうかは2通りで見る:
+# 頭が名詞のとき。名詞かどうかは次のどれかで見る:
 #   ・崩れの候補が でした（名詞の後ろに付く語尾。へいき＋でした が読める）——
 #     かなだけの名詞は行の解析が切り損ねる（へいき を へ＋いき）ので、候補の読みで見る
 #   ・行の解析が頭を名詞・副詞と読む（はだし・がくせい。候補は ています でも、
 #     がくせ＋い を いる の連用形と見ただけ）
+#   ・で＋いる を だった に置き換えた行の解析が頭を名詞と読む（しあわせでいます は
+#     し＋あわ＋せ と切れるが、しあわせだった なら 幸せ）。名詞＋で＋いる は
+#     名詞＋だった と同じところで言える（reading_segments.nominal_de_iru_copula）
 # でした の打ち間違い（あめでいた）とは見分けられないが、それも紫を付けない
 # （うにさんが選んだ側）。名詞の後ろは いる・おる だけ（で＋みた は 一人で見た の
 # ように別の語になるので候補のまま）。頭を動詞と読む行（わすれでいます）は候補のまま。
@@ -1867,8 +1870,12 @@ def _written_nominal_de_iru(line, a, b, tail, parts):
         return False
     if tail.startswith('で'):
         return True
-    head = next((t for t in parts if t.end == a), None)
-    return head is not None and head.has_reading and head.pos in ('名詞', '副詞')
+    from morphology import tokenize
+    for words in (parts, tokenize(line[:a] + 'だった')):
+        head = next((t for t in words if t.end == a), None)
+        if head is not None and head.has_reading and head.pos in ('名詞', '副詞'):
+            return True
+    return False
 
 
 # 48-DM / 2026-10-12: な は形容動詞の語幹のあとに付く。ただの名詞＋な＋名詞
@@ -2653,6 +2660,28 @@ def odd_kana_spans(line, dict_index=None, store=None, preserve_unknown_source=Tr
             continue
         prev = line[i0 - 1] if i0 > 0 else ''
         nxt = line[j] if j < n else ''
+        # 2026-10-16: a kana counter right after a digit (5こ・3つ・4ど) is a
+        # count, as in the correction entry (48-TG). The run is explained
+        # when the kana after one such counter is (5こ＋あります). Several
+        # counters can start the run (3つ＋うけとり・3つう＋けとり), so each
+        # is tried; otherwise the whole run is judged as before.
+        if prev.isdigit() or '０' <= prev <= '９':
+            from corrector import _KANA_COUNTERS
+            def _counted(rest):
+                if not rest:
+                    return True
+                try:
+                    if explain_kana_run(rest, before_kanji=bool(nxt) and _is_kanji(nxt),
+                                        is_word=_is_word):
+                        return True
+                except Exception:
+                    return False
+                try:
+                    return bool(dict_index is not None and dict_index.is_world_reading(rest))
+                except Exception:
+                    return False
+            if any(_counted(run[len(c):]) for c in _KANA_COUNTERS if run.startswith(c)):
+                continue
         # カタカナの直後も語幹の続き（カシコ**し**・ググ**った**・
         # サボ**り**——カタカナ語も活用するし、カタカナ＋かなで
         # 1語の表記もある）

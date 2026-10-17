@@ -74,11 +74,40 @@ def snapshot(app):
         charngram=dict(charngram._LEARNED or {}))
 
 
+_FALLBACK_ROWS=[0]
+
+
+def _count_fallback_rows():
+    """Count rows the simple splitter parsed (janome failed on them).
+
+    morphology falls back silently; a row parsed that way is not what a new
+    process would parse, so Runtime must not keep it across a reset. The
+    count wraps the function from here: morphology.py itself stays as it is
+    (public_nominal_cache pins its SHA-256). Behaviour is unchanged."""
+    import morphology
+    original=morphology._tokenize_fallback
+    if getattr(original,'_correctnote_counted',False):return
+    def counted(line):
+        _FALLBACK_ROWS[0]+=1
+        return original(line)
+    counted._correctnote_counted=True
+    morphology._tokenize_fallback=counted
+
+
 class Runtime:
     def __init__(self):
+        _count_fallback_rows()
         self.prepared={}
         self.context_lines={}
         self.content_words={}
+        # Native parse rows per line. morphology.tokenize reads only the
+        # versioned public dictionaries, never the vocabulary store, so a
+        # learned word must not throw these away (48-speed: 3000 lines took
+        # 4.4 s to parse again after each automatic learning).
+        self.line_tokens={}
+        # Lines parsed by the simple splitter after a janome failure: a new
+        # process would parse them again, so a reset forgets them.
+        self.unsteady=set()
         self.index_key=None
         self.index=None
         self._state_identity=None
@@ -151,7 +180,13 @@ class Runtime:
         self.tokenize=corrector.make_tokenizer(self.store);self.store._tokenize_fn=self.tokenize
         self.prepared.clear()
         self.context_lines.clear()
-        self.content_words.clear()
+        from morphology import HAS_JANOME
+        if not HAS_JANOME:
+            # The fallback splitter asks the store, so its rows follow it.
+            self.content_words.clear();self.line_tokens.clear()
+        for line in self.unsteady:
+            self.content_words.pop(line,None);self.line_tokens.pop(line,None)
+        self.unsteady=set()
         self._state_identity=identity
 
     def prepare(self,lines):
@@ -163,15 +198,25 @@ class Runtime:
         from context_vec import extract_content_words
         # Keep line extraction across local edits. The vocabulary helper checks
         # the store shape and prunes deleted lines; set_state clears both maps.
-        attested={};words={}
-        from morphology import tokenize,tokenization_scope
+        attested={};words={};rows_by_line={}
+        from morphology import tokenize,tokenization_scope,Token,HAS_JANOME
+        unsteady={line for line in self.unsteady if line in self.content_words}
         def parse_context_line(line):
             # Both context vocab and content words use the same native parse,
             # through their original extractors. Release raw tokens per row.
+            rows=self.line_tokens.get(line) if HAS_JANOME else None
+            if rows is not None and line in self.content_words:
+                rows_by_line[line]=rows
+                return [Token(*row) for row in rows]
+            failures=_FALLBACK_ROWS[0]
             with tokenization_scope():
                 tokens=tokenize(line)
                 if line not in self.content_words:
                     words[line]=extract_content_words(self.tokenize,line)
+                if _FALLBACK_ROWS[0]!=failures:unsteady.add(line)
+                elif HAS_JANOME:
+                    rows_by_line[line]=tuple((t.surface,t.pos,t.base_form,t.reading,t.start,t.end,
+                                              t.has_reading,t.pos_sub,t.infl_form) for t in tokens)
                 return tokens
         from literal_lines import literal_only
         ordinary=[]
@@ -185,9 +230,20 @@ class Runtime:
         for line in dict.fromkeys(lines):
             check_current_request()
             if line.strip() and line not in words:
-                words[line]=(self.content_words[line] if line in self.content_words else
-                             extract_content_words(self.tokenize,line))
+                if line in self.content_words:words[line]=self.content_words[line]
+                else:
+                    failures=_FALLBACK_ROWS[0]
+                    words[line]=extract_content_words(self.tokenize,line)
+                    if _FALLBACK_ROWS[0]!=failures:unsteady.add(line)
         self.content_words=words
+        # Keep rows only for the lines in use, like content_words. A line the
+        # context cache did not need to parse keeps its earlier rows.
+        for line in ordinary:
+            if line not in rows_by_line and line in self.line_tokens:
+                rows_by_line[line]=self.line_tokens[line]
+        self.line_tokens=rows_by_line
+        self.unsteady={line for line in unsteady if line in words}
+        for line in self.unsteady:self.line_tokens.pop(line,None)
         value=dict(context=context,attested=attested,words=words)
         self.prepared[key]=value
         while len(self.prepared)>4:self.prepared.pop(next(iter(self.prepared)))

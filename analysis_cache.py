@@ -318,7 +318,7 @@ def _engine_source_stamp(app_dir):
                  'okurigana.py', 'naturalness.py', 'charngram.py',
                  'ngram_ja.py', 'ngram_yomi.py',
                  'literal_examples.py', 'reading_segments.py', 'reading_likelihood.py',
-                 'contextual_repair.py', 'inflected_lexicon.py', 'reading_likelihood.py',
+                 'contextual_repair.py', 'last_keystroke.py', 'inflected_lexicon.py', 'reading_likelihood.py',
                  'semantic_roles.py', 'mark_usage.py',
                  'repaired_spelling.py', 'kana_spelling.py', 'particle_frames.py',
                  'small_vowel_repair.py', 'ime_inverse_gate.py',
