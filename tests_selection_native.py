@@ -29,17 +29,26 @@ def main():
             start=len(prefix.encode('utf-16-le'))//2;end=start+len(selection.encode('utf-16-le'))//2
             user.SendMessageW(hwnd,0xb1,start,end);user.SetFocus(hwnd);root.update()
             source=S.Source(int(user.GetParent(root.winfo_id()) or root.winfo_id()),int(hwnd),os.getpid(),kernel.GetCurrentThreadId())
-            result=[];errors=[]
-            def run():
-                try:result.append(S.read_selection(source,time.monotonic()+2,threading.Event(),focused=lambda automation:automation.object(6,hwnd,types=(W.HWND,))))
-                except BaseException as error:errors.append(repr(error))
-            with patch.object(S,'source_now',return_value=source):
-                thread=threading.Thread(target=run,daemon=True);thread.start();limit=time.monotonic()+4
-                while thread.is_alive() and time.monotonic()<limit:root.update();time.sleep(.002)
-                assert not thread.is_alive(),'owned UIA request did not finish'
-            assert not errors,errors
             expected=None if password else selection.replace('\r\n','\n')
-            assert result==[expected],(password,result,expected)
+            # Each UIA call is bounded (120ms); this thread provides the EDIT's
+            # answers. On a loaded runner it can miss that window once and the
+            # read returns None (CI 2026-10-17; reproduced by pumping every
+            # 150ms). The selected text is read again until it comes, up to 10s.
+            # The password field must answer None, so it is read once.
+            attempts=[];give_up=time.monotonic()+10
+            while True:
+                result=[];errors=[]
+                def run():
+                    try:result.append(S.read_selection(source,time.monotonic()+2,threading.Event(),focused=lambda automation:automation.object(6,hwnd,types=(W.HWND,))))
+                    except BaseException as error:errors.append(repr(error))
+                with patch.object(S,'source_now',return_value=source):
+                    thread=threading.Thread(target=run,daemon=True);thread.start();limit=time.monotonic()+4
+                    while thread.is_alive() and time.monotonic()<limit:root.update();time.sleep(.002)
+                    assert not thread.is_alive(),'owned UIA request did not finish'
+                assert not errors,errors
+                attempts.append(result[:])
+                if password or result==[expected] or time.monotonic()>give_up:break
+            assert result==[expected],(password,result,expected,len(attempts))
             print('OWNED_NATIVE_SELECTION_OK',dict(password=password,selected_chars=len(result[0]) if result[0] else 0),flush=True)
             user.DestroyWindow(hwnd);handles.remove(hwnd)
     finally:
