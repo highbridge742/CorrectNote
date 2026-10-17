@@ -41,14 +41,22 @@ def child():
             a=app.CorrectNoteApp(root);root.geometry('900x480+0+0');root.deiconify();until(done)
             assert a.settings.get('wheel_inertia') and a.settings.get('right_drag_inertia')
             initial=a.editor_source_text();revision=a.store.revision();a.editor.edit_reset()
+            # Every step the glide takes, as it takes it. One update() can run
+            # two steps when a step's repaint outlasts the next tick, and the
+            # glide ends at once after a 200ms stall (scroll_inertia): on a
+            # loaded runner a single look 35ms in saw only start and end
+            # (CI 2026-10-17, unified). A glide is a move in more than one step.
+            steps=[];raw_scroll=a._scroll_inertia.scroll
+            def watched(pixels):
+                moved=raw_scroll(pixels);steps.append(a.editor.yview()[0]);return moved
+            a._scroll_inertia.scroll=watched
             for layout in ('split','unified'):
                 if layout=='unified':a._set_layout_unified();until(done)
-                start=position();tab=a.session.active;wheel(a.editor,delta=-360)
+                start=position();tab=a.session.active;del steps[:];wheel(a.editor,delta=-360)
                 assert a.session.active==tab and a._scroll_inertia.job is not None
                 assert a.editor.yview()[0]==start
-                pump(.035);middle=a.editor.yview()[0]
-                until(lambda:a._scroll_inertia.job is None,seconds=2);end=a.editor.yview()[0]
-                assert start<middle<end,(layout,start,middle,end)
+                until(lambda:a._scroll_inertia.job is None,seconds=5);end=a.editor.yview()[0]
+                assert start<end and any(start<y<end for y in steps),(layout,start,steps,end)
                 assert a._scroll_inertia.job is None
                 if layout=='split':assert abs(a.result_view.yview()[0]-end)<.0001
                 assert a.editor_source_text()==initial
