@@ -50,8 +50,17 @@ def child():
         # Tk routes native key messages to its focused widget, even when the
         # posted HWND belongs to another widget. focus_get is mocked below,
         # so verify the real Tcl focus before sending a Windows key message.
-        target.focus_force()
-        until(lambda:str(root.tk.call('focus'))==str(target),seconds=2)
+        # On a loaded runner Windows can take longer than one try to hand the
+        # focus over (CI 2026-10-18: 2s passed without it). Ask again every
+        # 250ms, up to 10s; the key is still sent only once the focus is there.
+        give_up=time.monotonic()+10
+        while True:
+            target.focus_force()
+            try:
+                until(lambda:str(root.tk.call('focus'))==str(target),seconds=.25)
+                break
+            except AssertionError:
+                if time.monotonic()>give_up:raise
         assert target.winfo_viewable(),str(target)
         hwnd=target.winfo_id()
         assert user32.PostMessageW(hwnd,0x100,vk,1)
