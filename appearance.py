@@ -143,11 +143,14 @@ def theme_palette(theme_id, light_palette, dark_palette, light_fixed_fg):
 # --------------------------------------------------------------------- 装飾
 # 洋書・手描きノート・線は外した（うにさん 2026-10-15）
 DECOR_ORDER = ('none', 'wamon', 'genko', 'hoshizora', 'sakura', 'kusaki', 'sumi',
-               'artdeco', 'ikimono', 'nami')
+               'artdeco', 'ikimono', 'nami',
+               'hansen', 'oshibana', 'mochi', 'chara', 'bakuhatsu')
 DECOR_NAMES = {
     'none': 'なし', 'wamon': '和文様', 'genko': '原稿', 'hoshizora': '星空', 'sakura': '桜',
     'kusaki': '草木', 'sumi': '墨と和紙', 'artdeco': '扇と帯', 'ikimono': 'いきもの',
-    'nami': '波',
+    'nami': '波', 'chara': 'まじかる',
+    'oshibana': 'しおり', 'hansen': '船',
+    'mochi': 'おもち', 'bakuhatsu': '爆発',
 }
 # 絵の濃さ: 欄の地の色から文字の色へ寄せる割合
 STRENGTH_ORDER = ('faint', 'normal', 'strong')

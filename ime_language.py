@@ -44,6 +44,7 @@ class _MORRSLT(C.Structure):
 
 
 _LANGUAGE_ID = _guid('019f7152-e6db-11d0-83c3-00c04fddb82e')
+_UNKNOWN = object()
 
 
 from ime_readings import utf16_positions as _utf16_positions
@@ -189,13 +190,24 @@ class JapaneseIME:
         from threading import get_ident
         if not self.available or self._owner!=get_ident() or not value:
             return None
-        # Reuse successful strings only inside the owned correction scope.
-        # Outside that scope each query observes the native interface again.
+        # Reuse successful strings only inside the owned correction scope,
+        # and from the same typed line's store (ime_session.line_answers) when
+        # the analysis worker keeps one. Outside both, each query observes the
+        # native interface again.
         from analysis_context import check_current_request
         check_current_request()
         cache=self._text_cache if self._retained else None
         key=(method_index,value)
         if cache is not None and key in cache:return cache[key]
+        kept=None
+        if cache is not None:
+            from ime_session import line_answers
+            kept=line_answers()
+            if kept is not None:
+                text=kept.get(('text',)+key,_UNKNOWN)
+                if text is not _UNKNOWN:
+                    cache[key]=text
+                    return text
         source = _oleaut32.SysAllocString(value)
         result = C.c_void_p()
         try:
@@ -206,6 +218,7 @@ class JapaneseIME:
                 return None
             text=C.wstring_at(result, _oleaut32.SysStringLen(result))
             if cache is not None:cache[key]=text
+            if kept is not None:kept.put(('text',)+key,text)
             return text
         except Exception:
             return None
@@ -227,6 +240,15 @@ class JapaneseIME:
         cache=self._morph_cache if self._retained else None
         key=(request,source)
         if cache is not None and key in cache:return cache[key]
+        kept=None
+        if cache is not None:
+            from ime_session import line_answers
+            kept=line_answers()
+            if kept is not None:
+                value=kept.get(('morph',)+key)
+                if value is not None:
+                    cache[key]=value
+                    return value
         result=C.c_void_p()
         try:
             source_units=len(source.encode('utf-16-le'))//2
@@ -239,6 +261,15 @@ class JapaneseIME:
             if hr!=0 or not result:return None
             value=_decode_morph_result(result.value,source_units)
             if cache is not None and value is not None:cache[key]=value
+            if kept is not None and value is not None:
+                if request==0x00030000:
+                    # Written text read back for the first time in this line:
+                    # the user committed it, so the IME may have learnt its
+                    # readings' conversion. Their stored forward answers go.
+                    from ime_session import forget_readings
+                    reading=value[1]
+                    forget_readings((reading,)+tuple(reading[c:d] for a,b,c,d,pos,flags in value[2]))
+                kept.put(('morph',)+key,value)
             return value
         except (ValueError,UnicodeError,OSError,AttributeError):
             return None

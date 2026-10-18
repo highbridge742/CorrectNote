@@ -18,7 +18,9 @@ def _scope(app):
 
 
 # Start the same committed work early while retaining the prior display pause.
-COMPUTE_DELAY_MS = 80
+# From the keystroke itself (2026-10-17, as the editor's analysis_input; it was
+# 80ms): a newer key supersedes the computation in the child.
+COMPUTE_DELAY_MS = 1
 DISPLAY_QUIET_MS = 250
 
 

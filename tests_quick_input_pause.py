@@ -25,7 +25,8 @@ class QuickInputPauseTests(unittest.TestCase):
 
     def test_calculation_begins_before_unchanged_display_pause(self):
         a=self.app;Q.schedule_change(a)
-        self.assertEqual(a.root.jobs[a._quick_after_id][0],80)
+        self.assertEqual(a.root.jobs[a._quick_after_id][0],Q.COMPUTE_DELAY_MS)
+        self.assertLess(Q.COMPUTE_DELAY_MS,Q.DISPLAY_QUIET_MS)
         self.tick(.08);self.worker.submit.assert_called_once()
         self.worker.poll.return_value=self.completed();self.tick(.04)
         self.assertTrue(129<=a.root.jobs[a._quick_after_id][0]<=131)
@@ -81,7 +82,7 @@ class QuickInputPauseTests(unittest.TestCase):
         self.assertEqual(a._quick_display_after,0);self.assertIsNone(a._quick_job)
         a._quick_text=Widget();Q.schedule_change(a)
         self.assertIs(a._quick_pause_identity[0],a._quick_text)
-        self.assertEqual(a.root.jobs[a._quick_after_id][0],80)
+        self.assertEqual(a.root.jobs[a._quick_after_id][0],Q.COMPUTE_DELAY_MS)
         a._finish_quick_analysis.assert_not_called()
 
     def test_composition_prepares_only_resources_before_commit(self):

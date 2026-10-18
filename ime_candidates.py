@@ -236,6 +236,15 @@ class SearchCandidates:
         check_current_request()
         cache=self._candidate_cache if self._retained else None
         if cache is not None and reading in cache:return cache[reading]
+        kept=None
+        if cache is not None:
+            from ime_session import line_answers
+            kept=line_answers()
+            if kept is not None:
+                hits=kept.get(('candidates',reading))
+                if hits is not None:
+                    cache[reading]=hits
+                    return hits
         query = _oleaut32.SysAllocString(reading)
         application = _oleaut32.SysAllocString("")
         listing = C.c_void_p()
@@ -283,4 +292,5 @@ class SearchCandidates:
         check_current_request()
         if cache is not None and result is not None and complete:
             cache[reading]=result
+            if kept is not None:kept.put(('candidates',reading),result)
         return result

@@ -39,6 +39,16 @@ def child():
     with patch.object(app,'GlobalHotkeys',return_value=Mock()),patch.object(app.CorrectNoteApp,'_learn_now',new=lambda *args:None):
         try:
             a=app.CorrectNoteApp(root);root.attributes('-alpha',0);root.deiconify();until(done)
+            # This timeline was written for the amount and guards 120/200/300/300
+            # ms (the defaults until 2026-10-18). They are set through the debug
+            # menu, as a user would, and stay within its range. The defaults now
+            # (120/47/20/20, うにさん) are checked at exact times in
+            # tests_debug_menu_20261018 and tests_queued_tab_wheel: a 20ms guard
+            # cannot be seen through real Tk delivery (one tab switch repaints
+            # for longer than that).
+            import debug_menu
+            debug_menu.apply(a,{'tab_wheel_step':120,'tab_wheel_same':200,'tab_wheel_reverse':300,'tab_wheel_release':300})
+            assert (a.TAB_WHEEL_STEP,a.TAB_WHEEL_SAME_MS,a.TAB_WHEEL_REVERSE_MS,a.TAB_WHEEL_RELEASE_MS)==(120,200,300,300)
             revision=a.store.revision()
             label=a._tab_widgets[0]['label'];clock=time.monotonic()
             emit(label,'<MouseWheel>',delta=-120,wheel_time=clock)

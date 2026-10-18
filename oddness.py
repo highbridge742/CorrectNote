@@ -3948,7 +3948,13 @@ def preserves_bound_verb(source,source_end,changed,changed_end,tokenize):
     # another noun while leaving its にんできます fragment outside the edit.
     import re
     from reading_segments import completed_sahen_reading
+    original=list(tokenize(source) or ())
     for match in re.finditer(r'[ぁ-ゖー]+',source):
+        # A kana run that begins inside a written word (the く of 書く in
+        # 書くなんして) is that word's okurigana plus what follows, not the
+        # reading of a suru-noun; only a run starting at a word boundary can be.
+        if any(len(t)>=5 and t[3]<match.start()<t[4] for t in original):
+            continue
         if match.start()<source_end<match.end() and completed_sahen_reading(match.group()):
             before=source[match.start():source_end]
             after=source[source_end:match.end()]
@@ -3967,7 +3973,6 @@ def preserves_bound_verb(source,source_end,changed,changed_end,tokenize):
                         and _productive_predicate(head+after,head)):
                     continue
                 return False
-    original=list(tokenize(source) or ())
     # A retained native te/de link also needs a predicate after a head edit.
     # Trim a repeated suffix only to locate the effective edit edge; the
     # original replacement coordinates and bound-verb check stay unchanged.

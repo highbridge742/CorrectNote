@@ -247,17 +247,78 @@ def update_tag(widget, tag, ranges, stable_index):
     cache[tag] = (requested, tuple(map(str, widget.tag_ranges(tag))))
 
 
+def update_row_tag(widget, tag, row, ranges, stable_index):
+    """Set `tag` on one row to `ranges` (row-local), as update_tag would leave it.
+
+    The other rows keep their intervals: they come from unchanged results.
+    The projection cache of update_tag is dropped (its native ranges changed).
+    """
+    wanted = sorted((_key(widget.index(a)), _key(widget.index(b))) for a, b in ranges)
+    merged = []
+    for start, end in wanted:
+        if start >= end:
+            continue
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    widget.tag_remove(tag, '%d.0' % row, '%d.end' % row)
+    values = [stable_index(widget, '%s.%s' % p) for pair in merged for p in pair]
+    if values:
+        widget.tag_add(tag, *values)
+    if hasattr(widget, '_projection_tag_ranges'):
+        widget._projection_tag_ranges = {}
+
+
+def replace_row(widget, row, old, new):
+    """Replace one row's text over the same span replace_text would replace."""
+    if old == new:
+        return False
+    start = _common_length(old, new, min(len(old), len(new)), True)
+    tail = _common_length(old, new, min(len(old), len(new)) - start, False)
+    widget.replace('%d.0+%dc' % (row, start), '%d.0+%dc' % (row, len(old) - tail), new[start:len(new) - tail])
+    return True
+
+
+def remember_row(app, visible, index):
+    """remember() after a repaint of one row: add that row's units (the full
+    remember prunes entries of rows no longer shown)."""
+    state = app._display_state
+    result = visible[index]
+    key = (result['original'], result['corrected'])
+    units = getattr(app, '_units_cache', {})
+    if key in units:
+        state['units'][key] = units[key]
+    suspect = getattr(app, '_suspect_units_cache', {})
+    for extra in (False, True):
+        if key + (extra,) in suspect:
+            state['suspect'][key + (extra,)] = suspect[key + (extra,)]
+    state['results'] = list(visible)
+
+
+def _common_length(old, new, limit, head):
+    """The longest k <= limit with equal heads (or tails) of length k."""
+    lo, hi = 0, limit
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        same = (old[:mid] == new[:mid]) if head else (old[len(old)-mid:] == new[len(new)-mid:])
+        if same:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
+
 def replace_text(widget, old, new):
     """Keep unchanged text/tag ranges intact when one displayed row changes."""
     if old == new:
         return False
-    start = 0
-    while start < min(len(old),len(new)) and old[start] == new[start]:
-        start += 1
-    old_end, new_end = len(old), len(new)
-    while old_end > start and new_end > start and old[old_end-1] == new[new_end-1]:
-        old_end -= 1
-        new_end -= 1
+    # The same common head and tail as comparing one character at a time,
+    # found by comparing slices (C speed): on a 3000-row pane the
+    # character loop was about 24ms of each keystroke's repaint (2026-10-17).
+    start = _common_length(old, new, min(len(old), len(new)), True)
+    tail = _common_length(old, new, min(len(old), len(new)) - start, False)
+    old_end, new_end = len(old) - tail, len(new) - tail
     def index(offset):
         prefix = old[:offset]
         return '%s.0+%sc' % (prefix.count('\n')+1, len(prefix.rsplit('\n',1)[-1]))

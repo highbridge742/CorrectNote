@@ -49,7 +49,7 @@ class EnglishLearningDemandTests(unittest.TestCase):
         a=app.CorrectNoteApp.__new__(app.CorrectNoteApp)
         a.store=initial_store();a._last_learned_text='rendered';a._learn_after_id='synthetic'
         a._invalidate_analysis_cache=Mock();a._retain_finished_rows_after_auto_learning=Mock()
-        with patch.object(a.store,'save') as save,patch.object(janome_import,'learn_from_text') as japanese:
+        with patch.object(a.store,'save_in_background') as save,patch.object(janome_import,'learn_from_text') as japanese:
             a._learn_now('rendered')
             self.assertTrue(a.store.lookup(L.english_reading('rendered')))
             self.assertIsNone(a._learn_after_id)

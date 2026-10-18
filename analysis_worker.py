@@ -6,6 +6,7 @@ A queue feeder serializes requests outside Tk; newer requests supersede queued
 work. Results carry request ids and are accepted by the UI's document checks.
 """
 import multiprocessing as mp
+from contextlib import contextmanager
 import sys
 import keyboard_layout
 import queue
@@ -108,6 +109,13 @@ class Runtime:
         # Lines parsed by the simple splitter after a janome failure: a new
         # process would parse them again, so a reset forgets them.
         self.unsteady=set()
+        # Native parses kept across row requests (2026-10-17, speed): while a
+        # row is typed, each keystroke parsed the same fragments again (35-46%
+        # of a typed row's time). morphology.tokenize reads only the public
+        # dictionaries, so a kept parse is the parse a new request would make.
+        # morphology bounds both maps (2048 entries, oldest first).
+        self._parses=({},{})
+        self._parse_lines=frozenset()
         self.index_key=None
         self.index=None
         self._state_identity=None
@@ -189,8 +197,33 @@ class Runtime:
         self.unsteady=set()
         self._state_identity=identity
 
+    def _forget_parses(self):
+        for kept in self._parses:kept.clear()
+
+    @contextmanager
+    def _kept_parses(self):
+        """Let this request's tokenization scope use the kept parses."""
+        import morphology
+        if not morphology.HAS_JANOME:
+            yield;return
+        failures=_FALLBACK_ROWS[0]
+        token=morphology._TOKENIZATION_CACHE.set(self._parses[0])
+        native=morphology._NATIVE_TOKENIZATION_CACHE.set(self._parses[1])
+        try:yield
+        finally:
+            morphology._NATIVE_TOKENIZATION_CACHE.reset(native)
+            morphology._TOKENIZATION_CACHE.reset(token)
+            # A row janome failed on was parsed by the simple splitter; a new
+            # request would try janome again, so nothing of it is kept.
+            if _FALLBACK_ROWS[0]!=failures:self._forget_parses()
+
     def prepare(self,lines):
         key=tuple(lines)
+        current=frozenset(lines)
+        if len(current&self._parse_lines)*2<len(current):
+            # Another text (a tab switch): its fragments are not kept.
+            self._forget_parses()
+        self._parse_lines=current
         if key in self.prepared:return self.prepared[key]
         from literal_lines import literal_only,prepared
         if all(literal_only(line) for line in lines):return prepared(lines)
@@ -228,7 +261,10 @@ class Runtime:
                     attested_out=attested,tokenize_fn=parse_context_line)
         from analysis_context import check_current_request
         for line in dict.fromkeys(lines):
-            check_current_request()
+            # Each check reads the request queue (about 14us); one row a time
+            # cost a 3000-row prepare 40ms of its 110ms per keystroke. The
+            # request's 5ms cadence still notices a newer request in time.
+            check_current_request(frequent=True)
             if line.strip() and line not in words:
                 if line in self.content_words:words[line]=self.content_words[line]
                 else:
@@ -377,24 +413,40 @@ class Runtime:
         from ime_session import resource_scope
         # The same input row produces correction and display units. Reuse
         # read-only resources through both phases, then release them together.
-        with tokenization_scope(),resource_scope():
+        with self._kept_parses(),tokenization_scope(),resource_scope():
             return self._line_task(task)
 
     def _line_task(self,task):
         kind=task['kind']
         prepared=self.prepare(task['lines']) if kind=='units' and task.get('lines') is not None else None
         tracked=None;ime_evidence=None
+        nearby=task.get('nearby',())
+        context=task.get('context')
+        if kind=='line' and context is None and task.get('lines') is not None:
+            # A row sent ahead with its whole text (2026-10-17: the row being
+            # composed in the IME, before the commit). Prepare first, then
+            # take the context and the nearby words from that preparation,
+            # as the UI does after the same prepare (_nearby_words_for).
+            prepared=self.prepare(task['lines'])
+            context=prepared['context']
+            if nearby is None:
+                from context_vec import build_nearby_words,extract_content_words
+                lines=task['lines'];words=prepared['words']
+                def words_of(k):
+                    got=words.get(lines[k])
+                    return got if got is not None else extract_content_words(self.tokenize,lines[k])
+                nearby=build_nearby_words(len(lines),task['row'],words_of)
         if kind=='line':
             from correction_entry import correct_line
             from analysis_context import Reads
-            tracked=Reads(task['context'])
+            tracked=Reads(context)
             keyboard_layout.apply_spec(task.get('keyboard'))   # 配列・形（48-KB）
             self._ime_queries={}
             try:
                 result=correct_line(task['line'],self.store,context_vocab=tracked,
                     decisions=self.decisions,input_method=task['input_method'],
                     context_vec=self.context_vec,dict_index=self.index,
-                    nearby_words=task.get('nearby',()),recent_words=task.get('recent',()),
+                    nearby_words=nearby,recent_words=task.get('recent',()),
                     occurrence_readings=task.get('readings',()),
                     occurrence_calculations=task.get('calculations',()))
                 ime_evidence=tuple(sorted(self._ime_queries.items()))
@@ -416,7 +468,7 @@ class Runtime:
         if evidence is None and result.get('_context_evidence') is not None:
             evidence=dict(result['_context_evidence'],unit_keys=tuple(sorted(unit_keys.items())))
         from analysis_context import signature
-        inputs=(signature(task.get('nearby',()),task.get('readings',()),task.get('calculations',()))
+        inputs=(signature(nearby,task.get('readings',()),task.get('calculations',()))
                 if kind=='line' else result.get('_input_signature'))
         from text_navigation import plans
         navigation=plans((result['original'],result['corrected'],original_units[0],corrected_units[0]),self.tokenize)
@@ -428,7 +480,10 @@ class Runtime:
 
 def _serve(inbox,outbox):
     from tsf_worker import worker_connection_scope
-    with worker_connection_scope() as connection_owner:
+    # Native IME answers are kept per typed line for this worker's life
+    # (ime_session.line_answers_scope, 2026-10-17 speed).
+    from ime_session import line_answers_scope
+    with worker_connection_scope() as connection_owner,line_answers_scope():
         _serve_requests(inbox,outbox,connection_owner)
 
 

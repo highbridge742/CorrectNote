@@ -33,6 +33,14 @@ class HalfwidthIdentifierTest(unittest.TestCase):
             self.assertFalse(H.looks_like_halfwidth_input(text), text)
             self.assertTrue(H._has_hex_identifier(text), text)
 
+    def test_short_english_words_next_to_digits_or_underscores_are_names(self):
+        # 数字や _ と隣り合う4〜5字の英単語（stage042・build_7x・test_01: 同梱の英語辞書に載る語そのもの）は英字の名前
+        # （2026-10-18: 本人の短い語彙で読めてしまい、かな・漢字に化けた）。英単語でない4〜5字の並びは今まで通り開く
+        for text in ('stage042', 'build_7x', 'test_01/a', 'node9', 'x12batch', '7mode'):
+            self.assertFalse(H.looks_like_halfwidth_input(text), text)
+        for text in ('ebfnrw4', 'kjsd_01'):
+            self.assertTrue(H.looks_like_halfwidth_input(text), text)
+
     def test_kana_typing_examples_still_open(self):
         for text in _KANA_TYPED:
             self.assertTrue(H.looks_like_halfwidth_input(text), text)

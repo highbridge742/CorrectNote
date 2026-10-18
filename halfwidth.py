@@ -375,6 +375,14 @@ def looks_like_halfwidth_input(text, min_len=4):
     if any(_is_dictionary_english(m.group()) for m in re.finditer(
             r'(?<![A-Za-z])[A-Za-z]{6,}(?![A-Za-z])', text)):
         return False
+    # 2026-10-18: 数字や _ と隣り合う4〜5字の英単語（batch196_a/b・stage195・test_01）。上の2つは数字を境に
+    # 数えない（4字以上）か 6字以上の名簿に限るので、こういう名前はかなに戻って本人の短い語で読めてしまった
+    # （batch196_a/b→コチ加速ぬよおろちめこ）。同梱の英語辞書（en_pos: 短い語も載る）に載る語そのものに限って、
+    # 数字・_ を境に認める。かな配列の打鍵が偶然4〜5字の英単語を成し、しかも数字と隣り合うことはまず無い
+    # （JIS かなでは数字の段もかなキー）
+    if any(_is_bundled_english(m.group()) for m in re.finditer(
+            r'(?<![A-Za-z])(?:(?<=[0-9_])[A-Za-z]{4,5}|[A-Za-z]{4,5}(?=[0-9_]))(?![A-Za-z])', text)):
+        return False
     if _has_hex_identifier(text):
         return False
 
@@ -849,6 +857,15 @@ def romaji_to_kana(text):
         i += 1
 
     return ''.join(out), converted, target
+
+
+def _is_bundled_english(text):
+    """その並びは同梱の英語辞書（en_pos・短い語も載る）に載る語そのものか。数字と隣り合う英字の名前の判定に使う。"""
+    try:
+        import en_pos
+        return bool(text) and text.isalpha() and bool(en_pos.codes_for(text))
+    except Exception:
+        return False
 
 
 def _is_dictionary_english(text):

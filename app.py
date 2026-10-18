@@ -334,7 +334,7 @@ APP_TITLE = 'CorrectNote'
 # 「判断に迷った箇所」から**「不自然な文字列」**へ入れ替え（既定オン・
 # 補正が入った範囲には付けない）、**かな書きのアルファベット読みを
 # 英字に直す**（`エフ2 → F2`）、スクロール後の反映（項目48-IZ〜）。
-APP_VERSION = '1.13.17'
+APP_VERSION = '1.14.0'
 
 # 同梱する説明書のファイル名。exe の中に入れて持ち歩き、
 # 初回起動時に exe と同じフォルダへ書き出す
@@ -1896,6 +1896,11 @@ class CorrectNoteApp:
         # 補正の表を引く（候補の根拠・簡易入力の候補）ので、ここで当てる。
         # 解析の子には task['keyboard'] で届く（analysis_async・quick_analysis）。
         keyboard_layout.apply_spec(keyboard_layout.spec(self.settings))
+        # デバッグメニューで縮めた待ち（範囲の外・壊れた値は既定へ戻す）
+        import debug_menu
+        self.settings.set('debug_timings', debug_menu.normalize(
+            self.settings.get('debug_timings'), self))
+        debug_menu.apply(self)
         # メモリ使用量「低」では、補正の子が大きな表を小さな形で持つ
         # （compact_tables）。子は起動時の環境を受け継ぐので、どの子より先に。
         try:
@@ -3109,6 +3114,11 @@ class CorrectNoteApp:
             # 設計33: 確定していない仮の記録を、閉じる前に確定する
             try:
                 self._design33_flush()
+            except Exception:
+                pass
+            # 解析中・待ちの自動学習を済ませてから語彙を保存する（2026-10-18）
+            try:
+                self._finish_learning_now()
             except Exception:
                 pass
             self._save_session()     # ここで ime_readings も書かれる
@@ -7797,6 +7807,8 @@ class CorrectNoteApp:
             return
         self._forget_bracket_cycle()
         self._capture_session()
+        # 切り替えた時刻（見えていない行の重い塗りを、続けて切り替えている間は待たせる）
+        self._tab_switched_at = time.monotonic()
         self._prev_active = cur         # 裏が先に進める的（項目48-RY）
         sess.active = index
         self._load_active_tab()
@@ -8335,6 +8347,9 @@ class CorrectNoteApp:
         self._install_look_preview([(m_theme, 'theme'), (m_decor, 'decor'),
                                     (m_strength, 'strength')], parents=(m_look, m_about))
         m_about.add_cascade(label='外見', menu=m_look)
+        # 待ち時間を縮めて試す窓（2026-10-18 うにさん。リリースにも残す）
+        m_about.add_command(label='デバッグメニュー…',
+                            command=self.open_debug_menu)
         m_about.add_separator()
         m_about.add_command(label=f'バージョン {APP_VERSION}',
                             state='disabled')
@@ -9037,6 +9052,20 @@ class CorrectNoteApp:
     def _scroll_tab_bar(self, event):
         return self._tab_wheel(event, over_tabs=True)
 
+    # タブを切り替えるホイールの量（1目盛り＝120）と、跳ね返りの防止の待ち。
+    # デバッグメニュー（debug_menu）で変えて試せる（2026-10-18 うにさん）。
+    # 既定はうにさんがデバッグメニューで決めた値（2026-10-18）。_MAX は
+    # スライダーの上限（量は 300・待ちは前の既定 200／300／300）。
+    # 量は 120（1目盛りで1回）。一度 150 にしたが、うにさんの指定で戻した（2026-10-18）。
+    TAB_WHEEL_STEP = 120
+    TAB_WHEEL_STEP_MAX = 300
+    TAB_WHEEL_SAME_MS = 47        # 切り替えたあと、同じ向きを受け付けるまで
+    TAB_WHEEL_SAME_MS_MAX = 200
+    TAB_WHEEL_REVERSE_MS = 20     # 切り替えたあと、逆向きを無視する間
+    TAB_WHEEL_REVERSE_MS_MAX = 300
+    TAB_WHEEL_RELEASE_MS = 20     # 右ボタンを離したあと、逆向きを無視する間
+    TAB_WHEEL_RELEASE_MS_MAX = 300
+
     def _on_tab_wheel_press(self, event=None):
         """A new physical right press starts a fresh wheel interval."""
         self._tab_wheel_used = False
@@ -9085,7 +9114,7 @@ class CorrectNoteApp:
         now = time.monotonic()
         released = getattr(self, '_tab_wheel_release_guard', None)
         if released is not None:
-            if now - released[0] >= 0.30:
+            if now - released[0] >= self.TAB_WHEEL_RELEASE_MS / 1000.0:
                 self._tab_wheel_release_guard = None
             elif 0 <= now - released[0] and direction != released[1]:
                 return self._ignore_tab_wheel_rebound(right)
@@ -9100,7 +9129,8 @@ class CorrectNoteApp:
             self._r3_press = None
         last = getattr(self, '_tab_wheel_last_step', None)
         if last is not None:
-            interval = 0.20 if last[1] == direction else 0.30
+            interval = (self.TAB_WHEEL_SAME_MS if last[1] == direction
+                        else self.TAB_WHEEL_REVERSE_MS) / 1000.0
             elapsed = now - last[0]
             if len(last) > 2 and last[2] and event_time:
                 # Queued notches can reach Tk together after a slow paint.
@@ -9116,7 +9146,7 @@ class CorrectNoteApp:
         if remainder * delta < 0:
             remainder = 0
         total = remainder + int(delta)
-        if abs(total) < 120:
+        if abs(total) < self.TAB_WHEEL_STEP:
             self._tab_wheel_remainder = total
             return 'break'
         # One notch responds immediately; discard excess/burst input, not queue it.
@@ -11494,6 +11524,10 @@ class CorrectNoteApp:
             pass
 
     def _on_change(self, event=None):
+        # 打った字（IME の確定を含む）を、ここでの仕事より先に描く（2026-10-18・
+        # うにさん「文字確定すると、打った文字列が一度消え、少ししてから画面に出る」）
+        import analysis_work_app
+        analysis_work_app.draw_now(self)
         bulk = getattr(self, '_bulk_insert', None)
         if bulk is not None:bulk.queue_preview()
         self._refresh_list_button()
@@ -11985,6 +12019,7 @@ class CorrectNoteApp:
         self._analyze_band = None
         (todo, visible_n) = self._visible_first(todo)
         todo, edited_first = input_work.edited_first(self,todo)
+        self._analyze_typed_pass = edited_first
         if edited_first:visible_n=1  # Paint the new input before the startup backlog.
         self._analyze_todo = todo
         self._analyze_visible_n = visible_n
@@ -13244,6 +13279,9 @@ class CorrectNoteApp:
     ANALYZE_BUSY_GAP_MS = 30
     ANALYZE_BUSY_WINDOW_MS = 250
     ANALYZE_POLL_MS = 20
+    # The typed row's answer is taken as soon as it comes (2026-10-17,
+    # うにさん「打った分を可能な限り早く補正する」): the poll for it is cheap.
+    ANALYZE_TYPED_POLL_MS = 5
     # **見えている範囲は、揃うのを待たずに出す**
     # （項目48-JA・2026-08-23・うにさんの報告「解析中に
     # スクロールした後、見えている範囲の解析反映が遅い」）。
@@ -13260,6 +13298,7 @@ class CorrectNoteApp:
     # 塗り直す。全部片付いたときの一度きりの塗り直しは
     # そのまま残す（そこで「終わった」旗が立つ）。
     ANALYZE_PAINT_GAP_MS = 150
+    ANALYZE_TYPED_FOLLOW_GAP_MS = 600
     # **他のタブを裏で進める**ときの間合い（項目48-FQ）。
     # いま見ているタブより、さらにゆっくり。
     ANALYZE_BG_GAP_MS = 700
@@ -13384,9 +13423,25 @@ class CorrectNoteApp:
     def _schedule_analysis_chunk(self):
         import analysis_work_app as input_work
         gap = self.ANALYZE_BUSY_GAP_MS if self._interacting() else self.ANALYZE_POLL_MS
+        # The floor is the one every repeating poll has (2026-10-18: it was 20,
+        # which made the debug menu's two items below 20ms do nothing). The
+        # defaults (20/30ms) are above it, so they behave as before.
+        gap = self.ANALYZE_TYPED_POLL_MS if self._typed_row_pending() else max(1,gap)
         work=input_work.token(self)
-        self._analyze_job = self.root.after(max(20,gap),lambda: self._analyze_chunk()
+        self._analyze_job = self.root.after(gap,lambda: self._analyze_chunk()
             if input_work.token(self)==work else self._analyze())
+
+    def _typed_row_pending(self):
+        """子がいま計算しているのが、いま打った行か。"""
+        import analysis_work_app as input_work
+        pending = getattr(self, '_async_request', None)
+        priority = getattr(self, '_priority_input_row', None)
+        try:
+            return (pending[0][0] == 'line' and priority is not None
+                    and priority[0] == input_work.token(self)
+                    and pending[0][4] == priority[1])
+        except (TypeError, IndexError):
+            return False
 
     def _analyze_chunk(self):
         self._analyze_job = None
@@ -13457,7 +13512,15 @@ class CorrectNoteApp:
             _now = time.monotonic() * 1000.0
             _since = _now - getattr(self, '_analyze_last_paint_ms', 0.0)
             _p = getattr(self, '_analyze_painted_pos', 0)
-            if done > _p and _since >= self.ANALYZE_PAINT_GAP_MS:
+            # After the typed row is shown, the rows around it (their
+            # nearby words changed) are painted less often: each full paint
+            # of a 3000-row tab took 100-170ms of this thread while the next
+            # key was being typed (2026-10-17). The pass still ends with a
+            # full paint (_finish_analysis).
+            _gap = (self.ANALYZE_TYPED_FOLLOW_GAP_MS
+                    if getattr(self, '_analyze_typed_pass', False)
+                    else self.ANALYZE_PAINT_GAP_MS)
+            if done > _p and _since >= _gap:
                 _band = self._visible_band(margin=0)
                 if _band is not None and any(
                         _band[0] <= i <= _band[1]
@@ -14057,6 +14120,7 @@ class CorrectNoteApp:
     def _refresh_after_analysis(self, learn=True):
         import analysis_input
         if analysis_input.defer_display(self,learn):return
+        if not learn and self._refresh_typed_row():return
         try:
             saved_cursor = _stable_text_index(self.editor, 'insert')
             had_focus = self.root.focus_get() is self.editor
@@ -14116,6 +14180,145 @@ class CorrectNoteApp:
                     self.editor.focus_set()
             except Exception:
                 pass
+
+    def _refresh_typed_row(self):
+        """変わったのが1行だけのとき、その行だけを描き直す（2026-10-17・速さの件 d）。
+
+        3000行の全面の描き直しは1回 約100ms で、その半分ほどが本文全体の組み立て
+        （補正欄の全行・両欄の印の全区間・表示の控え）だった。前に描いた姿
+        （_display_state）と比べて変わったのが1行だけなら、メモ欄のその行の印と
+        補正欄のその行だけを作り直す。そのほか（書式の写し・左右の行そろえ・
+        空白の印・行番号・状態の表示）は全面のときと同じに呼ぶ。統合表示・候補の
+        一覧が開いているとき・行の数が合わないとき・組み立てが待ちのときは全面。
+        解析の終わり（_finish_analysis・learn=True）はいつも全面。
+        """
+        if self._layout_is_unified() or getattr(self, '_candidate_result', None) is not None:
+            return False
+        state = getattr(self, '_display_state', None)
+        if not state or state['document'] is not getattr(self, '_input_document', None):
+            return False
+        previous = state['results']
+        visible = ui_projection.results(self)
+        if (len(visible) != len(previous) or len(visible) != len(getattr(self, 'line_texts', ()))
+                or len(visible) != len(getattr(self, '_result_sources', ()))):
+            return False
+        def same(now, painted):
+            # A row waiting for its new answer is shown as its last answer
+            # (ui_projection.results: pending, _display_only): drawn the same.
+            if now is painted or now == painted:
+                return True
+            if not now.get('_display_only'):
+                return False
+            flags = ('pending', '_display_only')
+            return ({k: v for k, v in now.items() if k not in flags}
+                    == {k: v for k, v in painted.items() if k not in flags})
+        changed = [i for i, (a, b) in enumerate(zip(visible, previous)) if not same(a, b)]
+        if len(changed) != 1:
+            return False
+        i = changed[0]
+        row = i + 1
+        result = visible[i]
+        if result.get('pending') or result.get('_display_only'):
+            return False
+        try:
+            if self.editor.get(f'{row}.0', f'{row}.end') != result['original']:
+                return False
+            if int(self.result_view.index('end-1c').split('.')[0]) != len(visible):
+                return False
+        except Exception:
+            return False
+        key = (result['original'], result['corrected'])
+        cache = getattr(self, '_units_cache', None)
+        if cache is None:
+            cache = self._units_cache = {}
+        got = cache.get(key)
+        if got is None and self._units_are_pending():
+            return False
+        if got is None:
+            fn = getattr(self.store, '_tokenize_fn', None)
+            if fn is None:
+                fn = corrector.make_tokenizer(self.store)
+                self.store._tokenize_fn = fn
+            got = build_line_units(result, fn, self.choices, self._known_kana_word)
+        text, units = got
+        try:
+            saved_cursor = _stable_text_index(self.editor, 'insert')
+            had_focus = self.root.focus_get() is self.editor
+        except Exception:
+            (saved_cursor, had_focus) = (None, False)
+        # メモ欄: その行の補正の印と紫（全面の時の行ごとの計算と同じ）
+        self.editor.tag_configure('suspect', background=SUSPECT_BG)
+        self.editor.tag_configure('odd', background=UNSURE_BG)
+        self.editor.tag_configure('autofixed', foreground=FIXED_FG)
+        self.editor.tag_configure('autochosen', foreground=ACCENT)
+        line = result['original']
+        fixed = list(ui_projection.corrections(result)) if result.get('changed') else []
+        raw = result.get('odd_spans', ()) if self.settings.get('show_odd') else ()
+        odd = [(f'{row}.0+{start}c', f'{row}.0+{end}c')
+               for start, end in corrector.visible_odd_spans(line, raw, self.decisions)
+               if not any(start < right and left < end for left, right, detail in fixed)]
+        suspect = [(f'{row}.0+{start}c', f'{row}.0+{end}c') for start, end, detail in fixed]
+        ui_projection.update_row_tag(self.editor, 'suspect', row, suspect, _stable_text_index)
+        ui_projection.update_row_tag(self.editor, 'odd', row, odd, _stable_text_index)
+        # 補正欄: その行の本文と赤・青緑（_render_corrected の1行ぶん）
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            focus_before = self.root.focus_get()
+        except Exception:
+            focus_before = None
+        try:
+            self.result_view.config(state='normal')
+            interaction = self._capture_result_interaction()
+            self.line_units[i] = units
+            self.line_texts[i] = text
+            self._result_sources[i] = result.get('original')
+            interaction = (ui_projection.consume_result_cursor(self, interaction[0]), interaction[1])
+            old_row = self.result_view.get(f'{row}.0', f'{row}.end')
+            if ui_projection.replace_row(self.result_view, row, old_row, text):
+                self._restore_result_interaction(interaction)
+            elif self.result_view.index('insert') != interaction[0]:
+                self.result_view.mark_set('insert', interaction[0])
+            for tag in ('fixed', 'chosen'):
+                ranges = [(f"{row}.0+{u['start']}c", f"{row}.0+{u['end']}c") for u in units if u['kind'] == tag]
+                ui_projection.update_row_tag(self.result_view, tag, row, ranges, _stable_text_index)
+            self._mirror_text_format()
+            cache[key] = got
+            ui_projection.remember_row(self, visible, i)
+            self.result_view.config(state='disabled')
+            self._sync_partner_to_line(self.editor, self.result_view)
+        finally:
+            self._syncing = was_syncing
+        self.editor_gutter.sync_yview(*self.editor.yview())
+        self.result_gutter.sync_yview(*self.result_view.yview())
+        try:
+            self._paint_whitespace()
+        except Exception:
+            pass
+        if focus_before is self.editor:
+            try:
+                if self.root.focus_get() is not self.editor:
+                    self.editor.focus_set()
+            except Exception:
+                pass
+        self._update_status()
+        if any(r.get('analysis_error') for r in self.line_results):
+            self.status.config(text='解析でエラーが起きています（コンソール参照）')
+        elif any(r.get('analysis_status') == 'incomplete' for r in self.line_results):
+            self.status.config(text='一部の行は解析を完了できませんでした')
+        self.editor_gutter.redraw()
+        try:
+            self._schedule_whitespace_paint(delay=1)
+        except Exception:
+            pass
+        if saved_cursor is not None:
+            try:
+                self.editor.mark_set('insert', saved_cursor)
+                if had_focus:
+                    self.editor.focus_set()
+            except Exception:
+                pass
+        return True
 
     def _retain_finished_rows_after_auto_learning(self):
         """Keep completed current rows until their own text or context changes.
@@ -14222,12 +14425,87 @@ class CorrectNoteApp:
         except Exception:
             new_text = '\n'.join(new_lines)
         try:
-            from janome_import import learn_from_text, HAS_JANOME
+            from janome_import import HAS_JANOME
             if not HAS_JANOME:
                 return
-            added = learn_from_text(self.store, new_text)
-            if added:
-                self.store.save()
+        except Exception:
+            self._apply_learned_tokens(None, new_text)
+            return
+        # 形態素解析は別のスレッドで（2026-10-18）。3000行の新しい本文で
+        # 約7秒かかり、その間は打鍵も補正の表示も止まっていた。語彙に
+        # 覚えさせるのは解析が済んでから、このスレッドで行う（中身は同じ）。
+        self._learn_tokens_in_background(new_text)
+
+    def _learn_tokens_in_background(self, new_text):
+        """新しい行の形態素解析だけを別のスレッドで行い、済んだら覚える。
+        前の分が済む前に次が来たら、順番を保つために待たせる。"""
+        queue = getattr(self, '_learn_queue', None)
+        if queue is None:
+            queue = self._learn_queue = []
+        queue.append(new_text)
+        if getattr(self, '_learn_thread', None) is None:
+            self._start_learn_thread()
+
+    def _start_learn_thread(self):
+        import threading
+        import learning_tokens
+        new_text = self._learn_queue.pop(0)
+        box = {}
+
+        def work():
+            try:
+                box['tokens'] = learning_tokens.tokenize(new_text)
+            except BaseException:
+                box['tokens'] = None
+        thread = threading.Thread(target=work, name='learn-tokenize', daemon=True)
+        self._learn_thread = (thread, box, new_text)
+        thread.start()
+        self._learn_poll_id = self.root.after(30, self._learn_poll)
+
+    def _learn_poll(self):
+        self._learn_poll_id = None
+        pending = getattr(self, '_learn_thread', None)
+        if pending is None or getattr(self, '_closing', False):
+            return
+        thread, box, new_text = pending
+        if thread.is_alive():
+            self._learn_poll_id = self.root.after(30, self._learn_poll)
+            return
+        self._learn_thread = None
+        self._apply_learned_tokens(box.get('tokens'), new_text)
+        if getattr(self, '_learn_queue', None):
+            self._start_learn_thread()
+
+    def _finish_learning_now(self):
+        """閉じる前に、解析中・待ちの学習を済ませる（覚えずに閉じない）。"""
+        job = getattr(self, '_learn_poll_id', None)
+        if job is not None:
+            try:
+                self.root.after_cancel(job)
+            except Exception:
+                pass
+            self._learn_poll_id = None
+        pending = getattr(self, '_learn_thread', None)
+        self._learn_thread = None
+        if pending is not None:
+            thread, box, new_text = pending
+            thread.join(60)
+            if not thread.is_alive():
+                self._apply_learned_tokens(box.get('tokens'), new_text)
+        queue = getattr(self, '_learn_queue', None) or []
+        self._learn_queue = []
+        for new_text in queue:
+            import learning_tokens
+            self._apply_learned_tokens(learning_tokens.tokenize(new_text), new_text)
+
+    def _apply_learned_tokens(self, tokens, new_text):
+        try:
+            import learning_tokens
+            added = learning_tokens.learn(self.store, new_text, tokens)
+            if added and not getattr(self, '_closing', False):
+                # 閉じるとき（_finish_learning_now）は、このあと語彙を保存するだけ。
+                # 書き出しは裏で（2026-10-18・本人の語彙で1回約0.2秒）
+                self.store.save_in_background()
                 self._update_status()
                 # 語彙が変わったので、覚えている他タブの解析結果は
                 # もう当てにならない（項目48-M）。
@@ -14259,7 +14537,8 @@ class CorrectNoteApp:
             return
         try:
             if learn_english_words(text, self.store):
-                self.store.save()
+                # 書き出しは裏で（2026-10-18）。閉じるときの save が済むのを待つ
+                self.store.save_in_background()
                 self._invalidate_analysis_cache()
                 self._retain_finished_rows_after_auto_learning()
         except Exception:
@@ -15558,6 +15837,15 @@ class CorrectNoteApp:
                         if ime_readings_kana(comp) \
                                 and len(comp) >= len(self._ime_first_kana):
                             self._ime_first_kana = comp
+                        # 確定する前から、その句が入った行を子に補正させておく
+                        # （ime_speculation・2026-10-17）。確定が同じなら答えが先にある。
+                        try:
+                            import ime_speculation
+                            ime_speculation.speculate(
+                                self, comp, reading or self._ime_comp_reading
+                                or self._ime_first_kana)
+                        except Exception:
+                            pass
                     if reading:
                         self._ime_comp_reading = reading
                     # **文節ごとに何度も確定する**ことがある（項目48-GX）。
@@ -22640,6 +22928,11 @@ class CorrectNoteApp:
     # ------------------------------------------------------------
     # 語彙の追加
     # ------------------------------------------------------------
+    def open_debug_menu(self):
+        """このアプリについて → デバッグメニュー（待ちを縮めて試す窓）。"""
+        import debug_menu
+        return debug_menu.open_window(self, dict(bg=BG, ink=INK, muted=MUTED, panel=PANEL))
+
     def open_ime_readings_dialog(self):
         """保存対を選んで削除する。表示は最大300対に絞る。"""
         dlg = tk.Toplevel(self.root)

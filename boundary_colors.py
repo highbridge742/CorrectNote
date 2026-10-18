@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # CorrectNote — Copyright (C) 2026 Takahashi Yuu; GPL-3.0-or-later.
 """Visible Ctrl-navigation boundaries, without modifying text or undo."""
+import time
 import tkinter as tk
 import tkinter.font as tkfont
 from editor_guides import FLASH_COLOR
@@ -317,6 +318,11 @@ class BoundaryColors:
         self._view_job=None
         if self._closed:return
         if self._scroll_job is None and self._current_view()==self._drawn_view:
+            if self._sweep_job is not None:
+                # Sizing rows out of view while the sweep runs: the view did not
+                # move, so one draw when the sweep ends is enough (with a redraw
+                # between slices, each slice drew the marks again: 2026-10-18).
+                self._sweep_wants_draw=True;return
             self.queue_draw();return
         self._hide_until_settled()
         # Rows that just came into view still need their markers and fonts.
@@ -592,6 +598,11 @@ class BoundaryColors:
 
     MARGIN_ROWS = 8
     SWEEP_ROWS = 60
+    # The rows out of view wait until tab switching pauses (2026-10-18, うにさん
+    # 「タブを移動後につかえる」): a 3000-row tab kept the UI busy for about 2s
+    # after each switch, and the next switch came in the middle of it.
+    # The visible rows are still painted at once (_paint_visible_now / start).
+    TAB_SETTLE_S = 0.35
 
     def _schedule_sweep(self):
         """Give every row with a known plan its sizes, a slice per tick.
@@ -610,6 +621,10 @@ class BoundaryColors:
         try:
             if self._composing():
                 self._sweep_job=w.after(self.SETTLE_MS,self._sweep);return
+            switched=getattr(self.app,'_tab_switched_at',None)
+            rest=self.TAB_SETTLE_S-(time.monotonic()-switched) if switched is not None else 0
+            if rest>0:
+                self._sweep_job=w.after(int(rest*1000)+1,self._sweep);return
             self._configure_pos_fonts()
             # One read of the text; rows already sized for their text are
             # skipped without asking Tk, so a pass over a long document is
@@ -635,8 +650,26 @@ class BoundaryColors:
                     if not bare:tagged=self._first_tagged_row(row+1)
                 row+=1
             self._sweep_row=row
-            if row<=len(lines):self._sweep_job=w.after(1,self._sweep)
+            if row<=len(lines):self._next_sweep_slice()
+            elif getattr(self,'_sweep_wants_draw',False):
+                self._sweep_wants_draw=False;self.queue_draw()
         except tk.TclError:pass
+
+    def _next_sweep_slice(self):
+        """The next slice once Tk has been idle (its redraw runs there).
+
+        Back-to-back 1ms slices kept a timer always due, so Tk never went idle
+        and drew nothing until the whole document was swept: about 2.7s after
+        switching to a 3000-row tab, the window looked stuck (2026-10-18,
+        うにさん「タブを移動後につかえる」). Same slices, same order."""
+        w=self.widget
+
+        def slice_after_paint():
+            if self._closed:return
+            try:self._sweep_job=w.after(1,self._sweep)
+            except tk.TclError:self._sweep_job=None
+        try:self._sweep_job=w.after_idle(slice_after_paint)
+        except tk.TclError:self._sweep_job=None
 
     def paint_one(self):
         self._job=None

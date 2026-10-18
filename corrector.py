@@ -14470,7 +14470,180 @@ def _unit_table_support(chunk, surface, names):
 
 
 
-def _ime_exact_respell(chunk, store, tokenize_fn, dict_index=None):
+def _reads_as_typed(chunk, reading, tokenize_fn, dict_index):
+    """表記を語に分けた読みのどれかが、打った読みと同じか。"""
+    try:
+        toks = tokenize_fn(chunk)
+    except Exception:
+        return True
+    if not toks or ''.join(t[0] for t in toks) != chunk:
+        return True
+    heads = {''}
+    for t in toks:
+        if not t[5]:
+            return True
+        options = {t[2]}
+        try:
+            options.update(dict_index.readings_for_surface(t[0]))
+            if len(t[0]) == 1:
+                # 1字の語（接尾の 時・名）は、その字の音訓のどれでも読める
+                from kanji_guess import readings_for_char
+                options.update(readings_for_char(t[0], dict_index))
+        except Exception:
+            pass
+        heads = {h + o for h in heads for o in options
+                 if o and reading.startswith(h + o)}
+        if not heads:
+            return False
+    return reading in heads
+
+
+def _ime_pair_readings(chunk, line=None, start=None, end=None, span=12):
+    """
+    その塊について**打たれた読み**を集める（2026-10-17）。
+
+    IME の対（表記 → 打った読み）は**確定の文節ごと**（`切磋名は` →
+    `せつさめいは`）に保存される。塊（`切磋名`）そのものの対は無いことが
+    多く、語だけの対を引く設計30 は実際の入力に届いていなかった
+    （うにさんの報告「隣接キーの間違いをしたうえで IME が変換すると
+    補正されないケースが多い」・2026-10-17）。
+
+    集めるもの（順に）:
+      1. 塊そのものの対
+      2. 今回の確定（`analysis_work.occurrence_readings`。塊を含む確定の
+         前後の語の読みを外したもの）
+      3. 保存した対のうち、行の上で塊を含む並び（前後 `span` 字まで）の
+         もの。対の表記を語に分け、塊の前後が**辞書で読みの決まった語**
+         だけなら、その読みを打った読みの前後から外して塊の読みを
+         取り出す（2. と同じ決まり。語を割らず、字の対応も推測しない）
+    """
+    from kanji_guess import _IME_READINGS_PROVIDER as _prov
+    out = []
+
+    def add(values):
+        for r in values or ():
+            if r and isinstance(r, str) and r not in out:
+                out.append(r)
+    if _prov is not None:
+        try:
+            add(_prov(chunk))
+        except Exception:
+            pass
+    if line is None or start is None or end is None or line[start:end] != chunk:
+        return out
+    try:
+        from analysis_work import occurrence_readings
+        add(occurrence_readings(line, start, end))
+    except Exception:
+        pass
+    if _prov is None:
+        return out
+    from morphology import tokenize
+    from ime_readings import reading_to_hiragana
+    for s2 in range(max(0, start - span), start + 1):
+        for e2 in range(end, min(len(line), end + span) + 1):
+            if (s2, e2) == (start, end):
+                continue
+            whole = line[s2:e2]
+            try:
+                rds = [r for r in (_prov(whole) or ()) if r and isinstance(r, str)]
+            except Exception:
+                rds = []
+            if not rds:
+                continue
+            parts = tokenize(whole)
+            a, z = start - s2, end - s2
+            if not (any(t.start == a for t in parts) and any(t.end == z for t in parts)
+                    and ''.join(t.surface for t in parts) == whole):
+                continue
+            left = [t for t in parts if t.end <= a]
+            right = [t for t in parts if z <= t.start]
+            if not all(t.has_reading and t.reading for t in left + right):
+                continue
+            prefix = ''.join(reading_to_hiragana(t.reading) for t in left)
+            suffix = ''.join(reading_to_hiragana(t.reading) for t in right)
+            for rd in rds:
+                if (rd.startswith(prefix) and rd.endswith(suffix)
+                        and len(prefix) + len(suffix) < len(rd)):
+                    add([rd[len(prefix):len(rd) - len(suffix) if suffix else None]])
+    return out
+
+
+def _ime_one_key_respell(chunk, readings, store, tokenize_fn, dict_index=None):
+    """
+    **打った読みそのものに1打の誤りがあるときの設計30**（2026-10-17）。
+
+    うにさんの報告「`切磋名はどこ` が `説明はどこ` に直らなかった。
+    隣接キー巻き込み」。本人が打った読みは `せつさめい`（つ の隣の さ を
+    巻き込んだ）で、IME はそれを `切磋名`（切磋＋名）に変えた。表記は
+    語の並びとして読めるので漢字の並びの印は立たず、打った読みも語彙に
+    そのまま無いので、設計30（`_ime_exact_respell`）も届かなかった。
+
+    設計30 の決まりはそのまま（その塊に IME の対があり、いまの表記は
+    語として無い）。そのうえで、全部揃ったときだけ:
+
+      1. かな入力（打鍵の誤りは、かなキーの配列で数える）
+      2. 打った読みは**世の中の読みに無く、語彙にも無い**（在るなら、
+         読みは正しく表記の選択だけが違う。上の道の受け持ち）
+      3. 打った読みを、補正の本体と同じ1打の戻し（`key_repairs`。
+         隣のキー・巻き込み・入れ替え・同じキーの別の面）で戻すと、
+         世の中の読みで、語彙に漢字を含む表記が在る
+      4. いまの表記を語に分けた読み（解析の読みと辞書の読み）では、
+         打った読みにならない。読めるなら IME は打ったとおりに変えた
+         だけで、その表記は本人の書きたい語かもしれない（`写真化`＝
+         しゃしんか を `写真` にしない）。`切磋名` は せっさめい と読み、
+         打った せつさめい とは違う——IME が打ち違いを丸めて当てた形
+      5. そう戻せる読みが**1つだけ**（2つ以上なら、どれを打ちたかったか
+         分からないので触らない）
+
+    戻り値は `_ime_exact_respell` の `best` と同じ形、または None。
+    """
+    if dict_index is None:
+        return None
+    try:
+        from contextual_repair import key_repairs
+    except Exception:
+        return None
+    found = {}
+    for rd in readings:
+        if not all(is_hiragana(c) or c == 'ー' for c in rd):
+            continue
+        try:
+            if dict_index.is_world_reading(rd) or store.lookup(rd):
+                continue
+            if _reads_as_typed(chunk, rd, tokenize_fn, dict_index):
+                continue
+            rows = key_repairs(rd)
+        except Exception:
+            continue
+        for row in rows:
+            if row.operation == 'same_reading' or row.reading in found:
+                continue
+            try:
+                if not dict_index.is_world_reading(row.reading):
+                    continue
+                ents = [e for e in store.lookup(row.reading)
+                        if e['surface'] != chunk
+                        and any(is_kanji(c) for c in e['surface'])]
+            except Exception:
+                continue
+            if ents:
+                found[row.reading] = (rd, row, ents)
+    if len(found) != 1:
+        if found:
+            _trace('打った読み', f'{chunk!r} → 1打を戻した読みが '
+                                 f'{sorted(found)} と並ぶ。触らない')
+        return None
+    target, (rd, row, ents) = next(iter(found.items()))
+    e = min(ents, key=lambda x: (-x.get('count', 0), x['surface']))
+    _trace('打った読み', f'{chunk!r} → 打った読み {rd!r} は語に無く、'
+                         f'1打（{row.operation}）を戻した {target!r} だけが'
+                         f'語彙の語に届く')
+    return (-e.get('count', 0), e['surface']), e, target
+
+
+def _ime_exact_respell(chunk, store, tokenize_fn, dict_index=None,
+                       line=None, start=None, end=None):
     """
     **打った読みが語彙の語にそのまま在り、いまの表記が語として無いなら、
     表記を組み直す**（設計30・項目48-IX・2026-08-23）。
@@ -14504,12 +14677,10 @@ def _ime_exact_respell(chunk, store, tokenize_fn, dict_index=None):
         import seed_japanese as _sj
     except Exception:
         return None
-    if _prov is None or not chunk or not any(is_kanji(c) for c in chunk):
+    if not chunk or not any(is_kanji(c) for c in chunk):
         return None
-    try:
-        readings = [r for r in (_prov(chunk) or ()) if r]
-    except Exception:
-        readings = []
+    # 対は文節ごとに保存されるので、塊を含む対からも読みを取り出す
+    readings = _ime_pair_readings(chunk, line, start, end)
     if not readings:
         return None
     # 2. いまの表記が語として在るなら、本人の選択
@@ -14554,6 +14725,9 @@ def _ime_exact_respell(chunk, store, tokenize_fn, dict_index=None):
             key = (-e.get('count', 0), e['surface'])
             if best is None or key < best[0]:
                 best = (key, e, rd)
+    if best is None and _CORRECTION_INPUT_METHOD.get() == 'kana':
+        best = _ime_one_key_respell(chunk, readings, store, tokenize_fn,
+                                    dict_index)
     if best is None:
         _trace('打った読み', f'{chunk!r} → 打った読み {readings} は語彙の'
                              f'漢字の語に届かない。触らない')
@@ -21793,6 +21967,27 @@ def _run_reading_merge_fixes(line, tokenize_fn, store, dict_index=None,
                     # intactness check above. A registered head alone does
                     # not attest this head + suffix combination.
                     done = False
+                    # ★★ **書かれている語幹が本人の立っている語（補正・候補）か、同じ読みの身近な語**
+                    # **なら、長音の足しで本人の別の立っている語（方正・後方）に替えない**
+                    # （2026-10-18・うにの実機: `正しい補正分と → 正しい方正分と`・
+                    # `候補づくり → 後方づくり`。本人の語彙に ほうせい=方正・こうほう=後方 が
+                    # 立っていた。長音の脱字は「書かれた語幹が語でない」ことが根拠であり、
+                    # 語幹そのものが本人の語・身近な語なら脱字の証拠が無い）。
+                    # 立っていない語幹（囚虜 count 1）はこれまでどおり直す（48-AYO）。
+                    _ku_stem_ok = any(
+                        e.get('surface') == run[0][0] and e.get('count', 0) >= 2
+                        for e in store.lookup(ra))
+                    if not _ku_stem_ok:
+                        try:
+                            import everyday_faces as _ef
+                            _ku_stem_ok = run[0][0] in _ef.order(ra)[0]
+                        except Exception:
+                            _ku_stem_ok = False
+                    if _ku_stem_ok:
+                        _trace('読み繋ぎ',
+                               f'{surface!r} の語幹 {run[0][0]!r} は本人の立っている語か'
+                               f'身近な語なので、う を戻す形は見ない（項目48-KU）')
+                        break
                     for k2 in range(len(ra)):
                         if ra[k2] not in _KU_O_DAN:
                             continue
@@ -23109,7 +23304,7 @@ def _native_degree_repeat(line,edge):
 def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
                        decisions=None, halfwidth_taken=(), shift_taken=(),
                        lu_taken=(), conv_taken=(), loanword_module=None, spelling=False,
-                       ime_first_proof=False, ime_shift_proof=False):
+                       ime_first_proof=False, ime_shift_proof=False, ime_clause_proof=False):
     """共通の最終検査。原文座標の候補と、安定した判定理由IDを返す。
 
     Noneはこの候補の不採用。異様判定の撤回や候補総数ゼロを意味しない。
@@ -23164,7 +23359,9 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
         if not preserves_nominal_spelling_argument(line,start,end,new_surface):
             return None,'original_nominal_argument_meaning'
     from morphology import spelling_edit_allowed,preserves_native_adverbial_word
-    if not preserves_native_adverbial_word(line,line[:start]+new_surface+line[end:]):
+    # 副詞になれる名詞（昼・一時・今日）の境を守る門。文節の証明（ime_clause_proof）のある形は、
+    # 滑った読みを IME が変換した語なので、その境は元の文の証拠にならない（昼おすみ→昼休み）
+    if not ime_clause_proof and not preserves_native_adverbial_word(line,line[:start]+new_surface+line[end:]):
         return None,'original_adverbial_word'
     if spelling_edit_allowed(line,start,end,new_surface) is False:
         return None, 'original_spelling_scope'
@@ -23183,13 +23380,16 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
     # 48-AAO: deleting a mark must produce a positively explained seam.
     # This is shared by legacy, direct contextual and normalization paths.
     from mark_usage import incomplete_mark_deletion
-    if incomplete_mark_deletion(line,line[:start]+new_surface+line[end:],tokenize_fn):
+    if not ime_clause_proof and incomplete_mark_deletion(line,line[:start]+new_surface+line[end:],tokenize_fn):
         return None, 'unexplained_mark_deletion'
     if _repeat_repair_disabled_in_source(line, start, end, new_surface, tokenize_fn):
         return None, 'duplicate_repair_disabled'
-    if _changes_neighbor_and_shift_in_source(line,start,end,new_surface,tokenize_fn):
+    if not ime_clause_proof and _changes_neighbor_and_shift_in_source(line,start,end,new_surface,tokenize_fn):
         return None,'original_key_shift_state'
-    if _nonadjacent_drop_in_source(line,start,end,new_surface,tokenize_fn):
+    # 文節の証明（ime_clause_proof）がある消しは、打った読みの上で隣のキーの巻き込みと
+    # 確かめて作った形（きょう**え**→きょう）。元の行では消す字の隣が漢字（今日**え**）で
+    # 隣り合いを測れないので、ここでは見ない
+    if not ime_clause_proof and _nonadjacent_drop_in_source(line,start,end,new_surface,tokenize_fn):
         return None,'nonadjacent_original_key_deletion'
     # ユーザーが「この補正は不要」と判断した置換は行わない。
     # 統計や辞書より、本人が明示した判断を優先する。
@@ -23213,7 +23413,8 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
     if not preserves_unadorned_nominal_prefix(line,line[:start]+new_surface+line[end:]):
         return None,'completed_nominal_prefix'
     from reading_segments import preserves_native_mixed_kana_words
-    if not preserves_native_mixed_kana_words(line,line[:start]+new_surface+line[end:]):
+    # 漢字＋かなの語の書き方を守る門。文節の証明のある形は同じ理由で見ない（上ちアワせ→打ち合わせ）
+    if not ime_clause_proof and not preserves_native_mixed_kana_words(line,line[:start]+new_surface+line[end:]):
         return None,'native_mixed_kana_word'
     from reading_segments import attested_source_expression_ranges,_preserves_source_ranges
     if not _preserves_source_ranges(line,line[:start]+new_surface+line[end:],
@@ -23239,7 +23440,11 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
         return None,'attested_historical_auxiliary'
     from reading_segments import preserves_native_adnominal_modifier
     if not preserves_native_adnominal_modifier(line,start,end,new_surface):
-        return None,'completed_adnominal_modifier'
+        # 連体詞を守る門。文節の証明（ime_clause_proof）のある形では見ない: 文節の端にまたがる
+        # 連体詞（研修あ|の → あの）は確定の単位の途中に語が生まれた形で、文節の中の連体詞
+        # （良いい の 良い）は滑った読みを IME が変換した語で、どちらも元の文の証拠にならない
+        if not ime_clause_proof:
+            return None,'completed_adnominal_modifier'
     from reading_segments import preserves_native_predicate_modifier
     if not preserves_native_predicate_modifier(line,line[:start]+new_surface+line[end:]):
         return None,'completed_predicate_modifier'
@@ -23272,8 +23477,11 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
         # A verified whole-field first conversion supplies its own source
         # word boundaries when Janome cannot parse the original kana.
         # Earlier source-preservation and conflict gates still apply.
+        # An IME clause read back from its own typed reading with one key
+        # put back (last_keystroke) is not proved source text either: its
+        # written words are the IME's conversion of a slipped reading.
         if not ((spelling and ime_first_proof or ime_shift_proof)
-                and start==0 and end==len(line)):
+                and start==0 and end==len(line)) and not ime_clause_proof:
             return None,'unproven_original_object_predicate'
     from oddness import preserves_bound_verb
     if not preserves_bound_verb(line,end,line[:start]+new_surface+line[end:],
@@ -23309,7 +23517,7 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
     # 長さの代わりの砦）。
     is_lu = any(not (end <= s or start >= e)
                 for spans in (lu_taken, conv_taken) for s, e in spans)
-    if not is_halfwidth and not is_lu \
+    if not is_halfwidth and not is_lu and not ime_clause_proof \
             and abs(len(new_surface) - len(original)) > 2:
         return None, 'length_delta'
     # 置換によって、元には無かった同じ文字の連続が生まれた場合は
@@ -23355,7 +23563,7 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
     # （第38回からの持ち越し）。
     _lv = long_vowel_protected_span(line, start, end, new_surface,
                                     store, dict_index)
-    if _lv:
+    if _lv and not ime_clause_proof:
         _trace('置換', f'{original!r} → {new_surface!r} は '
                        f'{_lv} を壊すので採らない（長音の書き分け）')
         return None, 'long_vowel'
@@ -24513,7 +24721,8 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                                  f'機能語の並びで、残りは独立した漢字。'
                                  f'読み直さない（項目48-LN）')
                 continue
-            _ex = _ime_exact_respell(chunk, store, tokenize_fn, dict_index)
+            _ex = _ime_exact_respell(chunk, store, tokenize_fn, dict_index,
+                                     line, t_start, t_end)
             if _ex is not None:                     # 設計30（項目48-IX）
                 replacements.append((t_start, t_end, _ex[0], _ex[1]))
                 kanji_taken.append((t_start, t_end))
@@ -24607,7 +24816,8 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
             # （only_whole。組の探索まで許すと 止まるため→止まる詰め、
             #   変わります→変わりまず のような強い形の誤爆が出る。
             #   実機相当の総点検で確認して絞った）。
-            _ex = _ime_exact_respell(chunk, store, tokenize_fn, dict_index)
+            _ex = _ime_exact_respell(chunk, store, tokenize_fn, dict_index,
+                                     line, m_start, m_end)
             if _ex is not None:                     # 設計30（項目48-IX）
                 replacements.append((m_start, m_end, _ex[0], _ex[1]))
                 kanji_taken.append((m_start, m_end))
@@ -24969,7 +25179,8 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
             # 読める塊（`待ち外`＝待ち＋外）でも、本人が打った読みが
             # 語彙の語に一致し、いまの表記が語として無いなら組み直す。
             # 3つの道（漢字塊・かな＋漢字・混合塊）に同じ口を置く（学び22）
-            _ex = _ime_exact_respell(chunk, store, tokenize_fn, dict_index)
+            _ex = _ime_exact_respell(chunk, store, tokenize_fn, dict_index,
+                                     line, k_start, k_end)
             if _ex is not None:
                 replacements.append((k_start, k_end, _ex[0], _ex[1]))
                 kanji_taken.append((k_start, k_end))

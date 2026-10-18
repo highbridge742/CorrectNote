@@ -8,6 +8,11 @@ import analysis_work_app as input_work
 from analysis_worker import Worker,WorkerExitedError,snapshot,state_key
 
 
+# How often the prepare for the current text is looked for (2026-10-17: it
+# was 25ms; every keystroke waits for this answer before its row is sent).
+PREPARE_POLL_MS = 5
+
+
 def _worker_fields(background,app=None):
     if background and not (app is not None and memory_usage.shares_worker(app)):
         return '_prefetch_worker', '_prefetch_worker_state', '_async_background_request'
@@ -170,7 +175,14 @@ def context(app,text,lines):
     from literal_lines import literal_only,prepared
     literal=all(literal_only(line) for line in lines)
     if literal:cancel_foreground_request(app)
+    import ime_speculation
     value=prepared(lines) if literal else cached_context(app,text)
+    if value is None and not literal:
+        # The row composed in the IME was sent ahead with this whole text
+        # (take its answer first if it has come in the meantime).
+        ime_speculation.waiting(app)
+        value=ime_speculation.context_for(app,text)
+        if value is not None:_save_context(app,text,value)
     if value is not None:
         app._async_context_scope=None
         app._attested_surfaces=value['attested']
@@ -178,6 +190,11 @@ def context(app,text,lines):
         return value
     scope=('prepare',input_work.token(app),state_key(app),text)
     if getattr(app,'_async_context_scope',None)==scope:return None
+    if ime_speculation.waiting(app):
+        # A prepare now would supersede the composed row's request, whose
+        # prepare answers this text when the commit matches. Look again soon.
+        app.root.after(PREPARE_POLL_MS,app._analyze_if_changed)
+        return None
     app._async_context_scope=scope
     try:
         _request(app,dict(kind='prepare',lines=lines),scope)
@@ -203,7 +220,7 @@ def context(app,text,lines):
                 app._analyze()
                 return
             if value is None:
-                app.root.after(25,complete);return
+                app.root.after(PREPARE_POLL_MS,complete);return
             _save_context(app,text,value)
             app._async_context_scope=None
             app._analyze()
@@ -211,7 +228,7 @@ def context(app,text,lines):
             app._async_context_scope=None
             if _retry_foreground_exit(app,error):app._analyze()
             else:_error(app)
-    app.root.after(25,complete)
+    app.root.after(PREPARE_POLL_MS,complete)
     return None
 
 
@@ -269,9 +286,13 @@ def line_step(app,count):
                     lines=lines if units_only else None,
                     recent=app.recent_words.words() if getattr(app,'recent_words',None) is not None else (),
                     readings=input_work.line_readings(app,i,lines),calculations=input_work.line_calculations(app,i,lines),attested=getattr(app,'_attested_surfaces',{}))
-                _request(app,task,scope)
-                return
-            if value is None:return
+                import ime_speculation
+                value=None if units_only else ime_speculation.take(app,i,task)
+                if value is None:
+                    if ime_speculation.waiting(app):return   # the composed row first
+                    _request(app,task,scope)
+                    return
+            elif value is None:return
             # Recheck document identity at the point of application. A→B→A is
             # a different request even when its string happens to match.
             if app._analyze_work!=input_work.token(app) or app._analyze_dependencies!=state_key(app):return

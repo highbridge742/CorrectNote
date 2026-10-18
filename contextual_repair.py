@@ -5611,6 +5611,11 @@ def needs_source_argument_proof(reading):
 
 from contextvars import ContextVar
 _SEARCH=ContextVar('correctnote_contextual_search',default=None)
+# One keystroke of this line was already put back by last_keystroke (a retried
+# line). The entry then does not stack distant or two-key slips on top of it:
+# that search was the bulk of a retried line's time (2026-10-17, 10s of 11s)
+# and a stacked slip changes the reading the retry was meant to test.
+SLIP_REVERTED=ContextVar('correctnote_slip_reverted',default=False)
 _SKIP_MIXED_REOPEN=ContextVar('correctnote_skip_mixed_reopen',default=None)
 
 
@@ -9538,7 +9543,7 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
         # A lexical parse alone must not stop the independent two-key
         # search. Existing positive context/meaning keeps the bounded
         # fallback closed; an unproved first candidate does not.
-        if (target.structural and not target.spelling and not any(
+        if (target.structural and not target.spelling and not SLIP_REVERTED.get() and not any(
                 any(candidate.get('rank_evidence',{}).get(key,0)<0
                     for key in ('meaning','native_predicate','source_relation'))
                 for candidate in candidates)):

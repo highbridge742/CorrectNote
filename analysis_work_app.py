@@ -136,11 +136,44 @@ def install(app):
         app._input_documents=registry
         events=getattr(app,'_ime_result_events',None)
         if events is not None:events.ranges.edited(owner(app),edit,inserted,cancel_ime)
+        draw_soon(app)
     prepare=getattr(app,'_prepare_pick_calculation_edit',None)
     from bookmark_tracking import during_edit
     observe_text(app.editor,edited,on_before_edit=(
         lambda args:prepare(app.editor,args)) if prepare is not None else None,
         track_change=lambda:during_edit(app))
+
+
+def draw_soon(app):
+    """Draw the edited text at the next turn of the event loop.
+
+    Tk draws a text widget when it goes idle. While analysis timers keep
+    coming due (5ms polls, a burst of answers, repaints), it does not go idle,
+    and an IME commit stayed invisible until the burst ended: the composition
+    vanished and the committed text appeared a moment later (2026-10-18,
+    うにさん). A 0ms timer runs before the later timers; drawing there shows
+    the text as typed (the corrections still come afterwards, unchanged)."""
+    if getattr(app,'_draw_edit_job',None) is not None:return
+    root=getattr(app,'root',None);editor=getattr(app,'editor',None)
+    if root is None or editor is None:return
+    def draw():
+        app._draw_edit_job=None
+        try:editor.update_idletasks()
+        except Exception:pass
+    try:app._draw_edit_job=root.after(0,draw)
+    except Exception:app._draw_edit_job=None
+
+
+def draw_now(app):
+    """Draw a pending edit at once (the start of the change handler, before its
+    own work and the analysis it schedules)."""
+    job=getattr(app,'_draw_edit_job',None)
+    if job is None:return
+    app._draw_edit_job=None
+    try:app.root.after_cancel(job)
+    except Exception:pass
+    try:app.editor.update_idletasks()
+    except Exception:pass
 
 
 def edited_first(app,todo):
@@ -269,7 +302,13 @@ def remember(app,surface,reading,since=None):
         # never an older identical spelling next to the insertion point.
         if not span[0]<=end-len(surface)<end<=span[1]:return False
     if not doc.remember(end-len(surface),end,surface,reading):return False
+    priority=getattr(app,'_priority_input_row',None)
+    current=token(app)
     app._work_epoch=getattr(app,'_work_epoch',0)+1
+    # The reading bound to what was just committed is part of the same edit:
+    # the typed row stays first (as _invalidate_analysis_cache keeps it).
+    if priority is not None and priority[0]==current:
+        app._priority_input_row=(token(app),priority[1])
     return True
 
 

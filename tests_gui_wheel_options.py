@@ -80,13 +80,14 @@ def child():
                 cases.append(layout+'_click_cancels_tail')
             # Inertia is on, but a tab-strip wheel must still switch at once.
             label=a._tab_widgets[a.session.active]['label'];tab=a.session.active
-            wheel(label);root.update()
+            # One full step of the default amount (120 = one ordinary notch).
+            wheel(label,delta=-a.TAB_WHEEL_STEP);root.update()
             assert a.session.active!=tab and a._scroll_inertia.job is None
             cases.append('default_on_tab_wheel_immediate');until(done)
             # Right+wheel over the editor is tab navigation, never body inertia.
             pump(.35);tab=a.session.active
             a.editor.event_generate('<ButtonPress-3>',x=4,y=4)
-            wheel(a.editor,state=0x0400);root.update()
+            wheel(a.editor,delta=-a.TAB_WHEEL_STEP,state=0x0400);root.update()
             a.editor.event_generate('<ButtonRelease-3>',state=0x0400,x=4,y=4);root.update()
             assert a.session.active!=tab and a._scroll_inertia.job is None
             cases.append('default_on_right_wheel_switches_tab');until(done)

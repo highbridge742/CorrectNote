@@ -105,6 +105,25 @@ class PredicateConversionTests(unittest.TestCase):
                 lambda text: original if text=='選択し直し' else changed))
             self.assertTrue(O.preserves_bound_verb('選択し直し',3,'選択し直し',3,lambda _:original))
 
+    def test_kana_run_starting_inside_a_written_word_is_not_a_suru_noun_reading(self):
+        # 書く＋なんして の くなんして は 書く の送りがなから始まるかなの並びで、サ変名詞の読み
+        # （かくにん＋して）の一部を削る直しではない。語の途中から始まる並びはこの門で見ない。
+        # 同じ字でも、かなの並びが語の頭から始まる切り方なら今までどおり止める
+        self.assertTrue(R.completed_sahen_reading('くなんしてください'))
+        source,changed='資料を書くなんしてください','資料を確認してください'
+        inside=tokens([('資料','名詞:一般','しりょう'),('を','助詞:格助詞','を'),('書く','動詞:自立','かく','基本形'),
+                       ('なん','名詞:一般','なん'),('し','動詞:自立','し','連用形'),('て','助詞:接続助詞','て'),
+                       ('ください','動詞:非自立','ください','命令ｉ')])
+        boundary=tokens([('資料','名詞:一般','しりょう'),('を','助詞:格助詞','を'),('書','名詞:一般','しょ'),
+                         ('くなん','名詞:一般','くなん'),('し','動詞:自立','し','連用形'),('て','助詞:接続助詞','て'),
+                         ('ください','動詞:非自立','ください','命令ｉ')])
+        after=tokens([('資料','名詞:一般','しりょう'),('を','助詞:格助詞','を'),('確認','名詞:サ変接続','かくにん'),
+                      ('し','動詞:自立','し','連用形'),('て','助詞:接続助詞','て'),('ください','動詞:非自立','ください','命令ｉ')])
+        self.assertTrue(O.preserves_bound_verb(source,7,changed,5,
+            lambda text: inside if text==source else after))
+        self.assertFalse(O.preserves_bound_verb(source,7,changed,5,
+            lambda text: boundary if text==source else after))
+
     def test_native_compound_may_integrate_the_unchanged_suffix_into_one_verb(self):
         original=tokens([('読み','動詞:自立','よみ','連用形'),('直し','動詞:非自立','なおし','連用形')])
         integrated=tokens([('読み直し','動詞:自立','よみなおし','連用形')])

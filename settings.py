@@ -293,6 +293,9 @@ DEFAULTS = {
     # 上がって名前が変われば、印と一致しなくなるので新しい版が
     # 書き出される（app.py の MANUAL_FILENAME / _extract_manual）。
     'manual_extracted': '',
+    # デバッグメニューで縮めた待ち（2026-10-18 うにさん）。既定と違うものだけ
+    # 入れる（鍵→ms など）。読むときに debug_menu.normalize で範囲の外を捨てる。
+    'debug_timings': {},
 }
 
 # 古い設定ファイルからの読み替え。
@@ -389,6 +392,12 @@ class Settings:
                 from pos_font import normalize_colors
                 self.values[key] = normalize_colors(
                     value, key == 'pos_font_colors')
+            elif key == 'debug_timings':
+                # 鍵だけ選んでおく（範囲は当てるときに debug_menu が見る）。
+                # 壊れていれば空（＝すべて既定）。
+                if isinstance(value, dict):
+                    self.values[key] = {k: v for k, v in value.items()
+                                        if isinstance(k, str) and type(v) is int}
             elif key in allowed:
                 if value in allowed[key]:
                     self.values[key] = value

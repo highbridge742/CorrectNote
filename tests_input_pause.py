@@ -29,7 +29,8 @@ class InputPauseTests(unittest.TestCase):
         self.a._analyze_text='synthetic'
     def test_computation_starts_early_but_display_waits_for_quiet(self):
         a=self.a;scheduling.schedule(a);self.accepted()
-        self.assertEqual(a.root.jobs[a._after_id][0],80)
+        self.assertEqual(a.root.jobs[a._after_id][0],scheduling.COMPUTE_DELAY_MS)
+        self.assertLess(scheduling.COMPUTE_DELAY_MS,scheduling.DISPLAY_QUIET_MS)
         self.now+=.08;a.root.run(a._after_id);a._after_id=None
         a._analyze_if_changed.assert_called_once_with()
         self.assertTrue(scheduling.defer_display(a,False))
@@ -38,6 +39,18 @@ class InputPauseTests(unittest.TestCase):
         self.now+=.221;a.root.run(a._input_display_job)
         a._refresh_after_analysis.assert_called_once_with(learn=False)
         self.assertIsNone(a._input_display_job)
+    def test_an_ime_commit_waits_less_than_a_single_key(self):
+        a=self.a;a._ime_comp='としょかん';scheduling.schedule(a)
+        self.assertAlmostEqual(a._input_display_after,10+scheduling.DISPLAY_QUIET_IME_MS/1000)
+        self.assertLess(scheduling.DISPLAY_QUIET_IME_MS,scheduling.DISPLAY_QUIET_MS)
+        # The watcher's follow-up (reading bound, composition ended, same text)
+        # keeps the commit's pause; the next typed text does not.
+        a._ime_comp='';a._work_epoch+=1;self.now+=.01;scheduling.schedule(a)
+        self.assertAlmostEqual(a._input_display_after,10.01+scheduling.DISPLAY_QUIET_IME_MS/1000)
+        a.editor_source_text=lambda:'synthetic+';a._work_epoch+=1;scheduling.schedule(a)
+        self.assertAlmostEqual(a._input_display_after,10.01+scheduling.DISPLAY_QUIET_MS/1000)
+        self.reset_app();a=self.a;a._ime_comp='';scheduling.schedule(a)
+        self.assertAlmostEqual(a._input_display_after,10+scheduling.DISPLAY_QUIET_MS/1000)
     def test_arrow_release_does_not_restart_timer_or_hold_finished_display(self):
         a=self.a;scheduling.schedule(a);before=dict(a.root.jobs);end=a._input_display_after
         self.now+=.06;scheduling.schedule(a)
@@ -107,7 +120,7 @@ class InputPauseTests(unittest.TestCase):
         a._analysis_state_revision=1;scheduling.schedule(a)
         self.assertNotEqual(a._after_id,old)
         self.assertNotIn(old,a.root.jobs)
-        self.assertEqual(a.root.jobs[a._after_id][0],80)
+        self.assertEqual(a.root.jobs[a._after_id][0],scheduling.COMPUTE_DELAY_MS)
 
 class InputResizeTests(unittest.TestCase):
     def test_footer_height_does_not_block_work_but_width_and_root_resize_do(self):

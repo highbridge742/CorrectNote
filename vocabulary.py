@@ -46,6 +46,7 @@ import heapq
 import json
 import math
 import os
+import threading
 from collections import defaultdict
 
 from kana_layout import nearby_candidates, MISSING_KEY_COST
@@ -76,6 +77,9 @@ def entry_is_solid(entry):
     # 旧形式の名残（読み込みで潰しているので、ふつうは通らない）
     return int(entry.get('count') or 0) >= 2
 
+
+#: 語彙の書き出しを1つずつにする（`save` と `save_in_background`・2026-10-18）
+_SAVE_LOCK = threading.RLock()
 
 #: ファイルに書く鍵（**これ以外は書かない**）。回数・時刻はここに無い。
 _SAVE_KEYS = ('reading', 'surface', 'category', 'solid', 'world')
@@ -718,16 +722,63 @@ class VocabularyStore:
 
         書き換えは原子的に（tmp → replace）——途中で落ちても
         語彙が半分だけの状態にならない。
+
+        裏で書いている途中（`save_in_background`）なら、それが済むのを
+        待ってから書く。古い中身が後から上書きすることは無い。
         """
         target = path or self.path
         if not target:
             return
         data = [_entry_for_save(e) for e in self.to_list()]
-        tmp = target + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, target)
-        self.legacy_on_disk = False
+        self._write_saved(target, data, self._next_save_generation())
+
+    def save_in_background(self, path=None):
+        """
+        `save` と同じ中身を、別のスレッドで書き出す（2026-10-18）。
+
+        語彙の写しはこのスレッドで取る（書いている間に語彙が変わっても、
+        呼んだ時点の中身が書かれる）。本人の語彙（約2.7万語・3.5MB）で
+        1回約0.2秒、自動学習のたびに画面の手を止めていた。
+        後から呼んだ `save`／`save_in_background` の中身が先に書かれて
+        いたら、古いほうは書かない。戻り値はスレッド（書く物が無ければ None）。
+        """
+        target = path or self.path
+        if not target:
+            return None
+        data = [_entry_for_save(e) for e in self.to_list()]
+        generation = self._next_save_generation()
+
+        def write():
+            try:
+                self._write_saved(target, data, generation)
+            except Exception as error:
+                self.background_save_error = error
+        # 閉じるときに途中で切られないよう、終わるまで待つスレッドにする
+        thread = threading.Thread(target=write, name='vocabulary-save', daemon=False)
+        thread.start()
+        return thread
+
+    def _next_save_generation(self):
+        with _SAVE_LOCK:
+            self._save_generation = getattr(self, '_save_generation', 0) + 1
+            return self._save_generation
+
+    def _write_saved(self, target, data, generation):
+        with _SAVE_LOCK:
+            written = getattr(self, '_saved_generations', None)
+            if written is None:
+                written = self._saved_generations = {}
+            if generation < written.get(target, 0):
+                return False    # もっと新しい中身が、もう書かれている
+            # json.dump と同じ文字列（同じ iterencode の切れ端をつないだもの）
+            text = json.dumps(data, ensure_ascii=False, indent=2)
+            tmp = target + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                f.write(text)
+            os.replace(tmp, target)
+            written[target] = generation
+            self.legacy_on_disk = False
+            return True
 
     def load(self, path=None):
         """
@@ -1179,7 +1230,9 @@ def build_context_vocab_cached(all_lines, store, cache, attested_out=None, token
     want_attested = attested_out is not None
     from analysis_context import check_current_request
     for line in all_lines:
-        check_current_request()
+        # The request's 5ms cadence (2026-10-17): a check per row read the
+        # request queue 3000 times, about 40ms of each keystroke's prepare.
+        check_current_request(frequent=True)
         if not line.strip():
             continue
         got = cache.get(line)
