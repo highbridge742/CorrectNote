@@ -43,10 +43,25 @@ def child():
                     a._refresh_after_analysis(learn=False)
                     assert body()==source and a._input_display_job is not None
                     assert a._foreground_analysis_pending()
+                # When the correction is written into the text (unified layout).
+                applied=[];apply_autofix=a._apply_unified_autofix
+                def timed_autofix():
+                    applied.append(time.monotonic());return apply_autofix()
+                a._apply_unified_autofix=timed_autofix
                 fast_response();deadline=a._input_display_after
                 while time.monotonic()<deadline-.025:
-                    root.update();assert body()==source,body();time.sleep(.002)
+                    root.update()
+                    # One update that starts before the deadline can run past it on a
+                    # loaded runner and show the correction on time (CI 2026-10-19).
+                    # Only text changed before the deadline is early; the exact time
+                    # is checked below.
+                    if time.monotonic()<deadline:assert body()==source,body()
+                    time.sleep(.002)
                 until(lambda:body()==wanted,2)
+                # The correction was not written before the quiet period ended
+                # (the timer fires at the deadline; 5ms covers clock rounding).
+                assert applied and applied[0]>=deadline-.005,(applied[:1],deadline)
+                a._apply_unified_autofix=apply_autofix
                 assert not a._foreground_analysis_pending()
                 assert not a.status.winfo_ismapped()
                 # A later Backspace/replacement owns the text, even if an old

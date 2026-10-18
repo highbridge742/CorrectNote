@@ -334,7 +334,7 @@ APP_TITLE = 'CorrectNote'
 # 「判断に迷った箇所」から**「不自然な文字列」**へ入れ替え（既定オン・
 # 補正が入った範囲には付けない）、**かな書きのアルファベット読みを
 # 英字に直す**（`エフ2 → F2`）、スクロール後の反映（項目48-IZ〜）。
-APP_VERSION = '1.14.0'
+APP_VERSION = '1.14.1'
 
 # 同梱する説明書のファイル名。exe の中に入れて持ち歩き、
 # 初回起動時に exe と同じフォルダへ書き出す
@@ -761,6 +761,26 @@ def ime_result_once(text):
     return half if emoji_spans(half) == [(0, len(half))] else text
 
 
+def running_as_package():
+    """
+    MSIX（Microsoft Store 用）のパッケージとして動いているか（2026-10-18）。
+
+    パッケージのインストール先（WindowsApps）は読み取り専用なので、
+    そのときだけデータの置き場所を変える（app_dir）。
+    GetCurrentPackageFullName は、パッケージでなければ
+    APPMODEL_ERROR_NO_PACKAGE（15700）を返す。
+    """
+    if sys.platform != 'win32':
+        return False
+    try:
+        import ctypes
+        length = ctypes.c_uint32(0)
+        result = ctypes.windll.kernel32.GetCurrentPackageFullName(ctypes.byref(length), None)
+    except Exception:
+        return False        # 古い Windows（関数が無い）はパッケージで動かない
+    return result != 15700
+
+
 def app_dir():
     """
     データファイル（語彙・判断・選び直し・辞書索引）を置く場所。
@@ -769,7 +789,16 @@ def app_dir():
     （sys._MEIPASS）を指すようになる。そこは実行のたびに変わり、
     終了時に消えることもあるため、データを置いてはいけない。
     exe のときは exe と同じフォルダに置く（USBに入れて持ち運べる）。
+
+    MSIX のパッケージで動いているときだけは、%LOCALAPPDATA%\CorrectNote
+    （無ければ作る）。インストール先は書けないため。Windows はこの場所を
+    パッケージごとの場所へ写す。同梱物の読み出し（bundled_path）は変えない。
     """
+    if running_as_package():
+        base = os.environ.get('LOCALAPPDATA') or os.path.expanduser('~')
+        path = os.path.join(base, 'CorrectNote')
+        os.makedirs(path, exist_ok=True)
+        return path
     if getattr(sys, 'frozen', False):
         return os.path.dirname(os.path.abspath(sys.executable))
     return os.path.dirname(os.path.abspath(__file__))
