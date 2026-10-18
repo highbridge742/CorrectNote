@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="330" viewBox="0 0 1000 330">
+<rect width="1000" height="330" rx="14" fill="#f5f7f8"/>
+<text x="34" y="42" font-family="Yu Gothic UI, Meiryo, sans-serif" font-size="19" font-weight="700" fill="#25323a">操作イメージ｜「箇条書き」で背景色の範囲を別々の行に並べる</text>
+<rect x="30" y="62" width="430" height="218" rx="10" fill="#fff" stroke="#cbd5dc" stroke-width="2"/>
+<text x="52" y="94" font-family="Yu Gothic UI, Meiryo, sans-serif" font-size="15" font-weight="700" fill="#596b74">元の本文</text>
+<text x="52" y="132" font-family="Yu Gothic UI, Meiryo, sans-serif" font-size="15" fill="#25323a">会議では、</text>
+<rect x="145" y="112" width="165" height="30" rx="4" fill="#f9e5a8"/>
+<text x="151" y="133" font-family="Yu Gothic UI, Meiryo, sans-serif" font-size="14" fill="#25323a">資料を確認します。</text>
+<text x="52" y="159" font-family="Yu Gothic UI, Meiryo, sans-serif" font-size="14" fill="#25323a">その後、予定を整えます。</text>
+<text x="52" y="204" font-family="Yu Gothic UI, Meiryo, sans-serif" font-size="15" fill="#25323a">買い物では、</text>
+<rect x="164" y="184" width="149" height="30" rx="4" fill="#d8eddf"/>
+<text x="170" y="205" font-family="Yu Gothic UI, Meiryo, sans-serif" font-size="14" fill="#25323a">牛乳を買います。</text>
+<text x="52" y="232" font-family="Yu Gothic UI, Meiryo, sans-serif" font-size="14" fill="#25323a">帰宅後に片付けます。</text>
+<line x1="476" y1="171" x2="535" y2="171" stroke="#176b82" stroke-width="4"/>
+<path d="M535 160 L554 171 L535 182 Z" fill="#176b82"/>
+<rect x="570" y="62" width="400" height="218" rx="10" fill="#fff" stroke="#cbd5dc" stroke-width="2"/>
+<text x="592" y="94" font-family="Yu Gothic UI, Meiryo, sans-serif" font-size="15" font-weight="700" fill="#596b74">箇条書きの結果</text>
+<rect x="592" y="112" width="356" height="54" rx="7" fill="#f5f8f9"/>
+<circle cx="613" cy="139" r="5" fill="#176b82"/>
+<text x="630" y="145" font-family="Yu Gothic UI, Meiryo, sans-serif" font-size="17" fill="#25323a">資料を確認します。</text>
+<rect x="592" y="178" width="356" height="54" rx="7" fill="#f5f8f9"/>
+<circle cx="613" cy="205" r="5" fill="#176b82"/>
+<text x="630" y="211" font-family="Yu Gothic UI, Meiryo, sans-serif" font-size="17" fill="#25323a">牛乳を買います。</text>
+<text x="34" y="311" font-family="Yu Gothic UI, Meiryo, sans-serif" font-size="14" fill="#596b74">背景色の範囲は元の位置から移り、カーソル行の下に1行ずつ入ります。</text>
+</svg>
