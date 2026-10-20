@@ -43,6 +43,7 @@ hotkeys.py・タイトルバーのダークモードと同じく、外部ライ�
     方式に関係なく拾うので、実害は無い。
 """
 
+import os
 import sys
 
 HAS_SUPPORT = sys.platform.startswith('win')
@@ -190,6 +191,52 @@ def composition_active(hwnd):
             imm.ImmReleaseContext(hwnd, himc)
     except Exception:
         return None
+
+
+def _foreground_process():
+    """The process of the window in front, or None when it cannot be told."""
+    if sys.platform != 'win32':
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user = ctypes.WinDLL('user32')
+        user.GetForegroundWindow.restype = wintypes.HWND
+        user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        front = user.GetForegroundWindow()
+        if not front:
+            return None
+        pid = wintypes.DWORD()
+        user.GetWindowThreadProcessId(front, ctypes.byref(pid))
+        return pid.value or None
+    except Exception:
+        return None
+
+
+def composition_live(hwnd):
+    """
+    composition_active, but only while CorrectNote is in front (2026-10-19).
+
+    An unconfirmed string stays in the window's IME context when the user
+    goes to another app in the middle of a conversion. While CorrectNote is
+    behind, nobody is converting there, so the work that waits for the
+    conversion to end (the rows' marks, the automatic correction, quick input,
+    the input-method reanalysis) must not wait for it: うにさん saw the row
+    numbers keep showing "not analysed" until a click on CorrectNote. Back in
+    front with the string still there, it counts again. When the window in
+    front cannot be told (no foreground window, not Windows), as before.
+    Use it for waiting; composition_active stays for actions the user takes.
+    """
+    active = composition_active(hwnd)
+    if not active:
+        return active
+    return False if app_behind() else active
+
+
+def app_behind():
+    """True when another app's window is in front (False when it cannot be told)."""
+    front = _foreground_process()
+    return front is not None and front != os.getpid()
 
 
 def complete_composition(hwnd):

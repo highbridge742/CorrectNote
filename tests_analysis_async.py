@@ -23,7 +23,7 @@ def initial():
     choices=LastChoiceStore();choices.bind(store,index);set_active(choices)
     ime=IMEReadings();kanji_guess.set_ime_readings_provider(ime.readings_for)
     return SimpleNamespace(store=store,dict_index=index,choices=choices,decisions=DecisionStore(),
-        ime_readings=ime,context_vec=cv,settings={'input_method':'kana'})
+        ime_readings=ime,context_vec=cv,settings={'input_method':'kana','memory_usage':'high'})  # the tier these tests were written for (the default became mid on 2026-10-20)
 
 
 def wait(worker,identifier):

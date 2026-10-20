@@ -1493,14 +1493,12 @@ def test_map_column():
         if not ok:
             print(f'      得た値: {got!r}   期待: {want!r}')
 
-    # tkinter の無い環境でも動かせるよう、app.py から
-    # この関数の定義だけを取り出して読み込む（既存のテストと同じ手）。
-    _src = open('app.py', encoding='utf-8').read()
-    _start = _src.index('def map_column(')
-    _end = _src.index('\ndef ', _start + 10)
-    _ns = {}
-    exec(_src[_start:_end], _ns)
-    map_column = _ns['map_column']
+    # map_column は v1.12.58 で text_positions.py（tkinter を使わない部品）へ移った。
+    # app.py はそこから取り込んで使っている（2026-10-19 にここも読み先を合わせた）。
+    _app_src = open('app.py', encoding='utf-8').read()
+    check('app.py は text_positions の map_column を使っている',
+          'from text_positions import map_column' in _app_src, True)
+    from text_positions import map_column
 
     # 行末に居たら、新しい行末へ
     check('行末はそのまま行末',

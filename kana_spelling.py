@@ -1162,6 +1162,10 @@ def project(text,store,index,decisions=None,partial=False):
                                     and _relative_object_spelling_evidence(current[:start],face)
                                 for face in native_nominal_phrase_faces(rd))):continue
                     if remembered==rd:continue
+                    # A piece of a kana run that reads whole as one word (a dictionary word,
+                    # or word+suffix) gets no kanji of its own (けいさつ|しょ -> 書).
+                    from last_keystroke import inside_kana_word
+                    if inside_kana_word(current,start,end,index):continue
                     hit=[t for t in parts if t.start<end and start<t.end]
                     if not hit:continue
                     preceding=next((t for t in parts if t.end==start),None)

@@ -20,7 +20,7 @@ class QuickAsyncTests(unittest.TestCase):
     def setUp(self):
         self.widget=Widget();self.worker=Mock();self.worker.process.is_alive.return_value=True
         self.worker.submit.side_effect=range(1,30);self.worker.poll.return_value=None
-        self.app=SimpleNamespace(_quick_text=self.widget,settings={'input_method':'kana'},root=Mock(),status=Mock(),
+        self.app=SimpleNamespace(_quick_text=self.widget,settings={'input_method':'kana','memory_usage':'high'},root=Mock(),status=Mock(),
             _analyze_quick=Mock(),_finish_quick_analysis=Mock(return_value=False),_autofix_live_records=Mock(return_value=[]),_on_quick_f2=Mock())
         self.worker_patch=patch.object(Q,'Worker',return_value=self.worker);self.worker_patch.start()
         self.snapshot_patch=patch.object(Q,'snapshot',return_value={});self.snapshot=self.snapshot_patch.start()

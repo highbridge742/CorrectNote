@@ -54,7 +54,7 @@ def run_settings_cases():
     s = Settings(path)
     check('既定値は両方オン', (s.get('hotkey_insert_enabled'),
                           s.get('hotkey_minus_enabled')), (True, True))
-    check('既定でホットキーが2つとも有効', len(active_hotkeys(s)), 2)
+    check('既定でホットキーが3つとも有効（2026-10-19 単語帳を足した）', len(active_hotkeys(s)), 3)
     check('簡易入力の説明は既定で表示する', s.get('show_quick_hint'), True)
 
     s.set('hotkey_insert_enabled', False)
@@ -64,7 +64,7 @@ def run_settings_cases():
           (s2.get('hotkey_insert_enabled'), s2.get('hotkey_minus_enabled')),
           (False, True))
     check('片方だけオフにすると有効なホットキーが1つになる',
-          active_hotkeys(s2), [('minus', 'Ctrl+Shift+-')])
+          active_hotkeys(s2), [('minus', 'Ctrl+Shift+-'), ('wordbook', 'Ctrl+Alt+Insert / Ctrl+Alt+Shift+-')])
 
     with open(path, 'w', encoding='utf-8') as f:
         f.write('{ 壊れた内容')
@@ -88,7 +88,7 @@ def run_settings_cases():
     check('古い名前で保存されたオフ設定を引き継ぐ',
           s5.get('hotkey_minus_enabled'), False)
     check('引き継いだ設定が有効ホットキーにも反映される',
-          active_hotkeys(s5), [('insert', 'Ctrl+Insert')])
+          active_hotkeys(s5), [('insert', 'Ctrl+Insert'), ('wordbook', 'Ctrl+Alt+Insert / Ctrl+Alt+Shift+-')])
 
     # --- ホットキーのキー定義（hotkeys.py） ---
     # Windows 以外では登録処理そのものは動かないが、
@@ -120,6 +120,11 @@ def run_settings_cases():
           [(HK.MOD_CONTROL | HK.MOD_SHIFT, 0xBD)])
     check('Ctrl+Insert は修飾キーが Ctrl だけ',
           HK.HOTKEY_DEFS['insert'], [(HK.MOD_CONTROL, 0x2D)])
+    # 単語帳のオン・オフ（2026-10-19 うにさん）: Ctrl+Alt+Insert と Ctrl+Shift+Alt+-（JIS の Shift+「-」）
+    check('単語帳は Ctrl+Alt+Insert と Ctrl+Shift+Alt+VK_OEM_MINUS（繰り返しなし）',
+          HK.HOTKEY_DEFS['wordbook'],
+          [(HK.MOD_CONTROL | HK.MOD_ALT | HK.MOD_NOREPEAT, 0x2D),
+           (HK.MOD_CONTROL | HK.MOD_ALT | HK.MOD_SHIFT | HK.MOD_NOREPEAT, 0xBD)])
     check('設定の名前とキー定義の名前が揃っている',
           sorted(n for n, _l in active_hotkeys(Settings(None))),
           sorted(HK.HOTKEY_DEFS))
@@ -131,11 +136,11 @@ def run_settings_cases():
 
     s6 = Settings(None)
     check('一時解除が無ければ設定どおり',
-          effective_hotkeys(s6), {'insert', 'minus'})
+          effective_hotkeys(s6), {'insert', 'minus', 'wordbook'})
     check('一時解除したものだけが外れる',
-          effective_hotkeys(s6, {'insert'}), {'minus'})
+          effective_hotkeys(s6, {'insert'}), {'minus', 'wordbook'})
     check('2つとも一時解除できる',
-          effective_hotkeys(s6, {'insert', 'minus'}), set())
+          effective_hotkeys(s6, {'insert', 'minus'}), {'wordbook'})
     check('一時解除は設定ファイルの値を変えない',
           (s6.get('hotkey_insert_enabled'),
            s6.get('hotkey_minus_enabled')), (True, True))
@@ -143,9 +148,9 @@ def run_settings_cases():
     s7 = Settings(None)
     s7.set('hotkey_minus_enabled', False)
     check('設定でオフのものを一時解除しても矛盾しない',
-          effective_hotkeys(s7, {'minus'}), {'insert'})
+          effective_hotkeys(s7, {'minus'}), {'insert', 'wordbook'})
     check('設定でオフなら一時解除の有無に関わらず登録しない',
-          effective_hotkeys(s7), {'insert'})
+          effective_hotkeys(s7), {'insert', 'wordbook'})
 
     # 一時解除の名前は、キー定義の名前と同じでなければならない
     # （綴りがずれると「解除したのに効き続ける」ことになる）
@@ -196,20 +201,20 @@ def run_settings_cases():
 
     # --- 検索オプション ---
     s10 = Settings(None)
-    check('正規表現は既定でオン', s10.get('find_regex'), True)
+    check('正規表現は既定でオフ（2026-10-20 うにさん）', s10.get('find_regex'), False)
     check('折り返し検索は既定でオン', s10.get('find_wrap'), True)
     check('大文字小文字の区別は既定でオフ',
           s10.get('find_match_case'), False)
     check('単語単位は既定でオフ', s10.get('find_whole_word'), False)
 
     s10.path = path
-    s10.set('find_regex', False)
+    s10.set('find_regex', True)
     s10.set('find_match_case', True)
     s10.save()
     s11 = Settings(path)
     check('検索オプションが次回起動時に復元される',
           (s11.get('find_regex'), s11.get('find_match_case')),
-          (False, True))
+          (True, True))
 
     # --- ホットキーの診断（実機で「押しても出ない」と報告されたため） ---
     g = HK.GlobalHotkeys()
@@ -753,7 +758,8 @@ def run_settings_cases():
     from app import CorrectNoteApp as App
     class EndPane:
         def __init__(self, text):
-            self.text=text;self._end_rule_line=Mock();self.tags=[]
+            # 2026-10-19: the end rule has two lines since v1.12.58 (_end_rule_second_line)
+            self.text=text;self._end_rule_line=Mock();self._end_rule_second_line=Mock();self.tags=[]
         def get(self,*args):return self.text
         def tag_remove(self,*args):self.tags=[]
         def tag_add(self,*args):self.tags.append(args)
@@ -771,6 +777,13 @@ def run_settings_cases():
               pane._end_rule_line.place.call_args.kwargs if expected else
               pane._end_rule_line.place.call_count,
               dict(x=2,y=51,width=396,height=1) if expected else 0)
+        check('2本目の罫線は1本目の3px上: '+repr(text),
+              pane._end_rule_second_line.place.call_args.kwargs if expected else
+              pane._end_rule_second_line.place.call_count,
+              dict(x=2,y=48,width=396,height=1) if expected else 0)
+        check('罫線は2本とも描き直す前に消す: '+repr(text),
+              (pane._end_rule_line.place_forget.call_count,
+               pane._end_rule_second_line.place_forget.call_count), (1, 1))
 
     # --- 印を置く欄は名簿1つ（項目48-IH） ---
     #
@@ -2436,9 +2449,14 @@ def run_icon_cases():
     check('_apply_window_icon から呼ばれる',
           calls(fn, '_set_window_icons_win32'), True)
     # **簡易入力の窓にも掛ける**（学び22——片方だけに置くと迂回する）
+    # 2026-10-19: the window is built in _show_quick_capture now (_open_quick_capture
+    # hands over to quick_selection.open_quick)
     check('簡易入力の窓にも掛ける',
-          calls(methods.get('_open_quick_capture'),
+          calls(methods.get('_show_quick_capture'),
                 '_set_window_icons_win32'), True)
+    check('簡易入力の窓にも掛ける（建てた窓 win に掛ける）',
+          'self._set_window_icons_win32(win)' in (ast.get_source_segment(
+              src, methods.get('_show_quick_capture')) or ''), True)
 
     # --- 絵の中身（項目48-LY・矢を落とした） ---
     # うにさんの指定（2026-08-30）「アプリアイコンの右側にある矢印を
@@ -3814,12 +3832,19 @@ def test_unit_reading_and_rows_20260904():
 
     print('--- 項目48-QB（説明の塊ぜんぶが見える高さ） ---')
     src = open('app.py', encoding='utf-8').read()
-    check('見出しは品詞判定と補正根拠の両方を見る（48-OC の続き）',
-          'if _t in (ANALYSIS_HEAD_POS, ANALYSIS_HEAD_WHY):' in src, True)
+    # 2026-10-19: the height is no longer capped at DROPDOWN_ROWS_MAX. The list is
+    # measured and shows every item (both explanation blocks included) while it fits
+    # the work area, with a scrollbar beyond that.
+    check('見出しは品詞判定と補正根拠の両方を一覧に入れる（48-OC の続き）',
+          ('items.append((ANALYSIS_HEAD_POS, None))' in src,
+           'items.append((ANALYSIS_HEAD_WHY, None))' in src), (True, True))
     check('「16＋説明の行数」の足りない式は残っていない',
           'DROPDOWN_ROWS + (len(items) - _i)' in src, False)
-    check('高さは項目の総数（上限 ROWS_MAX）',
-          'rows = min(len(items), DROPDOWN_ROWS_MAX)' in src, True)
+    check('高さは項目の総数（画面の作業領域に収まるまで）',
+          'rows = min(len(items), max(1, (a_b - a_t - padding) // row_height))' in src, True)
+    check('収まらないときはスクロールバーで全部に届く',
+          'if rows < len(items):' in src
+          and "scrollbar = tk.Scrollbar(dd, orient='vertical', command=lb.yview)" in src, True)
     return all_ok
 
 
@@ -4337,7 +4362,14 @@ def test_quick_autofix_undo_48vd():
 
     # ---- (b) 台帳は全部の道へ（学び22） ----------------------
     _worker_tree=_ast.parse(open('analysis_worker.py',encoding='utf-8').read())
-    _calls = [x for source in (tree,_worker_tree) for x in _ast.walk(source)
+    # 2026-10-19: the main screen and quick input both reach correct_line through the
+    # worker (quick_analysis uses analysis_worker.Worker); the worker's line task goes
+    # through correction_entry.correct_line, so that file is checked too
+    _entry_tree=_ast.parse(open('correction_entry.py',encoding='utf-8').read())
+    check('48-VD 簡易入力も共有ワーカーを使う',
+          'from analysis_worker import Worker' in open('quick_analysis.py',encoding='utf-8').read(),
+          True)
+    _calls = [x for source in (tree,_worker_tree,_entry_tree) for x in _ast.walk(source)
               if isinstance(x, _ast.Call)
               and ((isinstance(x.func, _ast.Name)
                     and x.func.id == 'correct_line')
@@ -4378,7 +4410,7 @@ def test_quick_autofix_undo_48vd():
           and _qc.index('_autofix_reset') < _qc.index('win.destroy()'),
           True)
     check('48-VD 窓を建てる／掴み直す両方で控えを空にする',
-          body('_open_quick_capture').count(
+          body('_show_quick_capture').count(
               'self._quick_autofix_records = []'), 2)
 
     # ---- 自動反映が控えを作り、色は塗り直す -------------------
@@ -4907,8 +4939,13 @@ def run_view_latency_48vv():
         def winfo_height(self):return 500
         def dlineinfo(self,i):calls.append(i);return (0,0,20,20,15)
         def tag_names(self,index):return ()
+    fitted=[]
     class Gutter:
+        # 2026-10-19: redraw now asks fit_width for the width and uses RIGHT_GAP
         target=Target();bookmarks={70010};font='font';active_row=None;row_status=None
+        RIGHT_GAP=G.RIGHT_GAP
+        def fit_width(self,line_count):fitted.append(line_count);return 60
+        def configure(self,**kw):fitted.append(('configure',kw))
         def _number_font(self,number,width):return self.font
         def __getitem__(self,k):return 60
         def delete(self,*a):pass
@@ -4917,6 +4954,7 @@ def run_view_latency_48vv():
         def create_rectangle(self,*a,**kw):pass
     G.redraw(Gutter())
     ok=ok and len(calls)==25 and calls[0]=='70000.0' and calls[-1]=='70024.0'
+    ok=ok and fitted==[100000]      # the width is fitted to the line count once; same width, no reconfigure
     print(('OK' if ok else 'NG'),'48-VV 10万行のガターは可視25行だけ・サイズ変更100回を統合・解析を待機・控えを優先')
     return ok
 

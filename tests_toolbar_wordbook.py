@@ -257,7 +257,7 @@ r.after(30,tick);r.mainloop()
             if phase == 'responsive':
                 from word_book import word_book_position
                 from tkinter import font as tkfont
-                expected_hint='【簡易入力】別ウインドウを開き、エスケープキーで閉じると入力していた文字列をコピーしてカーソル位置に移します'
+                expected_hint='【簡易入力】別ウインドウを開き、エスケープキーで閉じると入力していた文字列をコピーしてカーソル位置に移します：Ctrl+Insert'
                 assert hover(a.quick_input_btn)==expected_hint
                 leave(a.quick_input_btn)
                 assert word_book_position((130,50,1030,600),(150,200),(0,0,1920,1040),number_left=175)==(0,80)
@@ -354,7 +354,7 @@ r.after(30,tick);r.mainloop()
             if phase == 'layout':
                 from word_book import word_book_position
                 from tkinter import font as tkfont
-                assert hover(a.word_book_btn) == '【単語帳】追加ボタンから登録した単語をクリックするとコピー状態になり、ペーストすることができます'
+                assert hover(a.word_book_btn) == '【単語帳】追加ボタンから登録した単語をクリックするとカーソル位置に挿入され、コピー状態になります：Ctrl+Alt+Insert'
                 leave(a.word_book_btn)
                 # Pure geometry includes a monitor to the left of the primary.
                 assert word_book_position((400, 50, 1200, 650), (150, 200), (0, 0, 1920, 1040)) == (244, 80)
@@ -539,7 +539,7 @@ r.after(30,tick);r.mainloop()
             offset = buttons.index(a.list_mode_btn)
             assert buttons[offset + 1:offset + 3] == [a.quick_input_btn, a.word_book_btn]
             assert all(b.winfo_ismapped() for b in buttons), [(b.cget('text'), b.winfo_ismapped()) for b in buttons]
-            assert hover(a.quick_input_btn) == '【簡易入力】別ウインドウを開き、エスケープキーで閉じると入力していた文字列をコピーしてカーソル位置に移します'; leave(a.quick_input_btn)
+            assert hover(a.quick_input_btn) == '【簡易入力】別ウインドウを開き、エスケープキーで閉じると入力していた文字列をコピーしてカーソル位置に移します：Ctrl+Insert'; leave(a.quick_input_btn)
             a.quick_input_btn.invoke(); root.update(); assert a._quick_win is not None
             a._close_quick_capture()
 

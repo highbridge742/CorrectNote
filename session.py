@@ -49,7 +49,6 @@ Windows 11 のメモ帳と同じ使い勝手を目指す:
 
 import json
 import os
-import time
 import file_format as file_formats
 
 SESSION_VERSION = 1
@@ -255,15 +254,20 @@ class SessionStore:
             return False
         data = {
             'version': SESSION_VERSION,
-            'saved_at': time.time(),
             'active': self.active,
             'tabs': self.tabs,
         }
         try:
+            text = json.dumps(data, ensure_ascii=False)
+            # Same as what was last written there: do not write it again (2026-10-20). The time
+            # of saving is no longer kept (nothing read it; times are not recorded).
+            if getattr(self, '_last_written', None) == (path, text) and os.path.exists(path):
+                return True
             tmp = path + '.tmp'
             with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False)
+                f.write(text)
             os.replace(tmp, path)
+            self._last_written = (path, text)
             return True
         except Exception:
             return False

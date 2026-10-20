@@ -6,6 +6,7 @@
 2026-10-14 うにさん: three tiers with upper limits on the total of every
 CorrectNote process in Task Manager, analysis included — low 700MB, mid
 1400MB, high 2100MB; the default is high. Low may analyse very slowly.
+2026-10-20 うにさん: the default is now mid (a safety step while PCs were crashing).
 2026-10-15 うにさん: 「中と高は、もう一段階負荷をかけてよいです。中は高に
 寄せた処理で1500前後に。高も何かひとつ追加してよいです。低は900を目指す
 というよりかは、限界まで抑えるという方針です。そのうえで900ならよい。」
@@ -48,10 +49,10 @@ _TIERS = (MEMORY_LOW, MEMORY_MID, MEMORY_HIGH)
 
 
 def mode(app):
-    """The saved tier; anything unknown is treated as the default (high)."""
+    """The saved tier; anything unknown is treated as the default (mid)."""
     settings = getattr(app, 'settings', None)
     value = settings.get('memory_usage') if settings is not None else None
-    return value if value in _TIERS else MEMORY_HIGH
+    return value if value in _TIERS else MEMORY_MID
 
 
 def low(app):

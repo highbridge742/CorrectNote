@@ -61,8 +61,9 @@ ITEMS = (
      'app', 'TAB_WHEEL_SAME_MS', 'ms', 0, _ZERO_GUARD),
     ('tab_wheel_reverse', 'タブを切り替えたあと、逆向きを無視する間',
      'app', 'TAB_WHEEL_REVERSE_MS', 'ms', 0, _ZERO_GUARD),
-    ('tab_wheel_release', '右ボタンを離したあと、逆向きを無視する間',
-     'app', 'TAB_WHEEL_RELEASE_MS', 'ms', 0, _ZERO_GUARD),
+    # 「右ボタンを離したあと、逆向きを無視する間」（tab_wheel_release）は外した
+    # （2026-10-19 うにさん。離したあとも上の「逆向き」で抑える）。保存に残った鍵は
+    # normalize が読み飛ばす。
 )
 KEYS = tuple(item[0] for item in ITEMS)
 # 窓の見出し（その鍵の項目の前に出す・2026-10-18 うにさん）。2つ目からは前に1行あける。

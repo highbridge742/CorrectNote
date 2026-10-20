@@ -5271,6 +5271,11 @@ def _polite_end_restore_only(line,start,end,surface):
 
 def object_predicate_candidate_allowed(line,start,end,surface,spelling=False):
     """A proposed edit completes the same independently proved object clause."""
+    # 英字だけの並びを同じ長さの英字だけの並びに替える直し（YRLを貼る→URLを貼る: 略語の隣のキー）は、
+    # 目的語と述語の結び付き（日本語の語の意味の役割）では確かめられない。英字の語は役割の表に無く、
+    # 門は正しい直しを落とすだけだった（うに 2026-10-19 略語の直しを一般に）
+    if (len(surface)==end-start and surface.isascii() and surface.isalpha()
+            and line[start:end].isascii() and line[start:end].isalpha()):return True
     if not _changed_genitive_object_allowed(line,start,end,surface):return False
     if _polite_end_restore_only(line,start,end,surface):return True
     if spelling and independently_spelled_object_verb(line,start,end,surface):return True
@@ -8333,10 +8338,36 @@ def _native_negative_degree_predicate(surface,head):
         last.start,last.end,last.has_reading,last.infl_form))
 
 
+# 片仮名の語＋る動詞（ミスる・パクる・サボる・メモる）: 五段「る」の活用を1つの活用として扱う。
+# 語幹の末尾（活用語尾の頭）→ 続く形。辞書の切り方（ミ＋スっ＋て）に頼らず、形で見る
+_KATAKANA_RU_FORMS = {
+    'っ': ('て', 'た', 'ても', 'たら', 'たり', 'てる', 'ている', 'てた', 'ていた', 'てない', 'ていない', 'ては', 'てから'),
+    'ら': ('ない', 'ず', 'なかった', 'なければ', 'れる', 'れた', 'れない', 'せる', 'せた'),
+    'り': ('ます', 'ました', 'ません', 'ましょう', 'たい', 'たくない', 'ながら', 'そう', ''),
+    'る': ('', 'と', 'な', 'か', 'し', 'から', 'ので', 'なら', 'けど', 'が', 'よ', 'ね'),
+    'れ': ('ば', ''),
+    'ろ': ('う', ''),
+}
+_KATAKANA_RU_RE = re.compile(r'[ァ-ヴー]{2,}([っらりるれろ])$')
+
+
+def katakana_ru_verb_predicate(text, head_start, head_end):
+    """text の [head_start, head_end) を芯とする述語が、片仮名の語＋る動詞の活用（ミスっても・パクった・
+    サボらない）か。片仮名の語は2字以上、活用語尾の頭が芯の末尾にあり、その後ろが活用の続きであること。"""
+    m = _KATAKANA_RU_RE.search(text[:head_end])
+    if not m or m.start() >= head_end or head_start > head_end - 1:
+        return False
+    tail = text[head_end:]
+    return any(tail.startswith(t) if t else True for t in _KATAKANA_RU_FORMS[m.group(1)])
+
+
 @lru_cache(maxsize=8192)
 def _productive_predicate(surface, head, before=""):
     """候補を作る語尾は、保護用の緩い説明だけで正当化しない。"""
     from morphology import tokenize
+    # 片仮名の語＋る動詞の活用（ミ＋スっ＋て: 辞書は ミ と スっ に切る）は述語（うに 2026-10-20）
+    if katakana_ru_verb_predicate(before + surface, len(before), len(before) + len(head)):
+        return True
     # The actual case on the left can distinguish a verb such as しめて
     # from its isolated adverb homograph. Preserve that original context.
     parts=[t for t in tokenize(before+surface) if t.start>=len(before)]

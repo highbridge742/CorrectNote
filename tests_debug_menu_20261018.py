@@ -44,13 +44,16 @@ class DebugTimingsTests(unittest.TestCase):
         self.assertEqual(debug_menu.default('ime_quiet', a), analysis_input.DISPLAY_QUIET_IME_MS)
         self.assertEqual(debug_menu.default('ime_poll_active', a), app.CorrectNoteApp._IME_POLL_ACTIVE_MS)
         self.assertEqual(debug_menu.default('busy_gap', a), app.CorrectNoteApp.ANALYZE_BUSY_GAP_MS)
-        # タブのホイールの既定と上限（2026-10-18 うにさんの指定）
+        # タブのホイールの既定と上限（2026-10-18 うにさんの指定。2026-10-19 に
+        # 同じ向き 50・逆向き 30 へ。離したあとの項目は外した。2026-10-20 に同じ向きを 65 へ）
         self.assertEqual([debug_menu.default(k, a) for k in
-                          ('tab_wheel_step', 'tab_wheel_same', 'tab_wheel_reverse', 'tab_wheel_release')],
-                         [120, 47, 20, 20])
+                          ('tab_wheel_step', 'tab_wheel_same', 'tab_wheel_reverse')],
+                         [120, 65, 30])
         self.assertEqual([debug_menu.maximum(k, a) for k in
-                          ('tab_wheel_step', 'tab_wheel_same', 'tab_wheel_reverse', 'tab_wheel_release')],
-                         [300, 200, 300, 300])
+                          ('tab_wheel_step', 'tab_wheel_same', 'tab_wheel_reverse')],
+                         [300, 200, 300])
+        self.assertNotIn('tab_wheel_release', debug_menu.KEYS)
+        self.assertFalse(hasattr(app.CorrectNoteApp, 'TAB_WHEEL_RELEASE_MS'))
         for key in debug_menu.KEYS:
             self.assertLessEqual(debug_menu.minimum(key), debug_menu.default(key, a), key)
             self.assertLessEqual(debug_menu.default(key, a), debug_menu.maximum(key, a), key)
@@ -100,9 +103,9 @@ class DebugTimingsTests(unittest.TestCase):
         self.assertEqual(debug_menu.normalize(['key_quiet', 1], a), {})
         # 上限が既定より上の項目（タブのホイール）: 既定と同じものは残さない
         self.assertEqual(debug_menu.normalize(
-            {'tab_wheel_step': 120, 'tab_wheel_same': 47, 'tab_wheel_reverse': 300,
-             'tab_wheel_release': 301, 'tab_wheel_step_x': 1}, a),
-            {'tab_wheel_reverse': 300})
+            {'tab_wheel_step': 120, 'tab_wheel_same': 65, 'tab_wheel_reverse': 300,
+             'tab_wheel_release': 30, 'tab_wheel_step_x': 1}, a),
+            {'tab_wheel_reverse': 300})      # the removed tab_wheel_release key is skipped
         self.assertEqual(debug_menu.parse('tab_wheel_step', '500', a), 300)
         self.assertEqual(debug_menu.parse('tab_wheel_step', '0', a), 1)
         # 壊れたファイル・形の違う値
@@ -206,17 +209,17 @@ class DebugTimingsTests(unittest.TestCase):
             nav._tab_wheel(self.event(1000, -150), over_tabs=True)
             nav._tab_wheel(self.event(1100, -120), over_tabs=True)
             self.assertEqual(nav._next_tab.call_count, 0)
-            # 同じ向きは 47ms、逆向きは 20ms のあいだ受け付けない（境目の両側）
+            # 同じ向きは 65ms、逆向きは 30ms のあいだ受け付けない（境目の両側）
             step = A.TAB_WHEEL_STEP
             nav = self.wheel_host()
             nav._tab_wheel(self.event(2000, -step), over_tabs=True)
-            nav._tab_wheel(self.event(2046, -step), over_tabs=True)
+            nav._tab_wheel(self.event(2064, -step), over_tabs=True)
             self.assertEqual(nav._next_tab.call_count, 1)
-            nav._tab_wheel(self.event(2047, -step), over_tabs=True)
+            nav._tab_wheel(self.event(2065, -step), over_tabs=True)
             self.assertEqual(nav._next_tab.call_count, 2)
-            nav._tab_wheel(self.event(2066, step), over_tabs=True)
+            nav._tab_wheel(self.event(2094, step), over_tabs=True)
             self.assertEqual(nav._next_tab.call_count, 2)
-            nav._tab_wheel(self.event(2067, step), over_tabs=True)
+            nav._tab_wheel(self.event(2095, step), over_tabs=True)
             self.assertEqual([c[0] for c in nav._next_tab.call_args_list], [(1,), (1,), (-1,)])
             # 変えた待ちが使われる（逆向き 300ms）
             nav = self.wheel_host(); debug_menu.apply(nav, {'tab_wheel_reverse': 300})
@@ -225,26 +228,34 @@ class DebugTimingsTests(unittest.TestCase):
             self.assertEqual(nav._next_tab.call_count, 1)
             nav._tab_wheel(self.event(3300, step), over_tabs=True)
             self.assertEqual(nav._next_tab.call_count, 2)
-            # 右ボタンを離したあと、逆向きは 20ms のあいだ受け付けない
-            nav = self.wheel_host()
-            clock[0] = 20.0
-            nav._tab_wheel(self.event(4000, -step), over_tabs=True)
-            nav._tab_wheel_hold_direction = 1
-            nav._finish_tab_wheel_gesture()
-            clock[0] = 20.019
-            nav._tab_wheel(self.event(4500, step), over_tabs=True)
+            # 右ボタンで切り替えて離したあと: 逆向きは「切り替えたあと、逆向き」（30ms）で
+            # 捨て、過ぎたら通す（2026-10-19 うにさん。離したあと専用の待ちは外した）
+            for released_by in ('release', 'lost release'):
+                nav = self.wheel_host(); nav._tab_right_pending = None
+                nav._tab_wheel(self.event(4000, -step))                    # right held
+                self.assertTrue(nav._tab_wheel_used)
+                if released_by == 'release':
+                    nav._on_tab_right_release(SimpleNamespace(widget=None))
+                    self.assertFalse(nav._tab_wheel_used)
+                self.assertEqual(nav._tab_wheel_last_step[1:], (1, 4000), released_by)   # kept on release
+                # over the strip, 29ms later (with a lost release this notch also ends the gesture)
+                rebound = SimpleNamespace(time=4029, delta=step, state=0, widget=None)
+                nav._tab_wheel(rebound, over_tabs=True)
+                self.assertFalse(nav._tab_wheel_used, released_by)
+                self.assertEqual(nav._next_tab.call_count, 1, released_by)
+                stale = SimpleNamespace(time=4029, delta=step, state=0x0400, widget=None)
+                nav._tab_wheel(stale)                                      # still marked as right held
+                self.assertEqual(nav._next_tab.call_count, 1, released_by)
+                nav._tab_wheel(SimpleNamespace(time=4030, delta=step, state=0, widget=None), over_tabs=True)
+                self.assertEqual([c[0] for c in nav._next_tab.call_args_list], [(1,), (-1,)], released_by)
+            # 変えた逆向きの待ちは、離したあとにも効く
+            nav = self.wheel_host(); debug_menu.apply(nav, {'tab_wheel_reverse': 300}); nav._tab_right_pending = None
+            nav._tab_wheel(self.event(5000, -step))
+            nav._on_tab_right_release(SimpleNamespace(widget=None))
+            nav._tab_wheel(SimpleNamespace(time=5299, delta=step, state=0, widget=None), over_tabs=True)
             self.assertEqual(nav._next_tab.call_count, 1)
-            clock[0] = 20.021
-            nav._tab_wheel(self.event(4600, step), over_tabs=True)
+            nav._tab_wheel(SimpleNamespace(time=5300, delta=step, state=0, widget=None), over_tabs=True)
             self.assertEqual(nav._next_tab.call_count, 2)
-            nav = self.wheel_host(); debug_menu.apply(nav, {'tab_wheel_release': 300})
-            clock[0] = 30.0
-            nav._tab_wheel(self.event(5000, -step), over_tabs=True)
-            nav._tab_wheel_hold_direction = 1
-            nav._finish_tab_wheel_gesture()
-            clock[0] = 30.2
-            nav._tab_wheel(self.event(5500, step), over_tabs=True)
-            self.assertEqual(nav._next_tab.call_count, 1)
 
     def test_items_order_and_headings(self):
         # うにさんの指定（2026-10-18）: 4項目を外し、【解析】11項目・【タブ移動】4項目
@@ -257,7 +268,8 @@ class DebugTimingsTests(unittest.TestCase):
             'IME の変換が始まったかを見張る間隔', '裏のタブの補正を始めるまで',
             '簡易入力：打ってから、補正を出すまでの待ち',
             'タブを切り替えるホイールの量（1目盛り＝120）', 'タブを切り替えたあと、同じ向きを受け付けるまで',
-            'タブを切り替えたあと、逆向きを無視する間', '右ボタンを離したあと、逆向きを無視する間'])
+            'タブを切り替えたあと、逆向きを無視する間'])
+        self.assertEqual(len(debug_menu.ITEMS), 14)
         self.assertEqual(debug_menu.SECTIONS, (('ime_quiet', '【解析】'), ('tab_wheel_step', '【タブ移動】')))
 
     def test_removed_items_ignore_old_saved_values(self):
@@ -309,7 +321,12 @@ class DebugWindowTkTests(unittest.TestCase):
         self.settle()
         self.assertEqual(dlg.title(), 'デバッグメニュー')
         self.assertIs(self.a.open_debug_menu(), dlg)   # 2つ目は開かない
-        self.assertEqual(len(dlg._debug_rows), 15)
+        self.assertEqual(len(dlg._debug_rows), 14)    # tab_wheel_release was removed (2026-10-19)
+        self.assertNotIn('tab_wheel_release', dlg._debug_rows)
+        # 【タブ移動】の並びと既定（2026-10-19 うにさん: 同じ向き 50・逆向き 30。2026-10-20 に同じ向き 65）
+        self.assertEqual([(k, dlg._debug_rows[k]['number'].get()) for k in
+                          ('tab_wheel_step', 'tab_wheel_same', 'tab_wheel_reverse')],
+                         [('tab_wheel_step', 120), ('tab_wheel_same', 65), ('tab_wheel_reverse', 30)])
         def texts(widget):
             for child in widget.winfo_children():
                 if isinstance(child, tk.Label):

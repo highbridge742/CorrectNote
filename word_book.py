@@ -218,9 +218,18 @@ class _WordBookNative:
 
     def restore_previous(self):
         u = self.user
-        if not self.hwnd or not self.previous or u.GetForegroundWindow() != self.hwnd:
+        if not self.hwnd or not self.previous:
             return False
+        front = u.GetForegroundWindow()
         hwnd, owner = self.previous
+        # The word book does not activate (2026-10-19, make_noactivate): the app the user
+        # was in usually keeps the front, so there is nothing to give back. A click can also
+        # leave no window in front; then the front is given back as from the word book.
+        if front and front == hwnd:
+            self.return_focus = self.focus if self.focus and self.focus[0] == hwnd else None
+            return u.IsWindow(hwnd) and u.IsWindowVisible(hwnd) and not u.IsIconic(hwnd)
+        if front and front != self.hwnd:
+            return False
         if not u.IsWindow(hwnd) or not u.IsWindowVisible(hwnd) or u.IsIconic(hwnd):
             return False
         from ctypes import wintypes as W
@@ -230,6 +239,36 @@ class _WordBookNative:
         # window's own activation may report its frame as focused next.
         self.return_focus = self.focus if self.focus and self.focus[0] == hwnd else None
         return bool(pid.value == owner and u.SetForegroundWindow(hwnd))
+
+    def make_noactivate(self):
+        """The word book never becomes the active window, like an on-screen keyboard
+        (2026-10-19 うにさん): showing it or clicking a word leaves the front, and the text box
+        being typed in, where they are — another app's, or CorrectNote's own text. It stays in
+        the taskbar and Alt+Tab (WS_EX_APPWINDOW)."""
+        if not self.hwnd:
+            return False
+        try:
+            c, u = self.c, self.user
+            from ctypes import wintypes as W
+            u.GetWindowLongPtrW.argtypes = [W.HWND, c.c_int]; u.GetWindowLongPtrW.restype = c.c_ssize_t
+            u.SetWindowLongPtrW.argtypes = [W.HWND, c.c_int, c.c_ssize_t]; u.SetWindowLongPtrW.restype = c.c_ssize_t
+            style = u.GetWindowLongPtrW(self.hwnd, -20)                  # GWL_EXSTYLE
+            u.SetWindowLongPtrW(self.hwnd, -20, style | 0x08000000 | 0x00040000)   # NOACTIVATE | APPWINDOW
+            return True
+        except (OSError, AttributeError, ValueError):
+            return False
+
+    def give_front(self, hwnd):
+        """Give the front back to `hwnd` (another app's window) when nothing else has it."""
+        u = self.user
+        if not hwnd or not u.IsWindow(hwnd) or u.IsIconic(hwnd):
+            return False
+        front = u.GetForegroundWindow()
+        if front == hwnd:
+            return True
+        if front and front != self.hwnd:
+            return False        # the user went somewhere else meanwhile
+        return bool(u.SetForegroundWindow(hwnd))
 
     def _refocus(self, hwnd, thread):
         """Give the remembered control of that window its focus back.
@@ -273,8 +312,11 @@ class _WordBookNative:
                 return False
             if info.hwndCaret:
                 return True
-            return bool(info.hwndFocus) and quick_return.is_text_class(
-                quick_return.class_name(info.hwndFocus))
+            # A browser's page draws its own caret: its content window counts
+            # (2026-10-19 うにさん「単語帳の文字をコピーしました と出ます」, quick_return).
+            name = quick_return.class_name(info.hwndFocus) if info.hwndFocus else ''
+            return bool(info.hwndFocus) and (quick_return.is_text_class(name)
+                                             or quick_return.is_web_content(name))
         except (OSError, ImportError, AttributeError, ValueError):
             return False
 
@@ -397,17 +439,68 @@ class WordBook:
         if self.visible and not getattr(self.app, '_closing', False):
             self.open()
 
-    def toggle(self):
+    def toggle(self, give_back=False, outside=None):
+        """give_back: the button was clicked while another app was in front (2026-10-19
+        うにさん): once shown, the word book gives the front back to that app. outside: that
+        app's window as seen before the click ((hwnd, pid), no_activate.recent_outside)."""
+        import focus_trace
+        focus_trace.log('word book toggle give_back=%s outside=%s open=%s front=%s' % (
+            give_back, '%x' % outside[0] if outside else None, self.window is not None,
+            focus_trace.foreground()))
+        if give_back and outside and self._native is not None:
+            self._native._remember(outside[0])
+        # The text being typed in CorrectNote, to give the focus back to after showing the book
+        self._pending_give_back = bool(give_back)
+        try:
+            self._refocus_widget = None if give_back else self.app.root.focus_get()
+        except (tk.TclError, KeyError, AttributeError):
+            self._refocus_widget = None
         if self.window is not None:
             if self.window.state() == 'iconic':
                 self.window.deiconify()
                 self.window.lift()
+                self.app.root.after(0, self._give_back_after_open)
             else:
+                # A shown word book closes, also when clicked from another app (2026-10-19
+                # うにさん「単語帳ボタンで単語帳を閉じられなくなりました」)
                 self.close()
         else:
-            self.open()
+            self.open(give_back=give_back, outside=outside)
 
-    def open(self):
+    def _give_back_after_open(self):
+        """Give the front back to the other app that was in front (and its text box), so
+        CorrectNote does not stay the active app and a click on a word pastes there."""
+        import focus_trace
+        native = self._native
+        previous = getattr(native, 'previous', None)
+        focus_trace.log('word book give back: previous=%s ours=%s front=%s book=%s' % (
+            '%x' % previous[0] if previous else None, bool(previous and previous[1] == os.getpid()),
+            focus_trace.foreground(), '%x' % (getattr(native, 'hwnd', 0) or 0)))
+        from_outside = getattr(self, '_pending_give_back', False)
+        self._pending_give_back = False
+        if native is not None and not from_outside:
+            # Opened from CorrectNote itself: Tk's deiconify still makes the word book the
+            # active window (うにさんの記録 2026-10-19), so give the focus back to the text
+            # that was being typed in. Never hand the front to another app from here.
+            widget = getattr(self, '_refocus_widget', None)
+            self._refocus_widget = None
+            try:
+                if widget is not None and widget.winfo_exists() and native.user.GetForegroundWindow() == native.hwnd:
+                    widget.focus_force()
+                    focus_trace.log('word book refocus %s front=%s' % (widget, focus_trace.foreground()))
+            except Exception:
+                pass
+            return
+        if native is None or not previous:
+            return
+        try:
+            give = getattr(native, 'give_front', None)
+            done = give(previous[0]) if give is not None else native.restore_previous()
+            focus_trace.log('word book give back done=%s front=%s' % (done, focus_trace.foreground()))
+        except Exception:
+            pass
+
+    def open(self, give_back=False, outside=None):
         if self.window is not None:
             self.window.lift()
             return
@@ -418,6 +511,10 @@ class WordBook:
             native = ctypes.WinDLL('user32')
             native.GetForegroundWindow.restype = ctypes.c_void_p
             previous = native.GetForegroundWindow()
+            if give_back and outside:
+                # Clicked from another app: by now Windows may report no window in front
+                # (うにさんの記録 2026-10-19); the app seen before the click is the one to return to
+                previous = outside[0]
         win = tk.Toplevel(self.app.root)
         win.withdraw()
         self.window = win
@@ -434,6 +531,9 @@ class WordBook:
         win.update_idletasks()
         if os.name == 'nt':
             self._native = _WordBookNative(win, previous)
+            # Never the active window (before it is first shown): opening it, or clicking a word,
+            # leaves the front and the text being typed where they are (2026-10-19 うにさん)
+            self._native.make_noactivate()
         self.app._set_window_icons_win32(win)
         self.width = min(self.width or self.initial_width(), max(80, win.winfo_screenwidth() - 40))
         win.geometry('%dx1' % self.width)
@@ -461,8 +561,12 @@ class WordBook:
         win.bind('<Map>', lambda e: no_maximize(win) if e.widget is win else None, add=True)
         self.visible = True
         self.render()
+        import focus_trace
+        focus_trace.log('word book open: before deiconify front=%s previous=%s' % (
+            focus_trace.foreground(), '%x' % (previous or 0)))
         win.deiconify()
         win.update_idletasks()
+        focus_trace.log('word book open: after deiconify front=%s' % focus_trace.foreground())
         no_maximize(win)
         floor = caption_width(win, getattr(self._native, 'hwnd', None))
         if floor:
@@ -474,6 +578,7 @@ class WordBook:
         self._place()
         self.app.word_book_btn.config(relief='sunken', fg=accent)
         self.save()
+        self.app.root.after(0, self._give_back_after_open)
 
     def _place(self):
         win, root = self.window, self.app.root
@@ -565,6 +670,7 @@ class WordBook:
         for child in self.rows.winfo_children():
             child.destroy()
         self.buttons = []
+        self._emoji_images = []
         font = self.app._editor_font()
         line_height = tkfont.Font(root=self.window, font=font).metrics('linespace')
         for index, text in enumerate(self.words):
@@ -580,6 +686,15 @@ class WordBook:
             row.pack(fill='x')
             row.pack_propagate(False)
             button.configure(pady=0, bd=0, highlightthickness=0)
+            # Emoji in colour, as in the memo (2026-10-19 うにさん「単語帳に絵文字を追加すると色が
+            # ない」): Tk draws button text in black and white, so a word with emoji is shown as
+            # an image of the same line (the button keeps its text for copying).
+            import emoji_color
+            image = emoji_color.line_image(self.window, button.cget('text'), font, ink, bg,
+                                           line_height + gap)
+            if image is not None:
+                self._emoji_images.append(image)
+                button.configure(image=image, compound='none')
             button.place(x=0, y=0, relwidth=1, relheight=1)
             button.bind('<Button-3>', lambda e, i=index: self.remove_menu(e, i))
             button.bind('<MouseWheel>', self._wheel)

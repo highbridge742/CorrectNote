@@ -178,6 +178,31 @@ class WordBookInsertTest(unittest.TestCase):
             self.assertFalse(native.paste(0x1234))
             user.return_value.keybd_event.assert_not_called()
 
+    def test_a_browser_page_without_a_caret_takes_the_paste(self):
+        # 2026-10-19 うにさん「ブラウザです。単語帳の文字をコピーしました と出ます」:
+        # a browser page draws its own caret, so its content window counts; Explorer does not.
+        from quick_ime import _GuiInfo
+        native = word_book._WordBookNative.__new__(word_book._WordBookNative)
+        native.c = __import__('ctypes')
+        native.user = SimpleNamespace(GetForegroundWindow=lambda: 0x1234,
+                                      GetWindowThreadProcessId=lambda hwnd, pid: 7)
+        native.return_focus = None
+
+        def thread_info(focus_class):
+            def fill(thread, pointer):
+                info = pointer._obj          # the _GuiInfo passed by reference
+                assert isinstance(info, _GuiInfo)
+                info.hwndActive = 0x1234; info.hwndFocus = 0x1234; info.hwndCaret = None
+                return 1
+            return fill
+        for focus_class, expected in (('Chrome_WidgetWin_1', True), ('MozillaWindowClass', True),
+                                      ('CabinetWClass', False), ('DirectUIHWND', False)):
+            with patch('quick_ime._api') as api, patch('quick_return._user') as user, \
+                    patch('quick_return.class_name', return_value=focus_class):
+                api.return_value.GetGUIThreadInfo.side_effect = thread_info(focus_class)
+                self.assertEqual(native.paste(0x1234), expected, focus_class)
+                self.assertEqual(user.return_value.keybd_event.called, expected, focus_class)
+
 
 if __name__ == '__main__':
     unittest.main()

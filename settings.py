@@ -94,7 +94,8 @@ MEMORY_LOW = 'low'
 MEMORY_MID = 'mid'
 MEMORY_HIGH = 'high'
 # 2026-10-14 うにさん「低・中・高の3段階にし、低は700MB、中は1400、高は2100
-# （上限）。デフォルトは高」。中身は memory_usage.py の頭に書いてある。
+# （上限）。デフォルトは高」。2026-10-20 うにさんの指定で既定を中に（PC が落ちる件の
+# 安全策の1つ）。中身は memory_usage.py の頭に書いてある。
 MEMORY_LABELS = {MEMORY_LOW: '低（解析は遅い）',
                  MEMORY_MID: '中',
                  MEMORY_HIGH: '高（速い）'}
@@ -135,7 +136,7 @@ CTRL_BOUNDARIES_DEFAULTS_VERSION = '3'
 
 DEFAULTS = {
     # 高は先読みと解析子を保持。低は完了後の待機中に解放する。
-    'memory_usage': MEMORY_HIGH,
+    'memory_usage': MEMORY_MID,
     # Ctrl＋左右で止まる場所の印。Ctrl を押している間だけ出る（既定オン）。
     'show_ctrl_boundaries': True,
     # Ctrl＋左右の印をカーソルのある行だけに出す（既定オン）。オフで全行。
@@ -153,6 +154,8 @@ DEFAULTS = {
     'hotkey_insert_enabled': True,
     # Ctrl+Shift+- で簡易入力ウィンドウを開く
     'hotkey_minus_enabled': True,
+    # Ctrl+Alt+Insert / Ctrl+Alt+Shift+- で単語帳をオン・オフ（2026-10-19）
+    'hotkey_wordbook_enabled': True,
     # 簡易入力ウィンドウに、呼び出したホットキーについての
     # 説明文を出すかどうか（一時解除ボタン自体は説明文とは別に常に出す）
     'show_quick_hint': True,
@@ -225,7 +228,8 @@ DEFAULTS = {
     # 検索ダイアログのチェックボックス。
     # 一度設定したら、同じ検索中はもちろん、次にアプリを
     # 開き直したときも同じ条件で検索できるようにする
-    # （実機からの要望。正規表現は既定でオンにする）。
+    # （実機からの要望。正規表現は既定でオフ——2026-10-20 うにさん「正規表現のチェックがデフォルトオンなら、
+    # デフォルトオフにする」。以前は既定でオン）。
     # OSのタイトルバーを隠す（Windows）。最上部の水色の枠
     # （アクセントカラーの帯）ごと無くしたい、といううにさんの
     # 指定で既定オン（2026-08-09）。表示メニューで戻せる。
@@ -262,7 +266,7 @@ DEFAULTS = {
     'show_reason_info': False,
     'find_match_case': False,
     'find_whole_word': False,
-    'find_regex': True,
+    'find_regex': False,
     'find_wrap': True,
     # 語彙の一回きりの手入れ（活用の途中の形の使用実績の取り消し）を
     # 実施済みか。過去の自動学習が、編集のたびにメモ全文を再学習して
@@ -487,6 +491,8 @@ def active_hotkeys(settings):
         out.append(('insert', 'Ctrl+Insert'))
     if settings.get('hotkey_minus_enabled'):
         out.append(('minus', 'Ctrl+Shift+-'))
+    if settings.get('hotkey_wordbook_enabled'):
+        out.append(('wordbook', 'Ctrl+Alt+Insert / Ctrl+Alt+Shift+-'))
     return out
 
 

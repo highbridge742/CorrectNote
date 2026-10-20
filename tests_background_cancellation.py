@@ -9,6 +9,7 @@ import app,analysis_async,analysis_context,analysis_worker
 
 def owner():
     a=app.CorrectNoteApp.__new__(app.CorrectNoteApp)
+    a.settings={'memory_usage':'high'}  # the tier these tests were written for (the default became mid on 2026-10-20)
     a.root=Mock();a._bg_start_job='start';a._bg_job='poll';a._bg=None
     a._bg_texts=['pending'];a._async_background_request=('obsolete',1)
     a._prefetch_worker=Mock();a._prefetch_worker.closed=False

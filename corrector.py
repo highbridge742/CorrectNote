@@ -11152,7 +11152,20 @@ def _design35_fix(surface, reading, surrounding_words, attest_text,
         return None
     _trace('同音', f'{surface!r} → 対の表の手がかりで '
                    f'{fix!r} に合わせる（設計35）')
+    if len(_DESIGN35_CHOSEN) > 512:
+        _DESIGN35_CHOSEN.clear()
+    _DESIGN35_CHOSEN.add((attest_text or '', surface, fix))
     return (fix, 'その他', EVIDENCE_VECTOR)
+
+
+# 対の表が選んだ直し（伏せた行・書かれている語・直す語）。最終検査の門 incomplete_original_source を通す証明
+_DESIGN35_CHOSEN = set()
+
+
+def _design35_chosen(line, start, end, new_surface):
+    surface = line[start:end]
+    return any((a, surface, new_surface) in _DESIGN35_CHOSEN
+               for a in (line, line[:start] + ' ' + line[end:], line[:start] + '　' + line[end:]))
 
 
 def _homophone_by_context(surface, reading, store, context_vec,
@@ -23304,7 +23317,8 @@ def _native_degree_repeat(line,edge):
 def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
                        decisions=None, halfwidth_taken=(), shift_taken=(),
                        lu_taken=(), conv_taken=(), loanword_module=None, spelling=False,
-                       ime_first_proof=False, ime_shift_proof=False, ime_clause_proof=False):
+                       ime_first_proof=False, ime_shift_proof=False, ime_clause_proof=False,
+                       ime_stray_proof=False, ime_purple_proof=False):
     """共通の最終検査。原文座標の候補と、安定した判定理由IDを返す。
 
     Noneはこの候補の不採用。異様判定の撤回や候補総数ゼロを意味しない。
@@ -23367,8 +23381,11 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
         return None, 'original_spelling_scope'
     if new_surface == original:
         return None, 'unchanged'         # 範囲を広げたら元と同じ＝直していない
+    # 紫（異様の印・残った英字）が掛かる戻し（ime_purple_proof）は、語の芯が機能語をまたぐ門と
+    # 否定の助動詞を守る門で止めない（うに 2026-10-19 14:46Z: 紫が出ている以上、元の切り方は証拠にならない。
+    # 共有しまい**s**た→共有しました・れな**r**くします→れんらくします）
     from reading_segments import native_lexical_core_edit_allowed
-    if not native_lexical_core_edit_allowed(line,start,end,new_surface):
+    if not ime_purple_proof and not native_lexical_core_edit_allowed(line,start,end,new_surface):
         return None,'lexical_core_crosses_functional_word'
     from reading_segments import preserves_opaque_source_object
     if not preserves_opaque_source_object(line,line[:start]+new_surface+line[end:]):
@@ -23382,7 +23399,10 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
     from mark_usage import incomplete_mark_deletion
     if not ime_clause_proof and incomplete_mark_deletion(line,line[:start]+new_surface+line[end:],tokenize_fn):
         return None, 'unexplained_mark_deletion'
-    if _repeat_repair_disabled_in_source(line, start, end, new_surface, tokenize_fn):
+    # ローマ字入力の印（文法で付かない所に残った1字の母音・っ: 番号**う**を・一つ**っ**前）を抜く文節の形
+    # （ime_stray_proof: 文節の証明付き）は、同じ字の重なりの門を通す（母音・子音のキーの2度押し uu・tt は
+    # この形そのもの。印の無い重なり（新しいい）は今までどおり直さない。うに 2026-10-19 11:08Z「印があれば通す」）
+    if not ime_stray_proof and _repeat_repair_disabled_in_source(line, start, end, new_surface, tokenize_fn):
         return None, 'duplicate_repair_disabled'
     if not ime_clause_proof and _changes_neighbor_and_shift_in_source(line,start,end,new_surface,tokenize_fn):
         return None,'original_key_shift_state'
@@ -23427,10 +23447,11 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
     if not preserves_native_temporal_nominal(line,line[:start]+new_surface+line[end:]):
         return None,'completed_temporal_nominal'
     from reading_segments import preserves_native_incomplete_source
-    if not spelling and not preserves_native_incomplete_source(line,line[:start]+new_surface+line[end:]):
+    if (not spelling and not preserves_native_incomplete_source(line,line[:start]+new_surface+line[end:])
+            and not _design35_chosen(line,start,end,new_surface)):
         return None,'incomplete_original_source'
     from reading_segments import preserves_native_negative_auxiliary
-    if not preserves_native_negative_auxiliary(line,line[:start]+new_surface+line[end:]):
+    if not ime_purple_proof and not preserves_native_negative_auxiliary(line,line[:start]+new_surface+line[end:]):
         return None,'native_negative_auxiliary'
     from reading_segments import preserves_native_polite_auxiliary
     if not preserves_native_polite_auxiliary(line,line[:start]+new_surface+line[end:]):
@@ -23443,7 +23464,7 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
         # 連体詞を守る門。文節の証明（ime_clause_proof）のある形では見ない: 文節の端にまたがる
         # 連体詞（研修あ|の → あの）は確定の単位の途中に語が生まれた形で、文節の中の連体詞
         # （良いい の 良い）は滑った読みを IME が変換した語で、どちらも元の文の証拠にならない
-        if not ime_clause_proof:
+        if not ime_clause_proof and not ime_purple_proof:
             return None,'completed_adnominal_modifier'
     from reading_segments import preserves_native_predicate_modifier
     if not preserves_native_predicate_modifier(line,line[:start]+new_surface+line[end:]):
@@ -26457,6 +26478,30 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
         if run_keep_tail:
             _trace('かな連続', f'{run!r} → 末尾の {run_keep_tail!r} は'
                              f'助詞なので動かさない')
+        # 片仮名の語＋る動詞の活用（ミス**らないように**・パク**ったら**）のかな連続は、頭の1字が活用語尾で、
+        # 続き（ない・て）も活用の続き（うに 2026-10-20: ミスる・パクる は活用の追加）。残りが機能語と語で
+        # 説明が付くなら窓を切らない（正しく打った ミスらないように に迷いの印が付いていた）
+        if (run_start >= 2 and (('ァ' <= line[run_start - 1] <= 'ヴ') or line[run_start - 1] == 'ー')
+                and line[run_start] in 'っらりるれろ'):
+            try:
+                import contextual_repair as _cr
+                _kru = _cr.katakana_ru_verb_predicate(line, run_start - 1, run_start + 1)
+            except Exception:
+                _kru = False
+            if _kru and (len(run) == 1 or not explain_cores(run[1:], store, after_kanji=True)):
+                _trace('かな連続', f'{run!r} → 片仮名の語＋る動詞の活用の続きなので見ない')
+                continue
+        # かな連続が、末尾の助詞（と頭の助詞の1字）を除いて丸ごと辞書の語＋接尾の名詞として読めるなら、窓で語の中を切らない
+        # （明日はけいさつしょに の つしょ・たんとうしゃ の うしゃ を窓にして 書・校舎 を置いていた）。語として読める
+        # のは、1キー隣に辞書の語そのものが無いもの（last_keystroke.kana_run_is_word）。辞書の語そのものの並びは前のまま
+        try:
+            from last_keystroke import kana_run_is_word as _krw
+            _run_word = _krw(run, run_keep_tail, dict_index, input_method, whole=False)
+        except Exception:
+            _run_word = False
+        if _run_word:
+            _trace('かな連続', f'{run!r} → 丸ごと正しい語（辞書の語・語＋接尾）として読めるので窓を切らない')
+            continue
         windows = token_windows(run, tokenize_fn)
         source = 'token_windows'
         if not windows:

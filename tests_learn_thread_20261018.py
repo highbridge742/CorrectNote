@@ -64,8 +64,12 @@ class LearnThreadTests(unittest.TestCase):
             self.a._learn_now(TEXT)
             self.assertIsNotNone(self.a._learn_thread)          # not on this thread
             self.pump_until(lambda: self.a._learn_thread is None)
-        self.assertEqual(self.a.store.to_list(), expected.to_list())
-        save.assert_called_once_with()
+            self.assertEqual(self.a.store.to_list(), expected.to_list())
+            # Written once, AUTOSAVE_MS later (2026-10-20: saves are gathered every 5 minutes)
+            save.assert_not_called()
+            self.assertTrue(self.a._store_save_after_id)
+            self.root.after_cancel(self.a._store_save_after_id)
+            self.a._store_save_after_id = None
         self.a._invalidate_analysis_cache.assert_called_once_with()
         self.a._retain_finished_rows_after_auto_learning.assert_called_once_with()
         # the same lines are not learned again

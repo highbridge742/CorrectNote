@@ -10,7 +10,7 @@ from tests_quick_async import Widget
 class QuickIdlePrewarmTests(unittest.TestCase):
     def make(self):
         worker=Mock();worker.process.is_alive.return_value=True
-        app=SimpleNamespace(root=Root(),_quick_text=Widget(),_quick_worker=worker,settings={},
+        app=SimpleNamespace(root=Root(),_quick_text=Widget(),_quick_worker=worker,settings={'memory_usage':'high'},
                             _quick_after_id=None,_quick_job=None)
         app._quick_worker_state=Q.state_key(app)
         return app,worker

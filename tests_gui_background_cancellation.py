@@ -15,7 +15,7 @@ def child():
     # so exact source equality checks all supplied text without trimming it.
     following=complete+'\n処理がじゃのになっていないだろうか'+'\n'*app.CorrectNoteApp.TRAILING_BLANK_LINES
     Path('session.json').write_text(json.dumps(dict(version=1,active=0,tabs=[new_tab(text=first),new_tab(text=following)]),ensure_ascii=False),encoding='utf8')
-    Path('settings.json').write_text(json.dumps(dict(layout='split',input_method='kana',input_method_auto=False)),encoding='utf8')
+    Path('settings.json').write_text(json.dumps(dict(layout='split',input_method='kana',input_method_auto=False,memory_usage='high')),encoding='utf8')
     root=tk.Tk();root.withdraw();a=None;errors=[];calls=[]
     root.report_callback_exception=lambda *exc:errors.append(''.join(traceback.format_exception(*exc)))
     original=analysis_worker.Worker.submit

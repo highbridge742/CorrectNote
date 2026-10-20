@@ -225,7 +225,8 @@ class BoundaryColorTkTests(unittest.TestCase):
         self.root.geometry('700x280+0+0');self.settle();self.assertEqual(self.errors,[])
     def test_ime_preedit_defers_and_destroy_cancels_all_callbacks(self):
         w=self.a.editor;colors=w._correctnote_boundary_colors
-        with patch('ime_watch.composition_active',return_value=True),patch('corrector.make_tokenizer',side_effect=AssertionError('preedit NLP')):
+        # typing in CorrectNote: it is in front (2026-10-19, ime_watch.composition_live)
+        with patch('ime_watch.composition_active',return_value=True),patch('ime_watch.app_behind',return_value=False),patch('corrector.make_tokenizer',side_effect=AssertionError('preedit NLP')):
             colors.refresh_option();self.settle();self.assertFalse(colors._marker_indices)
         self.settle();self.assertIn('、',self.texts(w))
         w.destroy();self.assertTrue(colors._closed);self.assertIsNone(colors._job)

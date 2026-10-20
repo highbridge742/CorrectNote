@@ -76,9 +76,17 @@ MOD_SHIFT = 0x0004
 # **JIS配列では VK_OEM_PLUS は「;」のキー**である。
 # そのため実機では Ctrl+= を押しても無反応になっていた。
 # 刻印どおりに押せる組み合わせとして Ctrl+Shift+- に改めた。
+MOD_NOREPEAT = 0x4000
 HOTKEY_DEFS = {
     'insert': [(MOD_CONTROL, 0x2D)],                  # Ctrl + Insert
     'minus': [(MOD_CONTROL | MOD_SHIFT, 0xBD)],       # Ctrl + Shift + -
+    # 単語帳のオン・オフ（2026-10-19 うにさん「Ctrl+Alt+Insert または Ctrl+Shift+Alt+= で
+    # どこからでも単語帳をオンオフ」）。= は JIS 配列の Shift+「-」なので、表記は簡易入力の
+    # Ctrl+Shift+- に揃えて Ctrl+Shift+Alt+- とし、2026-10-20 に Ctrl+Alt+Shift+- へ（うにさん。キーは
+    # 同じ）。押しっぱなしの
+    # 繰り返しで開け閉めを繰り返さないよう MOD_NOREPEAT を付ける。
+    'wordbook': [(MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 0x2D),             # Ctrl + Alt + Insert
+                 (MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, 0xBD)], # Ctrl + Shift + Alt + -
 }
 
 # 画面に出す名前。app.py のメニューや簡易入力ウィンドウの
@@ -86,6 +94,7 @@ HOTKEY_DEFS = {
 HOTKEY_LABELS = {
     'insert': 'Ctrl+Insert',
     'minus': 'Ctrl+Shift+-',
+    'wordbook': 'Ctrl+Alt+Insert / Ctrl+Alt+Shift+-',
 }
 
 # id はホットキーごとに固有の小さい整数が必要（RegisterHotKey の仕様）。
@@ -200,6 +209,13 @@ class GlobalHotkeys:
 
     # ------------------------------------------------------------
     def _run(self):
+        # このスレッドのメッセージの箱を先に作ってから、スレッドの番号を知らせる
+        # （2026-10-20）。箱は user32 を初めて呼んだときに作られるので、番号を先に
+        # 出すと、set_enabled の「見直せ」（PostThreadMessage）が箱の無いうちに
+        # 届いて捨てられ、スレッドは GetMessage で眠ったまま登録しなかった
+        # （30回中16回。うにさん「単語帳がショートカットキーで呼び出せなくなった」）。
+        msg = wintypes.MSG()
+        user32.PeekMessageW(ctypes.byref(msg), None, 0x0400, 0x0400, 0)   # WM_USER, PM_NOREMOVE
         self._thread_id = kernel32.GetCurrentThreadId()
         self._sync_registration()
         # _thread_id を入れてから最初の同期を終えるまでの間に

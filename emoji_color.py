@@ -186,10 +186,16 @@ class EmojiRenderer:
     DirectWrite factories are not COM-activated, and a DC render target
     replaces the WIC bitmap that needed CoInitializeEx on the Tk thread
     (CI 2026-10-14: an owned UIA request stopped finishing once the Tk thread
-    had been put into a COM apartment)."""
-    FAMILY = 'Segoe UI Emoji'
+    had been put into a COM apartment).
 
-    def __init__(self):
+    Drawn by the CPU, never handed to the graphics card (2026-10-20: a PC running
+    CorrectNote crashed in its graphics driver, igdkmdn64.sys). Only small glyph
+    images are drawn, so software drawing costs little."""
+    FAMILY = 'Segoe UI Emoji'
+    # D2D1_RENDER_TARGET_TYPE: 0 DEFAULT (the GPU when there is one), 1 SOFTWARE
+    TARGET_TYPE = 1
+
+    def __init__(self, target_type=None):
         d2d1 = ctypes.WinDLL('d2d1')
         dwrite = ctypes.WinDLL('dwrite')
         self.gdi = ctypes.WinDLL('gdi32')
@@ -215,7 +221,8 @@ class EmojiRenderer:
                                           ctypes.byref(self.dw)), 'DWriteCreateFactory')
         # One DC render target, bound to a fresh memory bitmap per glyph.
         self.target = ctypes.c_void_p()
-        props = _RT_PROPERTIES(0, _PIXEL_FORMAT(87, 3), 96.0, 96.0, 0, 0)   # B8G8R8A8, IGNORE
+        kind = self.TARGET_TYPE if target_type is None else target_type
+        props = _RT_PROPERTIES(kind, _PIXEL_FORMAT(87, 3), 96.0, 96.0, 0, 0)   # B8G8R8A8, IGNORE
         _check(_method(self.d2d, 16, ctypes.POINTER(_RT_PROPERTIES),
                        ctypes.POINTER(ctypes.c_void_p))(ctypes.byref(props), ctypes.byref(self.target)),
                'CreateDCRenderTarget')
@@ -228,23 +235,39 @@ class EmojiRenderer:
                'CreateSolidColorBrush')
         self._formats = {}
 
-    def _format(self, px):
-        fmt = self._formats.get(px)
+    def _format(self, px, family=None, leading=False):
+        key = (px, family, leading)
+        fmt = self._formats.get(key)
         if fmt is None:
             fmt = ctypes.c_void_p()
             create = _method(self.dw, 15, ctypes.c_wchar_p, ctypes.c_void_p, ctypes.c_uint,
                              ctypes.c_uint, ctypes.c_uint, ctypes.c_float, ctypes.c_wchar_p,
                              ctypes.POINTER(ctypes.c_void_p))
-            _check(create(self.FAMILY, None, 400, 0, 5, float(px), 'ja-jp',
+            _check(create(family or self.FAMILY, None, 400, 0, 5, float(px), 'ja-jp',
                           ctypes.byref(fmt)), 'CreateTextFormat')
-            _method(fmt, 3, ctypes.c_uint)(2)       # SetTextAlignment(CENTER)
+            _method(fmt, 3, ctypes.c_uint)(0 if leading else 2)   # SetTextAlignment(LEADING/CENTER)
             _method(fmt, 4, ctypes.c_uint)(2)       # SetParagraphAlignment(CENTER)
             _method(fmt, 5, ctypes.c_uint)(1)       # SetWordWrapping(NO_WRAP)
-            self._formats[px] = fmt
+            self._formats[key] = fmt
         return fmt
 
-    def render(self, text, px, width, height, bg):
-        """PPM bytes of `text` drawn in colour, centred on an opaque bg."""
+    def render(self, text, px, width, height, bg, fg=None, family=None, leading=False):
+        """PPM bytes of `text` drawn in colour, centred on an opaque bg.
+
+        fg/family/leading draw a whole line of text (2026-10-19, the word book): letters in
+        `fg` with the `family` font, emoji in colour by DirectWrite's own font fallback, from
+        the left edge."""
+        if fg is not None:
+            ink = _COLOR_F(*_rgb(fg), 1.0)
+            _method(self.brush, 8, ctypes.POINTER(_COLOR_F), restype=None)(ctypes.byref(ink))   # SetColor
+            try:
+                return self._render(text, px, width, height, bg, self._format(px, family, leading))
+            finally:
+                black = _COLOR_F(0, 0, 0, 1)
+                _method(self.brush, 8, ctypes.POINTER(_COLOR_F), restype=None)(ctypes.byref(black))
+        return self._render(text, px, width, height, bg, self._format(px))
+
+    def _render(self, text, px, width, height, bg, fmt):
         class _BITMAPINFOHEADER(ctypes.Structure):
             _fields_ = [('biSize', _wt.DWORD), ('biWidth', ctypes.c_long),
                         ('biHeight', ctypes.c_long), ('biPlanes', _wt.WORD),
@@ -275,7 +298,7 @@ class EmojiRenderer:
                 _method(self.target, 27, ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_void_p,
                         ctypes.POINTER(_RECT_F), ctypes.c_void_p, ctypes.c_uint,
                         ctypes.c_uint, restype=None)(
-                            text, n, self._format(px), ctypes.byref(area), self.brush, 4, 0)
+                            text, n, fmt, ctypes.byref(area), self.brush, 4, 0)
                 _check(_method(self.target, 49, ctypes.c_void_p, ctypes.c_void_p)(None, None),
                        'EndDraw')
                 ctypes.WinDLL('gdi32').GdiFlush()
@@ -291,6 +314,30 @@ class EmojiRenderer:
         rgb[1::3] = raw[1::4]
         rgb[2::3] = raw[0::4]
         return b'P6 %d %d 255' % (width, height) + bytes([10]) + bytes(rgb)
+
+
+def line_image(master, text, font, fg, bg, height):
+    """A PhotoImage of one line `text` in `font` and `fg` with its emoji in colour, or None
+    (no emoji, not Windows, or DirectWrite unavailable). For widgets that are not a tk.Text,
+    such as the word book's buttons (2026-10-19 うにさん「単語帳に絵文字を追加すると色がない」)."""
+    if not emoji_spans(text) or sys.platform != 'win32':
+        return None
+    r = renderer()
+    if r is None:
+        return None
+    try:
+        import tkinter
+        from tkinter import font as tkfont
+        f = tkfont.Font(root=master, font=font)
+        family = f.actual('family')
+        size = int(f.actual('size'))
+        px = -size if size < 0 else max(1, round(size * float(master.winfo_fpixels('1p'))))
+        # Tk measures emoji with its own fallback width; leave room for the colour glyphs
+        width = max(1, f.measure(text) + px * len(emoji_spans(text)) // 2 + 4)
+        data = r.render(text, px, width, max(1, int(height)), bg, fg=fg, family=family, leading=True)
+        return tkinter.PhotoImage(master=master, data=data)
+    except Exception:
+        return None
 
 
 _RENDERER = None

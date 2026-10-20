@@ -39,16 +39,19 @@ def child():
     with patch.object(app,'GlobalHotkeys',return_value=Mock()),patch.object(app.CorrectNoteApp,'_learn_now',new=lambda *args:None):
         try:
             a=app.CorrectNoteApp(root);root.attributes('-alpha',0);root.deiconify();until(done)
-            # This timeline was written for the amount and guards 120/200/300/300
-            # ms (the defaults until 2026-10-18). They are set through the debug
+            # This timeline was written for the amount and guards 120/200/300 ms
+            # (the defaults until 2026-10-18). They are set through the debug
             # menu, as a user would, and stay within its range. The defaults now
-            # (120/47/20/20, うにさん) are checked at exact times in
-            # tests_debug_menu_20261018 and tests_queued_tab_wheel: a 20ms guard
+            # (120/65/30, うにさん 2026-10-19/20) are checked at exact times in
+            # tests_debug_menu_20261018 and tests_queued_tab_wheel: a 30ms guard
             # cannot be seen through real Tk delivery (one tab switch repaints
-            # for longer than that).
+            # for longer than that). The separate wait after releasing the right
+            # button was removed on 2026-10-19; the reverse guard covers it, and
+            # an old saved tab_wheel_release value is skipped.
             import debug_menu
             debug_menu.apply(a,{'tab_wheel_step':120,'tab_wheel_same':200,'tab_wheel_reverse':300,'tab_wheel_release':300})
-            assert (a.TAB_WHEEL_STEP,a.TAB_WHEEL_SAME_MS,a.TAB_WHEEL_REVERSE_MS,a.TAB_WHEEL_RELEASE_MS)==(120,200,300,300)
+            assert (a.TAB_WHEEL_STEP,a.TAB_WHEEL_SAME_MS,a.TAB_WHEEL_REVERSE_MS)==(120,200,300)
+            assert not hasattr(a,'TAB_WHEEL_RELEASE_MS')
             revision=a.store.revision()
             label=a._tab_widgets[0]['label'];clock=time.monotonic()
             emit(label,'<MouseWheel>',delta=-120,wheel_time=clock)
@@ -149,17 +152,18 @@ def child():
                     time.sleep(.10)
                     emit(a._tab_widgets[0]['label'],'<MouseWheel>',delta=-120)
                     expect('new_rotation_after_release_guard_'+str(pane),a.session.active==1)
-            # Missing release notification: the first buttonless tab wheel
-            # starts the release guard instead of undoing the last tab switch.
+            # Missing release notification: the first buttonless tab wheel ends
+            # the gesture, and the reverse guard still compares it with the last
+            # switch instead of undoing it.
             a._switch_tab(0);until(done)
             emit(a.editor,'<ButtonPress-3>')
             time.sleep(.31);clock=time.monotonic()
             emit(a.editor,'<MouseWheel>',delta=-120,state=0x0400,wheel_time=clock)
             expect('lost_release_start',a.session.active==1)
-            emit(a._tab_widgets[0]['label'],'<MouseWheel>',delta=120,wheel_time=clock+.40)
-            expect('lost_release_rebound_ignored',a.session.active==1)
-            emit(a._tab_widgets[0]['label'],'<MouseWheel>',delta=120,wheel_time=clock+.701)
-            expect('lost_release_guard_expires',a.session.active==0)
+            emit(a._tab_widgets[0]['label'],'<MouseWheel>',delta=120,wheel_time=clock+.29)
+            expect('lost_release_rebound_ignored',a.session.active==1 and not a._tab_wheel_used)
+            emit(a._tab_widgets[0]['label'],'<MouseWheel>',delta=120,wheel_time=clock+.301)
+            expect('lost_release_reverse_after_interval',a.session.active==0)
             emit(a.editor,'<ButtonRelease-3>',state=0)
             # A fresh press must reset a gesture whose release happened outside the window.
             a._switch_tab(0);until(done)
@@ -231,11 +235,11 @@ def child():
                 expect('button_wheel_does_not_scroll',not scroll.called)
                 emit(a._tab_widgets[0]['label'],'<Button-4>')
                 expect('button_wheel_release_rebound_ignored',a.session.active==1)
-                guard=a._tab_wheel_release_guard
-                expect('button_wheel_release_guard_started',guard is not None)
-                time.sleep(max(0.0,guard[0]+.35-time.monotonic()))
+                last=a._tab_wheel_last_step
+                expect('button_wheel_last_switch_kept_after_release',last is not None and last[1]==1)
+                time.sleep(max(0.0,last[0]+.35-time.monotonic()))
                 emit(a._tab_widgets[0]['label'],'<Button-4>')
-                expect('button_wheel_release_guard_expires',a.session.active==0)
+                expect('button_wheel_reverse_after_interval',a.session.active==0)
             with patch.object(a,'_on_wheel_units') as scroll:
                 emit(a.editor,'<Button-5>')
                 expect('ordinary_button5_scrolls',scroll.call_args.args==(3,))

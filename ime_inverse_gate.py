@@ -461,6 +461,17 @@ def anomalous_source_fields(line, tokenize, store, dictionary, source_marks=(), 
         question=(len(parts)>=2 and parts[-1][1].startswith('助詞:終助詞')
             and parts[-2][1].startswith(('助動詞','動詞','形容詞'))
             and parts[-2][6]=='基本形')
+        # Final particles can also stack after the finite form (か+な, よ+ね);
+        # each must be a particle the dictionary reads as 終助詞. Like the
+        # finite form above, this cannot dismiss an independent source mark.
+        if not question and not marked:
+            finite_at=len(parts)-1
+            while (finite_at>0 and parts[finite_at][1].startswith('助詞:')
+                   and '終助詞' in parts[finite_at][1]):
+                finite_at-=1
+            question=(finite_at<len(parts)-1 and parts[-1][1].startswith('助詞:終助詞')
+                and parts[finite_at][1].startswith(('助動詞','動詞','形容詞'))
+                and parts[finite_at][6]=='基本形')
         # A native sahen noun plus the literary finite する is complete.
         # Kana grammar may misread its short ending as an odd Shift result.
         literary_sahen=(len(parts)>=2

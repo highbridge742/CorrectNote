@@ -334,7 +334,13 @@ APP_TITLE = 'CorrectNote'
 # 「判断に迷った箇所」から**「不自然な文字列」**へ入れ替え（既定オン・
 # 補正が入った範囲には付けない）、**かな書きのアルファベット読みを
 # 英字に直す**（`エフ2 → F2`）、スクロール後の反映（項目48-IZ〜）。
-APP_VERSION = '1.14.1'
+APP_VERSION = '1.15.0'
+
+# 控え（session.json・ime_readings）と語彙の自動保存の間合い（2026-10-20 うにさんの決定で5分）。
+# 以前は打つ手が止まって1.5秒ごとに丸ごと書き直していた。最初の変更から5分後にまとめて1回
+# 書く（打ち続けても延びない）。中身が前と同じなら書かない。タブを閉じる・アプリを閉じる・
+# Windows の終了のときはすぐ書く。
+AUTOSAVE_MS = 300000
 
 # 同梱する説明書のファイル名。exe の中に入れて持ち歩き、
 # 初回起動時に exe と同じフォルダへ書き出す
@@ -781,6 +787,27 @@ def running_as_package():
     return result != 15700
 
 
+def package_family_name():
+    """
+    パッケージで動いているときの、パッケージファミリ名（2026-10-19）。
+    パッケージでない・取れないときは None。
+    """
+    if sys.platform != 'win32':
+        return None
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        length = ctypes.c_uint32(0)
+        if kernel32.GetCurrentPackageFamilyName(ctypes.byref(length), None) != 122:
+            return None     # 122 = ERROR_INSUFFICIENT_BUFFER（長さが分かった）
+        buf = ctypes.create_unicode_buffer(length.value)
+        if kernel32.GetCurrentPackageFamilyName(ctypes.byref(length), buf) != 0:
+            return None
+        return buf.value or None
+    except Exception:
+        return None
+
+
 def app_dir():
     """
     データファイル（語彙・判断・選び直し・辞書索引）を置く場所。
@@ -790,13 +817,21 @@ def app_dir():
     終了時に消えることもあるため、データを置いてはいけない。
     exe のときは exe と同じフォルダに置く（USBに入れて持ち運べる）。
 
-    MSIX のパッケージで動いているときだけは、%LOCALAPPDATA%\CorrectNote
-    （無ければ作る）。インストール先は書けないため。Windows はこの場所を
-    パッケージごとの場所へ写す。同梱物の読み出し（bundled_path）は変えない。
+    MSIX のパッケージで動いているときだけは、パッケージ専用の
+    %LOCALAPPDATA%\\Packages\\<ファミリ名>\\LocalCache\\Local\\CorrectNote（無ければ作る）。
+    インストール先は書けないため。同梱物の読み出し（bundled_path）は変えない。
+    %LOCALAPPDATA%\\CorrectNote と書くと Windows がこの場所へ写すが、写すのは
+    パッケージの中から見たときだけで、外のプログラム（説明書を開くブラウザ・
+    エクスプローラ）に渡すと無いファイルになる（2026-10-19 うにさん「メニューから
+    説明書が開きませんでした」）。写した先そのものを使えば、中と外で同じ道になる。
     """
     if running_as_package():
         base = os.environ.get('LOCALAPPDATA') or os.path.expanduser('~')
-        path = os.path.join(base, 'CorrectNote')
+        family = package_family_name()
+        if family:
+            path = os.path.join(base, 'Packages', family, 'LocalCache', 'Local', 'CorrectNote')
+        else:
+            path = os.path.join(base, 'CorrectNote')
         os.makedirs(path, exist_ok=True)
         return path
     if getattr(sys, 'frozen', False):
@@ -1022,7 +1057,7 @@ QUICK_SENT_BG_B = '#9cc2fe'      # 青（緑から十分に離した）
 # 2色の差は、隣り合った空白を数えるための段差である。これ以上
 # 縮めると数えられなくなる。回帰テストで差の幅を見張る。
 WS_LINE_A = '#d2d2d2'    # 下端の線（濃）
-WS_LINE_B = '#e2e2e2'    # 同（淡）。隣り合ったときの数え分け用
+WS_LINE_B = '#dcdcdc'    # 同（淡）。隣り合ったときの数え分け用（2026-10-19 #e2e2e2 から。PANEL が #f0f0ed になって差が 13.7 に縮んだため）
 # タブだけは線にできない（**Tk はタブに下線も打ち消し線も引かない**。
 # 描いて確かめた）。地色の帯しかないので、いちばん薄くする。
 # 幅が広いので薄くても分かる。
@@ -2015,6 +2050,8 @@ class CorrectNoteApp:
         # 先に入れておけば、スレッドは最初の同期で正しい状態を見る。
         self._apply_hotkey_state()
         self.hotkeys.start()
+        # 単語帳のショートカットが登録できなかったら知らせる（登録はスレッドが行うので少し後で見る）
+        self.root.after(2000, self._check_word_book_hotkey)
 
         self._build_ui()
         _t_build_ui = time.monotonic()
@@ -2087,6 +2124,20 @@ class CorrectNoteApp:
         # 閉じるときに、その時点の内容を必ず控える。
         # 保存していなくても次回に続きが出るようにするため。
         self.root.protocol('WM_DELETE_WINDOW', self._on_close)
+        # Windows の終了・再起動・サインアウトでも控えを残す（2026-10-20）
+        self.root.protocol('WM_SAVE_YOURSELF', self._on_windows_session_end)
+        # コンソール付きで動いているとき（py.exe／python.exe で起動）は、終了・再起動で閉じられる
+        # コンソールが先に CTRL_CLOSE を送り、Python は既定のままだと即座に終わる。保存してから終わる
+        self._install_console_close_save()
+        # 保存を待っている変更があるうちは、Windows の終了・再起動を「保存してから」にする
+        # （shutdown_guard.py。2026-10-20 うにさん「保存してませんのダイアログで止め…待って閉じたら」）
+        try:
+            import shutdown_guard
+            self._shutdown_guard = shutdown_guard.ShutdownGuard(
+                self.root, self._has_unsaved_backup, self._close_for_windows_end)
+            self._shutdown_guard.install()
+        except Exception:
+            self._shutdown_guard = None
 
         # **最小化から戻ったとき**も、最大化がタスクバーを覆って
         # いないか見る（項目48-MA。`_on_resize` でも拾えているが、
@@ -2105,6 +2156,9 @@ class CorrectNoteApp:
         # **変換の見張り**を始める（設計25(甲)・Windows のみ）。
         # ウィジェットが出来てからでないと `winfo_id()` が取れない。
         self._start_ime_reading_watch()
+        self._start_pending_marks_watch()     # 未解析の印が長く残ったら理由を出す（2026-10-19）
+        import focus_trace
+        focus_trace.start()     # 単語帳ボタンの診断（既定オフ・tools_local/word_book_trace.on で有効）
         self._start_native_f5()
         # **ファイルのドロップを受ける**（項目48-TO）。同じ理由で
         # ここ——`winfo_id()` が取れてからでないと窓に手を掛けられない。
@@ -2990,10 +3044,131 @@ class CorrectNoteApp:
                 cur.get('text', '') if cur else '', text)))
 
     def _schedule_session_save(self):
-        """入力が落ち着いたら控えを書き出す。"""
+        """控えを書き出す予約。最初の変更から AUTOSAVE_MS 後に1回（予約済みなら延ばさない）。"""
         if self._session_after_id:
-            self.root.after_cancel(self._session_after_id)
-        self._session_after_id = self.root.after(1500, self._save_session)
+            return
+        self._session_after_id = self.root.after(AUTOSAVE_MS, self._save_session)
+
+    def _schedule_store_save(self):
+        """語彙の書き出しを、控えと同じ間合いでまとめる（1回約3.5MB を覚えるたびに書いていた）。"""
+        if getattr(self, '_store_save_after_id', None):
+            return
+        if getattr(self, 'root', None) is None:
+            self.store.save_in_background()     # 窓の無い使い方（試験など）ではすぐ書く
+            return
+        def save():
+            self._store_save_after_id = None
+            try:
+                self.store.save_in_background()
+            except Exception:
+                pass
+        self._store_save_after_id = self.root.after(AUTOSAVE_MS, save)
+
+    def _cancel_store_save(self):
+        job = getattr(self, '_store_save_after_id', None)
+        self._store_save_after_id = None
+        if job:
+            try:
+                self.root.after_cancel(job)
+            except Exception:
+                pass
+
+    def _on_windows_session_end(self):
+        """Windows の終了・再起動・サインアウト（WM_QUERYENDSESSION を Tk が WM_SAVE_YOURSELF
+        として渡す）。窓は閉じずに、次回に続きから始められるよう本文の控えと語彙を書く
+        （2026-10-20 うにさん）。短く終わるよう、解析の続きと学習の待ちは済ませない。"""
+        try:
+            self._design33_flush()
+        except Exception:
+            pass
+        if self._session_after_id:
+            try:
+                self.root.after_cancel(self._session_after_id)
+            except Exception:
+                pass
+            self._session_after_id = None
+        self._save_session()     # ここで ime_readings も書かれる
+        self._cancel_store_save()
+        try:
+            self.store.save()
+        except Exception:
+            pass
+        self._save_analysis_cache()
+
+    def _has_unsaved_backup(self):
+        """控えか語彙の書き出しを待っている（5分の自動保存の前）。Tk には触らない。"""
+        return bool(self._session_after_id or getattr(self, '_store_save_after_id', None))
+
+    def _close_for_windows_end(self):
+        """Windows の終了を止めたあと: いつも閉じるときと同じく全部を保存して閉じ、すぐに
+        手続きごと終わる。消えれば Windows は再起動（終了）を続ける（2026-10-20 うにさん「保存したら
+        居なくなって、再起動が先に進めばよい」。ふつうに終わるのを待つと、裏の書き出しや補正の子の
+        後片付けを待って、Windows の画面が止まったままになっていた）。"""
+        try:
+            self._on_close()
+        finally:
+            try:
+                import multiprocessing
+                for child in multiprocessing.active_children():
+                    child.terminate()
+            except Exception:
+                pass
+            try:
+                sys.stdout.flush(); sys.stderr.flush()
+            except Exception:
+                pass
+            os._exit(0)
+
+    CONSOLE_CLOSE_WAIT_S = 4.0     # Windows がコンソールの閉じを待つのは約5秒
+
+    def _install_console_close_save(self):
+        """コンソールが閉じられる・サインアウト・シャットダウンのとき（2026-10-20 うにさん「書いて
+        すぐに、アプリを落とさずにPCを再起動したら、書いた文は残っていませんでした」）。
+        Windows はこの知らせを別のスレッドで渡すので、そこでは Tk に触らず、主スレッドに保存を
+        頼んで終わるのを待つ（主スレッドが200msごとに見る）。コンソールの無い起動（pythonw・EXE）では
+        何もしない（その場合は WM_SAVE_YOURSELF だけで足りる）。"""
+        if sys.platform != 'win32':
+            return
+        try:
+            import ctypes, threading
+            kernel = ctypes.WinDLL('kernel32')
+            if not self._has_console():
+                return
+            self._console_end = threading.Event()
+            self._console_saved = threading.Event()
+
+            def handler(kind):
+                if kind not in (2, 5, 6):        # CTRL_CLOSE / LOGOFF / SHUTDOWN（Ctrl+C などは今まで通り）
+                    return 0
+                self._console_end.set()
+                self._console_saved.wait(self.CONSOLE_CLOSE_WAIT_S)
+                return 1
+            self._console_handler = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_uint)(handler)
+            kernel.SetConsoleCtrlHandler.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            if kernel.SetConsoleCtrlHandler(self._console_handler, 1):
+                self.root.after(200, self._watch_console_close)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _has_console():
+        import ctypes
+        return bool(ctypes.WinDLL('kernel32').GetConsoleWindow())
+
+    def _watch_console_close(self):
+        end = getattr(self, '_console_end', None)
+        if end is None:
+            return
+        if end.is_set():
+            try:
+                self._on_windows_session_end()
+            finally:
+                self._console_saved.set()
+            return
+        try:
+            self.root.after(200, self._watch_console_close)
+        except Exception:
+            pass
 
     def _save_session(self):
         self._session_after_id = None
@@ -3151,6 +3326,7 @@ class CorrectNoteApp:
             except Exception:
                 pass
             self._save_session()     # ここで ime_readings も書かれる
+            self._cancel_store_save()
             try:
                 self.store.save()
             except Exception:
@@ -3159,6 +3335,13 @@ class CorrectNoteApp:
             # 見分けに vocabulary.json の更新時刻を使うので、順番が逆だと
             # 次回起動で必ず食い違って捨てられる。
             self._save_analysis_cache()
+            # 保存は済んだ。このあとコンソールが閉じられても待たせない
+            saved = getattr(self, '_console_saved', None)
+            if saved is not None:
+                saved.set()
+            guard = getattr(self, '_shutdown_guard', None)
+            if guard is not None:
+                guard.close()
             try:
                 self.hotkeys.stop()
             except Exception:
@@ -3332,7 +3515,7 @@ class CorrectNoteApp:
         self._on_find_query_changed()
         # 検索条件は前回の値を引き継ぐ。同じ検索の続きはもちろん、
         # アプリを開き直した後も同じ条件で検索したいという要望のため、
-        # settings.json に保存する（正規表現は既定でオンにする）。
+        # settings.json に保存する（正規表現は既定でオフ。2026-10-20 うにさん）。
         self._find_match_case = tk.BooleanVar(
             value=self.settings.get('find_match_case'))
         self._find_whole_word = tk.BooleanVar(
@@ -3876,14 +4059,19 @@ class CorrectNoteApp:
                  bg=BG, fg=INK, anchor='w').pack(fill='x', padx=12, pady=(12, 4))
         frame = tk.Frame(dlg, bg=BG)
         frame.pack(fill='both', expand=True, padx=12)
+        # 一覧も外見の配色で塗る（2026-10-19 うにさん「全タブ検索の結果を、外見配色に
+        # 合わせてください」）。ttk の部品は bg/fg を持たないので、専用の style で塗る。
+        self._configure_all_tab_style()
         tree = self._all_tab_tree = ttk.Treeview(
-            frame, columns=('tab', 'line', 'text'), show='headings', selectmode='browse')
+            frame, columns=('tab', 'line', 'text'), show='headings', selectmode='browse',
+            style=self.ALL_TAB_STYLE)
         for name, label, width, stretch in (
                 ('tab', 'タブ', 150, False), ('line', '行:桁', 70, False),
                 ('text', '一致箇所と前後の文章', 480, True)):
             tree.heading(name, text=label)
             tree.column(name, width=width, minwidth=50, stretch=stretch)
-        scroll = ttk.Scrollbar(frame, orient='vertical', command=tree.yview)
+        scroll = ttk.Scrollbar(frame, orient='vertical', command=tree.yview,
+                               style=self.ALL_TAB_SCROLL_STYLE)
         tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side='right', fill='y')
         tree.pack(side='left', fill='both', expand=True)
@@ -3894,10 +4082,78 @@ class CorrectNoteApp:
         buttons = tk.Frame(dlg, bg=BG)
         buttons.pack(fill='x', padx=12, pady=(0, 12))
         tk.Label(buttons, text='ダブルクリック / Enterで移動', bg=BG, fg=MUTED).pack(side='left')
-        tk.Button(buttons, text='閉じる', command=self._close_all_tab_results).pack(side='right')
-        tk.Button(buttons, text='再検索', command=self._refresh_all_tab_results).pack(side='right', padx=6)
+        # ボタンは検索ウインドウのボタン（open_find_dialog の mk）と同じ塗り方。配色を
+        # 切り替えると _restyle_widget が PANEL/INK/ACCENT を新しい値へ置き換える。
+        for label, command, padx in (('閉じる', self._close_all_tab_results, 0),
+                                     ('再検索', self._refresh_all_tab_results, 6)):
+            tk.Button(buttons, text=label, command=command, bg=PANEL, fg=INK,
+                      activebackground=ACCENT, activeforeground=PANEL,
+                      relief='flat', bd=1, highlightbackground=BG,
+                      font=('Yu Gothic UI', 9), padx=10, pady=4,
+                      cursor='hand2').pack(side='right', padx=padx)
         dlg.bind('<Escape>', lambda e: self._close_all_tab_results())
         dlg.protocol('WM_DELETE_WINDOW', self._close_all_tab_results)
+
+    ALL_TAB_STYLE = 'AllTabs.Treeview'
+
+    ALL_TAB_SCROLL_STYLE = 'AllTabs.Vertical.TScrollbar'
+
+    def _configure_all_tab_style(self):
+        """全タブ検索の一覧（ttk.Treeview）と縦のスクロールバーの色を、今の外見の配色にする。
+
+        ttk の部品は _restyle_widget（bg/fg の置き換え）では塗れないので、
+        外見を切り替えるたびに _apply_theme からも呼ぶ（開いている一覧もそのまま変わる）。
+        行は本文の欄と同じ地と字（PANEL・INK）、選んだ行は本文の選択の色
+        （EDITOR_SEL_BG）、見出しは窓の地（BG）。
+
+        Windows の標準（vista）の部品は色の指定を受け付けない（一覧の地・行・見出し・
+        スクロールバーが白いままだった。2026-10-20 うにさんの報告）。この一覧の部品だけ、
+        色を受け付ける clam の部品で組む（名前を付けた専用の style なので、ほかの窓の
+        見た目は変わらない）。色が付くことは画素で確かめている（tests_all_tab_theme_20261019）。"""
+        name = self.ALL_TAB_STYLE
+        bar = self.ALL_TAB_SCROLL_STYLE
+        try:
+            style = ttk.Style()
+            # Built once for each Tk (the parts belong to its interpreter)
+            if 'AllTabs.Treeview.field' not in style.element_names():
+                try:
+                    for element in ('Treeview.field', 'Treeitem.row', 'Treeheading.cell',
+                                    'Treeheading.border', 'Vertical.Scrollbar.trough',
+                                    'Vertical.Scrollbar.thumb', 'Vertical.Scrollbar.uparrow',
+                                    'Vertical.Scrollbar.downarrow'):
+                        style.element_create('AllTabs.' + element, 'from', 'clam', element)
+                    style.layout(name, [('AllTabs.Treeview.field', {'sticky': 'nswe', 'border': '1', 'children': [
+                        ('Treeview.padding', {'sticky': 'nswe', 'children': [
+                            ('Treeview.treearea', {'sticky': 'nswe'})]})]})])
+                    style.layout(name + '.Item', [('AllTabs.Treeitem.row', {'sticky': 'nswe'}),
+                        ('Treeitem.padding', {'sticky': 'nswe', 'children': [
+                            ('Treeitem.indicator', {'side': 'left', 'sticky': ''}),
+                            ('Treeitem.image', {'side': 'left', 'sticky': ''}),
+                            ('Treeitem.text', {'side': 'left', 'sticky': ''})]})])
+                    style.layout(name + '.Heading', [('AllTabs.Treeheading.cell', {'sticky': 'nswe'}),
+                        ('AllTabs.Treeheading.border', {'sticky': 'nswe', 'children': [
+                            ('Treeheading.padding', {'sticky': 'nswe', 'children': [
+                                ('Treeheading.image', {'side': 'right', 'sticky': ''}),
+                                ('Treeheading.text', {'sticky': 'we'})]})]})])
+                    style.layout(bar, [('AllTabs.Vertical.Scrollbar.trough', {'sticky': 'ns', 'children': [
+                        ('AllTabs.Vertical.Scrollbar.uparrow', {'side': 'top', 'sticky': ''}),
+                        ('AllTabs.Vertical.Scrollbar.downarrow', {'side': 'bottom', 'sticky': ''}),
+                        ('AllTabs.Vertical.Scrollbar.thumb', {'expand': '1', 'sticky': 'nswe'})]})])
+                except tk.TclError:
+                    pass
+            style.configure(name, background=PANEL, fieldbackground=PANEL,
+                            foreground=INK, bordercolor=RULE, lightcolor=PANEL, darkcolor=PANEL)
+            style.map(name, background=[('selected', EDITOR_SEL_BG)],
+                      foreground=[('selected', INK)])
+            heading = name + '.Heading'
+            style.configure(heading, background=BG, foreground=INK, relief='flat',
+                            bordercolor=RULE, lightcolor=BG, darkcolor=BG)
+            style.map(heading, background=[('active', HOVER_BG)], foreground=[('active', INK)])
+            style.configure(bar, background=RULE, troughcolor=PANEL, bordercolor=RULE,
+                            lightcolor=RULE, darkcolor=RULE, arrowcolor=INK)
+            style.map(bar, background=[('active', MUTED)])
+        except tk.TclError:
+            pass
 
     def _close_all_tab_results(self):
         self._cancel_all_tab_search()
@@ -4476,7 +4732,10 @@ class CorrectNoteApp:
             while True:
                 name = self._hotkey_queue.get_nowait()
                 try:
-                    self._open_quick_capture(name)
+                    if name == 'wordbook':
+                        self._toggle_word_book_from_hotkey()
+                    else:
+                        self._open_quick_capture(name)
                 except Exception:
                     pass
         except Exception:
@@ -5221,6 +5480,8 @@ class CorrectNoteApp:
                             bordercolor=RULE, arrowcolor=INK)
         except Exception:
             pass
+        # 全タブ検索の一覧も ttk なので style で塗り直す（開いていてもそのまま変わる）
+        self._configure_all_tab_style()
 
         # 品詞の文字色はライトとダークで別に持つ（pos_font.current_colors）。
         # 印の色も欄の色から決まるので、ここで塗り直す。
@@ -6101,6 +6362,35 @@ class CorrectNoteApp:
         else:
             self._quick_autofix_records = []
 
+        # 開く前に入力欄があった別アプリへ、フォーカスを戻す（quick_return。
+        # 2026-10-14 うにさん）。貼り付けは中身があって設定がオンのときだけ。
+        # **簡易入力の窓を消す前に戻す**（2026-10-19 うにさん「別のアプリをフォーカス
+        # するなどしたあとに、簡易入力を閉じても最初の入力欄をフォーカスしなかった」）。
+        # 前面の窓を消すと、Windows は最後に使った窓（途中で触った別のアプリ）を前に
+        # 出すので、消したあとでは「ユーザーがよそへ移った」と見えて戻さなかった。
+        back = getattr(self, '_quick_return', None)
+        self._quick_return = None
+        filled = bool(content.strip())
+        to_clipboard = filled and bool(self.settings.get('quick_close_clipboard'))
+        if to_clipboard:
+            try:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(content)
+            except Exception:
+                pass
+        paste = filled and bool(self.settings.get('quick_paste_back'))
+        lent = None
+        if paste and not to_clipboard and getattr(back, 'text_box', False):
+            # ほかのアプリへの貼り付け（Ctrl+V）にだけクリップボードを貸し、
+            # 相手が読んだころに、もとの中身へ戻す（2026-10-16 うにさん）。
+            try:
+                import clipboard_keep
+                lent = clipboard_keep.lend(content)
+            except Exception:
+                lent = None
+            paste = lent is not None
+        back_given = self._quick_give_focus_back(back, paste=paste)
+
         try:
             win.destroy()
         except Exception:
@@ -6110,23 +6400,10 @@ class CorrectNoteApp:
         self._quick_hint_frame = None
         self._quick_source = None
         self._quick_units = []
-        # 開く前に入力欄があった別アプリへ、フォーカスを戻す（quick_return。
-        # 2026-10-14 うにさん）。貼り付けは中身があって設定がオンのときだけ。
-        back = getattr(self, '_quick_return', None)
-        self._quick_return = None
 
-        if not content.strip():
-            self._quick_give_focus_back(back, paste=False)
+        if not filled:
             self.status.config(text='簡易入力を閉じました（内容は空でした）')
             return
-
-        to_clipboard = bool(self.settings.get('quick_close_clipboard'))
-        if to_clipboard:
-            try:
-                self.root.clipboard_clear()
-                self.root.clipboard_append(content)
-            except Exception:
-                pass
 
         target = None
         try:
@@ -6145,18 +6422,6 @@ class CorrectNoteApp:
         except Exception:
             pass
         self._on_change()
-        paste = bool(self.settings.get('quick_paste_back'))
-        lent = None
-        if paste and not to_clipboard and getattr(back, 'text_box', False):
-            # ほかのアプリへの貼り付け（Ctrl+V）にだけクリップボードを貸し、
-            # 相手が読んだころに、もとの中身へ戻す（2026-10-16 うにさん）。
-            try:
-                import clipboard_keep
-                lent = clipboard_keep.lend(content)
-            except Exception:
-                lent = None
-            paste = lent is not None
-        back_given = self._quick_give_focus_back(back, paste=paste)
         if lent is not None:
             if back_given:
                 import clipboard_keep
@@ -7865,7 +8130,7 @@ class CorrectNoteApp:
             self._load_active_tab()
         else:
             self._refresh_tab_bar()
-        self._schedule_session_save()
+        self._save_session()     # 閉じたタブはすぐ控えから外す
 
     def _next_tab(self, step=1):
         sess = self.session
@@ -8008,7 +8273,10 @@ class CorrectNoteApp:
         m_edit.add_command(label='置換…', accelerator='Ctrl+H',
                            command=lambda: self.open_find_dialog(True))
         m_edit.add_separator()
-        m_edit.add_command(label='コピー', accelerator='選択してF1 / Ctrl+C',
+        # 2026-10-20 うにさん: コピーの一つ上に「行を選択」。コピーの表示は F1 と、行選択して Shift+Space
+        m_edit.add_command(label='行を選択', accelerator='Shift+Space',
+                           command=self._select_line_from_menu)
+        m_edit.add_command(label='コピー', accelerator='選択してF1 / 行選択してShift+Space',
                            command=self._copy_focused_selection)
         m_edit.add_command(label='ペースト', accelerator='F4 / Ctrl+V / Win+V',
                            command=self._paste_from_menu)
@@ -8036,9 +8304,13 @@ class CorrectNoteApp:
         # 「押しても出ない」ときに、窓自体の問題なのか
         # ホットキーの問題なのかを切り分けられる。
         m_edit.add_command(label='簡易入力ウィンドウを開く',
-                           accelerator='Ctrl+Insert',
+                           accelerator='Ctrl+Insert / Ctrl+Shift+-',
                            command=lambda: self._open_quick_capture(None))
         m_edit.add_separator()
+        # 2026-10-20 うにさん: 単語帳のまとまりの先頭に「単語帳を開く／閉じる」（ボタン・ホットキーと同じ動き）
+        m_edit.add_command(label='単語帳を開く／閉じる',
+                           accelerator='Ctrl+Alt+Insert / Ctrl+Alt+Shift+-',
+                           command=self._toggle_word_book)
         self._word_book_set_var = tk.IntVar(value=0)
         m_word_sets = tk.Menu(m_edit, tearoff=0, postcommand=lambda:
             self._word_book_set_var.set(self._word_book.active_set))
@@ -8259,17 +8531,29 @@ class CorrectNoteApp:
             value=self.settings.get('hotkey_insert_enabled'))
         self.hotkey_minus_var = tk.BooleanVar(
             value=self.settings.get('hotkey_minus_enabled'))
+        # 名前は「…ホットキー有効化」、キーは右のショートカット欄に（2026-10-20 うにさん。
+        # 以前は「簡易入力ウィンドウ（Ctrl+Insert）」のように名前の中にキーを書いていた）
         m_view.add_checkbutton(
-            label='簡易入力ウィンドウ（Ctrl+Insert）',
+            label='簡易入力ホットキー有効化', accelerator='Ctrl+Insert',
             variable=self.hotkey_insert_var,
             command=lambda: self._on_toggle_hotkey(
                 'insert', self.hotkey_insert_var),
             selectcolor=ACCENT)
         m_view.add_checkbutton(
-            label='簡易入力ウィンドウ（Ctrl+Shift+-）',
+            label='簡易入力ホットキー有効化', accelerator='Ctrl+Shift+-',
             variable=self.hotkey_minus_var,
             command=lambda: self._on_toggle_hotkey(
                 'minus', self.hotkey_minus_var),
+            selectcolor=ACCENT)
+        # どこからでも単語帳を開け閉めするホットキー（2026-10-19 うにさん）。項目名は
+        # 「単語帳ホットキー有効化」（2026-10-20 うにさん）
+        self.hotkey_wordbook_var = tk.BooleanVar(
+            value=self.settings.get('hotkey_wordbook_enabled'))
+        m_view.add_checkbutton(
+            label='単語帳ホットキー有効化', accelerator='Ctrl+Alt+Insert / Ctrl+Alt+Shift+-',
+            variable=self.hotkey_wordbook_var,
+            command=lambda: self._on_toggle_hotkey(
+                'wordbook', self.hotkey_wordbook_var),
             selectcolor=ACCENT)
         # 簡易入力ウィンドウに出す説明文の表示。
         # ボタン（一時解除）はこれとは別に常に出す。
@@ -9088,28 +9372,23 @@ class CorrectNoteApp:
     # 量は 120（1目盛りで1回）。一度 150 にしたが、うにさんの指定で戻した（2026-10-18）。
     TAB_WHEEL_STEP = 120
     TAB_WHEEL_STEP_MAX = 300
-    TAB_WHEEL_SAME_MS = 47        # 切り替えたあと、同じ向きを受け付けるまで
+    # 2026-10-19 うにさん: 同じ向き 50・逆向き 30 を既定に（同じ向きは 2026-10-20 に 65 へ）。右ボタンを離したあとの
+    # 逆向きも「切り替えたあと、逆向き」で抑える（離したあと専用の待ちは外した）。
+    TAB_WHEEL_SAME_MS = 65        # 切り替えたあと、同じ向きを受け付けるまで
     TAB_WHEEL_SAME_MS_MAX = 200
-    TAB_WHEEL_REVERSE_MS = 20     # 切り替えたあと、逆向きを無視する間
+    TAB_WHEEL_REVERSE_MS = 30     # 切り替えたあと、逆向きを無視する間（右ボタンを離したあとも）
     TAB_WHEEL_REVERSE_MS_MAX = 300
-    TAB_WHEEL_RELEASE_MS = 20     # 右ボタンを離したあと、逆向きを無視する間
-    TAB_WHEEL_RELEASE_MS_MAX = 300
 
     def _on_tab_wheel_press(self, event=None):
         """A new physical right press starts a fresh wheel interval."""
         self._tab_wheel_used = False
-        self._tab_wheel_last_step = None
+        # The same direction may step again at once, but a reverse rebound right
+        # after the last switch is still one (TAB_WHEEL_REVERSE_MS, 2026-10-19:
+        # this replaced the separate wait after releasing the right button).
+        last = getattr(self, '_tab_wheel_last_step', None)
+        self._tab_wheel_last_step = (None if last is None else
+                                     (last[0], last[1], last[2] if len(last) > 2 else None, True))
         self._tab_wheel_remainder = 0
-
-    def _ignore_tab_wheel_rebound(self, right):
-        if right:
-            # A suppressed notch still belongs to the right-click gesture.
-            # Otherwise releasing a fresh press opens its menu or candidates.
-            self._tab_wheel_used = True
-            self._tab_right_pending = None
-            self._r3_press = None
-            self._tab_wheel_remainder = 0
-        return 'break'
 
     def _tab_wheel(self, event, over_tabs=False, delta=None):
         """Right-held wheel or the tab strip uses the existing tab switch."""
@@ -9126,7 +9405,8 @@ class CorrectNoteApp:
                 pass
         if not right and getattr(self, '_tab_wheel_used', False):
             # A release outside Tk may be missed. The first buttonless wheel
-            # proves the hold ended; retain its direction for the rebound guard.
+            # proves the hold ended. _tab_wheel_last_step is kept, so a rebound
+            # over the tab strip is still compared with the last switch.
             self._finish_tab_wheel_gesture()
             self._tab_wheel_used = False
         if not (right or over_tabs):
@@ -9141,22 +9421,16 @@ class CorrectNoteApp:
             return 'break'
         direction = 1 if delta < 0 else -1
         now = time.monotonic()
-        released = getattr(self, '_tab_wheel_release_guard', None)
-        if released is not None:
-            if now - released[0] >= self.TAB_WHEEL_RELEASE_MS / 1000.0:
-                self._tab_wheel_release_guard = None
-            elif 0 <= now - released[0] and direction != released[1]:
-                return self._ignore_tab_wheel_rebound(right)
         self._close_dropdown()
         self._tab_right_pending = None
         if right:
-            if not getattr(self, '_tab_wheel_used', False):
-                self._tab_wheel_hold_direction = None
             # Finish a possible right drag before changing its document.
             self._drag_release(event, getattr(event, 'widget', None))
             self._tab_wheel_used = True
             self._r3_press = None
         last = getattr(self, '_tab_wheel_last_step', None)
+        if last is not None and len(last) > 3 and last[3] and last[1] == direction:
+            last = None         # a fresh press: the same direction does not wait
         if last is not None:
             interval = (self.TAB_WHEEL_SAME_MS if last[1] == direction
                         else self.TAB_WHEEL_REVERSE_MS) / 1000.0
@@ -9181,18 +9455,17 @@ class CorrectNoteApp:
         # One notch responds immediately; discard excess/burst input, not queue it.
         self._tab_wheel_remainder = 0
         self._tab_wheel_last_step = (now, direction, event_time)
-        # The interval guard above also permits intentional held reversals.
-        # Release rebound is relative to the last accepted direction.
-        if right:
-            self._tab_wheel_hold_direction = direction
+        # The interval guard above also permits intentional held reversals,
+        # and it keeps working after the right button is released (the last
+        # step is not cleared on release).
         self._next_tab(direction)
         return 'break'
 
     def _finish_tab_wheel_gesture(self):
-        direction = getattr(self, '_tab_wheel_hold_direction', None)
-        if direction is not None:
-            self._tab_wheel_release_guard = (time.monotonic(), direction)
-        self._tab_wheel_hold_direction = None
+        """The right-held wheel gesture ended (release seen, or proven by a
+        buttonless wheel). A reverse rebound after it is handled by the same
+        TAB_WHEEL_REVERSE_MS comparison with _tab_wheel_last_step (2026-10-19)."""
+        self._tab_wheel_used = False
 
     def _on_tab_wheel_release(self, event):
         if getattr(self, '_tab_wheel_used', False):
@@ -9275,8 +9548,51 @@ class CorrectNoteApp:
         unit = max(1, font.measure('0')) if font is not None else 8
         return max(80, round((unit * self.QUICK_MIN_WIDTH + 20) / 2))
 
+    def _toggle_word_book_from_hotkey(self):
+        """Ctrl+Alt+Insert / Ctrl+Alt+Shift+- で単語帳をオン・オフ（2026-10-19 うにさん「どこから
+        でも単語帳をオンオフ」）。ボタンと同じく、前面のアプリと入力欄のフォーカスは動かさない。"""
+        import no_activate
+        behind = no_activate.other_app_in_front()
+        if behind:
+            no_activate._note_outside()     # the app in front now is the one to keep
+        self._word_book.toggle(give_back=behind,
+                               outside=no_activate.recent_outside() if behind else None)
+
+    def _check_word_book_hotkey(self):
+        """単語帳のショートカットを OS に登録できなかったら、下の行で知らせる。"""
+        try:
+            st = self.hotkeys.status()
+            if (st.get('supported') and st['enabled'].get('wordbook')
+                    and 'wordbook' not in st['registered'] and st['errors'].get('wordbook')):
+                errs = st['errors']['wordbook']
+                why = '（他のアプリが同じキーを使っています）' if 1409 in errs else '（Win32エラー %s）' % errs
+                self.status.config(text='単語帳のショートカット（%s）を登録できませんでした%s'
+                                   % (HOTKEY_LABELS['wordbook'], why))
+                self._queue_status_visibility()
+        except Exception:
+            pass
+
     def _toggle_word_book(self):
-        self._word_book.toggle()
+        # 別のアプリが前面のままボタンを押されたら、本体を前に出さずに開き、前面をそのアプリへ
+        # 返す（2026-10-19 うにさん。押しても本体が前に出ないのは no_activate の働き）
+        import no_activate, focus_trace
+        # 1回のクリックで2回呼ばれることがあった（うにさんの記録 2026-10-19: 約30ms 差で
+        # 2回 → 開いてすぐ閉じる・閉じて開き直す）。続けて来た2回目は捨てる
+        now = time.monotonic()
+        last = getattr(self, '_word_book_clicked_at', None)
+        if last is not None and 0 <= now - last < 0.35 and no_activate.posted_recently():
+            import traceback
+            focus_trace.log('button command again after %.3fs: ignored; from %s' % (
+                now - last, ' < '.join('%s:%d' % (f.name, f.lineno) for f in traceback.extract_stack()[-6:-1])))
+            return
+        self._word_book_clicked_at = now
+        behind = no_activate.other_app_in_front()
+        import traceback
+        focus_trace.log('button command other_app_in_front=%s front=%s from %s' % (
+            behind, focus_trace.foreground(),
+            ' < '.join('%s:%d' % (f.name, f.lineno) for f in traceback.extract_stack()[-6:-1])))
+        self._word_book.toggle(give_back=behind,
+                               outside=no_activate.recent_outside() if behind else None)
 
     def _open_bulk_insert(self):
         from bulk_insert import BulkInsertDialog
@@ -9437,9 +9753,9 @@ class CorrectNoteApp:
         self.list_mode_btn.bind('<Leave>', lambda e: self._toolbar_hover_hint(e, False, self._list_hint()))
         for name, label, command, hint in (
                 ('quick_input_btn', '簡易入力', self._open_quick_capture,
-                 '【簡易入力】別ウインドウを開き、エスケープキーで閉じると入力していた文字列をコピーしてカーソル位置に移します'),
+                 '【簡易入力】別ウインドウを開き、エスケープキーで閉じると入力していた文字列をコピーしてカーソル位置に移します：Ctrl+Insert'),
                 ('word_book_btn', '単語帳', self._toggle_word_book,
-                 '【単語帳】追加ボタンから登録した単語をクリックするとコピー状態になり、ペーストすることができます'),
+                 '【単語帳】追加ボタンから登録した単語をクリックするとカーソル位置に挿入され、コピー状態になります：Ctrl+Alt+Insert'),
                 ('bulk_insert_btn', '一括挿入', self._open_bulk_insert,
                  '【一括挿入】選択部分の先頭または末尾から指定した位置へ、行ごとに文字列を挿入します'),
                 ('ruler_btn', '', lambda:self._toggle_ruler(),
@@ -9451,6 +9767,10 @@ class CorrectNoteApp:
             button.bind('<Enter>', lambda e, h=hint: self._toolbar_hover_hint(e, True, h))
             button.bind('<Leave>', lambda e, h=hint: self._toolbar_hover_hint(e, False, h))
             setattr(self, name, button)
+            if name=='word_book_btn':
+                # 別のアプリが前面のときに押しても、本体を前に出さない（2026-10-19 うにさん）
+                import no_activate
+                no_activate.install(button)
             if name=='ruler_btn':
                 self._ruler_icon=tk.PhotoImage(master=self.root,width=24,height=18)
                 self._ruler_icon.put(INK,to=(2,12,22,14))
@@ -9770,6 +10090,13 @@ class CorrectNoteApp:
         # tkinter 標準のコピー動作をそのまま行わせる。
         self.editor.bind('<Control-c>', self._on_editor_ctrl_c)
         self.editor.bind('<Control-C>', self._on_editor_ctrl_c)
+        # Tk 標準のコピー・切り取りでも B/I/U/S を一緒に入れる（rich_copy.py）
+        try:
+            import rich_copy
+            for pane in (self.editor, self.result_view):
+                rich_copy.install(pane)
+        except Exception:
+            pass
 
         # **Ctrl+A は、上下の空行を除いて選ぶ**（項目48-FK・
         # うにさんの指定・2026-08-18「Ctrl+Aで全選択する際は、
@@ -10304,6 +10631,14 @@ class CorrectNoteApp:
         for sequence in ('<KeyRelease-Shift_L>', '<KeyRelease-Shift_R>', '<ButtonPress-1>'):
             _w.bind(sequence, self._clear_line_selection, add=True)
 
+    def _select_line_from_menu(self):
+        """編集メニューの「行を選択」（Shift+Space と同じ）。"""
+        try:widget=self.root.focus_get()
+        except tk.TclError:widget=None
+        if widget not in (self.editor,self.result_view):widget=self.editor
+        from types import SimpleNamespace
+        return self._on_select_line_text(SimpleNamespace(widget=widget))
+
     @staticmethod
     def _clear_line_selection(event):
         event.widget._line_selection = None
@@ -10349,63 +10684,44 @@ class CorrectNoteApp:
         次の行の頭までを選ぶので、コピーすると改行が付いてくる。
         こちらは**行の中身だけ**なので、そのまま貼り直せる。
 
-        既にその行の中身をちょうど選んでいるなら、**前後の空白を
-        除いた中身**へ狭める（2回押すと引き締まる）。
+        **選んでいる範囲があれば、その範囲をコピーする**（2026-10-20 うにさん「選択が無いときの
+        Shift+Space は行全体を選ぶ。選択があるとき（ドラッグでの範囲選択でも、行選択でも）は、
+        その選択範囲をコピーする」。書式付きコピーも同じ）。初めは「2回続けたらコピー」で、
+        続けたかを選んだ範囲・カーソル・ほかのキーの数で見ていたが、解析が挟まると崩れて
+        効かなかった。いまは選択が在るかだけを見る。
+        以前の「2回押すと前後の空白を除いた中身へ狭める」「複数行の一部を選んでいたら
+        その行全体へ広げる」は、これに置き換えた。
         """
         w = event.widget if event is not None else self.target
         try:
-            ranges = w.tag_ranges('sel')
-            if ranges and w.index(ranges[0]).split('.')[0] != w.index(ranges[-1]).split('.')[0]:
-                lo = int(w.index(ranges[0]).split('.')[0])
-                hi = int(w.index(f'{ranges[-1]}-1c').split('.')[0])
-                upward = w.compare('insert', '<=', ranges[0])
-                anchor, active = (hi, lo) if upward else (lo, hi)
-                head, tail = f'{lo}.0', f'{hi}.end'
-                w.tag_remove('sel', '1.0', 'end')
-                w.tag_add('sel', head, tail)
-                cursor, fixed = (head, tail) if upward else (tail, head)
-                w.mark_set('insert', cursor)
-                w.mark_set(self._sel_anchor_mark(w), fixed)
-                self._remember_line_selection(w, anchor, active)
-                w.see(cursor)
-                self.status.config(text=f'{lo}〜{hi} 行目を選びました')
-                return 'break'
+            selected = bool(w.tag_ranges('sel'))
+        except Exception:
+            return 'break'
+        if selected:
+            from types import SimpleNamespace
+            self._copy_focused_selection(SimpleNamespace(widget=w))
+            return 'break'
+        try:
             row = int(w.index('insert').split('.')[0])
             head, tail = f'{row}.0', f'{row}.end'
             text = w.get(head, tail)
         except Exception:
             return 'break'
         if not text:
-            w.tag_remove('sel', '1.0', 'end')
             w.mark_set('insert', head)
             w.mark_set(self._sel_anchor_mark(w), head)
             self._remember_line_selection(w, row, row)
             self.status.config(text='この行は空です')
             return 'break'
-        # いま選んでいる範囲
         try:
-            cur = (w.index('sel.first'), w.index('sel.last'))
-        except Exception:
-            cur = None
-        s_off = len(text) - len(text.lstrip(' 	　'))
-        e_off = len(text.rstrip(' 	　'))
-        tight = (f'{row}.0+{s_off}c', f'{row}.0+{e_off}c')
-        if cur == (w.index(head), w.index(tail)) and e_off > s_off                 and (s_off, e_off) != (0, len(text)):
-            a, b = tight
-            msg = f'{row} 行目の中身（前後の空白を除く）を選びました'
-        else:
-            a, b = head, tail
-            msg = f'{row} 行目を選びました（改行は含みません）'
-        try:
-            w.tag_remove('sel', '1.0', 'end')
-            w.tag_add('sel', a, b)
-            w.mark_set('insert', b)
-            w.mark_set(self._sel_anchor_mark(w), a)
+            w.tag_add('sel', head, tail)
+            w.mark_set('insert', tail)
+            w.mark_set(self._sel_anchor_mark(w), head)
             self._remember_line_selection(w, row, row)
-            w.see(b)
+            w.see(tail)
         except Exception:
             return 'break'
-        self.status.config(text=msg)
+        self.status.config(text=f'{row} 行目を選びました（改行は含みません。もう一度でコピー）')
         return 'break'
 
     def _on_toggle_bookmark_key(self, event=None):
@@ -11812,6 +12128,97 @@ class CorrectNoteApp:
         from literal_lines import literal_only
         state='done' if literal_only(self.editor.get(f'{row}.0',f'{row}.end')) else self._line_analysis_state(row)
         return display.state(input_work.token(self),row,state)
+
+    # 未解析の印が長く残ったら、何を待っているかを下の行に出す（2026-10-19 うにさん「ふと見ると
+    # 未解析の行番号が表示され続けていた…クリックしたら…動き始めた」）。本文・回数・時刻は残さない。
+    PENDING_NOTE_S = 5
+    PENDING_WATCH_MS = 1000
+
+    def _start_pending_marks_watch(self):
+        if getattr(self, '_pending_watch_job', None) is None:
+            self._pending_watch_job = self.root.after(self.PENDING_WATCH_MS, self._watch_pending_marks)
+
+    def _visible_rows_pending(self):
+        """見えている行に、未解析の印（行番号の横）が出ているか。"""
+        try:
+            top = int(self.editor.index('@0,0').split('.')[0])
+            bottom = int(self.editor.index('@0,%d' % max(0, self.editor.winfo_height() - 1)).split('.')[0])
+        except (tk.TclError, ValueError):
+            return False
+        for row in range(top, bottom + 1):
+            try:
+                if not self.editor.get(f'{row}.0', f'{row}.end').strip():
+                    continue
+            except tk.TclError:
+                return False
+            if self._line_analysis_display_state(row) == 'pending':
+                return True
+        return False
+
+    def _analysis_wait_reason(self):
+        """いま解析（またはその表示）が何を待っているか。分からなければ None。"""
+        if getattr(self, '_initial_setup', None) is not None:
+            return '初回設定が終わるのを待っています'
+        if getattr(self, '_warmup', None) is not None:
+            return '辞書と索引の準備が終わるのを待っています'
+        try:
+            import ime_watch
+            if ime_watch.composition_live(self.editor.winfo_id()):
+                return 'メモ欄の変換（未確定の文字）の確定を待っています'
+        except Exception:
+            pass
+        if getattr(self, '_tab_warming', False):
+            return 'タブの切り替えが落ち着くのを待っています'
+        if self._view_changing():
+            return '窓の移動・表示の変更が終わるのを待っています'
+        spec = getattr(self, '_ime_speculation', None)
+        if spec is not None and spec.get('value') is None:
+            return '変換中の行の答えを待っています'
+        if getattr(self, '_async_context_scope', None) is not None:
+            return '解析の準備（文脈）の答えを待っています'
+        if self._foreground_analysis_pending():
+            return '解析の答えを待っています'
+        if (getattr(self, '_after_id', None) is None and getattr(self, '_analyze_job', None) is None
+                and getattr(self, '_tab_analysis_job', None) is None):
+            return '解析の予約がありません（次の入力で再開します）'
+        return None
+
+    def _watch_pending_marks(self):
+        self._pending_watch_job = None
+        if getattr(self, '_closing', False):
+            return
+        note = None
+        try:
+            if self._visible_rows_pending():
+                since = getattr(self, '_pending_marks_since', None)
+                now = time.monotonic()
+                if since is None:
+                    self._pending_marks_since = now
+                elif now - since >= self.PENDING_NOTE_S:
+                    reason = self._analysis_wait_reason()
+                    if reason:
+                        note = '未解析の行が残っています：' + reason
+            else:
+                self._pending_marks_since = None
+            shown = getattr(self, '_pending_note_shown', None)
+            current = self.status.cget('text')
+            if note is not None and current != note and (
+                    not current or current == shown
+                    or current.startswith(('解析中', '表示準備中', '解析の準備中'))):
+                self.status.config(text=note)
+                self._pending_note_shown = note
+                self._queue_status_visibility()
+            elif note is None and shown is not None:
+                if current == shown:
+                    self.status.config(text='')
+                    self._queue_status_visibility()
+                self._pending_note_shown = None
+        except Exception:
+            pass
+        try:
+            self._pending_watch_job = self.root.after(self.PENDING_WATCH_MS, self._watch_pending_marks)
+        except tk.TclError:
+            pass
 
     def _queue_analysis_gutters(self, texts=None):
         """区切りの計算が届いたら、未解析の縦線を引き直す（まとめて1回）。
@@ -14534,7 +14941,7 @@ class CorrectNoteApp:
             if added and not getattr(self, '_closing', False):
                 # 閉じるとき（_finish_learning_now）は、このあと語彙を保存するだけ。
                 # 書き出しは裏で（2026-10-18・本人の語彙で1回約0.2秒）
-                self.store.save_in_background()
+                self._schedule_store_save()
                 self._update_status()
                 # 語彙が変わったので、覚えている他タブの解析結果は
                 # もう当てにならない（項目48-M）。
@@ -14567,7 +14974,7 @@ class CorrectNoteApp:
         try:
             if learn_english_words(text, self.store):
                 # 書き出しは裏で（2026-10-18）。閉じるときの save が済むのを待つ
-                self.store.save_in_background()
+                self._schedule_store_save()
                 self._invalidate_analysis_cache()
                 self._retain_finished_rows_after_auto_learning()
         except Exception:
@@ -15042,7 +15449,8 @@ class CorrectNoteApp:
             return False
         try:
             import ime_watch
-            if ime_watch.composition_active(self.editor.winfo_id()):
+            # 前面のときだけ待つ（2026-10-19。後ろで残った未確定に待たされない・composition_live）
+            if ime_watch.composition_live(self.editor.winfo_id()):
                 self._unified_autofix_waiting_ime = True
                 return False
         except Exception:
@@ -15692,7 +16100,7 @@ class CorrectNoteApp:
         self._imethod_after_id = None
         try:
             import ime_watch
-            if ime_watch.HAS_SUPPORT and ime_watch.composition_active(
+            if ime_watch.HAS_SUPPORT and ime_watch.composition_live(
                     self.editor.winfo_id()) is True:
                 self._schedule_input_method_reanalyze()
                 return
@@ -15905,7 +16313,10 @@ class CorrectNoteApp:
             if event_results:self._on_change()
             # Reuse this watcher when result projection was deferred by IME.
             # Do not keep postponing an already scheduled analysis callback.
-            if (active is False and getattr(self, '_unified_autofix_waiting_ime', False)
+            # A conversion left behind while CorrectNote is not in front no longer
+            # holds it either (2026-10-19, ime_watch.composition_live).
+            if ((active is False or (active and ime_watch.app_behind()))
+                    and getattr(self, '_unified_autofix_waiting_ime', False)
                     and not getattr(self, '_after_id', None)):
                 self._after_id = self.root.after(300, self._analyze_if_changed)
         except Exception:
@@ -19715,7 +20126,8 @@ class CorrectNoteApp:
             try:text=pane.get('sel.first','sel.last')
             except tk.TclError:continue
             if text:
-                self.root.clipboard_clear();self.root.clipboard_append(text)
+                if self._rich_copy(pane) is None:
+                    self.root.clipboard_clear();self.root.clipboard_append(text)
                 self.status.config(text=f'{len(text)}文字コピーしました')
                 return True if only_if_selected else 'break'
         return False if only_if_selected else 'break'
@@ -19756,10 +20168,21 @@ class CorrectNoteApp:
             text = ''
         if not text:
             return 'break'
-        self.root.clipboard_clear()
-        self.root.clipboard_append(text)
+        if self._rich_copy(self.result_view) is None:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
         self.status.config(text=f'{len(text)}文字コピーしました')
         return 'break'
+
+    def _rich_copy(self, pane):
+        """B/I/U/S の付いた選択なら、書式も一緒にクリップボードへ入れる（rich_copy.py・
+        2026-10-19 うにさん「書式もコピーできますか」）。入れた文字列を返す。書式の無い
+        選択と Windows 以外では None（呼んだ側が今までどおり文字だけを入れる）。"""
+        try:
+            import rich_copy
+            return rich_copy.copy(pane)
+        except Exception:
+            return None
 
     def _on_editor_ctrl_c(self, event=None):
         """

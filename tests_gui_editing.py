@@ -98,9 +98,12 @@ class EditingTkTests(unittest.TestCase):
         w.insert('1.0', '先頭\n  本文　\n\n末尾')
         a._install_line_selection_keys(w)
         w.mark_set('insert', '2.2')
+        # 2回続けると選んだ行をコピーする（2026-10-20。以前は前後の空白を除いた中身へ狭めた）
+        a._copy_focused_selection = Mock(return_value='break')
         for _ in range(2):
             deliver_key(w, '<Shift-space>', 'space', 32, state=1)
-        self.assertEqual(w.get('sel.first', 'sel.last'), '本文')
+        self.assertEqual(w.get('sel.first', 'sel.last'), '  本文　')
+        a._copy_focused_selection.assert_called_once()
         deliver_key(w, '<Shift-Down>', 'Down', 40, state=1)
         self.assertEqual(w.get('sel.first', 'sel.last'), '  本文　\n')
         deliver_key(w, '<KeyRelease-Shift_L>', 'Shift_L', 16, state=1, event_type=3)
@@ -117,35 +120,23 @@ class EditingTkTests(unittest.TestCase):
         self.assertIsNone(a._on_extend_line_selection(types.SimpleNamespace(widget=w), -1))
         self.assertIsNone(w._line_selection)
 
-    def test_shift_space_expands_existing_multiline_selection_in_both_directions(self):
+    def test_shift_space_with_a_selection_copies_it_in_both_panes(self):
+        # 2026-10-20: with a selection Shift+Space copies it as it is (it used to widen it to whole lines)
         from tests_tk_keys import deliver_key
         a = self.a; a.status = Mock()
+        a._copy_focused_selection = Mock(return_value='break')
         for w in (a.editor, a.result_view):
             w.insert('1.0', '先頭行\n前😀長い行\n中の行\n末尾の行\n次の行')
             a._install_line_selection_keys(w)
             if w is a.result_view: w.config(state='disabled')
-            for upward in (False, True):
-                w.tag_remove('sel', '1.0', 'end')
-                w.tag_add('sel', '2.0+2c', '4.2')
-                w.mark_set('insert', '2.0+2c' if upward else '4.2')
-                deliver_key(w, '<Shift-space>', 'space', 32, state=1)
-                self.assertEqual(w.get('sel.first','sel.last'), '前😀長い行\n中の行\n末尾の行')
-                self.assertEqual(w.index('insert'), w.index('2.0' if upward else '4.end'))
-                # Keep the active side when extending or shrinking the range.
-                step = -1 if upward else 1
-                a._on_extend_line_selection(types.SimpleNamespace(widget=w), step)
-                expected = ('1.0','4.end') if upward else ('2.0','5.end')
-                self.assertEqual(tuple(str(i) for i in w.tag_ranges('sel')),tuple(w.index(i) for i in expected))
-                a._on_extend_line_selection(types.SimpleNamespace(widget=w), -step)
-                self.assertEqual(w.get('sel.first','sel.last'), '前😀長い行\n中の行\n末尾の行')
-
-    def test_shift_space_selection_ending_at_next_line_start_excludes_that_line(self):
-        a=self.a; a.status=Mock();w=a.editor
-        w.insert('1.0','最初\n途中\n末尾')
-        w.tag_add('sel','1.1','3.0');w.mark_set('insert','3.0')
-        a._on_select_line_text(types.SimpleNamespace(widget=w))
-        self.assertEqual(w.get('sel.first','sel.last'),'最初\n途中')
-        self.assertEqual(w.index('insert'),w.index('2.end'))
+            w.tag_remove('sel', '1.0', 'end')
+            w.tag_add('sel', '2.0+2c', '4.2')
+            w.mark_set('insert', '4.2')
+            before = w.get('sel.first', 'sel.last')
+            deliver_key(w, '<Shift-space>', 'space', 32, state=1)
+            self.assertEqual(w.get('sel.first','sel.last'), before)        # copied as it is
+            self.assertEqual(a._copy_focused_selection.call_args[0][0].widget, w)
+        self.assertEqual(a._copy_focused_selection.call_count, 2)
 
     def test_search_replacement_is_one_undo_and_redo(self):
         w=self.a.editor;before='最初の文😀\n次の文\n'
@@ -542,6 +533,11 @@ class HalfwidthAutofixTkTests(unittest.TestCase):
         a._refresh_after_analysis=lambda learn=False:a._apply_unified_autofix()
         a._ime_comp='fythw@';a._ime_comp_reading='';a._ime_first_kana='';a._ime_last_result=''
         a._remember_ime_pair=Mock()
+        # These cases type into CorrectNote, so it is the window in front (2026-10-19: a
+        # conversion left while another app is in front no longer holds the work).
+        import ime_watch
+        behind=patch.object(ime_watch,'app_behind',return_value=False);behind.start()
+        self.addCleanup(behind.stop)
 
     def tearDown(self):
         if getattr(self,'root',None) is not None:

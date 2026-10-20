@@ -145,6 +145,10 @@ class _Win32:
                 (u, 'SetClipboardData', [W.UINT, W.HANDLE], W.HANDLE),
                 (u, 'GetClipboardSequenceNumber', [], W.DWORD),
                 (u, 'RegisterClipboardFormatW', [W.LPCWSTR], W.UINT),
+                (u, 'PeekMessageW', [C.c_void_p, W.HWND, W.UINT, W.UINT, W.UINT], W.BOOL),
+                (u, 'CreateWindowExW', [W.DWORD, W.LPCWSTR, W.LPCWSTR, W.DWORD, C.c_int, C.c_int,
+                                        C.c_int, C.c_int, W.HWND, W.HMENU, W.HINSTANCE, W.LPVOID], W.HWND),
+                (k, 'GetCurrentThreadId', [], W.DWORD),
                 (k, 'GlobalAlloc', [W.UINT, C.c_size_t], W.HGLOBAL),
                 (k, 'GlobalFree', [W.HGLOBAL], W.HGLOBAL),
                 (k, 'GlobalLock', [W.HGLOBAL], C.c_void_p),
@@ -156,12 +160,34 @@ class _Win32:
             fn.argtypes = args
             fn.restype = result
         self.u, self.k, self.g = u, k, g
+        self._owners = {}
+
+    def _owner(self):
+        """A hidden message-only window of this thread to open the clipboard with. Opened
+        without a window, the clipboard is taken away again right after it changed (Windows
+        reports ERROR_CLIPBOARD_NOT_OPEN, 1418): reading it then saw only part of the formats,
+        and putting back that part lost the rest (2026-10-20, every time in 15 tries; with a
+        window, none)."""
+        thread = int(self.k.GetCurrentThreadId())
+        if thread not in self._owners:
+            HWND_MESSAGE = self.C.c_void_p(-3)
+            self._owners[thread] = self.u.CreateWindowExW(
+                0, 'STATIC', 'CorrectNote clipboard', 0, 0, 0, 0, 0, HWND_MESSAGE, None, None, None)
+        return self._owners[thread]
 
     def open(self):
-        # Another program may hold it for a moment.
+        owner = self._owner()
+        # Another program may hold it for a moment. Often it is waiting for this thread: Tk puts
+        # its copy as "render on request", and a program reading the clipboard (its history, for
+        # one) keeps it open until Tk renders. So messages sent to this thread are handled while
+        # waiting (PeekMessage hands them to the window procedures; nothing is taken off the
+        # queue): a plain sleep let that program wait for us, and the clipboard could not be
+        # opened (2026-10-20, each time after a few copies in a row).
+        msg = (self.C.c_byte * 64)()
         for _ in range(10):
-            if self.u.OpenClipboard(None):
+            if self.u.OpenClipboard(owner):
                 return True
+            self.u.PeekMessageW(msg, None, 0, 0, 0)     # PM_NOREMOVE
             time.sleep(0.01)
         return False
 

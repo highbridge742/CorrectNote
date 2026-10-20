@@ -177,9 +177,13 @@ def child(case):
     root.clipboard_clear = lambda *a, **k: None
     root.clipboard_append = lambda *a, **k: None
     asked = []
+    window_alive = []
 
     def give_back(target, root_, paste=False):
         asked.append(paste)
+        # 2026-10-19: asked while the quick window still exists (in front)
+        win = getattr(a, '_quick_win', None)
+        window_alive.append(bool(win is not None and win.winfo_exists()))
         return case == 'back'
     a = None
     try:
@@ -193,7 +197,8 @@ def child(case):
             a._quick_text.insert('1.0', '閉じる文')
             a._quick_return = Q.Target(1, 2, 3, 4, True)
             a._close_quick_capture()
-            print('RESULT ' + json.dumps(dict(asked=asked, status=a.status.cget('text'),
+            print('RESULT ' + json.dumps(dict(asked=asked, window_alive=window_alive,
+                                              closed=a._quick_win is None, status=a.status.cget('text'),
                                               memo=a.editor.get('1.0', 'end-1c')), ensure_ascii=False), flush=True)
     finally:
         if a:
@@ -229,6 +234,15 @@ class CloseStatusTests(unittest.TestCase):
         r = self.run_case('back')
         self.assertIn('元の入力欄へ戻しました', r['status'])
         self.assertNotIn('戻れなかった', r['status'])
+
+    def test_focus_is_given_back_before_the_quick_window_is_destroyed(self):
+        # 2026-10-19 うにさん: destroying the window in front makes Windows activate the
+        # window used last (another app visited meanwhile); asked afterwards, the return
+        # read that as "the user went elsewhere" and did not go back.
+        for case in ('back', 'stuck'):
+            r = self.run_case(case)
+            self.assertEqual(r['window_alive'], [True], case)
+            self.assertTrue(r['closed'], case)
 
 
 if __name__ == '__main__':

@@ -28,6 +28,10 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(LK.candidates('とどはました', 2, 6).get('とどきました'), ('sub', 2))
         self.assertEqual(LK.candidates('まよました', 1, 5).get('まよいました'), ('ins', 2))
         self.assertEqual(LK.candidates('ひいしてまう', 1, 4).get('ひいてしまう'), ('swap', 2))
+        # 濁点・半濁点の付け忘れ・付けすぎは1打（゛ ゜ は独立のキー）: 戻す字に濁音・半濁音も入る
+        self.assertEqual(LK.candidates('ごさいます', 0, 5).get('ございます'), ('sub', 1))
+        self.assertEqual(LK.candidates('はんぶん', 0, 4).get('ばんぶん'), ('sub', 0))
+        self.assertIn('ぱ', LK._keys())
 
     def test_small_kana_and_n_need_a_kana_before(self):
         for text in LK.candidates('きょう', 0, 3):
@@ -62,21 +66,23 @@ class RepairGateTests(unittest.TestCase):
         self.assertTrue(LK._predicate_follows('あのようにも見える。', 3, 4))
         self.assertTrue(LK._predicate_follows('みちにまよいました', 5, 6))
 
-    def test_kana_input_and_dictionary_index_are_required(self):
+    def test_kana_or_romaji_input_and_dictionary_index_are_required(self):
         result = {'odd_spans': [(4, 8)]}
         never = lambda text: self.fail('retried ' + text)
+        # かな入力・ローマ字入力のどちらでもない方式（2026-10-19 からローマ字入力でも走る）
         self.assertIsNone(LK.repair('みちにまよました', result, never,
-                                    input_method='romaji', dict_index=_NoWords()))
+                                    input_method='other', dict_index=_NoWords()))
         self.assertIsNone(LK.repair('みちにまよました', result, never, dict_index=None))
 
     def test_long_or_non_kana_purple_is_left(self):
         never = lambda text: self.fail('retried ' + text)
-        self.assertIsNone(LK.repair('みちにまよいましたよね', {'odd_spans': [(0, 7)]},
+        # 紫の幅の上限は8字（2026-10-19）: 9字は見ない
+        self.assertIsNone(LK.repair('みちにまよいましたよね', {'odd_spans': [(0, 9)]},
                                     never, dict_index=_NoWords()))
         self.assertIsNone(LK.repair('道にまよました', {'odd_spans': [(0, 3)]},
                                     never, dict_index=_NoWords()))
         # 紫が2つあって、片方が長いときも見ない
-        self.assertIsNone(LK.repair('みちにまよましたがあれこれなにやら', {'odd_spans': [(3, 7), (8, 16)]},
+        self.assertIsNone(LK.repair('みちにまよましたがあれこれなにやらかんやら', {'odd_spans': [(3, 7), (8, 20)]},
                                     never, dict_index=_NoWords()))
 
     def test_line_final_double_is_left(self):
@@ -144,6 +150,30 @@ class LastKeystrokeLineTests(unittest.TestCase):
                 self.assertTrue(any(x in result['corrected'] for x in expected), result['corrected'])
                 self.assertEqual(result['odd_spans'], [])
                 self.assertEqual(result['diagnosis']['language_state'], 'anomaly_repaired')
+
+    def test_structure_restoring_substitution_is_taken_without_the_reading_table(self):
+        # 文の組み立てが大きく良くなる1打の置き換え（接頭詞＋名詞＋ます → 動詞＋ます）は、読みの並びの表が低く見ても
+        # （ございます −8.5）、語の内側（ごさい＝五歳）でも、紫が無く迷いだけ・印が何も無くても採る（3番目の道・2026-10-19）
+        for line, want in (('ありがとうごさいます。', 'ありがとうございます。'),
+                           ('明日しましゅう。', '明日しましょう。'),
+                           ('本当にありかとう、助かりました。', '本当にありがとう、助かりました。'),
+                           ('よろしくおねかいします。', 'よろしくおねがいします。'),
+                           ('ありかとう。', 'ありがとう。')):
+            with self.subTest(line=line):
+                result = self.run_line(line)
+                self.assertEqual(result['corrected'], want)
+                self.assertEqual(result['odd_spans'], [])
+        # 正しい行・入口が直した行には重ねない（抜き・足し・短い並びは見ない）。数字の直後のかな（助数詞）も触らない
+        for line in ('駅の改札口で待ち合わせしましょう。', 'さようなら、またあした。', 'ごめんなさい、おくれます。',
+                     '以下の2つがある', '以下の２つがある。', 'りんごが3こある'):
+            with self.subTest(line=line):
+                self.assertEqual(self.run_line(line)['corrected'], line)
+
+    def test_seven_kana_purple_still_gets_the_one_key_reread(self):
+        # 紫が7字（うちあせわは）でも1打の戻し（入れ替わり）を試す（上限 6→8・2026-10-19）
+        result = self.run_line('明日のうちあせわは10時からです。')
+        self.assertIn('うちあわせは', result['corrected'])
+        self.assertEqual(result['odd_spans'], [])
 
     def test_transposition_is_one_replacement(self):
         result = self.run_line('うこほうにいきます')
@@ -224,7 +254,9 @@ class LastKeystrokeLineTests(unittest.TestCase):
             self.run_line('にもつがとどはました')
         self.assertEqual(calls, ['にもつがとどはました'])
 
-    def test_romaji_input_is_left_to_the_romaji_path(self):
+    def test_romaji_input_uses_romaji_keys(self):
+        # ローマ字入力でも走る（2026-10-19）が、戻しの候補はローマ字キーの隣で作る:
+        # は→き（ha→ki）は隣のキーでないので直さない。かな入力では は と き が隣で直る
         calls = []
         real = LK.repair
 
@@ -234,8 +266,44 @@ class LastKeystrokeLineTests(unittest.TestCase):
 
         with mock.patch.object(LK, 'repair', counted):
             result = self.run_line('にもつがとどはました', input_method='romaji')
-        self.assertEqual(calls, ['romaji'] if calls else [])
+        self.assertTrue(calls and set(calls) == {'romaji'})
         self.assertNotIn(('とどは', '届き', 'かな入力'), result['details'])
+        self.assertNotIn(('とどは', '届き', 'ローマ字入力'), result['details'])
+
+    def test_romaji_stray_vowel_tokens_are_marks(self):
+        # ローマ字入力で母音のキーや t・n の2度押しが1字のかなで残った形（悪い**う**ので・番号**う**を・思う**い**。・
+        # 友達**お**に・**っ**天気予報）は異様の印。正しい文（言うと・あ、そうだ・お茶・新しいカメラ）には印が無い
+        import morphology as M
+        for line, mark in (('印刷機の調子が悪いうので連絡する。', 'う'), ('電話番号うを書き間違えた。', 'う'),
+                           ('そんなことはないと思うい。', 'い'), ('友達おに聞いた。', 'お'),
+                           ('っ天気予報によると晴れるらしい。', 'っ'), ('忘れ物をしないように前えの晩に準備する。', 'え'),
+                           ('週に一度はっ家族で外食をする。', 'はっ'), ('近所のっ子供たちが元気だ。', 'のっ')):
+            with self.subTest(line=line):
+                toks = list(M.tokenize(line))
+                self.assertEqual({toks[i].surface for i in LK._romaji_stray_tokens(toks)}, {mark})
+        # ローマ字の子音の抜け（ku→u）: ウ音便（多**う**なる）、形容詞の連用形・語幹に直に続く母音で始まる動詞
+        # （遅く**う**なりました・懐かし**う**なった・難しく**い**て）。印の位置は語の先頭か末尾の字
+        for line, mark, pos in (('冬は鍋料理が多うなる。', '多う', 7), ('すみません、遅くうなりました。', 'うなり', 8),
+                                ('古い写真を見ていたら懐かしうなった。', 'うなっ', 13), ('宿題が難しくいて時間がかかった。', 'い', 6)):
+            with self.subTest(line=line):
+                toks = list(M.tokenize(line))
+                marks = LK._romaji_stray_tokens(toks)
+                self.assertEqual({toks[i].surface for i in marks}, {mark})
+                self.assertEqual(set(marks.values()), {pos})
+        for line in ('言うと怒られる。', 'あ、そうだ。', 'それはお茶です。', '新しいカメラで花の写真を撮った。',
+                     '書こうと思う。', '見ていてください。', '真っ赤な顔になった。', '今日は遅く起きた。',
+                     '急に寒くなった。', '嬉しそうに笑った。'):
+            with self.subTest(line=line):
+                self.assertEqual(set(LK._romaji_stray_tokens(list(M.tokenize(line)))), set())
+
+    def test_romaji_candidates_follow_romaji_keys(self):
+        # ローマ字: さ→ざ（s↔z 隣・濁点）、に→い（n の抜け）、ん の抜け（kakuni→kakunin）は候補、は→き は候補にならない
+        out = LK.candidates('ごさいます', 1, 2, 'romaji')
+        self.assertIn('ございます', out)
+        kana_out = LK.candidates('とどはました', 2, 3, 'kana')
+        self.assertIn('とどきました', kana_out)
+        self.assertNotIn('とどきました', LK.candidates('とどはました', 2, 3, 'romaji'))
+        self.assertEqual(LK.candidates('かくにします', 2, 4, 'romaji').get('かくにんします'), ('ins', 3))
 
 
 @unittest.skipUnless(M.HAS_JANOME, 'real native dictionary required')
@@ -263,6 +331,25 @@ class IMEClauseRepairTests(unittest.TestCase):
         return app.correct_line(line, a.store, input_method=input_method,
                                 dict_index=a.dict_index, decisions=a.decisions,
                                 context_vec=a.context_vec)
+
+    def test_renyokei_followed_by_kudasai_or_suru_is_a_sure_mark(self):
+        # 動詞の連用形に直に付いた ください・する（ご角**煮ください**・角**煮します**: かくに→角煮）は文法で確かな印。
+        # お待ちください（接頭詞＋連用形）・書きなさい・見てください・角煮をください（注文）は印にしない
+        import morphology
+        def sure(line):
+            toks = list(morphology.tokenize(line))
+            return {toks[i].surface for i in LK._conjugation_mismatch(toks)}
+        self.assertEqual(sure('資料をご角煮ください。'), {'煮'})
+        self.assertEqual(sure('明日までに角煮します。'), {'煮'})
+        for line in ('お待ちください。', '名前を書きなさい。', '資料を見てください。', '角煮をください。', '確認します。'):
+            with self.subTest(line=line):
+                self.assertEqual(sure(line), set())
+        for line, pair, want in (('資料をご角煮ください。', ('角煮', 'かくに'), '資料をご確認ください。'),
+                                 ('内容を角煮ください。', ('角煮', 'かくに'), '内容を確認ください。'),
+                                 ('明日までに角煮します。', ('角煮', 'かくに'), '明日までに確認します。'),
+                                 ('角煮をください。', ('角煮', 'かくに'), '角煮をください。')):
+            with self.subTest(line=line):
+                self.assertEqual(self.correct(line, [pair])['corrected'], want)
 
     @_without_ime
     def test_entrance_conversion_of_the_reverted_clause_is_accepted(self):
@@ -320,6 +407,260 @@ class IMEClauseRepairTests(unittest.TestCase):
                 ('電車が沖れたので会議に間に合わなかった。', ('沖れたので', 'おきれたので'), '起きれ')):
             with self.subTest(line=line):
                 self.assertNotIn(bad, self.correct(line, [pair])['corrected'])
+
+    def test_romaji_stray_deletion_passes_the_duplicate_gate(self):
+        # ローマ字入力で母音・子音のキーの2度押しが1字残った形（番号**う**を・一つ**っ**前）は、文節の読み直しで
+        # 抜いた形が入口の「同じ字の重なりは直さない」門（duplicate_repair_disabled）を文節の証明付きで通る。
+        # 印の無い同じ母音の重なり（新し**い**い）は今までどおり直さない
+        for line, pair, want in (
+                ('電話番号うを書き間違えていたようだ。', ('番号う', 'ばんごうう'), '電話番号を書き間違えていたようだ。'),
+                ('一つっ前の画面に戻るには左上の矢印を押す。', ('っ前', 'っまえ'), '一つ前の画面に戻るには左上の矢印を押す。')):
+            with self.subTest(line=line):
+                self.assertEqual(self.correct(line, [pair], input_method='romaji')['corrected'], want)
+        line = '来月から新しいい部署に異動になります。'
+        self.assertEqual(self.correct(line, input_method='romaji')['corrected'], line)
+
+    def test_romaji_dropped_consonant_is_restored(self):
+        # ローマ字で く の k が抜けた形（ooku→oou: 多**う**なる・遅く**う**なりました・難しく**い**て）は、IME の漢字（語）を
+        # 残してかなの末尾だけ戻す（多くなる・遅くなりました・難しくて）。脱字の戻しは低い優先度（うに 10-19 11:38Z）だが、
+        # 隣のキーの形（多いなる: 形容詞の基本形＋動詞）は文法で確かな印ができるので採らない
+        for line, pair, want in (
+                ('冬は鍋料理が多うなる。', ('多う', 'おおう'), '冬は鍋料理が多くなる。'),
+                ('すみません、遅くうなりました。', ('遅くう', 'おそくう'), 'すみません、遅くなりました。'),
+                ('英語の宿題が難しくいて時間がかかった。', ('難しくいて', 'むずかしくいて'), '英語の宿題が難しくて時間がかかった。')):
+            with self.subTest(line=line):
+                self.assertEqual(self.correct(line, [pair], input_method='romaji')['corrected'], want)
+        line = '今日は遅く起きた。'
+        self.assertEqual(self.correct(line, [('遅く', 'おそく'), ('起きた', 'おきた')], input_method='romaji')['corrected'], line)
+
+    def test_romaji_dropped_letter_forms_from_the_report_are_restored(self):
+        # うに 2026-10-19 11:53Z: ローマ字打ちの脱字の例。shi の s が抜けた ひ（確認**ひ**ます）、masu の m が抜けた
+        # あす（確認し**あ**す）、masu の s が抜けた まう（確認し**まう**）は、IME の語（確認）を残してかなの末尾だけ直す
+        for line, pair, want in (
+                ('資料を確認ひます。', ('確認ひ', 'かくにんひ'), '資料を確認します。'),
+                ('資料を確認しあす。', ('確認しあす', 'かくにんしあす'), '資料を確認します。'),
+                ('資料を確認しまう。', ('確認しまう', 'かくにんしまう'), '資料を確認します。')):
+            with self.subTest(line=line):
+                self.assertEqual(self.correct(line, [pair], input_method='romaji')['corrected'], want)
+        # 英字に母音を足す候補（確認**s**ます→さしすせそ）と ん の前の な行（かく**ん**します→かくにんします）は候補にある
+        self.assertIn('しりょうをかくにんします。', LK.candidates('しりょうをかくにんsます。', 5, 9, 'romaji'))
+        self.assertIn('しりょうをかくにんします。', LK.candidates('しりょうをかくんします。', 3, 6, 'romaji'))
+
+    def test_romaji_leftover_letters_are_reread_as_keystrokes(self):
+        # 残った英字は打ち違いの確かな印: 英字の並びに戻して、隣どうしの順番違い（mai**s**ta→masita）、巻き込んだ字の抜き
+        # （simasi**w**ta→simasita）、そのまま読み直すだけで読める形（ma**s**hita→masita）、英字の隣の順番違い
+        # （rena**r**ku→renraku・**r**neraku→renraku）を試す。IME の対が無い、かなだけの行で直る
+        for line, want in (('資料をおくりまいsた。', '資料をおくりました。'),
+                           ('資料を提出しましwた。', '資料を提出しました。'),
+                           ('資料をおくりまsひた。', '資料をおくりました。'),
+                           ('あとでれなrくします。', 'あとでれんらくします。'),
+                           ('rねらくします。', 'れんらくします。'),
+                           ('ありがとうございまうs。', 'ありがとうございます。')):
+            with self.subTest(line=line):
+                self.assertEqual(self.correct(line, [], input_method='romaji')['corrected'], want)
+        # 英語の語・記号としての英字（大文字・3字以上・かなの端の母音1字）は読み直さない
+        for line in ('URLをしらべます。', 'PCをつかいます。', 'aをおします。', 'iをつかいます。'):
+            with self.subTest(line=line):
+                self.assertEqual(self.correct(line, [], input_method='romaji')['corrected'], line)
+        # かな入力では英字の読み直しをしない
+        self.assertIn('まいsた', self.correct('資料をおくりまいsた。', [], input_method='kana')['corrected'])
+        # ローマ字では かなの単位の入れ替わり（うちあわせ→うちあせわ）は候補にしない（utiawase→utiasewa は打鍵の順番違いではない）
+        self.assertNotIn('うちあわせのしりょう', LK.candidates('うちあせわのしりょう', 0, 5, 'romaji'))
+        self.assertIn('うちあわせのしりょう', LK.candidates('うちあせわのしりょう', 0, 5, 'kana'))
+        # 英字が残っている並びでは、戻しは英字の隣だけ（okurimai**s**ta の o と k の入れ替え こうりました は見ない）
+        got = LK.candidates('資料をおくりまいsた。', 2, 10, 'romaji')
+        self.assertIn('資料をおくりました。', got)
+        self.assertNotIn('資料をこうりまいsた。', got)
+        # 英字を入口にしたときは英字の単位の戻しだけ（ごかくにん**お**ねがい の お→を は試さない）。元からの紫（かなだけの並び）が
+        # 同じ所に残っても採る。身近な語を崩す判定は迷いの並び全体がその語のときだけ（提出し**まい**た→提出しました は止めない）
+        self.assertEqual(self.correct('ごかくにんおねがいしまうs。', [], input_method='romaji')['corrected'], 'ごかくにんおねがいします。')
+        self.assertEqual(self.correct('提出しまいた。', [], input_method='romaji')['corrected'], '提出しました。')
+
+    def test_whole_line_purple_kana_run_tries_every_window(self):
+        # かなの並びが丸ごと紫で窓（8字）に収まらないとき、語の切れ目と両端の窓を費用の順に全部見て、
+        # 読みの並びが大きく良くなるかな1字の抜き（と の巻き込み）を組み立ての戻しとして採る
+        self.assertEqual(self.correct('しとゅうがくりょこう', [], input_method='kana')['corrected'], '修学旅行')
+        self.assertEqual(self.correct('しとゅうがくりょこうにいきました。', [], input_method='kana')['corrected'],
+                         'しゅうがくりょこうにいきました。')
+        # 正しいかなだけの行は変えない
+        line = 'どうもありがとうございました。'
+        self.assertEqual(self.correct(line, [], input_method='kana')['corrected'], line)
+
+    def test_stray_kana_before_ime_word_keeps_its_kanji(self):
+        # 確定の前に1字余分に打って IME が先頭をかなのまま残した顔（がっ好きだ: っすきだ）は、語の漢字は IME のまま
+        # 先頭の余った字だけ抜く（好きだ）。かなに戻すだけ（すきだ）で終わらない
+        got = self.correct('料理をするのがっ好きだ。', [('っ好きだ', 'っすきだ')], input_method='romaji')
+        self.assertEqual(got['corrected'], '料理をするのが好きだ。')
+        # 先頭が普通のかな（れ研修: れけんしゅう→れんしゅう かもしれない）・漢字が続かない・語の表記でないなら対象外
+        st, di = self.state.store, self.state.dict_index
+        self.assertIsNone(LK._ime_head_kept('れ研修を', 'れけんしゅうを', 'けんしゅうを', st, di))
+        self.assertIsNone(LK._ime_head_kept('っすきだ', 'っすきだ', 'すきだ', st, di))
+        self.assertEqual(LK._ime_head_kept('っ好きだ', 'っすきだ', 'すきだ', st, di), '好きだ')
+
+    def test_vouched_substitution_keeps_familiar_kana_words(self):
+        # 組み立ての戻し（費用の下がりだけで採る置き換え）は、身近な語の読み（ひらがな・はんい＝範囲）を
+        # 別の語（ひらかな・しんい）に替えない。かな入力でも同じ。語でない並び（ありかとう・おねかい）は直す
+        for line, want in (('ぜんぶひらがなでかいた。', 'ぜんぶひらがなでかいた。'),
+                           ('あのはんいをみる。', 'あのはんいをみる。'),
+                           ('ありかとう。', 'ありがとう。'),
+                           ('よろしくおねかいします。', 'よろしくおねがいします。')):
+            with self.subTest(line=line):
+                self.assertEqual(self.correct(line, [], input_method='kana')['corrected'], want)
+
+    def test_kango_familiarity_is_judged_for_the_reading(self):
+        # 表記が身近でも、その読みでは珍しい漢語（冊子＝さっし を ふみ に）は置かない（見すっても→冊子すっても にしない）
+        self.assertFalse(LK._kango_reads_as('冊子', 'ふみ'))
+        self.assertTrue(LK._kango_reads_as('冊子', 'さっし'))
+        self.assertTrue(LK._kango_reads_as('踏み', 'ふみ'))
+        got = self.correct('見すっても', [('見', 'み')], input_method='kana')['corrected']
+        self.assertNotIn('冊子', got)
+
+    def test_reading_suspect_clause_is_reread_with_a_doubt_mark(self):
+        # IME の顔（霧が内容名も）に印が無くても、打った読み（きりがないよう**な**も）の並びに疑いの字句が在れば
+        # 直せなくても紫を付ける（うに 10-19 17:41Z 異様さは測り、紫は付ける）。かなに戻した行の組み立ての戻しで直す形は
+        # 正しい文の漢字をかなに崩したので入れていない（夕立→ようだち）
+        import morphology
+        line = '霧が内容名も'
+        toks = list(morphology.tokenize(line))
+        self.assertEqual(LK._reading_suspect(line, [(0, 6, 'きりがないようなも')]), [(0, 6)])
+        self.assertEqual(LK._reading_suspect(line, [(0, 6, 'きりがないようにも')]), [])
+        # 読みの並びの印は正しい文（文字列一致は＝もじれついっちは）にも付いたので、印としては使わない（#74）。
+        # 読みの上の文法で確かな印（助動詞 な の体言接続に直に付いた助詞: ような**も**）は使い、印を消す1打の戻し
+        # （ようにも）を採る（#80・10-20）
+        for text, want in ((line, '霧がないようにも'), ('霧が内容名も、続ける。', '霧がないようにも、続ける。')):
+            with self.subTest(text=text):
+                got = self.correct(text, [(line, 'きりがないようなも'), ('霧が', 'きりが'), ('内容名も', 'ないようなも')],
+                                   input_method='kana')
+                self.assertEqual(got['corrected'], want)
+                # 長い行では ようなね（も→ね）も費用の差 MARGIN の内で並び、読みの並びの差が線（CLAUSE_YOMI_TIE）に
+                # わずかに届かないので、直した所に迷いの紫が付くことがある（迷うなら紫）。紫は直した所の中だけ
+                self.assertTrue(all(2 <= a and b <= 8 for a, b in (tuple(x[:2]) for x in got['odd_spans'])))
+        # 正しい形（ようなのに・大変なので・静かなはず）には印を付けない
+        for text in ('そのようなのに', '大変なのでやめた', '静かなはずだ', '好きなだけ食べて。', '静かなほど良い。'):
+            with self.subTest(text=text):
+                self.assertEqual(LK._conjugation_mismatch(list(morphology.tokenize(text))), set())
+        got = self.correct('文字列一致は特に思い描かないかな。', [('文字列一致は', 'もじれついっちは')], input_method='kana')
+        self.assertEqual(got['corrected'], '文字列一致は特に思い描かないかな。')
+        self.assertEqual(got['odd_spans'], [])
+
+    def test_doubtful_kana_run_after_a_fix_gets_its_one_dictionary_kanji(self):
+        # 1打の戻し（し**と**ゅうがくりょこう）のあと入口が迷いを残したかなの並びに、辞書で1通りの漢字＋助詞が置ける
+        # なら置く（修学旅行は）。単語だけの行は入口が置く（10-19 挙動関連担当の PC の確認）
+        for line, want in (('しとゅうがくりょこうは楽しかった。', '修学旅行は楽しかった。'),
+                           ('しとゅうがくりょこう', '修学旅行')):
+            with self.subTest(line=line):
+                got = self.correct(line, [], input_method='kana')
+                self.assertEqual(got['corrected'], want)
+                self.assertEqual(got['odd_spans'], [])
+
+    def test_katakana_word_with_ru_verb_tail_is_placed_before_cost(self):
+        # 文法で確かな印（見＋すっ）の文節で、打った読みが 片仮名の語＋る動詞の語尾（みす＋っても）なら
+        # 片仮名の語を置いた形（ミスっても）を先に試す。費用では こすっても（擦っても）が勝っていた
+        # 置いた形 ミスっても は述語の門（bound_verb_slot）を、片仮名の語＋る動詞の活用（ミスる・パクる・サボる:
+        # contextual_repair.katakana_ru_verb_predicate）として通る（うに 10-20: 門の例外でなく活用の追加）
+        got = self.correct('見すっても', [('見すっても', 'みすっても')], input_method='kana')
+        self.assertEqual(got['corrected'], 'ミスっても')
+        self.assertEqual(got['odd_spans'], [])
+        import contextual_repair as CR
+        for text, a, b in (('ミスっても', 1, 3), ('パクった', 0, 3), ('サボらない', 0, 3), ('メモります', 0, 3), ('ダブる', 0, 3)):
+            with self.subTest(text=text):
+                self.assertTrue(CR.katakana_ru_verb_predicate(text, a, b))
+        for text, a, b in (('見すっても', 1, 3), ('ミスて', 1, 3), ('コピーして', 0, 3), ('ミスっを', 1, 3)):
+            with self.subTest(text=text):
+                self.assertFalse(CR.katakana_ru_verb_predicate(text, a, b))
+        self.assertEqual(LK._katakana_only_faces('みす', self.state.dict_index), ['ミス'])
+        self.assertEqual(LK._katakana_only_faces('せつめい', self.state.dict_index), [])
+
+    def test_renyokei_with_sura_and_nai_is_a_sure_mark_and_katakana_verb_is_placed(self):
+        # 動詞の連用形＋すら・さえ・こそ・も＋ない（見**すらない**）は文法で確かな印（打ち消しは する を挟む:
+        # 見もしない）。打った読み みす＋らない が 片仮名の語＋る動詞の活用なら ミスらない に置く。
+        # 1打の直し（擦らない）の方が費用は安いが、世の中の表の組み立てに替えた形は費用で比べない
+        import morphology
+        def sure(line):
+            toks = list(morphology.tokenize(line))
+            return {toks[i].surface for i in LK._conjugation_mismatch(toks)}
+        self.assertEqual(sure('見すらないように気をつける。'), {'見'})
+        for line in ('見もしないで捨てた。', '高くもない。', '知りさえしない。', 'ミスらないように気をつける。'):
+            with self.subTest(line=line):
+                self.assertEqual(sure(line), set())
+        got = self.correct('見すらないように気をつける。', [('見すらない', 'みすらない')], input_method='kana')
+        self.assertEqual(got['corrected'], 'ミスらないように気をつける。')
+        # 正しく打った 片仮名の語＋る動詞の活用 のかな連続には迷いの印を付けない
+        for line in ('ミスらないように気をつける。', 'パクらないでください。', 'サボらないようにする。'):
+            with self.subTest(line=line):
+                got = self.correct(line, [], input_method='kana')
+                self.assertEqual(got['corrected'], line)
+                self.assertEqual(got['unsure_spans'], [])
+                self.assertEqual(got['odd_spans'], [])
+
+    def test_dropped_long_vowel_of_a_katakana_word_places_the_katakana(self):
+        # 片仮名の語の読みで ー を1つ打ち落とし（しょ**ー**とかっと）、IME が漢字＋かな（書とかっと）にした文節は、
+        # ー を足した読みが片仮名だけの語の読みになるので、その語を置く（うに 10-20 01:12Z 紫が付かなかった）
+        for line, want in (('書とかっと', 'ショートカット'), ('書とかっとを使う。', 'ショートカットを使う。'),
+                           ('書とかっとキーを押す。', 'ショートカットキーを押す。')):
+            with self.subTest(line=line):
+                got = self.correct(line, [('書とかっと', 'しょとかっと')], input_method='kana')
+                self.assertEqual(got['corrected'], want)
+                self.assertEqual(got['odd_spans'], [])
+        # 対の無い行（かなのまま・対の残っていない顔）も同じ（10-20 挙動関連担当の PC の確かめ）
+        for line, want in (('しょとかっと', 'ショートカット'), ('しょとかっとを使う。', 'ショートカットを使う。'),
+                           ('書とかっとキーを押す。', 'ショートカットキーを押す。')):
+            with self.subTest(line=line, pair=False):
+                got = self.correct(line, [], input_method='kana')
+                self.assertEqual(got['corrected'], want)
+        self.assertEqual(LK._katakana_long_vowel_face('しょとかっとを', self.state.dict_index), ('ショートカット', 'を'))
+        self.assertIsNone(LK._katakana_long_vowel_face('しょうとかっと', self.state.dict_index))
+        self.assertIsNone(LK._katakana_long_vowel_face('がっこう', self.state.dict_index))
+        # 4字の片仮名の語（カッター・テンキー）はふつうの語の読み（かった・てんき）と重なるので置かない
+        for typed in ('かった', 'てんきが', 'ころに', 'ないた'):
+            with self.subTest(typed=typed):
+                self.assertIsNone(LK._katakana_long_vowel_face(typed, self.state.dict_index))
+        got = self.correct('スーパーで特売の卵を買った。', [('買った', 'かった')], input_method='kana')
+        self.assertEqual(got['corrected'], 'スーパーで特売の卵を買った。')
+
+    def test_correct_kana_words_are_not_broken_by_one_key_fixes(self):
+        # かなのまま打った正しい語（区切られた辞書の読み）を、1打の直しで崩さない（10-20 #82）。辞書に無くても
+        # 知っている語＋接尾の名詞（ふくびき＋けん）なら、直した後が辞書の語そのものでない限り崩さない
+        for line in ('すいぞくかんをみた。', 'ふゆやすみをみた。', '明日はすいぞくかんに行く。', '明日はふくびきけんに行く。'):
+            with self.subTest(line=line):
+                self.assertEqual(self.correct(line, [], input_method='kana')['corrected'], line)
+        self.assertEqual(self.correct('しやくしょをみた。', [], input_method='kana')['corrected'][:3], '市役所')
+        # 語＋接尾の名詞のかなの並びは、窓で語の中を切らず、切れ端に漢字も置かない（けいさつ|しょ→書・たんと|うしゃ→校舎）。
+        # サ変の名詞＋する（せんたく＋して）は組み立てと見ない
+        for line in ('明日はけいさつしょに行く。', '明日はたんとうしゃに行く。', '明日はなつやすみに行く。'):
+            with self.subTest(line=line):
+                self.assertEqual(self.correct(line, [], input_method='kana')['corrected'], line)
+        self.assertTrue(LK._sahen_with_suru('せんたくして'))
+        self.assertFalse(LK._kana_compound('せんたくして', self.state.dict_index))
+        # 直した後が辞書の語や活用の続きになる直しは前のまま（ありかとう→ありがとう・とどはました→届きました）
+        self.assertEqual(self.correct('ありかとう', [], input_method='kana')['corrected'], 'ありがとう')
+        self.assertEqual(self.correct('とどはました', [], input_method='kana')['corrected'], '届きました')
+
+    def test_one_key_fix_that_reads_as_a_katakana_word_places_the_katakana(self):
+        # 片仮名の語の読みに成る1打の戻し（デバッグめ**な**ゅー→めにゅー＝メニュー）は、語の内側・述語の門で止めず
+        # 片仮名を置く（10-19 うにの未解決.txt）
+        got = self.correct('デバッグめなゅー', [], input_method='kana')
+        self.assertEqual(got['corrected'], 'デバッグメニュー')
+        self.assertEqual(got['odd_spans'], [])
+        self.assertEqual(LK._katakana_run('デバッグめにゅー', 5, 6, 'デバッグめなゅー', self.state.dict_index), (4, 8, 'メニュー'))
+        self.assertIsNone(LK._katakana_run('みすっても', 0, 1, 'こすっても', self.state.dict_index))
+        # 読みの印が無い正しい文節はそのまま
+        got = self.correct('駅前の新しいパン屋に行ってみたい。', [('駅前の', 'えきまえの'), ('行ってみたい', 'いってみたい')],
+                           input_method='kana')
+        self.assertEqual(got['corrected'], '駅前の新しいパン屋に行ってみたい。')
+
+    def test_doubtful_kana_run_takes_a_strong_reading_fix(self):
+        # 迷い（紫でない）のかなの並びでも、読みの並びが大きく良くなる1字の抜き・同じ段の隣の置き換えは採る
+        # （せつ**さ**めいはどこ→説明はどこ・がいとう**あ**のはんいを→がいとうのはんいを・きりがないよう**な**も→ようにも）
+        for line, want in (('せつさめいはどこ', '説明はどこ'),
+                           ('がいとうあのはんいを', 'がいとうのはんいを'),
+                           ('きりがないようなも', 'きりがないようにも')):
+            with self.subTest(line=line):
+                self.assertEqual(self.correct(line, [], input_method='kana')['corrected'], want)
+        # 正しいかなだけの行は変えない
+        for line in ('どうもありがとうございました。', 'きょうはいいてんきですね。'):
+            with self.subTest(line=line):
+                self.assertEqual(self.correct(line, [], input_method='kana')['corrected'], line)
 
     def test_only_kana_input_with_store_and_pairs(self):
         result = {'corrected': '雨ろが止んだら散歩に行こう。', 'odd_spans': [], 'unsure_spans': []}
@@ -404,8 +745,10 @@ class IMEClauseRepairTests(unittest.TestCase):
         a = self.state
         faces = LK._kanji_choices('かえる', a.store, a.dict_index)
         self.assertGreater(len(faces), 2)
-        self.assertIsNone(LK._place_kanji('予定をかえることにした。', 3, 6, '替ある', 'かあえる',
-                                          a.store, a.dict_index, None, []))
+        # 文脈にも費用にも決め手が無い用言（かえる）は、身近さの表（AI 判定）の先頭に決めて迷いの印を返す
+        placed = LK._place_kanji('予定をかえることにした。', 3, 6, '替ある', 'かあえる',
+                                 a.store, a.dict_index, None, [])
+        self.assertEqual(placed[1:], ('帰る', True))
         self.assertEqual(LK._kanji_choices('れいぞうこ', a.store, a.dict_index), ['冷蔵庫'])
         # 読み2字の語（なつ・よる）も手を付けていない付属が付いていれば語と見るが、
         # 置くのは表記が1通り（夏）か文脈に決め手があるときだけ。同じ読みの語が多く
@@ -563,8 +906,9 @@ class IMEClauseRepairTests(unittest.TestCase):
         args = (line, s, e, '上うた', 'うえうた', a.store, a.dict_index, a.context_vec, [])
         with mock.patch.object(ime_language, 'JapaneseIME', lambda: FakeIME({'うえた': '植えた', 'うえ': '上'})):
             self.assertEqual(LK._place_kanji(*args)[:2], (line.replace('うえた', '植えた'), '植えた'))
+        # IME が付属ごとの読み（うえた）を知らなければ、用言の基本形の読み（うえる）の表で決める（植える が抜けている）
         with mock.patch.object(ime_language, 'JapaneseIME', lambda: FakeIME({'うえ': '上'})):
-            self.assertIsNone(LK._place_kanji(*args))
+            self.assertEqual(LK._place_kanji(*args), (line.replace('うえた', '植えた'), '植えた', False))
 
     @_without_ime
     def test_stray_kana_after_converted_word_is_removed(self):
@@ -696,17 +1040,21 @@ class IMEClauseRepairTests(unittest.TestCase):
         # 費用で並んだら退く（紫は入口がその並びを語と認めなかった印。決め手なしで行を残さない）
         line = '卒業文とゅうに将来の夢を書いた。'
         result = self.correct(line, pairs=[('文とゅうに', 'ぶんとゅうに')])
-        self.assertEqual(result['corrected'], '卒業文集に将来の夢を書いた。')
+        # 文集 は身近さの表に無い語なので置かない（2026-10-19: 表に無いものは身近でない）。かなのまま（紫）か元のまま
+        self.assertIn(result['corrected'], (line, '卒業ぶんしゅうに将来の夢を書いた。'))
+        self.assertNotIn('文中', result['corrected'])
 
     @_without_ime
     def test_adnominal_in_clause_is_not_an_extra_key(self):
         # 名詞の直後の連体詞（昨日**あの**店・先生**あの**件）は余った字と見ない
-        # （連体詞は独立した語で、名詞の直後に来るのもふつう）。研修あの申し込み も直さない
+        # （連体詞は独立した語で、名詞の直後に来るのもふつう）。サ変の名詞・形容動詞の語幹に直に付いた連体詞
+        # （研修**あの**申し込み・健康**あの**ために）だけは疑いの印で、余った字として抜ける（2026-10-19）
         for line, pair in (('昨日あの店に行った。', ('昨日あの', 'きのうあの')),
-                           ('先生あの件ですが。', ('先生あの', 'せんせいあの')),
-                           ('研修あの申し込みは金曜日が締め切りです。', ('研修あの', 'けんしゅうあの'))):
+                           ('先生あの件ですが。', ('先生あの', 'せんせいあの'))):
             with self.subTest(line=line):
                 self.assertEqual(self.correct(line, pairs=[pair])['corrected'], line)
+        self.assertEqual(self.correct('研修あの申し込みは金曜日が締め切りです。', pairs=[('研修あの', 'けんしゅうあの')])['corrected'],
+                         '研修の申し込みは金曜日が締め切りです。')
 
     def test_conjugation_mismatch_is_a_suspect_mark(self):
         # 活用の形が合わない続きは印: 形容詞の基本形＋て（新しい**て**靴）、形容詞の語幹＋助詞（楽し**は**そう）、
@@ -785,7 +1133,7 @@ class IMEClauseRepairTests(unittest.TestCase):
                 self.assertEqual(result['odd_spans'], [])
         for line, pair in (('朝は霧が出ていてし医科が悪かった。', ('し医科が', 'しいかが')),):
             with self.subTest(line=line):
-                self.assertEqual(self.correct(line, [pair])['corrected'], line)
+                self.assertNotIn('視界', self.correct(line, [pair])['corrected'])
         # いて県には: 定見（層2）には置かず、入口が自ら漢字にした 意見 を迷いの印（紫）付きで採る（うに 10-18: 迷うなら紫）
         result = self.correct('彼のいて県にはおおむね賛成だ。', [('いて県には', 'いてけんには')])
         self.assertEqual(result['corrected'], '彼の意見にはおおむね賛成だ。')
@@ -882,7 +1230,9 @@ class IMEClauseRepairTests(unittest.TestCase):
         # 身近さの表が無ければ（玄関/厳寒 に決め手が無い）: 疑いの印の無い文節（外科かんの は印が付かない）では、表記が
         # 並んで決め手の無い弱い置き方はせず、入口が迷いを残して変換した形も採らない（異様の判定が先。正しい 今日中に を
         # きょうちょうに→強調に に替えないため）。印の無い文節の弱い置き方は、かなの形がそれだけで通るときだけ（公園）
-        with mock.patch.object(LK, '_everyday_order', lambda reading: ((), False)):
+        import kango_tier
+        with mock.patch.object(LK, '_everyday_order', lambda reading: ((), False)), \
+                mock.patch.object(kango_tier, 'known_usage_tier', lambda word: None):
             result = self.correct('荷物は外科かんの前に置いておきます。', [('外科かんの', 'げかかんの')])
             self.assertEqual(result['corrected'], '荷物は外科かんの前に置いておきます。')
             self.assertEqual(result['odd_spans'], [])
@@ -926,7 +1276,8 @@ class IMEClauseRepairTests(unittest.TestCase):
 
     def test_most_familiar_face_comes_from_the_everyday_table(self):
         # 身近さの表（everyday_faces・AI 判定）: 読み → 身近な順の表記、先頭に ! が付けば抜けている（電気 ≫ 伝記・電機）。
-        # 表に無い読みで用言の表記が並ぶとき（返る・変える・帰る）は身近さでは決めない（かなのまま）
+        # 用言（取っ＋た）は基本形の読み（とる）で引く。表に無い用言の並び（食べ・給べ）は並びの先頭に決めて
+        # 「抜けている」とは見ない（呼ぶ側が迷いの印を残す。かなのまま残さない）
         import everyday_faces
         self.assertEqual(everyday_faces.order('でんき'), (('電気', '伝記', '電機'), True))
         self.assertEqual(everyday_faces.order('こうえん')[1], False)
@@ -935,7 +1286,41 @@ class IMEClauseRepairTests(unittest.TestCase):
         self.assertTrue(everyday_faces.available())
         self.assertEqual(LK._most_familiar('でんき', ['伝記', '電機', '電気']), ('電気', True))
         self.assertEqual(LK._most_familiar('こうえん', ['講演', '公園']), ('公園', False))
-        self.assertEqual(LK._most_familiar('かえる', ['返る', '変える', '帰る']), (None, False))
+        self.assertEqual(LK._most_familiar('かえる', ['返る', '変える', '帰る']), ('帰る', False))
+        self.assertEqual(LK._most_familiar('とっ', ['取っ', '撮っ', '採っ'], 'た'), ('取っ', False))
+        self.assertEqual(LK._most_familiar('うえ', ['飢え', '植え'], 'た'), ('植え', True))
+        self.assertEqual(LK._most_familiar('たべ', ['食べ', '給べ'], 'た'), ('食べ', False))
+        # 名詞が混じる並び（上・植え）は用言の表で決めない
+        self.assertEqual(LK._familiar_order('うえ', ['上', '植え'], 'に'), ((), False, {}))
+
+    def test_spelling_variants_of_one_word_are_merged_before_deciding(self):
+        # 同じ語の書き方違い（洗い物／洗いもの・打ち合わせ／打合せ）は1つにまとめてから決める（並んだままだと
+        # 行の費用が並んで決め手が無く、かなのまま残った）。別の語（飢え／植え・受け取り／請取）はまとめない
+        a = self.state
+        self.assertTrue(LK._same_spelling('洗いもの', '洗い物', 'あらいもの'))
+        self.assertTrue(LK._same_spelling('打合せ', '打ち合わせ', 'うちあわせ'))
+        self.assertFalse(LK._same_spelling('飢え', '植え', 'うえ'))
+        self.assertFalse(LK._same_spelling('受け取り', '請取', 'うけとり'))
+        self.assertEqual(LK._merge_spellings(['洗いもの', '洗い物'], 'あらいもの'), ['洗い物'])
+        # 残す形は行の費用が最も軽い形（やり直す 20693 > 遣り直す 23790）。費用が並べば漢字の多い形（親戚 > 親せき）
+        self.assertEqual(LK._merge_spellings(['やり直す', '遣り直す'], 'やりなおす',
+                                             {'やり直す': 20693, '遣り直す': 23790}), ['やり直す'])
+        self.assertEqual(LK._merge_spellings(['親せき', '親戚', '浸せき'], 'しんせき',
+                                             {'親せき': 11418, '親戚': 11419, '浸せき': 10752}), ['親戚', '浸せき'])
+        # 辞書の表記の送りがな違いは同梱の表の費用の安い形（新しい 72 > 新らしい 116・忙しい > 忙がしい）
+        self.assertEqual(LK._kanji_choices('あたらしい', a.store, a.dict_index), ['新しい'])
+        self.assertEqual(LK._kanji_choices('いそがしい', a.store, a.dict_index)[0], '忙しい')
+        faces = LK._kanji_choices('うちあわせ', a.store, a.dict_index)
+        self.assertIn('打ち合わせ', faces)
+        self.assertNotIn('打合せ', faces)
+        for line, s, e, clause, typed, want in (
+                ('あらいものは私がやっておくね。', 0, 6, 'らあ鋳物は', 'らあいものは', '洗い物は'),
+                ('新しい取引先とのうちあわせが来週に決まった。', 8, 14, '上ちアワせが', 'うえちあわせが', '打ち合わせが'),
+                ('在庫の数が合わないので棚卸しをやりなおす。', 15, 20, 'やの直す', 'やのなおす', 'やり直す'),
+                ('近所の公園の桜の下でお弁当をたべた。', 14, 17, '縦べた', 'たてべた', '食べた')):
+            with self.subTest(line=line):
+                placed = LK._place_kanji(line, s, e, clause, typed, a.store, a.dict_index, None, [])
+                self.assertEqual(placed[1:], (want, False))
 
     @_without_ime
     def test_the_persons_established_word_is_not_replaced_by_her_other_word_with_a_long_vowel(self):

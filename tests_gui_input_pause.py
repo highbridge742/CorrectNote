@@ -11,7 +11,7 @@ def child():
     from session import new_tab
     assert Path('.input-pause-isolated').exists()
     source='寒ぃ日だ。';wanted='寒い日だ。'
-    Path('settings.json').write_text(json.dumps(dict(layout='unified',input_method='kana',input_method_auto=False,unified_autofix=True)),encoding='utf8')
+    Path('settings.json').write_text(json.dumps(dict(layout='unified',input_method='kana',input_method_auto=False,unified_autofix=True,memory_usage='high')),encoding='utf8')
     Path('session.json').write_text(json.dumps(dict(version=1,active=0,tabs=[new_tab(text=source),new_tab(text='別タブ')])),encoding='utf8')
     root=tk.Tk();root.withdraw();a=None;errors=[]
     root.report_callback_exception=lambda *e:errors.append(''.join(traceback.format_exception(*e)))

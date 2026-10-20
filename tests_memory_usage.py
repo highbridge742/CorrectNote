@@ -47,14 +47,15 @@ def owner(mode=MEMORY_LOW):
 
 
 class MemorySettingsTests(unittest.TestCase):
-    def test_default_and_invalid_saved_values_use_high(self):
-        self.assertEqual(Settings().get('memory_usage'), MEMORY_HIGH)
+    def test_default_and_invalid_saved_values_use_mid(self):
+        # 2026-10-20 うにさん: the default is mid (it was high)
+        self.assertEqual(Settings().get('memory_usage'), MEMORY_MID)
         with tempfile.TemporaryDirectory(dir=Path(__file__).absolute().parent) as directory:
             path = Path(directory) / 'synthetic_settings.json'
             for value in ('unknown', None, True, 1, [], {}):
                 with self.subTest(value=value):
                     path.write_text(json.dumps({'memory_usage': value}), encoding='utf8')
-                    self.assertEqual(Settings(str(path)).get('memory_usage'), MEMORY_HIGH)
+                    self.assertEqual(Settings(str(path)).get('memory_usage'), MEMORY_MID)
 
     def test_low_and_high_save_and_reload_without_other_setting_changes(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).absolute().parent) as directory:
@@ -315,11 +316,11 @@ class MemoryQuickTests(unittest.TestCase):
 
 class MemoryTierTests(unittest.TestCase):
     """2026-10-14 うにさん: low/mid/high with upper limits 700/1400/2100MB;
-    default high, a saved choice is kept as it is."""
-    def test_three_tiers_default_high_and_saved_choices_kept(self):
+    default high (mid from 2026-10-20), a saved choice is kept as it is."""
+    def test_three_tiers_default_mid_and_saved_choices_kept(self):
         from settings import MEMORY_MID, MEMORY_CHOICES
         self.assertEqual(MEMORY_CHOICES, (MEMORY_LOW, MEMORY_MID, MEMORY_HIGH))
-        self.assertEqual(Settings().get('memory_usage'), MEMORY_HIGH)
+        self.assertEqual(Settings().get('memory_usage'), MEMORY_MID)
         with tempfile.TemporaryDirectory(dir=Path(__file__).absolute().parent) as directory:
             path = Path(directory) / 'synthetic_settings.json'
             for value in (MEMORY_LOW, MEMORY_MID, MEMORY_HIGH):
@@ -346,7 +347,7 @@ class MemoryTierTests(unittest.TestCase):
             self.assertEqual(got, expect, value)
         app, _ = owner(MEMORY_HIGH)
         app.settings.set('memory_usage', 'unknown')
-        self.assertEqual(M.mode(app), MEMORY_HIGH)
+        self.assertEqual(M.mode(app), MEMORY_MID)          # the default (2026-10-20)
 
     def test_cache_sizes_by_tier(self):
         from settings import MEMORY_MID

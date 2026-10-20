@@ -2051,8 +2051,72 @@ _ACRONYM_RE = None
 # 略語の種（項目48-LW・AI の判断で書き下した閉じた名簿・2026-08-30）。
 # 英語の学びは6字からなので、よく使う短い略語の**正しい綴り**を
 # ここで持つ（直し先にも「触らない側」にも使う）。増やすのは測ってから。
-_ACRONYM_SEED = ('URL', 'IME', 'API', 'PDF', 'CSV', 'PNG', 'JSON',
-                 'HTML', 'CPU', 'EXE')
+# 同梱の一般的な略語（大文字 2〜5 字）。10 語の種（URL・IME …）では YSB→USB・HTNL→HTML が直らなかった
+# （うに 2026-10-19「もっとほかの略語系単語は補正されない？されないならする。局所的な補正はダメ」）。
+# 本人の控え（英語の控えに実績2以上・大文字表記）はこの表に重ねて見る
+_ACRONYM_SEED = frozenset((
+    'AAC', 'ACT', 'ADHD', 'ADV', 'AI', 'AIDS', 'AM', 'ANA', 'API', 'APK',
+    'APP', 'AR', 'ASAP', 'ATM', 'AVI', 'AWS', 'BCC', 'BD', 'BGM', 'BIM',
+    'BIN', 'BIOS', 'BMI', 'BMP', 'BS', 'CAD', 'CAE', 'CAM', 'CC', 'CD',
+    'CDN', 'CEO', 'CF', 'CFO', 'CG', 'CIO', 'CLI', 'CM', 'CMO', 'COO',
+    'CPI', 'CPU', 'CRT', 'CRUD', 'CSR', 'CSS', 'CSV', 'CT', 'CTO', 'DB',
+    'DIY', 'DJ', 'DLL', 'DM', 'DNA', 'DNS', 'DOC', 'DOCX', 'DTP', 'DVD',
+    'DVI', 'DX', 'ER', 'ESG', 'ETA', 'ETC', 'EUR', 'EXE', 'FAQ', 'FIFA',
+    'FLAC', 'FPS', 'FTP', 'FW', 'FYI', 'GCP', 'GDP', 'GIF', 'GIS', 'GNP',
+    'GPS', 'GPU', 'GUI', 'GW', 'HD', 'HDD', 'HDMI', 'HIV', 'HR', 'HTML',
+    'HTTP', 'HTTPS', 'IAAS', 'ICT', 'ICU', 'ID', 'IDE', 'IME', 'IOC', 'IOT',
+    'IP', 'IPO', 'IR', 'ISO', 'ISS', 'IT', 'JAL', 'JK', 'JPEG', 'JPG',
+    'JPY', 'JR', 'JSON', 'JWT', 'KDDI', 'KPI', 'LAN', 'LCD', 'LED', 'LGBT',
+    'LINE', 'LLM', 'MC', 'MD', 'MKV', 'ML', 'MLB', 'MMO', 'MOV', 'MR',
+    'MRI', 'MSI', 'MSIX', 'MV', 'NAS', 'NASA', 'NBA', 'NEET', 'NFC', 'NFL',
+    'NG', 'NGO', 'NHK', 'NLP', 'NOSQL', 'NPO', 'NTT', 'NVME', 'OAUTH', 'OB',
+    'OCR', 'ODT', 'OG', 'OK', 'OKR', 'OL', 'OLED', 'OS', 'OTP', 'PAAS',
+    'PC', 'PCI', 'PCR', 'PDF', 'PIN', 'PL', 'PM', 'PNG', 'POS', 'PPT',
+    'PPTX', 'PR', 'PTA', 'PTSD', 'PV', 'PW', 'QR', 'RAM', 'RAR', 'RE',
+    'REST', 'RFID', 'RNA', 'ROE', 'ROI', 'ROM', 'RPA', 'RPC', 'RPG', 'RSVP',
+    'RT', 'RTF', 'RTS', 'SAAS', 'SATA', 'SDGS', 'SDK', 'SE', 'SF', 'SIM',
+    'SLG', 'SNS', 'SOAP', 'SQL', 'SSD', 'SSH', 'SSL', 'STG', 'SVG', 'TBA',
+    'TBD', 'TCP', 'TIFF', 'TLS', 'TSV', 'TV', 'TXT', 'UDP', 'UEFI', 'UFO',
+    'UI', 'UPS', 'URI', 'URL', 'USB', 'USD', 'UX', 'VFX', 'VGA', 'VIP',
+    'VP', 'VPN', 'VR', 'VS', 'WAN', 'WAV', 'WEBP', 'WHO', 'WIFI', 'XLS',
+    'XLSX', 'XML', 'XR', 'YAML', 'ZIP',
+))
+
+
+# 国・地域の2字の符号（ISO 3166-1 alpha-2。tzdata の iso3166.tab から・public domain）。AU・UK・US・JP の
+# ような2字の大文字は、1字が隣のキーの略語（AI）に見えても触らない
+_ISO3166 = frozenset((
+    'AD', 'AE', 'AF', 'AG', 'AI', 'AL', 'AM', 'AO', 'AQ', 'AR', 'AS', 'AT',
+    'AU', 'AW', 'AX', 'AZ', 'BA', 'BB', 'BD', 'BE', 'BF', 'BG', 'BH', 'BI',
+    'BJ', 'BL', 'BM', 'BN', 'BO', 'BQ', 'BR', 'BS', 'BT', 'BV', 'BW', 'BY',
+    'BZ', 'CA', 'CC', 'CD', 'CF', 'CG', 'CH', 'CI', 'CK', 'CL', 'CM', 'CN',
+    'CO', 'CR', 'CU', 'CV', 'CW', 'CX', 'CY', 'CZ', 'DE', 'DJ', 'DK', 'DM',
+    'DO', 'DZ', 'EC', 'EE', 'EG', 'EH', 'ER', 'ES', 'ET', 'FI', 'FJ', 'FK',
+    'FM', 'FO', 'FR', 'GA', 'GB', 'GD', 'GE', 'GF', 'GG', 'GH', 'GI', 'GL',
+    'GM', 'GN', 'GP', 'GQ', 'GR', 'GS', 'GT', 'GU', 'GW', 'GY', 'HK', 'HM',
+    'HN', 'HR', 'HT', 'HU', 'ID', 'IE', 'IL', 'IM', 'IN', 'IO', 'IQ', 'IR',
+    'IS', 'IT', 'JE', 'JM', 'JO', 'JP', 'KE', 'KG', 'KH', 'KI', 'KM', 'KN',
+    'KP', 'KR', 'KW', 'KY', 'KZ', 'LA', 'LB', 'LC', 'LI', 'LK', 'LR', 'LS',
+    'LT', 'LU', 'LV', 'LY', 'MA', 'MC', 'MD', 'ME', 'MF', 'MG', 'MH', 'MK',
+    'ML', 'MM', 'MN', 'MO', 'MP', 'MQ', 'MR', 'MS', 'MT', 'MU', 'MV', 'MW',
+    'MX', 'MY', 'MZ', 'NA', 'NC', 'NE', 'NF', 'NG', 'NI', 'NL', 'NO', 'NP',
+    'NR', 'NU', 'NZ', 'OM', 'PA', 'PE', 'PF', 'PG', 'PH', 'PK', 'PL', 'PM',
+    'PN', 'PR', 'PS', 'PT', 'PW', 'PY', 'QA', 'RE', 'RO', 'RS', 'RU', 'RW',
+    'SA', 'SB', 'SC', 'SD', 'SE', 'SG', 'SH', 'SI', 'SJ', 'SK', 'SL', 'SM',
+    'SN', 'SO', 'SR', 'SS', 'ST', 'SV', 'SX', 'SY', 'SZ', 'TC', 'TD', 'TF',
+    'TG', 'TH', 'TJ', 'TK', 'TL', 'TM', 'TN', 'TO', 'TR', 'TT', 'TV', 'TW',
+    'TZ', 'UA', 'UG', 'UM', 'US', 'UY', 'UZ', 'VA', 'VC', 'VE', 'VG', 'VI',
+    'VN', 'VU', 'WF', 'WS', 'YE', 'YT', 'ZA', 'ZM', 'ZW',
+))
+
+
+def _known_english_short(key):
+    """同梱の英語の品詞表（en_pos）に在る語か（IS・ON・AM・CM・VS: 短い語は英単語の種に無い）。"""
+    try:
+        import en_pos
+        return bool(en_pos.codes_for(key))
+    except Exception:
+        return False
 
 
 def find_miskeyed_acronym(line, store):
@@ -2074,7 +2138,7 @@ def find_miskeyed_acronym(line, store):
     global _ACRONYM_RE
     if _ACRONYM_RE is None:
         import re as _re
-        _ACRONYM_RE = _re.compile(r'[A-Z]{3,5}')
+        _ACRONYM_RE = _re.compile(r'[A-Z]{2,5}')   # 2字（OC→PC・UD→ID）も見る（2026-10-19）
     # No match reaches the loop below, so its English tables are unused.
     # Keep their construction lazy until an actual acronym-shaped run.
     if _ACRONYM_RE.search(line) is None:return []
@@ -2094,7 +2158,7 @@ def find_miskeyed_acronym(line, store):
         word = m.group(0)
         key = word.lower()
         if word in _ACRONYM_SEED or key in seeds \
-                or _english_count(store, key) >= 1:
+                or _english_count(store, key) >= 1 or _known_english_short(key) or word in _ISO3166:
             continue        # 知っている綴りは正しい。触らない
         hits = set()
         for i, ch in enumerate(key):

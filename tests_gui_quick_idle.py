@@ -10,7 +10,7 @@ def child():
     from analysis_worker import Worker
     from session import new_tab
     assert Path('.quick-idle-owned').exists()
-    Path('settings.json').write_text(json.dumps(dict(layout='split',input_method='kana',input_method_auto=False,unified_autofix=False)),encoding='utf8')
+    Path('settings.json').write_text(json.dumps(dict(layout='split',input_method='kana',input_method_auto=False,unified_autofix=False,memory_usage='high')),encoding='utf8')
     Path('session.json').write_text(json.dumps(dict(version=1,active=0,tabs=[new_tab(text='')])),encoding='utf8')
     root=tk.Tk();root.withdraw();a=None;errors=[];sent=[];ticks=[]
     root.report_callback_exception=lambda *e:errors.append(''.join(traceback.format_exception(*e)))

@@ -582,7 +582,9 @@ class BoundaryColors:
 
     def _composing(self):
         import ime_watch
-        try:return ime_watch.composition_active(self.widget.winfo_id())
+        # Only while CorrectNote is in front: a conversion left behind must not hold the
+        # rows' marks (2026-10-19, ime_watch.composition_live)
+        try:return ime_watch.composition_live(self.widget.winfo_id())
         except tk.TclError:return True
 
     def _paint_visible_now(self):

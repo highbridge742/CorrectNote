@@ -20,6 +20,16 @@ from dataclasses import dataclass
 # Class names of common single/multi-line text controls. A control showing a
 # caret is taken as a text box too (browsers, Office, Notepad's RichEdit).
 TEXT_CLASSES = ('edit', 'richedit', 'scintilla', 'textbox', 'notepad')
+# Web content (Chromium-based browsers and apps, Firefox): the page's fields
+# live inside this one window and draw their own caret, so neither the class
+# nor the system caret tells a text field (2026-10-19 うにさん: the word book
+# only copied in a browser). Asking the browser through MSAA / UI Automation
+# does not tell either: it names only the page or its outer pane until it has
+# switched its accessibility on (measured with Edge, tools_local/quick_focus_20261019).
+# Ctrl+V on a part of a page that does not take text does nothing, so such a
+# window counts as a place to paste. Explorer, Excel, image editors and the
+# like (where Ctrl+V does something else) are still not targets.
+WEB_CONTENT_CLASSES = ('chrome_widgetwin', 'chrome_renderwidgethosthwnd', 'mozillawindowclass')
 PASTE_DELAY_MS = 80
 
 
@@ -72,11 +82,18 @@ def is_text_class(name):
     return any(part in name for part in TEXT_CLASSES)
 
 
+def is_web_content(name):
+    """The focused control is a browser's (or a web-based app's) content window."""
+    name = (name or '').lower()
+    return any(name.startswith(part) for part in WEB_CONTENT_CLASSES)
+
+
 def capture(source):
     """The return target for a quick-input opening (None if not another app)."""
     if sys.platform != 'win32' or source is None or source.process == os.getpid():
         return None
-    text_box = is_text_class(class_name(source.focus))
+    focused = class_name(source.focus)
+    text_box = is_text_class(focused) or is_web_content(focused)
     if not text_box:
         try:
             from quick_ime import _api, _GuiInfo
@@ -100,7 +117,13 @@ def restore(target, root, paste=False):
     """Bring the target window forward, focus its box, then paste if asked.
 
     Returns True when the focus was given back: the target window is in
-    front afterwards (2026-10-16). Otherwise nothing is pasted anywhere."""
+    front afterwards (2026-10-16). Otherwise nothing is pasted anywhere.
+
+    Call it while the quick-input window is still the window in front, before
+    destroying it (2026-10-19 うにさん: opened from A, a visit to app B, back to
+    quick input, close — the focus did not go back to A). Destroying the
+    active window makes Windows activate the window used last, here B, and
+    then "our window is not in front" reads as "the user went elsewhere"."""
     if sys.platform != 'win32' or target is None or not target.text_box:
         return False
     u = _user()

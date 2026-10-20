@@ -69,7 +69,7 @@ def _schedule(app,delay=40):
 
 def _composing(app):
     import ime_watch
-    return bool(ime_watch.composition_active(app._quick_text.winfo_id()))
+    return bool(ime_watch.composition_live(app._quick_text.winfo_id()))   # 2026-10-19
 
 
 def defer_f2(app):

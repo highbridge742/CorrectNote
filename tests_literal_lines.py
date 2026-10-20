@@ -37,7 +37,7 @@ class LiteralLinesTests(unittest.TestCase):
             self.assertEqual(value['corrected_units'][index],(line,[]))
     def test_foreground_and_background_do_not_submit_literal_rows(self):
         import analysis_async as A,analysis_work_app,analysis_worker
-        a=N(store=None,settings={'input_method':'kana'},_work_epoch=1,root=Mock(),status=Mock(),_analyze=Mock())
+        a=N(store=None,settings={'input_method':'kana','memory_usage':'high'},_work_epoch=1,root=Mock(),status=Mock(),_analyze=Mock())
         a._analyze_work=analysis_work_app.token(a);a._analyze_dependencies=analysis_worker.state_key(a)
         a._analyze_todo=list(range(len(ROWS)));a._analyze_pos=0;a._prev_lines=ROWS
         a.line_results=[dict(original=s,corrected=s,pending=True) for s in ROWS]
@@ -50,7 +50,8 @@ class LiteralLinesTests(unittest.TestCase):
             self.assertEqual(st['ctx'],{});self.assertEqual(st['words'],L.prepared(ROWS)['words'])
     def test_all_literal_replacement_cancels_only_obsolete_owned_requests(self):
         import analysis_async as A
-        a=N(_async_request=('old',1),_async_background_request=('other',2))
+        a=N(_async_request=('old',1),_async_background_request=('other',2),
+            settings={'memory_usage':'high'})  # the tier this test was written for (the default became mid on 2026-10-20)
         foreground=Mock();background=Mock()
         for worker in (foreground,background):
             worker.closed=False;worker.process.is_alive.return_value=True
