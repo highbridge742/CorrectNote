@@ -24,11 +24,14 @@ class CommitThenBracketTests(unittest.TestCase):
         w.delete('1.0', 'end'); w.insert('1.0', text); w.mark_set('insert', cursor)
         self.a._forget_bracket_cycle(); self.a._forget_commit_run()
 
-    def commit(self, w, text):
-        for ch in text:                                   # one IME result, delivered by Tk
-            self.a._on_commit_run_event('key', '-3', '', str(w))
+    def commit(self, w, text, marker='1'):
+        # One IME result: Tk delivers its characters as key events (%E is 1 for every key in
+        # Tk 8.6.12, -3 for IME characters in Tk 8.6.9), and the IME reports the result string.
+        for ch in text:
+            self.a._on_commit_run_event('key', marker, '??', str(w))
             w.insert('insert', ch)
-        self.root.update()                                # the commit ends (idle)
+        self.a._note_ime_result(w, text)
+        self.root.update()
 
     def key(self, w, keysym):
         self.a._on_commit_run_event('key', '0', keysym, str(w))
@@ -59,7 +62,6 @@ class CommitThenBracketTests(unittest.TestCase):
     def test_only_the_last_commit(self):
         w = self.editor; self.ready(w)
         self.commit(w, '一つ目')
-        self.a._commit_run['last'] -= 1                  # the next reading was typed in between
         self.commit(w, '二つ目')
         self.bracket(w)
         self.assertEqual(w.get('1.0', 'end-1c'), '前一つ目（二つ目）後')
@@ -125,6 +127,43 @@ class CommitThenBracketTests(unittest.TestCase):
         self.bracket(q)
         self.assertEqual(q.get('1.0', 'end-1c'), '前（漢字）後')
         self.assertEqual(self.editor.get('1.0', 'end-1c'), '前後')
+
+    def test_the_ime_result_decides_in_both_tk_versions(self):
+        # Tk 8.6.12 (the release build) gives every key event %E=1, typed or not (2026-10-22
+        # うにさん「開発版は付く」が、配布版では付かなかった). The IME's own result string decides.
+        w = self.editor
+        for marker in ('-3', '1'):
+            with self.subTest(marker=marker):
+                self.ready(w); self.commit(w, '漢字', marker); self.bracket(w)
+                self.assertEqual(w.get('1.0', 'end-1c'), '前（漢字）後')
+        self.ready(w)
+        for ch in 'ab':                                   # typed: %E=1 too, but no IME result
+            self.a._on_commit_run_event('key', '1', ch, str(w)); w.insert('insert', ch)
+        self.root.update(); self.bracket(w)
+        self.assertEqual(w.get('1.0', 'end-1c'), '前ab（）後')
+
+    def test_result_reported_before_tk_inserts_it_waits(self):
+        w = self.editor; self.ready(w)
+        self.a._note_ime_result(w, '漢字')                  # not inserted yet
+        self.assertIsNone(self.a._last_conversion_range(w))
+        w.insert('insert', '漢字')
+        self.bracket(w)
+        self.assertEqual(w.get('1.0', 'end-1c'), '前（漢字）後')
+
+    def test_window_procedure_commits_go_to_their_text_box(self):
+        # Tk keeps the Windows focus on the top-level window, so the IME's result arrives in the
+        # window procedure (_on_message), which queues (hwnd, text); the IME timer hands it over.
+        q = tk.Text(self.root); q.pack(); self.a._quick_text = q
+        self.a._on_quick_change = lambda *args: None
+        self.a._quick_drop_hwnds = [111, 112]
+        self.ready(self.editor); self.ready(q)
+        self.editor.insert('insert', '漢字'); q.insert('insert', '簡易')
+        self.a._ime_commit_queue = [(100, '漢字'), (112, '簡易')]
+        self.a._take_ime_commits()
+        self.assertEqual(self.a._ime_commit_queue, [])
+        self.assertEqual(self.a._last_conversion_range(q), ('1.0+1c', '1.0+3c'))   # the later one
+        self.bracket(q)
+        self.assertEqual(q.get('1.0', 'end-1c'), '前（簡易）後')
 
     def test_tag_is_first_and_installed_once(self):
         w = self.editor

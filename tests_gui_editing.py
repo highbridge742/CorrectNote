@@ -855,12 +855,20 @@ class CrossTabQuoteTests(unittest.TestCase):
         a=self.a;w=a.editor;w.mark_set('insert','1.0+2c')
         a._on_editor_ctrl_c();self._type_quote_expression(w,'5+6')
         a._switch_tab(1);self._type_quote_expression(w,'1+2')
-        other=w.get('1.0','end-1c');self._enter_quote_expression(w)
-        self.assertEqual(w.get('1.0','end-1c'),other);self.assertEqual(a._pick_mode,'f1')
         a._switch_tab(0);w.mark_set('insert',a._PICK_CALC_END)
         self._enter_quote_expression(w)
         self.assertEqual(w.get('1.0','end-1c'),'前😀5+6置換対象後')
         self.assertEqual(self._calculated_text(),'前😀11置換対象後')
+
+    def test_enter_in_another_tab_ends_the_quote_without_calculating(self):
+        # 2026-10-22 うにさん「引用モードで無選択エンターしたら引用を終える」: the other tab's
+        # text is not this quote's formula, so its Enter ends the quote (and makes a new line).
+        a=self.a;w=a.editor;w.mark_set('insert','1.0+2c')
+        a._on_editor_ctrl_c();self._type_quote_expression(w,'5+6')
+        a._switch_tab(1);self._type_quote_expression(w,'1+2')
+        other=w.get('1.0','end-1c')
+        self.assertIsNone(self._enter_quote_expression(w))
+        self.assertEqual(w.get('1.0','end-1c'),other);self.assertIsNone(a._pick_mode)
 
     def test_calculation_mode_still_quotes_selected_text(self):
         a=self.a;w=a.editor;w.mark_set('insert','1.0+2c')
@@ -1113,8 +1121,10 @@ class CrossTabQuoteTests(unittest.TestCase):
     def test_empty_selection_and_ime_confirm_do_not_quote(self):
         a=self.a;a._start_pick_mode(False);before=a.editor.get('1.0','end-1c')
         event=types.SimpleNamespace(widget=a.editor,keysym='Return',char='\r',state=0)
-        self.assertEqual(a._on_pick_mode_keypress(event),'break')
-        self.assertEqual(a.editor.get('1.0','end-1c'),before);self.assertEqual(a._pick_mode,'f1')
+        # 2026-10-22: with nothing selected Enter ends the quote and passes on as a new line
+        self.assertIsNone(a._on_pick_mode_keypress(event))
+        self.assertEqual(a.editor.get('1.0','end-1c'),before);self.assertIsNone(a._pick_mode)
+        a._start_pick_mode(False)
         a.editor.tag_add('sel','1.0','1.0+2c')
         from unittest.mock import patch
         with patch('ime_watch.composition_active',return_value=True):

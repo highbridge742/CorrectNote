@@ -738,6 +738,14 @@ def ime_confirmed_char_event(event):
     return ime_confirmed_char(keysym, getattr(event, 'char', '') or '')
 
 
+def _ime_delivered(marker):
+    """Tk's %E marks an IME-delivered character as -3 in Tk 8.6.9. Tk 8.6.12 (the release
+    build's Python 3.11) gives every key event 1, typed or not, so there the IME's own
+    result string is used instead (_note_ime_result). (2026-10-22 うにさん「変換後決定して
+    F2すると、決定した範囲に括弧が付かなかった。開発版は付く」)"""
+    return str(marker) == '-3'
+
+
 def ime_result_needs_help(text):
     """IME の確定文字に、Tk 8.6.9 が落とす字（BMP の外＝絵文字など）があるか。
 
@@ -16359,6 +16367,7 @@ class CorrectNoteApp:
         delay = self._IME_POLL_IDLE_MS
         try:
             event_results=CorrectNoteApp._drain_ime_result_events(self)
+            self._take_ime_commits()
             if input_work.drain_quick_readings(self):
                 # メモ欄の event_results → _on_change と同じ（遅れて届いた読み）
                 import quick_analysis
@@ -18268,34 +18277,19 @@ class CorrectNoteApp:
         tags = tuple(t for t in widget.bindtags() if t != self.COMMIT_RUN_TAG)
         widget.bindtags((self.COMMIT_RUN_TAG,) + tags)
 
-    # One IME result reaches Tk as one character per event, with idle time in between (seen with
-    # a real IME: an idle-based end kept only the last character). The characters of one commit
-    # follow each other at once; typing the next reading always takes far longer.
-    COMMIT_RUN_GAP_S = 0.1
+    # Which text the IME has just committed. Tk's %E told it in Tk 8.6.9 (-3), but in Tk 8.6.12
+    # (the release build's Python 3.11) every key event says 1, typed or not (2026-10-22 うにさん
+    # 「変換後決定してF2すると、決定した範囲に括弧が付かなかった。開発版は付く」). The commit
+    # itself is known from the IME (ResultEvents' result string): once that text is right before
+    # the cursor, it is the run. Key events only tell that something else happened since.
+    COMMIT_WAIT_S = 1.0
 
     def _on_commit_run_event(self, kind, marker, keysym, path):
-        import time
         run = getattr(self, '_commit_run', None)
         try:widget = self.root.nametowidget(str(path))
         except (KeyError, tk.TclError):return ''
-        if kind == 'key' and str(marker) == '-3':
-            now = time.monotonic()
-            if (run is not None and run['widget'] is widget and run['fresh']
-                    and now - run['last'] < self.COMMIT_RUN_GAP_S
-                    and widget.compare('insert', '==', run['end'])):
-                run['last'] = now   # more characters of the same commit
-            else:
-                self._commit_run_seq = getattr(self, '_commit_run_seq', 0) + 1
-                start, end = 'CommitRunStart%d' % self._commit_run_seq, 'CommitRunEnd%d' % self._commit_run_seq
-                self._forget_commit_run()
-                widget.mark_set(start, 'insert');widget.mark_gravity(start, 'left')
-                widget.mark_set(end, 'insert');widget.mark_gravity(end, 'right')
-                run = self._commit_run = dict(widget=widget, start=start, end=end, last=now, text='', fresh=True,
-                                              tab=self.session.current() if widget is self.editor else None)
-            # The character is inserted after this tag: read the run back once it is in.
-            self.root.after_idle(lambda:self._note_commit_run_text(run))
-            return ''
-        if kind == 'key' and (keysym in self._COMMIT_RUN_KEEP or keysym == self.BRACKET_KEY):
+        if kind == 'key' and (_ime_delivered(marker) or keysym in self._COMMIT_RUN_KEEP
+                              or keysym == self.BRACKET_KEY):
             return ''
         # Anything else: no longer "just" committed (plain F2), but still the last
         # conversion for Ctrl+F2 while its text stays as it was.
@@ -18303,12 +18297,49 @@ class CorrectNoteApp:
             run['fresh'] = False
         return ''
 
-    def _note_commit_run_text(self, run):
-        if getattr(self, '_commit_run', None) is not run:return
-        try:
-            run['text'] = run['widget'].get(run['start'], run['end'])
-        except tk.TclError:
-            self._forget_commit_run()
+    def _take_ime_commits(self):
+        """Hand the IME's commits seen by the window procedure to their text box."""
+        queue = getattr(self, '_ime_commit_queue', None)
+        if queue:
+            got = list(queue);del queue[:]
+            quick_hwnds = set(getattr(self, '_quick_drop_hwnds', ()) or ())
+            for hwnd, surface in got:
+                widget = getattr(self, '_quick_text', None) if hwnd in quick_hwnds else self.editor
+                self._note_ime_result(widget, surface)
+        self._match_commit_wait()
+
+    def _note_ime_result(self, widget, surface):
+        """The IME reported a commit for this widget; place it once Tk has inserted it."""
+        import time
+        if widget is None or not surface:return
+        waiting = getattr(self, '_commit_wait', None)
+        if waiting is None:waiting = self._commit_wait = []
+        waiting.append((widget, surface, time.monotonic() + self.COMMIT_WAIT_S))
+        self._match_commit_wait()
+
+    def _match_commit_wait(self):
+        import time
+        waiting = getattr(self, '_commit_wait', None) or []
+        now = time.monotonic();left = []
+        for widget, surface, until in waiting:
+            try:
+                if not widget.winfo_exists():continue
+                if widget.get('insert-%dc' % len(surface), 'insert') == surface:
+                    self._start_commit_run(widget, surface)
+                    continue
+            except tk.TclError:
+                continue
+            if now < until:left.append((widget, surface, until))
+        self._commit_wait = left
+
+    def _start_commit_run(self, widget, surface):
+        self._forget_commit_run()
+        self._commit_run_seq = getattr(self, '_commit_run_seq', 0) + 1
+        start, end = 'CommitRunStart%d' % self._commit_run_seq, 'CommitRunEnd%d' % self._commit_run_seq
+        widget.mark_set(start, 'insert-%dc' % len(surface));widget.mark_gravity(start, 'left')
+        widget.mark_set(end, 'insert');widget.mark_gravity(end, 'right')
+        self._commit_run = dict(widget=widget, start=start, end=end, text=surface, fresh=True,
+                                tab=self.session.current() if widget is self.editor else None)
 
     def _forget_commit_run(self):
         run = getattr(self, '_commit_run', None)
@@ -18319,6 +18350,7 @@ class CorrectNoteApp:
 
     def _just_committed_range(self, widget):
         """(start, end) of the text the IME has just committed here, while nothing else happened."""
+        self._take_ime_commits()
         run = getattr(self, '_commit_run', None)
         if run is None or not run.get('fresh'):return None
         last = self._last_conversion_range(widget)
@@ -18330,6 +18362,7 @@ class CorrectNoteApp:
 
     def _last_conversion_range(self, widget):
         """(start, end) of the last IME commit here, while that text is still as committed."""
+        self._take_ime_commits()
         run = getattr(self, '_commit_run', None)
         if run is None or run['widget'] is not widget or not run.get('text'):return None
         try:
@@ -18457,7 +18490,7 @@ class CorrectNoteApp:
 
     def _on_bracket_ime_char(self, marker, char):
         pending = getattr(self,'_pending_bracket_composition',None)
-        if (str(marker) != '-3' or pending is None
+        if (not _ime_delivered(marker) or pending is None
                 or not self._bracket_owner_valid(pending)
                 or len(char) != 1 or not char.isprintable()):return ''
         # Handle the native committed character once before Ctrl/Alt widget
@@ -19251,8 +19284,12 @@ class CorrectNoteApp:
             if selected:
                 widget.tag_remove('sel', '1.0', 'end')
                 self._pick_insert(selected)
-            else:
-                self._finish_pick_calculation(widget)
+            elif not self._finish_pick_calculation(widget):
+                # 2026-10-22 うにさん「変換中にF1を間違えて押すと、そのあとエンターしても引用モードで
+                # 改行できないことになるので、引用モードで無選択エンターしたら引用を終える」:
+                # 選んだものも式も無い Enter は引用を終え、ふつうの改行として通す。
+                self._end_pick_mode(keep_equals=True)
+                return None
             return 'break'
 
         if keysym in ('Left', 'Right', 'Up', 'Down', 'Home', 'End', 'Prior', 'Next') \
@@ -20097,6 +20134,7 @@ class CorrectNoteApp:
         except tk.TclError:return
 
     def _finish_pick_calculation(self, widget):
+        """True when Enter went to a written formula (calculated or explained)."""
         # Continue a touching explicit formula using its original expression.
         if not getattr(self, '_pick_calculate', False):
             return
@@ -20132,22 +20170,27 @@ class CorrectNoteApp:
                 last_row=int(self.editor.index('end-1c').split('.')[0])
                 if not 1<=number<=last_row:
                     self.status.config(text=f'行番号は1〜{last_row}で指定してください')
-                    return
+                    return True
                 first,last=f'{number}.0',f'{number}.end'
                 text=self.editor.get(first,last)
                 command_start=self._PICK_EQUALS_START if self._pick_mode=='equals' else self._PICK_MARK
                 if not quick and self.editor.compare(command_start,'>=',first) and self.editor.compare(self._PICK_CALC_END,'<=',last):
                     text=self.editor.get(first,command_start)+self.editor.get(self._PICK_CALC_END,last)
                 self._pick_insert(text,typed_reference=True)
-                return
+                return True
             if kind!='calculation':
+                # Text with no digit is not a formula (e.g. words committed after an accidental
+                # F1): the Enter ends the quote as a new line (2026-10-22 うにさん「無選択エンター
+                # したら引用を終える」). With a digit it was a formula attempt (2²): explain it.
+                if not any(ch.isdigit() for ch in expression):
+                    return False
                 self.status.config(text='行番号、または四則演算の式を入力してください')
-                return
+                return True
             start,expression=input_work.calculation_expression(self,start,end,quick=quick)
             result=calculate(expression)
             if result is None:
                 self.status.config(text='計算できません。式を直してEnterで計算できます')
-                return
+                return True
             if self._pick_mode=='equals':
                 # Remove only the quote trigger; the right-gravity equals end
                 # also surrounds typed characters and cannot delimit this edit.
@@ -20159,16 +20202,17 @@ class CorrectNoteApp:
                     start,end=source_offset(self._PICK_MARK),source_offset(self._PICK_CALC_END)
                 start,expression=input_work.calculation_expression(self,start,end,quick=quick)
                 result=calculate(expression)
-                if result is None:return
+                if result is None:return True
             if not input_work.remember_calculation(self,start,end,expression,result,quick=quick):
-                return
+                return True
             self._end_pick_mode(keep_equals=True)
             self.status.config(text='計算結果を補正に反映しました')
             if not quick:
                 self._schedule_session_save()
                 self._analyze()
+            return True
         except tk.TclError:
-            return
+            return None
 
     def _pick_insert(self, text, typed_reference=False):
         """
@@ -24288,6 +24332,13 @@ class CorrectNoteApp:
                     self._drop_icon_pending = True
                 if msg == 0x010F and lparam & 0x0800:   # WM_IME_COMPOSITION・GCS_RESULTSTR
                     given = _ime_result(hwnd)
+                    # Every commit, for the bracket key's "just committed" text (2026-10-22).
+                    # Tk keeps the Windows focus on this window, so the IME result arrives here.
+                    if given:
+                        try:
+                            self._ime_commit_queue.append((hwnd, given))
+                        except Exception:
+                            pass
                     text = ime_result_once(given)
                     # Tk drops emoji outside the BMP, and the emoji panel's
                     # pick comes twice (also ❤️): those are typed in here.
@@ -24334,6 +24385,7 @@ class CorrectNoteApp:
             self._drop_hwnds = []
             self._drop_queue = []
             self._ime_text_queue = []
+            self._ime_commit_queue = []
 
             def _attach(widget):
                 """その窓に差し替えを掛ける。掛けた hwnd の並びを返す。
