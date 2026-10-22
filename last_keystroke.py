@@ -830,6 +830,10 @@ def repair(line, result, retry, input_method='kana', decisions=None,
                              decisions=decisions, dict_index=dict_index, vouch=True, whole=(a, b))
                 if got:
                     return got
+        if not whole and not usable(unsure):
+            got = _absorbed_repair(line, retry, dict_index)
+            if got:
+                return got
         odd = [whole] if whole else (unsure if usable(unsure) else _costly_kana_runs(line))
         vouch_only = True
         doubt_run = bool(whole) or usable(unsure)
@@ -924,8 +928,10 @@ def repair(line, result, retry, input_method='kana', decisions=None,
     if not found:
         if vouch and not whole and not vouch_only and not letter_entry:
             unsure = [tuple(x[:2]) for x in (result.get('unsure_spans') or ())]
-            wider = [(a, b) for a, b in unsure if a <= start and end <= b and (a, b) != (start, end)
-                     and b - a <= MAX_SPAN and _kana_str(line[a:b])]
+            # 迷いが紫と重なるだけ（紫 をか・迷い かいまひ）のときは、両方を覆う並びを読み直す
+            wider = [(min(a, start), max(b, end)) for a, b in unsure if a < end and start < b
+                     and (min(a, start), max(b, end)) != (start, end)
+                     and max(b, end) - min(a, start) <= MAX_SPAN and _kana_str(line[min(a, start):max(b, end)])]
             if wider and result.get('corrected', line) == line:
                 return repair(line, result, retry, input_method=input_method, decisions=decisions,
                               dict_index=dict_index, vouch=True, whole=wider[0])
@@ -954,7 +960,10 @@ def repair(line, result, retry, input_method='kana', decisions=None,
                                 and not (doubt_run and op == 'del' and yomi >= WHOLE_DEL_YOMI)):
         return None
     if len(found) > 1 and score - found[1][0] < MARGIN:
-        return None
+        # 差が小さくても、並びの費用と読みの並びの両方で上回り（身近さで勝つ）、読みの並びが置き換えを採る線
+        # （VOUCH_SUB_YOMI）を越えて良くなる候補は決める。どちらかが欠けるなら紫のまま（行使くなる→行使くばる +1.3 は採らない）
+        if not (gain > found[1][1] and yomi > found[1][2] and yomi >= VOUCH_SUB_YOMI):
+            return None
     if yomi_del:
         got = dict(got, yomi_del=True)
     if op == 'edit':
@@ -991,6 +1000,7 @@ CLAUSE_GAIN = 2000
 CLAUSE_LOCAL_COST = 1500  # 文節だけの1字あたりの費用の線（長い行で余分な1字が行全体の費用を上げないとき用）
 CLAUSE_YOMI_TIE = 3.0     # 費用の下がりが並んだとき、読みの並びの差がこれ以上なら上を採る
 CLAUSE_KANA_YOMI = 5.0    # かなのまま残る直しは、読みの並びがこれ以上良くなるものだけ
+CLAUSE_KEPT_YOMI = 8.0    # IME の顔の漢字に戻した直し（食べ**タフ**→食べた）を行の重さで止めないのは、読みの並びがこれ以上良くなるときだけ
 CLAUSE_YOMI_WEIGHT = 200  # 候補を並べるとき、読みの並びの良さ（自然対数）1 を行の費用のいくらと見るか。辞書の費用の尺度
                           # （約700/対数1）で足すと、費用の安い語（調整 15790・読み +1.7）が最も安い戻し（注意 16466・-0.4）
                           # より先に枠を埋めた。費用の差が小さいときだけ読みの並びが順を決める重み
@@ -2435,6 +2445,58 @@ def _foreign_swaps(toks, dict_index):
     return out
 
 
+def _absorbed_katakana(toks, dict_index):
+    """片仮名の名詞の字句で、直前のかなの字句と直後のかなの字句（付属の語・接尾）と続けた読みが辞書の読みの表に
+    無く、片仮名の語の端の1字を抜いて続けた読みは表に在るもの（これ＋カニ＋ら: これかにら は無い・これから は在る）
+    → 字句の番号の集合。語は名指ししない: 表の有無と端の1字だけで決める。印を付けるだけで、直しは読み直しが決める。"""
+    out = set()
+    if dict_index is None:
+        return out
+    for i, t in enumerate(toks):
+        if i == 0 or i + 1 >= len(toks) or len(t.surface) < 2 or not _katakana_str(t.surface):
+            continue
+        p, u = toks[i - 1], toks[i + 1]
+        if not (_kana_str(p.surface) and _kana_str(u.surface)) or p.end != t.start or t.end != u.start:
+            continue
+        r, pr, ur = _tok_reading(t), _tok_reading(p), _tok_reading(u)
+        if not (r and pr and ur) or _world_reading(dict_index, pr + r + ur):
+            continue
+        for k in (0, len(r) - 1):
+            if _kana(r[k]) and _world_reading(dict_index, pr + r[:k] + r[k + 1:] + ur):
+                out.add(i)
+                break
+    return out
+
+
+def _absorbed_repair(line, retry, dict_index):
+    """紫も迷いも無い行で、_absorbed_katakana の片仮名の語（これ＋カニ＋ら）を、端の1字を抜いたかな（これ＋か＋ら）に
+    戻して読み直す。採るのは、続けた読みが辞書の読みの表に在り、並びの費用が MIN_PATH_GAIN 以上下がり、読み直しに
+    紫も迷いも残らない形だけ。抜く字が両端どちらでも語になるとき（決め手が無い）は採らない。"""
+    import morphology
+    if dict_index is None:
+        return None
+    toks = list(morphology.tokenize(line))
+    base = morphology.path_cost(line)
+    if not toks or base is None:
+        return None
+    for i in sorted(_absorbed_katakana(toks, dict_index)):
+        t, p, u = toks[i], toks[i - 1], toks[i + 1]
+        r, pr, ur = _tok_reading(t), _tok_reading(p), _tok_reading(u)
+        rows = [r[:k] + r[k + 1:] for k in (0, len(r) - 1)
+                if _kana(r[k]) and _world_reading(dict_index, pr + r[:k] + r[k + 1:] + ur)]
+        if len(set(rows)) != 1:
+            continue
+        face = rows[0]
+        text = line[:t.start] + face + line[t.end:]
+        cost = morphology.path_cost(text)
+        if cost is None or base - cost < MIN_PATH_GAIN:
+            continue
+        got = retry(text)
+        if got and _clean(got):
+            return text, got, (t.start, t.end, face)
+    return None
+
+
 def _place_kanji(text, s, e_text, clause, typed, store, dict_index, context_vec, surrounding):
     """text[s:e_text] がかなのまま残った文節なら、辞書の形の漢字に置いた
     (置いた行, 置いた顔) を返す。置けなければ None（軽くなるかは呼ぶ側が比べる）。"""
@@ -2932,6 +2994,9 @@ def repair_ime_clause(line, result, retry, input_method='kana', decisions=None,
     sure = _conjugation_mismatch(toks)
     # 本人の使っていない片仮名の語で、端の1字を抜くと本人の語になるもの（印の1つ。費用の線に掛からない）
     swaps = _foreign_swaps(toks, dict_index)
+    # 前後のかなと続けた読み（これ＋かに＋ら）が世の中の語に無く、片仮名の語の端の1字を抜くと語になる
+    # （これから）ものも疑いの印（余分な1字を IME が片仮名の語に巻き込んだ跡）
+    spots |= _absorbed_katakana(toks, dict_index)
     odd = [tuple(x[:2]) for x in (result.get('odd_spans') or ())]
     costly = _cost_per_char(line, base) >= CLAUSE_COST
     # 文節をつなぐ読み直し（隣の文節・前のかなの切れ端）は、印（疑いの字句・文法で確かな印・片仮名の巻き込み・
@@ -3055,6 +3120,15 @@ def repair_ime_clause(line, result, retry, input_method='kana', decisions=None,
             text = line[:s] + row.reading + line[e:]
             if text != kana_line:
                 cands.setdefault(text, ('ins' if row.operation == 'omission' else 'key', -1))
+        # 漢字の名詞＋かなの接尾（変換＋ちゅう）の接尾だけを別の接尾（ちょう→帳）に替える戻しは、書いた複合語を
+        # 別の複合語に替えるだけで、打ち違いの証が無い
+        tail = _kana_suffix_tail(toks, s, e, line)
+        if tail:
+            head = len(typed) - len(tail)
+            cands = {text: v for text, v in cands.items()
+                     if not (len(text) - len(kana_line) == 0 and text[:s + head] == kana_line[:s + head]
+                             and text[s + len(typed):] == kana_line[s + len(typed):]
+                             and _suffix_with_function(text[s + head:s + len(typed)]))}
         sokuon_idx = {i for i in free_del if 0 <= i < len(kana_line) and kana_line[i] == 'っ'}
         if sokuon_idx:
             cands = {text: (op, i) for text, (op, i) in cands.items()
@@ -3432,9 +3506,15 @@ def repair_ime_clause(line, result, retry, input_method='kana', decisions=None,
                                  and stray_clause and not _not_everyday_kango(face)))
                 grammar_fix = ((s, e) in reading_marked and kana_face and not got.get('unsure_spans') and not got.get('odd_spans')
                                and _grammar_mark_removed(kana_line, s, s + len(typed), corrected, s, new_e))
+                # 入口が IME の顔と同じ漢字に戻した形（食べ**タフ**→食べた・猫**鍵**庭→猫が庭: 余った字・語だけが消え、
+                # 残る漢字は元の顔のもの）で、戻した読みが打った読みより大きく通りのよい並びなら、行の残り（朝ご飯）の
+                # 重さでは止めない（2026-10-21 隣接キーの総当たり 2536件）
+                kept_kanji = (kind == 'kana' and not kana_face and bool(_kanji_seq(face)) and not unsure
+                              and set(_kanji_seq(face)) <= set(_kanji_seq(line[s:e]))
+                              and yomi >= CLAUSE_KEPT_YOMI)
                 ok = (not kana_odd and gate_real >= CLAUSE_GAIN
                       and (_cost_per_char(corrected, cost) < CLAUSE_COST
-                           or converted or grammar_fix
+                           or converted or grammar_fix or kept_kanji
                            or (kana_face and _known_kana_word(face, line[s:e], typed, dict_index)))
                       and (not kana_face or grammar_fix
                            or _known_kana_word(face, line[s:e], typed, dict_index, tail=4, inflected=True)))
@@ -4066,6 +4146,33 @@ def _bounded_kana_word(text, pos, end, dict_index, loose=False, compound=False):
             if _known_kana_reading(text[a:b], dict_index) or (compound and _kana_compound(text[a:b], dict_index)):
                 return True
     return False
+
+
+def _suffix_with_function(run):
+    """かなの並びが「接尾の名詞の読み（＋助詞・助動詞）」か（ちゅう・ちゅうです）。"""
+    try:
+        import suffix_readings
+        import morphology
+    except Exception:
+        return False
+    for n in range(len(run), 1, -1):
+        if suffix_readings.is_suffix_reading(run[:n]):
+            rest = run[n:]
+            if not rest or all(t.pos in ('助詞', '助動詞') for t in morphology.tokenize(rest)):
+                return True
+    return False
+
+
+def _kana_suffix_tail(toks, s, e, line):
+    """文節 [s, e) の終わりが「漢字の名詞＋かなの接尾（＋助詞・助動詞）」のとき、そのかなの並び。"""
+    if not _kana_str(line[s:e]) and s < e:
+        i = max((k for k, t in enumerate(toks) if s <= t.start and t.end <= e and t.pos == '名詞'
+                 and t.surface and _kanji_seq(t.surface) == t.surface), default=None)
+        if i is not None and toks[i].end < e:
+            run = line[toks[i].end:e]
+            if all('ぁ' <= c <= 'ゖ' for c in run) and _suffix_with_function(run):
+                return run
+    return ''
 
 
 def _kana_compound(reading, dict_index):

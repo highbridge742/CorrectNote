@@ -167,7 +167,9 @@ import zlib
 # 2026-09-06a: 項目48-RZ〜48-SC（格助詞の連続・人名＋を＋叙述動詞・濁点の
 #              位置ずれ・語の列として組み直す道を起こした）で答えが変わる。
 # 2026-10-09a: 候補キャッシュを語彙identity/revisionごとに分離。
-ENGINE_STAMP = '2026-10-10al'
+# 2026-10-22a: v1.15.1。補正（corrector・contextual_repair・last_keystroke・loanword・oddness）の
+#              答えが変わるので、古い控えを使わない（public_nominal_cache も同じ印で作り直し）。
+ENGINE_STAMP = '2026-10-22a'
 
 # 控えの形式の版。作りを変えたら上げる（古い控えは捨てられる）。
 CACHE_VERSION = 1

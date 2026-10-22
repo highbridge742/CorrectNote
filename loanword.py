@@ -2171,6 +2171,10 @@ def find_miskeyed_acronym(line, store):
                 # 直し先: 略語の種、または本人の控えの大文字の略語
                 # （実績2以上）
                 if cand.upper() in _ACRONYM_SEED:
+                    if len(key) == 2 and not _known_english_short(cand) and _english_count(store, cand) < 2:
+                        # 2字の並びはほとんどがどれかの略語（CP・OC）。直し先がごく身近な略語（PC・ID）か
+                        # 本人の書いてきた略語でなければ、打ったまま（CP→VP にしない）
+                        continue
                     hits.add(cand.upper())
                     continue
                 if cand in vocab and _english_count(store, cand) >= 2:

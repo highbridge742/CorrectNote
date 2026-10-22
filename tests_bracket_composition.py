@@ -1,4 +1,4 @@
-"""Own Tk text: modifier cycles, asynchronous IME commits and native F5."""
+"""Own Tk text: modifier cycles, asynchronous IME commits and the bracket key (F2 since 2026-10-22)."""
 import ctypes,time,unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -27,7 +27,7 @@ class BracketCompositionTests(unittest.TestCase):
         self.assertFalse(self.errors)
 
     def press(self,state=0):
-        self.a._on_f5_brackets(SimpleNamespace(widget=self.editor,keysym='F5',char='',state=state))
+        self.a._on_f5_brackets(SimpleNamespace(widget=self.editor,keysym='F2',char='',state=state))
 
     def wait(self,predicate):
         end=time.monotonic()+2
@@ -40,8 +40,10 @@ class BracketCompositionTests(unittest.TestCase):
     def text(self):return self.editor.get('1.0','end-1c')
 
     def test_every_modifier_advances_instead_of_removing(self):
+        # 2026-10-22: Alt+F2 places a pair at the cursor and Ctrl+F2 wraps the last conversion;
+        # with neither a selection nor a conversion both start from the first pair.
         for state,first,second in ((0,'（）','「」'),(4,'（）','「」'),(1,'『』','【】'),
-                                   (0x20000,'【】','“”'),(5,'“”','（）')):
+                                   (0x20000,'（）','「」'),(5,'“”','（）')):
             with self.subTest(state=state),patch.object(ime_watch,'composition_active',return_value=False):
                 self.editor.delete('1.0','end');self.editor.insert('1.0','前後')
                 self.editor.mark_set('insert','1.1');self.a._forget_bracket_cycle()
@@ -51,7 +53,7 @@ class BracketCompositionTests(unittest.TestCase):
 
     def test_pending_text_is_wrapped_and_rapid_repeat_is_retained(self):
         for state,pair in ((0,('（','）')),(4,('（','）')),(1,('『','』')),
-                           (0x20000,('【','】')),(5,('“','”'))):
+                           (5,('“','”'))):           # Alt+F2: see test_alt_places_a_pair_after_the_commit
             for repeated in (False,True):
                 with self.subTest(state=state,repeated=repeated):
                     self.editor.delete('1.0','end');self.editor.insert('1.0','前後');self.editor.mark_set('insert','1.1')
@@ -73,6 +75,18 @@ class BracketCompositionTests(unittest.TestCase):
                     self.assertIn('入力中の文字',self.text());self.assertTrue(self.a._cancel_bracket_cycle())
                     self.assertEqual(self.text(),'前入力中の文字後')
 
+    def test_alt_places_a_pair_after_the_commit(self):
+        # 2026-10-22 うにさん「Alt+F2を　カーソル位置に括弧を置く」: converting text is committed first
+        active=[True]
+        def commit(hwnd):
+            self.root.after(30,lambda:(self.editor.insert('insert','入力中'),active.__setitem__(0,False)));return True
+        with patch.object(ime_watch,'composition_active',side_effect=lambda hwnd:active[0]),\
+             patch.object(ime_watch,'read_composition',return_value={'comp':'入力中'}),\
+             patch.object(ime_watch,'complete_composition',side_effect=commit):
+            self.press(0x20000);self.wait(lambda:self.a._pending_bracket_composition is None)
+        self.assertEqual(self.text(),'前入力中（）後')
+        self.assertEqual(self.editor.index('insert'),'1.5')
+
     def test_ascii_pending_text_uses_halfwidth_parens(self):
         active=[True]
         def commit(hwnd):self.editor.insert('insert','abc');active[0]=False;return True
@@ -91,7 +105,7 @@ class BracketCompositionTests(unittest.TestCase):
 
     def test_result_readback_waits_for_native_delivery_without_second_insertion(self):
         for synchronous in (False,True):
-            for state in (0,4,1,0x20000):
+            for state in (0,4,1):
                 with self.subTest(synchronous=synchronous,state=state):
                     self.editor.delete('1.0','end');self.editor.insert('1.0','前後')
                     self.editor.mark_set('insert','1.1');self.a._forget_bracket_cycle()
@@ -109,7 +123,7 @@ class BracketCompositionTests(unittest.TestCase):
                         self.press(state)
                         if not synchronous:self.assertEqual(self.text(),'前後')
                         self.wait(lambda:self.a._pending_bracket_composition is None)
-                    pair={0:('（','）'),4:('（','）'),1:('『','』'),0x20000:('【','】')}[state]
+                    pair={0:('（','）'),4:('（','）'),1:('『','』')}[state]
                     self.assertEqual(self.text(),'前'+pair[0]+'入力中の文字'+pair[1]+'後')
                     self.assertTrue(self.a._cancel_bracket_cycle())
                     self.assertEqual(self.text(),'前入力中の文字後')
@@ -153,25 +167,16 @@ class BracketCompositionTests(unittest.TestCase):
             self.assertIsNone(self.a._live_bracket_cycle())
 
     @unittest.skipUnless(ime_watch.HAS_SUPPORT,'Windows only')
-    def test_native_physical_f5_is_consumed_before_tk(self):
-        from native_f5 import NativeF5
+    def test_physical_bracket_key_reaches_tk_without_a_hook(self):
+        # 2026-10-22: brackets moved to F2 and no PC-wide keyboard hook
+        # (native_f5) takes the key first; Tk's own binding receives it.
         self.root.geometry('1x1+10000+10000');self.root.deiconify()
         self.editor.focus_force();self.root.update()
-        native=NativeF5(self.editor.winfo_id());self.assertTrue(native.handle)
-        received=[];self.editor.bind('<F5>',lambda e:received.append(e))
+        received=[];self.editor.bind('<F2>',lambda e:received.append(e.keysym))
         user=ctypes.WinDLL('user32');user.PostMessageW.argtypes=[ctypes.c_void_p,ctypes.c_uint,ctypes.c_size_t,ctypes.c_ssize_t]
-        try:
-            user.PostMessageW(self.editor.winfo_id(),0x100,0x74,0x003f0001)
-            user.PostMessageW(self.editor.winfo_id(),0x101,0x74,0xc03f0001)
-            self.wait(lambda:bool(native.pending))
-            self.assertEqual(native.take(),(0,));self.assertEqual(received,[])
-            # Scan-less IME text and another editor are not intercepted.
-            user.PostMessageW(self.editor.winfo_id(),0x100,0x74,1);self.root.update()
-            self.assertEqual(native.take(),());self.assertEqual(len(received),1)
-            other=tk.Text(self.root);other.pack();other.focus_force();self.root.update()
-            user.PostMessageW(other.winfo_id(),0x100,0x74,0x003f0001);self.root.update()
-            self.assertEqual(native.take(),())
-        finally:native.close()
-        self.assertFalse(native.handle)
+        user.PostMessageW(self.editor.winfo_id(),0x100,0x71,0x003c0001)
+        user.PostMessageW(self.editor.winfo_id(),0x101,0x71,0xc03c0001)
+        self.wait(lambda:bool(received))
+        self.assertEqual(received,['F2'])
 
 if __name__=='__main__':unittest.main()

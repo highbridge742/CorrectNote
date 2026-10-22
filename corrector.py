@@ -15959,6 +15959,7 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
     try:
         from kanji_guess import _IME_READINGS_PROVIDER as _prov
         if _prov is not None:
+            _typed_rd = [r for r in (_prov(chunk) or ()) if r]
             for r in (_prov(chunk) or ()):
                 if r and r not in readings:
                     readings.append(r)
@@ -16089,6 +16090,10 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
                 readings.append(r)
     except Exception:
         pass
+    # IME に記録された打った読み（翔松は ← しょうまつは）が在れば、それが打鍵の事実。漢字の別の読み
+    # （松＝しょう）に開き直した並び（しょうしょうは → 症状）は打っていない読みなので探さない
+    if _typed_rd:
+        readings = [r for r in readings if r in _typed_rd] or readings
     readings = readings[:20]
     if not readings:
         _trace('異様', f'{chunk!r} → **ひらがなに開けない**'

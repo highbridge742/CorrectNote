@@ -5,6 +5,10 @@ is one (2026-10-20 うにさん「選択が無いときの Shift+Space は行全
 copy (with B/I/U/S when the text has them). Nothing is counted any more, so analysis running in
 between (tags, the cursor moved, other keys) does not matter. The Edit menu has 「行を選択
 Shift+Space」 just above 「コピー」, whose shortcut text is 「選択してF1 / 行選択してShift+Space」.
+2026-10-22 うにさん「Shift+上下で、行の途中までを選択した状態でShift+Spaceしても行選択しない。この
+場合は途中までの選択した行を行全体選択する」: a selection with an end inside a line is first widened
+to the whole lines it touches; only a whole-line selection is copied (so a dragged partial selection
+now needs a second press to copy).
 Tk's clipboard is replaced inside the interpreter, so the Windows clipboard is not touched."""
 import inspect
 import unittest
@@ -60,14 +64,35 @@ class LineSelectCopyTests(unittest.TestCase):
                 self.press(w)                                     # again: copies again
                 self.assertEqual(self.clipboard(), '  二行目の本文　')
 
-    def test_a_dragged_selection_is_copied_as_it_is(self):
+    def test_a_partial_selection_is_widened_to_whole_lines_then_copied(self):
+        for w in (self.a.editor, self.a.result_view):
+            for first, last, whole in (('1.2', '2.3', '最初の行😀\n  二行目の本文　'),   # dragged / Shift+Down
+                                       ('2.3', '2.5', '  二行目の本文　'),               # inside one line
+                                       ('1.0', '2.3', '最初の行😀\n  二行目の本文　'),   # starts at a line head
+                                       ('2.4', '4.0', '  二行目の本文　\n'),             # ends at the next head
+                                       ('1.0 lineend -1c', '2.0 lineend', '最初の行😀\n  二行目の本文　')):
+                with self.subTest(pane=str(w), first=first, last=last):
+                    self.root.tk.setvar('::fake', '')
+                    w.tag_remove('sel', '1.0', 'end')
+                    w.tag_add('sel', first, last); w.mark_set('insert', last)
+                    self.press(w)
+                    self.assertEqual(w.get('sel.first', 'sel.last'), whole)
+                    self.assertEqual(self.clipboard(), '')                   # widened, not copied
+                    self.assertEqual(w.index('insert'), w.index('sel.last'))
+                    self.press(w)
+                    self.assertEqual(self.clipboard(), whole)                # whole lines: copied
+                    self.assertEqual(w.get('sel.first', 'sel.last'), whole)
+
+    def test_whole_line_selections_are_copied_as_they_are(self):
         w = self.a.editor
-        w.tag_add('sel', '1.2', '2.3'); w.mark_set('insert', '2.3')
-        dragged = w.get('sel.first', 'sel.last')
-        self.assertTrue(dragged.startswith('の行') and dragged.endswith('\n  二'), dragged)
-        self.press(w)
-        self.assertEqual(self.clipboard(), dragged)                       # not widened to whole lines
-        self.assertEqual(w.get('sel.first', 'sel.last'), dragged)
+        for first, last in (('1.0', '1.0 lineend'), ('1.0', '3.0'), ('2.0', '4.end')):
+            with self.subTest(first=first, last=last):
+                self.root.tk.setvar('::fake', '')
+                w.tag_remove('sel', '1.0', 'end'); w.tag_add('sel', first, last)
+                chosen = w.get('sel.first', 'sel.last')
+                self.press(w)
+                self.assertEqual(self.clipboard(), chosen)
+                self.assertEqual(w.get('sel.first', 'sel.last'), chosen)
 
     def test_analysis_in_between_does_not_matter(self):
         # What analysis does between two presses: other tags, the cursor moved, other keys

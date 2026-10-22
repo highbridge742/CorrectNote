@@ -87,7 +87,7 @@ def child():
                         a._close_dropdown();a._f2_cycle=None
                         a.editor.mark_set('insert',f"1.0+{original['end']}c")
                         if selected:a.editor.tag_add('sel',f"1.0+{original['start']}c",f"1.0+{original['end']}c")
-                        a._on_f2_candidates(SimpleNamespace(widget=a.editor,keysym='F2',state=0))
+                        a._on_f2_candidates(SimpleNamespace(widget=a.editor,keysym='F5',state=0))
                         labels=[label for label,cb in menus[-1]]
                         assert '― 自動補正 ―' in labels,labels
                         assert any('「寒ぃ」は今後直さない' in label for label in labels),labels

@@ -1,5 +1,5 @@
 <h1>CorrectNote 説明書</h1>
-<p class="muted">バージョン 1.15.0</p>
+<p class="muted">バージョン 1.15.1</p>
     
 
 <a name="intro"></a>

@@ -244,7 +244,7 @@ def child():
                 def capture(items,*args,**kw):menus.append(items);a._dropdown=Mock()
                 with patch.object(a,'_make_dropdown',capture):
                     a.editor.mark_set('insert','1.2');a._f2_cycle=None
-                    a._on_f2_candidates(SimpleNamespace(widget=a.editor,keysym='F2',state=0))
+                    a._on_f2_candidates(SimpleNamespace(widget=a.editor,keysym='F5',state=0))
                     assert menus and any(label=='― 自動補正 ―' for label,cb in menus[-1]),menus
                 a._close_dropdown();a._set_layout_split();until(done)
             check('unified_f2_unapplied_auto_correction',unified_menu)

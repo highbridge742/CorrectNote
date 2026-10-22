@@ -32,14 +32,16 @@ class WordBookHotkeyTests(unittest.TestCase):
         self.assertIn(('wordbook', 'Ctrl+Alt+Insert / Ctrl+Alt+Shift+-'), settings.active_hotkeys(s))
         s.set('hotkey_wordbook_enabled', False)
         self.assertNotIn('wordbook', [name for name, _ in settings.active_hotkeys(s)])
-        # The View menu items switch the hotkeys: 「…ホットキー有効化」 with the keys on the right
-        # (2026-10-20: 「単語帳のオン・オフ（…）」 read as a command to open the word book)
+        # The View menu items switch the hotkeys: 「…ホットキー有効化」 (2026-10-20: 「単語帳のオン・オフ（…）」
+        # read as a command to open the word book). 2026-10-22: no key text on the right; the two
+        # quick input items are told apart by name (うにさん「B 名前で分ける」)
         from pathlib import Path
         import app
         source = Path(app.__file__).read_text(encoding='utf-8')
-        self.assertIn("label='単語帳ホットキー有効化', accelerator='Ctrl+Alt+Insert / Ctrl+Alt+Shift+-'", source)
-        self.assertIn("label='簡易入力ホットキー有効化', accelerator='Ctrl+Insert'", source)
-        self.assertIn("label='簡易入力ホットキー有効化', accelerator='Ctrl+Shift+-'", source)
+        self.assertIn("label='単語帳ホットキー有効化',", source)
+        self.assertIn("label='簡易入力ホットキー有効化（Insert）',", source)
+        self.assertIn("label='簡易入力ホットキー有効化（-）',", source)
+        self.assertNotIn("ホットキー有効化', accelerator=", source)
         self.assertIn("m_edit.add_command(label='単語帳を開く／閉じる',", source)
         self.assertNotIn("label='単語帳のオン・オフ", source)
 

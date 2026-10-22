@@ -114,7 +114,7 @@ class ToolbarWidgetTests(unittest.TestCase):
         self.assertEqual(self.a._toolbar.winfo_manager(),'pack')
         self.assertLess(self.a._toolbar.winfo_y(),self.editor.winfo_y())
         self.a._bracket_buttons[3].event_generate('<Enter>');self.root.update()
-        self.assertTrue(self.hint.endswith('F5'))
+        self.assertTrue(self.hint.endswith('F2'))
         p.reset();self.root.update();self.assertEqual(p.order,list(IDS))
         self.assertEqual(p.hidden,set(DEFAULT_HIDDEN))
         p.close();self.assertIsNone(p.window)

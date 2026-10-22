@@ -518,7 +518,7 @@ r.after(30,tick);r.mainloop()
             a.pick_mode_btn.invoke(); assert a._pick_hint == a._QUOTE_PICK_HINT
             assert hover(a.pick_mode_btn) == a._QUOTE_PICK_HINT; leave(a.pick_mode_btn); a._end_pick_mode()
             for count, button in enumerate(a._bracket_buttons, 1):
-                assert hover(button) == ('選択中の文字や、変換中の文字を括弧で包みます。ショートカットキー：F5'
+                assert hover(button) == ('選択中の文字や、変換中の文字を括弧で包みます。ショートカットキー：F2'
                     + (f'を{count}回' if count > 1 else ''))
                 leave(button)
             # Pending sent text highlights the button without entering a mode.

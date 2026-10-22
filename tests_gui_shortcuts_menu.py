@@ -76,7 +76,7 @@ def child():
             for label,accelerator in [('検索…','Ctrl+F'),
                 ('行を選択','Shift+Space'),('コピー','選択してF1 / 行選択してShift+Space'),('ペースト','F4 / Ctrl+V / Win+V'),
                 ('改行','F3 / Enter'),('後ろ1文字を削除','CapsLock / BackSpace'),
-                ('括弧を挿入','F5入力ごとに括弧を切替'),
+                ('括弧を挿入','F2入力ごとに括弧を切替'),
                 ('語を拾って差し込む','無選択でF1 / = / Insert'),
                 ('簡易入力ウィンドウを開く','Ctrl+Insert / Ctrl+Shift+-'),
                 ('単語帳を開く／閉じる','Ctrl+Alt+Insert / Ctrl+Alt+Shift+-')]:
@@ -84,7 +84,7 @@ def child():
             assert '次を検索' not in labels
             assert a.settings.get('capslock_backspace_enabled') is True
             assert a.settings.get('insert_quote_enabled') is True
-            assert not a._plain_shortcut(SimpleNamespace(keysym='F5',char='',state=0x20000))
+            assert not a._plain_shortcut(SimpleNamespace(keysym='F2',char='',state=0x20000))
             a.editor.tag_add('sel','1.0','1.2')
             menu.invoke(labels['コピー'])
             assert root.tk.getvar('test_clipboard')=='資料'
@@ -133,9 +133,17 @@ def child():
             assert menu.entrycget(labels['簡易入力ウィンドウを開く'],'accelerator')=='Ctrl+Insert / Ctrl+Shift+-'
             # 2026-10-20: 単語帳を開く／閉じる heads the word book group, below the separator after the quick
             # input item, and toggles the word book like its button
-            assert labels['単語帳を開く／閉じる']==labels['簡易入力ウィンドウを開く']+2
-            assert menu.type(labels['簡易入力ウィンドウを開く']+1)=='separator'
-            assert menu.entrycget(labels['単語帳を開く／閉じる']+1,'label')=='単語帳セットを切り替える'
+            # 2026-10-22: 「ホットキーの状態を確認…」 moved here from the View menu, under the quick input item
+            # 2026-10-22: the six items below 「ダークモード」 in the View menu moved here as well
+            quick=labels['簡易入力ウィンドウを開く']
+            assert [menu.entrycget(quick+i,'label') for i in range(1,6)]==[
+                '簡易入力ホットキー有効化（Insert）','簡易入力ホットキー有効化（-）','簡易入力の説明を表示',
+                '簡易入力を閉じたら、元の入力欄へ貼り付ける','簡易入力を閉じたら、クリップボードに入れる']
+            assert labels['ホットキーの状態を確認…']==quick+6
+            assert menu.type(quick+7)=='separator'
+            assert labels['単語帳を開く／閉じる']==quick+8
+            assert menu.entrycget(labels['単語帳を開く／閉じる']+1,'label')=='単語帳ホットキー有効化'
+            assert menu.entrycget(labels['単語帳を開く／閉じる']+2,'label')=='単語帳セットを切り替える'
             assert menu.entrycget(labels['単語帳を開く／閉じる'],'command')
             a._on_insert_quote(SimpleNamespace(widget=a.editor,keysym='Insert',char='',state=0));assert not getattr(a,'_pick_mode',None)
             a.editor.mark_set('insert','1.0')
@@ -163,21 +171,21 @@ def child():
             assert 1 not in a.bookmarks,a.bookmarks
             # Restore a usable toolbar after the deliberately tiny focus fixture.
             root.geometry('1400x650+10000+10000');root.update()
-            assert a.editor.bind('<F5>')
+            assert a.editor.bind('<F2>') and a.editor.bind('<F5>')
             assert len(a._bracket_buttons)==5
             assert all(label not in labels for label in
                        ('（）を挿入','「」を挿入','『』を挿入','【】を挿入','“”を挿入'))
             a.editor.delete('1.0','end');a.editor.insert('1.0','語')
             a.editor.mark_set('insert','1.end');a.editor.focus_force();root.update()
             for expected in ('語（）','語「」','語『』','語【】','語“”','語（）'):
-                key('<F5>')
+                key('<F2>')
                 assert a.editor.get('1.0','1.end')==expected,expected
             key('<Escape>')
             assert a.editor.get('1.0','1.end')=='語'
             assert a.editor.index('insert')=='1.1'
             menu.invoke(labels['括弧を挿入'])
             assert a.editor.get('1.0','1.end')=='語（）'
-            key('<F5>')
+            key('<F2>')
             assert a.editor.get('1.0','1.end')=='語「」'
             key('<Escape>')
             assert a.editor.get('1.0','1.end')=='語'
@@ -207,30 +215,30 @@ def child():
             # Clicking elsewhere or moving vertically commits the visible pair.
             a.editor.tag_remove('sel','1.0','end')
             a.editor.mark_set('insert','1.end')
-            key('<F5>');assert a.editor.get('1.0','1.end')=='abc（）'
+            key('<F2>');assert a.editor.get('1.0','1.end')=='abc（）'
             a.editor.event_generate('<ButtonPress-1>',x=5,y=5);root.update()
             assert a._bracket_cycle is None
             key('<Escape>');assert a.editor.get('1.0','1.end')=='abc（）'
             a.editor.mark_set('insert','1.end')
-            key('<F5>');assert a.editor.get('1.0','1.end')=='abc（）（）'
+            key('<F2>');assert a.editor.get('1.0','1.end')=='abc（）（）'
             key('<Up>');assert a._bracket_cycle is None
             key('<Escape>')
             assert a.editor.get('1.0','1.end')=='abc（）（）'
             a.editor.mark_set('insert','1.end')
-            key('<F5>')
+            key('<F2>')
             key('<Down>');assert a._bracket_cycle is None
             key('<Escape>')
             assert a.editor.get('1.0','1.end')=='abc（）（）（）'
             a.editor.delete('1.0','end');a.editor.insert('1.0','語')
             a.editor.mark_set('insert','1.end')
-            key('<F5>')
+            key('<F2>')
             assert a.layout_split_btn.winfo_viewable()
             a.layout_split_btn.event_generate('<ButtonPress-1>',x=2,y=2)
             root.update();assert a._bracket_cycle is None
             key('<Escape>');assert a.editor.get('1.0','1.end')=='語（）'
             a.editor.edit_undo();root.update()
             assert a.editor.get('1.0','1.end')=='語'
-            # F2's chosen word stays the target through replacement and Escape.
+            # The candidate key's (F5) chosen word stays the target through replacement and Escape.
             a.editor.delete('1.0','end');a.editor.insert('1.0','語')
             a.editor.mark_set('insert','1.end')
             a._f2_focus_target=dict(widget=a.editor,row=1,start=0,end=1,text='語')
@@ -239,7 +247,7 @@ def child():
             key('<Escape>');assert a.editor.get('1.0','1.end')=='語'
             # Switching tabs commits the pair even after returning.
             a.editor.mark_set('insert','1.end')
-            key('<F5>');assert a.editor.get('1.0','1.end')=='語（）'
+            key('<F2>');assert a.editor.get('1.0','1.end')=='語（）'
             a.session.tabs.append(new_tab(text='別のタブ'))
             a._switch_tab(1);until(done)
             a._switch_tab(0);until(done)
@@ -248,7 +256,7 @@ def child():
             a._set_layout_unified();until(done)
             a.editor.delete('1.0','end');a.editor.insert('1.0','語')
             a.editor.mark_set('insert','1.end')
-            key('<F5>');key('<F5>')
+            key('<F2>');key('<F2>')
             assert a.editor.get('1.0','1.end')=='語「」'
             key('<Escape>');assert a.editor.get('1.0','1.end')=='語'
             a._set_layout_split();until(done)
@@ -257,20 +265,20 @@ def child():
             a.editor.tag_add('sel','1.0','3.0')
             buttons[0].invoke()
             assert a.editor.get('1.0','3.0')=='（一行\n二行）\n'
-            key('<F5>')
+            key('<F2>')
             assert a.editor.get('1.0','3.0')=='「一行\n二行」\n'
             key('<Escape>')
             assert a.editor.get('1.0','3.0')=='一行\n二行\n'
-            # A real Win32 F5 message can carry Tk state bit 8 without Alt.
+            # A real Win32 F2 message (brackets since 2026-10-22) can carry Tk state bit 8 without Alt.
             a.editor.delete('1.0','end');a.editor.insert('1.0','語')
             a.editor.mark_set('insert','1.end')
-            native_key(0x74)
+            native_key(0x71)
             assert a.editor.get('1.0','1.end')=='語（）'
-            # An IME-confirmed Latin character masquerading as F5 stays text.
+            # An IME-confirmed Latin character masquerading as F2 stays text.
             a.editor.delete('1.0','end');a.editor.insert('1.0','語')
             a.editor.mark_set('insert','1.end')
-            a._on_f5_brackets(SimpleNamespace(widget=a.editor,keysym='F5',char='t',state=0,keycode=116));root.update()
-            assert a.editor.get('1.0','1.end')=='語t'
+            a._on_f5_brackets(SimpleNamespace(widget=a.editor,keysym='F2',char='q',state=0,keycode=113));root.update()
+            assert a.editor.get('1.0','1.end')=='語q'
             # Check menu hover dispatch against Tk's actual Menubutton paths
             # without posting an OS-native menu in this headless child.
             b0,b1=a._menu_buttons[:2]

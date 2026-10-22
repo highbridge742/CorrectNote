@@ -82,7 +82,7 @@ def child():
                     ('前（文字）後','1.1','1.5','前「文字」後'),
                     ('前「文字」後','1.2','1.4','前（文字）後'),
                     ('前😀（文字）後','1.0+3c','1.0+5c','前😀「文字」後')):
-                set_text(source);select(w,first,last);key(w,'F5',116)
+                set_text(source);select(w,first,last);key(w,'F2',113)
                 assert text()==expected,(source,text())
                 assert a._cancel_bracket_cycle();assert text()==source
             set_text('前（文字）後');select(w,'1.2','1.4')

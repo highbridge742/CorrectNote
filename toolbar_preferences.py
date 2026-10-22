@@ -134,7 +134,7 @@ class ToolbarPreferences:
             toolbar.pack_forget()
         kinds=self.kinds()
         for count, kind in enumerate(kinds if kinds!=self._hint_kinds else (), 1):
-            hint = ('選択中の文字や、変換中の文字を括弧で包みます。ショートカットキー：F5'
+            hint = ('選択中の文字や、変換中の文字を括弧で包みます。ショートカットキー：F2'
                     + (f'を{count}回' if count > 1 else ''))
             button = self.app._bracket_buttons[kind]
             button.bind('<Enter>', lambda e, h=hint: self.app._toolbar_hover_hint(e, True, h))

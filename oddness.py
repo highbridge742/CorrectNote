@@ -1974,6 +1974,9 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
                 and not a_sf.endswith('化')
                 and bp.startswith('動詞')
                 and b_sf in _SURU_FORMS
+                # 音読みの漢字を重ねた漢語（起票・検品）は、辞書がサ変と付けていなくても「する」が付く語の形
+                # （動作の漢語の多くは辞書の穴）。迷う所なので、和語の名詞（花し）と1字の語（号し）だけ見る
+                and not _kango_compound(a_sf, a[2] or '')
                 and prev_sf not in ('お', 'ご')
                 # **接頭詞が直前に付いているなら、接頭詞＋この字が1語**
                 # （項目48-SN・2026-09-06。同梱し・再送し・未着し）。
@@ -2195,6 +2198,28 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         except (ImportError,OSError,AttributeError):
             pass
     return out
+
+
+def _kango_compound(surface, reading):
+    """漢字2字以上の語で、読みを字ごとの音読みに切り分けられる（漢語の複合語）か。表が無ければ False。"""
+    if len(surface) < 2 or not reading:
+        return False
+    try:
+        import kanji_onkun
+        if not kanji_onkun.available():
+            return False
+    except Exception:
+        return False
+
+    def split(i, rest):
+        if i == len(surface):
+            return not rest
+        return any(kanji_onkun.is_on_reading(surface[i], rest[:k]) and split(i + 1, rest[k:])
+                   for k in range(1, min(4, len(rest)) + 1))
+    try:
+        return split(0, reading)
+    except Exception:
+        return False
 
 
 #: 正の判定で見る「自立語の名詞」の細分類（項目48-KH）

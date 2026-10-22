@@ -95,5 +95,14 @@ class IMERemovalTests(unittest.TestCase):
         self.assertEqual(ir.readings_for('行った'), ['いった'])
 
 
+    def test_not_on_the_menu(self):
+        # 2026-10-20 うにさん「機能は残して、この項目をメニューから削除します」: the readings are
+        # still remembered and dropped with the text; only the menu item is gone
+        source = Path(__file__).with_name('app.py').read_text(encoding='utf-8')
+        self.assertNotIn("add_command(label='保存したIMEの読み", source)
+        self.assertIn('def open_ime_readings_dialog(self):', source)
+        self.assertIn('self._prune_ime_readings()', source)
+
+
 if __name__ == '__main__':
     unittest.main()

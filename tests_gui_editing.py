@@ -120,8 +120,9 @@ class EditingTkTests(unittest.TestCase):
         self.assertIsNone(a._on_extend_line_selection(types.SimpleNamespace(widget=w), -1))
         self.assertIsNone(w._line_selection)
 
-    def test_shift_space_with_a_selection_copies_it_in_both_panes(self):
-        # 2026-10-20: with a selection Shift+Space copies it as it is (it used to widen it to whole lines)
+    def test_shift_space_widens_a_partial_selection_then_copies_it_in_both_panes(self):
+        # 2026-10-20: with a selection Shift+Space copies it. 2026-10-22 うにさん: a selection
+        # ending inside a line is first widened to the whole lines it touches; then it copies.
         from tests_tk_keys import deliver_key
         a = self.a; a.status = Mock()
         a._copy_focused_selection = Mock(return_value='break')
@@ -132,9 +133,12 @@ class EditingTkTests(unittest.TestCase):
             w.tag_remove('sel', '1.0', 'end')
             w.tag_add('sel', '2.0+2c', '4.2')
             w.mark_set('insert', '4.2')
-            before = w.get('sel.first', 'sel.last')
+            calls = a._copy_focused_selection.call_count
             deliver_key(w, '<Shift-space>', 'space', 32, state=1)
-            self.assertEqual(w.get('sel.first','sel.last'), before)        # copied as it is
+            self.assertEqual(w.get('sel.first','sel.last'), '前😀長い行\n中の行\n末尾の行')   # widened
+            self.assertEqual(a._copy_focused_selection.call_count, calls)                # not copied yet
+            deliver_key(w, '<Shift-space>', 'space', 32, state=1)
+            self.assertEqual(w.get('sel.first','sel.last'), '前😀長い行\n中の行\n末尾の行')
             self.assertEqual(a._copy_focused_selection.call_args[0][0].widget, w)
         self.assertEqual(a._copy_focused_selection.call_count, 2)
 

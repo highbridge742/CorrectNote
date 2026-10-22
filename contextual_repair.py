@@ -9171,6 +9171,20 @@ def rank_candidates(rows):
     return list(chosen.values())
 
 
+def _faithful_word_outside_oddness(target,diagnostic):
+    if not any('一'<=ch<='鿿' for ch in target.text):return False
+    if not target.anomalies or not all(m[2]<=target.start and target.end<m[3] or m[2]<target.start and target.end<=m[3]
+                                       for m in target.anomalies if len(m)>=4):return False
+    readings=[r.get('text') for r in diagnostic.get('readings',()) if r.get('text')]
+    if not readings:return False
+    try:
+        from ime_language import JapaneseIME
+        with JapaneseIME() as ime:
+            if not ime.available:return False
+            return any(ime.convert(rd)==target.text for rd in readings[:2])
+    except (ImportError,OSError,AttributeError):
+        return False
+
 @_with_search_report
 def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_surface=None, companions=()):
     """同じ文脈で成立した全候補を比較し、最優先の一つと診断を返す。"""
@@ -9772,7 +9786,8 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
             surfaces.append(legacy_surface)
         # This original noun boundary also belongs to IME-priority routes.
         # Candidate ranking and the common source/key checks remain unchanged.
-        if repair.operation=='omission':
+        # 余分な1打（しとゅうがく旅行 の と）も、書いてある名詞（旅行）を残す読みの綴りを同じ表で引く。
+        if repair.operation in ('omission','adjacent_intrusion'):
             # The reading-side lookup must reach the same exact native
             # spelling here; a frequency-band omission is not absence from
             # the dictionary. All candidates still pass normal validation.
@@ -10095,6 +10110,10 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
                         first_spelling={rd:ime.convert(rd) for rd in ambiguous}
             except (ImportError,OSError,AttributeError):
                 pass
+    # IME が自分の読みからそのまま出す漢字の語（察し←さっし）は、異様さが語の外へ続くなら
+    # 語そのものの打ち損じの証にならない。文の意味の裏付けが無い置き換えはしない。
+    if candidates and _faithful_word_outside_oddness(target,diagnostic):
+        candidates=[row for row in candidates if row.get('argument_fit')]
     for row in candidates:
         rd=row['repair']['reading']
         hits=ime_evidence.get(rd) or ()
@@ -10350,7 +10369,9 @@ def _choose_joint_candidates(targets,diagnostics,old_changes,engine,
     selected=[];reports=[]
     for group in groups(options):
         rank_candidates([option['candidate'] for option in group])
-        for option in group:option['rank']=option['candidate']['rank']
+        # 脱字の戻し（1字を足す）は、重なる範囲の別の戻し（余分な1打を抜く・隣のキー）より後に回す
+        # （うに 10-19: 脱字は優先度を下げる）
+        for option in group:option['rank']=(option['candidate']['repair'].get('operation')=='omission',)+tuple(option['candidate']['rank'])
         def valid(rows):
             changes=[(row['start'],row['end'],row['surface']) for row in rows]
             companions=_retain_independent_changes(old_changes,changes,targets,diagnostics)
@@ -10484,6 +10505,11 @@ def _contained_scope_resolution(target, completed, engine, tokenize, store, dict
                 or not (target.start<=owner.start<owner.end<=target.end)
                 or (owner.start,owner.end)==(target.start,target.end)
                 or diagnostic.get('search',{}).get('state')!='complete'):continue
+        # 内側の範囲の左端に1字を足す戻し（とゅうがく → と＋し＋ゅうがく）は、すぐ外の字と切り離して
+        # 決められない。外の範囲の読み直し（余分な と を抜く）と比べるため、ここで外を閉じない
+        chosen=next((c for c in diagnostic.get('candidates',()) if c.get('surface')==surface),None)
+        if (chosen and owner.start>target.start and chosen.get('repair',{}).get('operation')=='omission'
+                and chosen.get('repair',{}).get('position')==0):continue
         if target.boundary_kind not in ('ime_scope','kana_predicate') and any(
                 not any(c<=a and b<=d for _,_,c,d in owner.anomalies)
                 for _,_,a,b in target.anomalies):continue

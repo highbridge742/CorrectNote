@@ -41,6 +41,15 @@ def schedule_change(app):
     _schedule(app,COMPUTE_DELAY_MS)
 
 
+def content_changed(app):
+    """Text that arrived without a key release (an IME commit, a drop) is
+    still typed input. Start its work only when no timer will read it."""
+    # 2026-10-21: an IME commit without <KeyRelease> left quick input
+    # uncorrected, while the memo's IME watch reran its analysis.
+    if getattr(app,'_quick_after_id',None) is not None:return
+    schedule_change(app)
+
+
 def refresh_after_mode(app):
     """Revisit display deferred by a mode, without inventing another key pause."""
     if getattr(app,'_quick_text',None) is None or getattr(app,'_quick_after_id',None) is not None:return

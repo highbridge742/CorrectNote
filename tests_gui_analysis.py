@@ -110,7 +110,7 @@ def child():
                     start='1.0+%dc'%first['start'];end='1.0+%dc'%first['end']
                     instance.result_view.mark_set('insert',end)
                     if selected:instance.result_view.tag_add('sel',start,end)
-                    instance._on_f2_candidates(SimpleNamespace(widget=instance.result_view,keysym='F2',state=0))
+                    instance._on_f2_candidates(SimpleNamespace(widget=instance.result_view,keysym='F5',state=0))
                     assert menus,'F2 did not open a menu'
                     items=menus[-1];labels=[label for label,callback in items]
                     assert '― 自動補正 ―' in labels,labels

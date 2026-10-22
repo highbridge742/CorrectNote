@@ -334,7 +334,7 @@ APP_TITLE = 'CorrectNote'
 # 「判断に迷った箇所」から**「不自然な文字列」**へ入れ替え（既定オン・
 # 補正が入った範囲には付けない）、**かな書きのアルファベット読みを
 # 英字に直す**（`エフ2 → F2`）、スクロール後の反映（項目48-IZ〜）。
-APP_VERSION = '1.15.0'
+APP_VERSION = '1.15.1'
 
 # 控え（session.json・ime_readings）と語彙の自動保存の間合い（2026-10-20 うにさんの決定で5分）。
 # 以前は打つ手が止まって1.5秒ごとに丸ごと書き直していた。最初の変更から5分後にまとめて1回
@@ -2159,7 +2159,6 @@ class CorrectNoteApp:
         self._start_pending_marks_watch()     # 未解析の印が長く残ったら理由を出す（2026-10-19）
         import focus_trace
         focus_trace.start()     # 単語帳ボタンの診断（既定オフ・tools_local/word_book_trace.on で有効）
-        self._start_native_f5()
         # **ファイルのドロップを受ける**（項目48-TO）。同じ理由で
         # ここ——`winfo_id()` が取れてからでないと窓に手を掛けられない。
         # 窓の HWND を取ると本体の窓が出てしまうので、窓が出たあとで
@@ -3260,10 +3259,6 @@ class CorrectNoteApp:
         if fit_job is not None:
             self.root.after_cancel(fit_job)
             self._toolbar_fit_job = None
-        native = getattr(self, '_native_f5', None)
-        if native is not None:native.close()
-        job = getattr(self, '_native_f5_job', None)
-        if job is not None:self.root.after_cancel(job)
         self._clear_pending_bracket_composition()
         hover_job = getattr(self, '_menu_hover_after_id', None)
         if hover_job is not None:
@@ -5992,17 +5987,18 @@ class CorrectNoteApp:
         # 終わる」と報告・2026-08-09）。通常時は何もしない。
         text.bind('<ButtonRelease-1>', self._on_quick_pick_click,
                   add=True)
-        # F2: カーソル直前の語の候補。押すごとに左の語へ遡る
-        # （本体と同じ操作・2026-08-09）。
-        # **IME が確定した `q` は keysym が F2 に化ける**ので、
+        # F5（2026-10-22 までは F2）: カーソル直前の語の候補。押すごとに
+        # 左の語へ遡る（本体と同じ操作・2026-08-09）。
+        # **IME が確定した `t` は keysym が F5 に化ける**ので、
         # 欄への束縛用の入口を通す（項目48-EH）。
-        text.bind('<F2>', self._on_quick_f2_widget)
+        text.bind('<%s>' % self.CANDIDATE_KEY, self._on_quick_f2_widget)
         for sequence,handler in (('<F3>',self._on_f3_return),
                                  ('<F4>',self._on_f4_paste),
                                  ('<Caps_Lock>',self._on_caps_backspace),
                                  ('<Insert>',self._on_insert_quote)):
             text.bind(sequence,handler)
-        text.bind('<F5>',self._on_f5_brackets)
+        text.bind('<%s>' % self.BRACKET_KEY,self._on_f5_brackets)
+        self._install_commit_run(text)
         for key in ('F6','F7','F8','F9'):
             text.bind('<'+key+'>',self._on_selection_transform)
         # 中身が変わったことを確実に捉える経路。
@@ -6068,8 +6064,6 @@ class CorrectNoteApp:
             self._quick_himc = None
 
         input_work.start_quick_readings(self)
-        text.bind('<FocusIn>', lambda e:self._set_native_f5_target(text), add=True)
-        text.bind('<FocusOut>', lambda e:self._set_native_f5_target(None), add=True)
 
         # この窓へ落としたファイルも受ける（項目48-TW・学び22）。
         # 行き先は本体と同じ——**本体の新しいタブ**に出す。
@@ -6321,7 +6315,6 @@ class CorrectNoteApp:
         self._quick_after_id = None
         import quick_analysis
         self._discard_widget_brackets(text_widget)
-        self._set_native_f5_target(None)
         quick_analysis.close(self,keep_idle_worker=True)
 
         content = ''
@@ -6665,6 +6658,11 @@ class CorrectNoteApp:
         # IME の確定・貼り付け・引用の差し込みまで拾う入口なので、
         # **打鍵だけを見る `<KeyRelease>` より取りこぼしが少ない**。
         self._schedule_whitespace_paint()
+        # 補正の解析も同じ入口で始める（2026-10-21 うにさん「興亜劇」）。
+        # KeyRelease の飛ばない IME の確定は、メモ欄では IME の見張りが
+        # `_on_change` を呼ぶが、簡易入力では誰も解析を始めていなかった。
+        import quick_analysis
+        quick_analysis.content_changed(self)
 
     def _maybe_start_quick_pick_from_equals(self):
         """
@@ -7875,6 +7873,8 @@ class CorrectNoteApp:
         except Exception:
             self._pending_scroll_applied = None
         self._pending_scroll = float(tab.get('scroll', 0.0) or 0.0)
+        # Any later cursor move is the user's (see _restore_pending_scroll).
+        self._pending_scroll_cursor = self.editor.index('insert')
         try:
             self._pending_scroll_top = int(tab.get('top') or 0) or None
         except Exception:
@@ -8291,7 +8291,7 @@ class CorrectNoteApp:
                            command=self._toggle_bookmark_from_menu)
         m_edit.add_separator()
         m_edit.add_command(label='括弧を挿入',
-                           accelerator='F5入力ごとに括弧を切替',
+                           accelerator='F2入力ごとに括弧を切替',
                            command=self._cycle_brackets)
         m_edit.add_separator()
         self._edit_quote_index = m_edit.index('end') + 1
@@ -8306,11 +8306,79 @@ class CorrectNoteApp:
         m_edit.add_command(label='簡易入力ウィンドウを開く',
                            accelerator='Ctrl+Insert / Ctrl+Shift+-',
                            command=lambda: self._open_quick_capture(None))
+        # 2026-10-22 うにさん: 表示メニューの「ダークモード」より下の6項目を、編集メニューの
+        # 簡易入力・単語帳のまとまりへ移した
+        self.hotkey_insert_var = tk.BooleanVar(
+            value=self.settings.get('hotkey_insert_enabled'))
+        self.hotkey_minus_var = tk.BooleanVar(
+            value=self.settings.get('hotkey_minus_enabled'))
+        # 名前は「…ホットキー有効化」（2026-10-20 うにさん）。右のショートカット欄は出さず、
+        # 簡易入力の2つは名前で呼び分ける（2026-10-22 うにさん「B 名前で分ける」）
+        m_edit.add_checkbutton(
+            label='簡易入力ホットキー有効化（Insert）',
+            variable=self.hotkey_insert_var,
+            command=lambda: self._on_toggle_hotkey(
+                'insert', self.hotkey_insert_var),
+            selectcolor=ACCENT)
+        m_edit.add_checkbutton(
+            label='簡易入力ホットキー有効化（-）',
+            variable=self.hotkey_minus_var,
+            command=lambda: self._on_toggle_hotkey(
+                'minus', self.hotkey_minus_var),
+            selectcolor=ACCENT)
+        # 簡易入力ウィンドウに出す説明文の表示。
+        # ボタン（一時解除）はこれとは別に常に出す。
+        self.quick_hint_var = tk.BooleanVar(
+            value=self.settings.get('show_quick_hint'))
+        m_edit.add_checkbutton(
+            label='簡易入力の説明を表示',
+            variable=self.quick_hint_var,
+            command=self._on_toggle_quick_hint,
+            selectcolor=ACCENT)
+        # 閉じたら、開く前の入力欄へ戻して貼り付ける（2026-10-14 うにさん）
+        self.quick_paste_back_var = tk.BooleanVar(
+            value=self.settings.get('quick_paste_back'))
+        m_edit.add_checkbutton(
+            label='簡易入力を閉じたら、元の入力欄へ貼り付ける',
+            variable=self.quick_paste_back_var,
+            command=lambda: (self.settings.set(
+                'quick_paste_back', bool(self.quick_paste_back_var.get())),
+                self.settings.save()),
+            selectcolor=ACCENT)
+        # 閉じた文をクリップボードに入れるか（2026-10-16 うにさん。既定オン）。
+        # オフでも上の貼り付けはする（そのときだけ貸して戻す。clipboard_keep）。
+        self.quick_close_clipboard_var = tk.BooleanVar(
+            value=self.settings.get('quick_close_clipboard'))
+        m_edit.add_checkbutton(
+            label='簡易入力を閉じたら、クリップボードに入れる',
+            variable=self.quick_close_clipboard_var,
+            command=lambda: (self.settings.set(
+                'quick_close_clipboard', bool(self.quick_close_clipboard_var.get())),
+                self.settings.save()),
+            selectcolor=ACCENT)
+        # 2026-10-22 うにさん: 表示メニューから、簡易入力・単語帳のまとまりのそばへ移した
+        if not self.hotkeys.supported:
+            m_edit.add_command(
+                label='（この環境ではグローバルホットキーは使えません）',
+                state='disabled')
+        else:
+            m_edit.add_command(label='ホットキーの状態を確認…',
+                               command=self.show_hotkey_status)
         m_edit.add_separator()
         # 2026-10-20 うにさん: 単語帳のまとまりの先頭に「単語帳を開く／閉じる」（ボタン・ホットキーと同じ動き）
         m_edit.add_command(label='単語帳を開く／閉じる',
                            accelerator='Ctrl+Alt+Insert / Ctrl+Alt+Shift+-',
                            command=self._toggle_word_book)
+        # どこからでも単語帳を開け閉めするホットキー（2026-10-19 うにさん）。項目名は
+        # 「単語帳ホットキー有効化」（2026-10-20 うにさん）
+        self.hotkey_wordbook_var = tk.BooleanVar(
+            value=self.settings.get('hotkey_wordbook_enabled'))
+        m_edit.add_checkbutton(
+            label='単語帳ホットキー有効化',
+            variable=self.hotkey_wordbook_var,
+            command=lambda: self._on_toggle_hotkey(
+                'wordbook', self.hotkey_wordbook_var),
+            selectcolor=ACCENT)
         self._word_book_set_var = tk.IntVar(value=0)
         m_word_sets = tk.Menu(m_edit, tearoff=0, postcommand=lambda:
             self._word_book_set_var.set(self._word_book.active_set))
@@ -8526,72 +8594,6 @@ class CorrectNoteApp:
                                variable=self.dark_mode_var,
                                command=self._on_toggle_dark_mode,
                                selectcolor=ACCENT)
-        m_view.add_separator()
-        self.hotkey_insert_var = tk.BooleanVar(
-            value=self.settings.get('hotkey_insert_enabled'))
-        self.hotkey_minus_var = tk.BooleanVar(
-            value=self.settings.get('hotkey_minus_enabled'))
-        # 名前は「…ホットキー有効化」、キーは右のショートカット欄に（2026-10-20 うにさん。
-        # 以前は「簡易入力ウィンドウ（Ctrl+Insert）」のように名前の中にキーを書いていた）
-        m_view.add_checkbutton(
-            label='簡易入力ホットキー有効化', accelerator='Ctrl+Insert',
-            variable=self.hotkey_insert_var,
-            command=lambda: self._on_toggle_hotkey(
-                'insert', self.hotkey_insert_var),
-            selectcolor=ACCENT)
-        m_view.add_checkbutton(
-            label='簡易入力ホットキー有効化', accelerator='Ctrl+Shift+-',
-            variable=self.hotkey_minus_var,
-            command=lambda: self._on_toggle_hotkey(
-                'minus', self.hotkey_minus_var),
-            selectcolor=ACCENT)
-        # どこからでも単語帳を開け閉めするホットキー（2026-10-19 うにさん）。項目名は
-        # 「単語帳ホットキー有効化」（2026-10-20 うにさん）
-        self.hotkey_wordbook_var = tk.BooleanVar(
-            value=self.settings.get('hotkey_wordbook_enabled'))
-        m_view.add_checkbutton(
-            label='単語帳ホットキー有効化', accelerator='Ctrl+Alt+Insert / Ctrl+Alt+Shift+-',
-            variable=self.hotkey_wordbook_var,
-            command=lambda: self._on_toggle_hotkey(
-                'wordbook', self.hotkey_wordbook_var),
-            selectcolor=ACCENT)
-        # 簡易入力ウィンドウに出す説明文の表示。
-        # ボタン（一時解除）はこれとは別に常に出す。
-        self.quick_hint_var = tk.BooleanVar(
-            value=self.settings.get('show_quick_hint'))
-        m_view.add_checkbutton(
-            label='簡易入力の説明を表示',
-            variable=self.quick_hint_var,
-            command=self._on_toggle_quick_hint,
-            selectcolor=ACCENT)
-        # 閉じたら、開く前の入力欄へ戻して貼り付ける（2026-10-14 うにさん）
-        self.quick_paste_back_var = tk.BooleanVar(
-            value=self.settings.get('quick_paste_back'))
-        m_view.add_checkbutton(
-            label='簡易入力を閉じたら、元の入力欄へ貼り付ける',
-            variable=self.quick_paste_back_var,
-            command=lambda: (self.settings.set(
-                'quick_paste_back', bool(self.quick_paste_back_var.get())),
-                self.settings.save()),
-            selectcolor=ACCENT)
-        # 閉じた文をクリップボードに入れるか（2026-10-16 うにさん。既定オン）。
-        # オフでも上の貼り付けはする（そのときだけ貸して戻す。clipboard_keep）。
-        self.quick_close_clipboard_var = tk.BooleanVar(
-            value=self.settings.get('quick_close_clipboard'))
-        m_view.add_checkbutton(
-            label='簡易入力を閉じたら、クリップボードに入れる',
-            variable=self.quick_close_clipboard_var,
-            command=lambda: (self.settings.set(
-                'quick_close_clipboard', bool(self.quick_close_clipboard_var.get())),
-                self.settings.save()),
-            selectcolor=ACCENT)
-        if not self.hotkeys.supported:
-            m_view.add_command(
-                label='（この環境ではグローバルホットキーは使えません）',
-                state='disabled')
-        else:
-            m_view.add_command(label='ホットキーの状態を確認…',
-                               command=self.show_hotkey_status)
 
         _btn_buttons, self._buttons_menu = _make_menubutton('ボタン')
 
@@ -8673,8 +8675,9 @@ class CorrectNoteApp:
         m_learn.add_separator()
         # 保守用。通常は初回に自動で済むので、階層を1つ下げておく。
         m_maint = tk.Menu(m_learn, tearoff=0)
-        m_maint.add_command(label='保存したIMEの読み…',
-                            command=self.open_ime_readings_dialog)
+        # 「保存したIMEの読み…」はメニューから外した（2026-10-20 うにさん「機能は残して、この項目を
+        # メニューから削除します。ユーザーがすぐ見れるところに置かない」）。読みを覚える・本文と一緒に
+        # 消える働きはそのまま。窓（open_ime_readings_dialog）は残してある
         m_maint.add_command(label='語彙を追加…',
                             command=self.open_vocab_dialog)
         m_maint.add_command(label='文章から学習…',
@@ -8689,6 +8692,8 @@ class CorrectNoteApp:
         self._menus = [m_file, m_encoding, self._recent_files_menu, m_edit, m_word_sets, m_view, m_keyboard, self._buttons_menu, m_font, m_font_size,
                        m_about, m_memory, m_look, m_theme, m_decor, m_strength,
                        m_learn, m_maint]
+        for button in self._menu_buttons:       # also for menus opened from the keyboard
+            self._keep_menu_open_entries(button)
         # A posted native Windows menu can capture Motion/Enter events before
         # the adjacent Menubutton sees them.  Watch the pointer only while a
         # menu is posted; Tk timers continue during its native menu loop.
@@ -8724,6 +8729,59 @@ class CorrectNoteApp:
         if memory_usage.background_tabs(self):
             self._queue_background_tabs()
 
+    # 2026-10-22 うにさん「メニューのチェックボックス項目は、クリックしたらチェックを
+    # 切り替えて、メニューを閉じないようにする」。Windows のメニューは項目を押すと
+    # 必ず閉じるので、チェックの項目は切り替えたあと同じメニューを開き直す。
+    # 中身を作り直すメニュー（ボタン）もあるので、開く直前に毎回掛け直す。
+    _KEEP_MENU_OPEN = '_request_menu_reopen'
+
+    def _menu_tree(self, menu):
+        seen, out = set(), []
+        def walk(m):
+            if str(m) in seen:return
+            seen.add(str(m));out.append(m)
+            last = m.index('end')
+            for i in range(last + 1 if last is not None else 0):
+                if m.type(i) == 'cascade':
+                    name = str(m.entrycget(i, 'menu'))
+                    if name:walk(m.nametowidget(name))
+        walk(menu)
+        return out
+
+    def _keep_menu_open_entries(self, button):
+        """Make every checkbutton under this menubutton reopen the menu after it toggles."""
+        try:
+            menu = button.nametowidget(str(button.cget('menu')))
+        except (KeyError, tk.TclError):
+            return
+        for m in self._menu_tree(menu):
+            last = m.index('end')
+            for i in range(last + 1 if last is not None else 0):
+                if m.type(i) != 'checkbutton':continue
+                original = str(m.entrycget(i, 'command'))
+                if self._KEEP_MENU_OPEN in original:continue
+                # One registered command per entry (its name carries the marker), so
+                # tkinter's Menu.delete can still delete it when a menu is rebuilt.
+                def _request_menu_reopen(original=original, path=str(button), menu=m):
+                    if original:menu.tk.eval(original)
+                    self._request_menu_reopen(path)
+                m.entryconfigure(i, command=_request_menu_reopen)
+
+    def _request_menu_reopen(self, path):
+        self._menu_reopen = str(path)
+        # If the item ran after the menu loop returned, open the menu from here.
+        self.root.after(1, self._reopen_menu_if_closed)
+
+    def _reopen_menu_if_closed(self):
+        path = getattr(self, '_menu_reopen', None)
+        if path is None or getattr(self, '_native_menu_active', False) or getattr(self, '_closing', False):
+            return
+        self._menu_reopen = None
+        button = next((b for b in self._menu_buttons if str(b) == path), None)
+        if button is not None and button.winfo_exists():
+            from types import SimpleNamespace
+            self._post_menu_bar(SimpleNamespace(widget=button))
+
     def _post_menu_bar(self, event):
         """Switch top menus only after the current native menu loop returns."""
         inertia=getattr(self,'_scroll_inertia',None)
@@ -8750,6 +8808,7 @@ class CorrectNoteApp:
                 self._native_menu_hover = native
                 for item in self._menu_buttons:
                     item.configure(state='active' if item is button else 'normal')
+                self._keep_menu_open_entries(button)
                 try:
                     self.root.tk.call('tk::MbPost', str(button))
                 finally:
@@ -8758,6 +8817,10 @@ class CorrectNoteApp:
                 if native.closed_by_title:
                     self._menu_closed_by_title = (str(button), time.monotonic())
                     break
+                # A checkbutton toggled inside this loop opens the same menu again.
+                if getattr(self, '_menu_reopen', None) == str(button) and not native.pending:
+                    self._menu_reopen = None
+                    continue
                 button = next((b for b in self._menu_buttons if str(b) == native.pending), None)
         finally:
             self._native_menu_hover = None
@@ -9814,7 +9877,7 @@ class CorrectNoteApp:
             self._bracket_buttons.append(button)
 
         for count, button in enumerate(self._bracket_buttons, 1):
-            hint = ('選択中の文字や、変換中の文字を括弧で包みます。ショートカットキー：F5'
+            hint = ('選択中の文字や、変換中の文字を括弧で包みます。ショートカットキー：F2'
                     + (f'を{count}回' if count > 1 else ''))
             button.bind('<Enter>', lambda e, h=hint: self._toolbar_hover_hint(e, True, h))
             button.bind('<Leave>', lambda e, h=hint: self._toolbar_hover_hint(e, False, h))
@@ -9871,7 +9934,7 @@ class CorrectNoteApp:
         # 報告された）。詳しい使い方は説明書（HTML）に譲り、
         # ここでは操作の要点だけを示す。
         self.UNIFIED_HEADER_TEXT = (
-            '確定済みの単語を右クリック（またはF2）で再変換できます。'
+            '確定済みの単語を右クリック（またはF5）で再変換できます。'
             '範囲選択して再変換もできます。Ctrl+Insertで簡易入力が開き、'
             '入力後に閉じるとコピーされ、ペースト可能になります。また、'
             'アプリ内に挿入されます')
@@ -10221,11 +10284,11 @@ class CorrectNoteApp:
             lambda event: self._on_bookmark_navigation(event, False)))
         self.root.bind('<Alt-Down>', self._ime_first(
             lambda event: self._on_bookmark_navigation(event, True)))
-        self.root.bind_all('<F2>', self._on_f2_candidates)
-        # 欄への束縛は IME が確定した `q` を受け取る入口を分ける
-        # （項目48-EH）。
-        self.editor.bind('<F2>', self._on_f2_candidates_widget)
-        self.result_view.bind('<F2>', self._on_f2_candidates_widget)
+        self.root.bind_all('<%s>' % self.CANDIDATE_KEY, self._on_f2_candidates)
+        # 欄への束縛は IME が確定した文字（F5 なら `t`）を受け取る入口を
+        # 分ける（項目48-EH）。
+        self.editor.bind('<%s>' % self.CANDIDATE_KEY, self._on_f2_candidates_widget)
+        self.result_view.bind('<%s>' % self.CANDIDATE_KEY, self._on_f2_candidates_widget)
 
         # 簡易入力のホットキーを、アプリ自身の中でも受ける。
         #
@@ -10458,8 +10521,9 @@ class CorrectNoteApp:
                                  ('<Insert>',self._on_insert_quote)):
             self.root.bind_all(sequence,handler)
             self.editor.bind(sequence,handler)
-        self.root.bind_all('<F5>',self._on_f5_brackets)
-        self.editor.bind('<F5>',self._on_f5_brackets)
+        self.root.bind_all('<%s>' % self.BRACKET_KEY,self._on_f5_brackets)
+        self.editor.bind('<%s>' % self.BRACKET_KEY,self._on_f5_brackets)
+        self._install_commit_run(self.editor)
         for key in ('F6','F7','F8','F9'):
             self.editor.bind('<'+key+'>',self._on_selection_transform)
         # Only an uninterrupted bracket gesture can be replaced or cancelled.
@@ -10675,6 +10739,26 @@ class CorrectNoteApp:
                                  else f'{lo}〜{hi} 行目を選びました'))
         return 'break'
 
+    @staticmethod
+    def _whole_line_selection(w, ranges):
+        """
+        選択の端が行の途中なら、掛かっている行の全体（改行は含めない）を返す。
+        すでに行全体なら None。返すのは (頭, 末尾, 最初の行, 最後の行)。
+        次の行の頭で終わる選択（行番号のクリックの形）は、その手前の行までとみなす。
+        Tk の linestart/lineend で見るので、絵文字の入った行でも位置がずれない。
+        """
+        first, last = ranges[0], ranges[-1]
+        starts_line = w.compare(first, '==', f'{first} linestart')
+        at_next_head = (w.compare(last, '==', f'{last} linestart')
+                        and w.compare(last, '>', first))
+        ends_line = at_next_head or w.compare(last, '==', f'{last} lineend')
+        if starts_line and ends_line:
+            return None
+        end = w.index(f'{last} -1c') if at_next_head else w.index(last)
+        head = w.index(f'{first} linestart')
+        tail = w.index(f'{end} lineend')
+        return head, tail, int(head.split('.')[0]), int(tail.split('.')[0])
+
     def _on_select_line_text(self, event=None):
         """
         **Shift+スペース——その行の中身を選ぶ**（項目48-OD・2026-09-02・
@@ -10694,10 +10778,23 @@ class CorrectNoteApp:
         """
         w = event.widget if event is not None else self.target
         try:
-            selected = bool(w.tag_ranges('sel'))
+            selected = w.tag_ranges('sel')
         except Exception:
             return 'break'
         if selected:
+            # 2026-10-22 うにさん「Shift+上下で、行の途中までを選択した状態でShift+Spaceしても
+            # 行選択しない。この場合は途中までの選択した行を行全体選択する」。行の途中が
+            # 端にある選択は、掛かっている行の全体へ広げる。行全体のときだけコピーする。
+            wider = self._whole_line_selection(w, selected)
+            if wider is not None:
+                head, tail, first, last = wider
+                w.tag_remove('sel', '1.0', 'end')
+                w.tag_add('sel', head, tail)
+                w.mark_set('insert', tail)
+                w.mark_set(self._sel_anchor_mark(w), head)
+                self._remember_line_selection(w, first, last)
+                w.see(tail)
+                return 'break'
             from types import SimpleNamespace
             self._copy_focused_selection(SimpleNamespace(widget=w))
             return 'break'
@@ -11000,6 +11097,7 @@ class CorrectNoteApp:
 
     def _goto_line(self, line, centered=True):
         """Move the cursor and place the destination at the window's middle."""
+        self._drop_pending_scroll()
         idx = self.editor.index(f'{line}.0')
         was_syncing = getattr(self,'_syncing',False)
         self._syncing = True
@@ -11213,6 +11311,7 @@ class CorrectNoteApp:
         """
         inertia=getattr(self,'_scroll_inertia',None)
         if inertia is not None:inertia.cancel()
+        self._drop_pending_scroll()
         self._release_navigation_padding()
         self.editor.yview(*args)
         self._sync_partner_to_line(self.editor, self.result_view)
@@ -11299,6 +11398,7 @@ class CorrectNoteApp:
         if self._tab_wheel(event) == 'break':
             return 'break'
         # 両方のペインを同じだけ動かす
+        self._drop_pending_scroll()
         delta = -float(event.delta) / 120
         self._wheel_scroll(delta)
         return 'break'
@@ -11931,7 +12031,7 @@ class CorrectNoteApp:
         # （今までどおり）。
         _ks = getattr(event, 'keysym', '')
         if (getattr(self, '_f2_focus_target', None) is not None
-                and _ks != 'F2'
+                and _ks not in (self.CANDIDATE_KEY, self.BRACKET_KEY)
                 and _ks not in ('Shift_L', 'Shift_R', 'Left', 'Right')):
             self._clear_f2_target()
 
@@ -14019,6 +14119,11 @@ class CorrectNoteApp:
         except Exception:
             return 3
 
+    def _drop_pending_scroll(self):
+        """The user moved the view or the cursor: the tab's saved position is not reapplied."""
+        self._pending_scroll = 0.0
+        self._pending_scroll_top = None
+
     def _restore_pending_scroll(self, final=False):
         """
         タブを開いたときの表示位置を当て直す（項目48-N）。
@@ -14041,6 +14146,21 @@ class CorrectNoteApp:
         want = getattr(self, '_pending_scroll', 0.0)
         want_top = getattr(self, '_pending_scroll_top', None)
         if not want and not want_top:
+            return
+        # 2026-10-22 うにさん「タブ移動して、途中の行にいたので、1行目ボタンで先頭に移動
+        # した後、解析が済むとタブ移動した行に戻りました」: 先頭へ動かしたのは位置
+        # （0）だけでは「まだ配置待ち」と見分けられない。カーソルが開いたときから
+        # 動いていれば利用者が動かしたので、当て直さない（スクロールバー・ホイール・
+        # 行への移動は _drop_pending_scroll が先に下ろす）。
+        # 行で見る（自動反映はその行の中でカーソルの桁だけを動かす）
+        try:
+            opened = getattr(self, '_pending_scroll_cursor', None)
+            moved = (opened is not None and
+                     self.editor.index('insert').split('.')[0] != str(opened).split('.')[0])
+        except Exception:
+            moved = False
+        if moved:
+            self._drop_pending_scroll()
             return
         try:
             now = self.editor.yview()[0]
@@ -16239,7 +16359,10 @@ class CorrectNoteApp:
         delay = self._IME_POLL_IDLE_MS
         try:
             event_results=CorrectNoteApp._drain_ime_result_events(self)
-            input_work.drain_quick_readings(self)
+            if input_work.drain_quick_readings(self):
+                # メモ欄の event_results → _on_change と同じ（遅れて届いた読み）
+                import quick_analysis
+                quick_analysis.content_changed(self)
             pointer = getattr(self, '_typing_pointer', None)
             import ime_watch
             hwnd = self.editor.winfo_id()
@@ -17752,6 +17875,8 @@ class CorrectNoteApp:
 
     def _on_f3_return(self,event):
         if not self._plain_shortcut(event):return self._function_key_character(event)
+        # 変換中なら F1・F2 と同じく先に確定してから（2026-10-22。それまでは変換したまま改行した）
+        if self._commit_composition_first(event, self._on_f3_return):return 'break'
         widget=getattr(event,'widget',None)
         if widget is None:return None
         widget.event_generate('<Return>')
@@ -17759,36 +17884,35 @@ class CorrectNoteApp:
 
     def _on_f4_paste(self,event):
         if not self._plain_shortcut(event):return self._function_key_character(event)
+        # 変換中なら先に確定してから貼る（2026-10-22。それまでは変換したまま貼った）
+        if self._commit_composition_first(event, self._on_f4_paste):return 'break'
         widget=getattr(event,'widget',None)
         if widget not in (self.editor,getattr(self,'_quick_text',None)):
             widget=self.editor
         widget.event_generate('<<Paste>>')
         return 'break'
 
-    def _start_native_f5(self):
-        from native_f5 import NativeF5
-        self._native_f5 = NativeF5(self.editor.winfo_id())
-        self.editor.bind('<FocusIn>', lambda e: self._set_native_f5_target(self.editor), add=True)
-        self.editor.bind('<FocusOut>', lambda e: self._set_native_f5_target(None), add=True)
-        if self._native_f5.handle or getattr(self._native_f5,'_low_handle',None):self._poll_native_f5()
+    # 括弧は F2、候補一覧は F5（2026-10-22 うにさん「入れ替える」）。以前の
+    # 括弧の F5 は、変換中でも IME より先に受けるため PC 全体のキーボード
+    # フック（native_f5.py）を使っていたが、キーロガーと同じ形で Store の
+    # 検査に疑われうるのでやめた。変換中の F2 は窓に届く（うにさんの実機）
+    # ので、窓の受け口で受け、変換中なら先に確定する
+    # （_complete_bracket_composition）。Alt を離したときにメニューへ
+    # 焦点が行かないよう、Alt＋F2 を受けたことだけを控える（_on_message）。
+    ALT_BRACKET_MENU_S = 5.0
+    BRACKET_KEY = 'F2'
+    CANDIDATE_KEY = 'F5'
 
-    def _set_native_f5_target(self, widget):
-        hook=getattr(self,'_native_f5',None)
-        if hook is None:return
-        if widget not in (self.editor,getattr(self,'_quick_text',None)):widget=None
-        hook.set_target(widget.winfo_id() if widget is not None else 0)
-        hook.set_editor_focus(widget is not None)
+    def _note_alt_bracket(self, alt):
+        import time
+        self._alt_bracket_at = time.monotonic() if alt else None
 
-    def _poll_native_f5(self):
-        self._native_f5_job = None
-        if getattr(self, '_closing', False):return
-        from types import SimpleNamespace
-        widget=self.root.focus_get()
-        self._set_native_f5_target(widget)
-        for state in self._native_f5.take():
-            if widget is not None and widget in (self.editor,getattr(self,'_quick_text',None)):
-                self._on_f5_brackets(SimpleNamespace(widget=widget, state=state, char='', keysym='F5'))
-        self._native_f5_job = self.root.after(20, self._poll_native_f5)
+    def _consume_alt_bracket_menu(self):
+        """The Alt-alone menu activation right after an Alt+F2 bracket, once."""
+        import time
+        at = getattr(self, '_alt_bracket_at', None)
+        self._alt_bracket_at = None
+        return at is not None and time.monotonic() - at < self.ALT_BRACKET_MENU_S
 
     def _on_f5_brackets(self,event):
         if ime_confirmed_char_event(event) is not None:
@@ -17806,9 +17930,12 @@ class CorrectNoteApp:
                 import ctypes
                 alt=bool(ctypes.windll.user32.GetAsyncKeyState(0x12)&0x8000)
             else:alt=True
+        self._note_alt_bracket(alt)
         pending = getattr(self, '_pending_bracket_composition', None)
         if pending is not None and pending.get('widget') is not widget:
             self._clear_pending_bracket_composition();pending=None
+        if pending is not None and pending.get('then') is not None:
+            return 'break'      # an F1/F2 commit is on its way; it wraps nothing
         if pending is not None:
             kind = self._next_bracket_kind(pending['kind'])
             if kind is not None:
@@ -17818,11 +17945,15 @@ class CorrectNoteApp:
         if self._live_bracket_cycle(widget) is not None:
             self._cycle_brackets(widget)
         elif alt and not (control or shift):
-            self._wrap_with_brackets('【','】',from_cycle=True,widget=widget)
+            # 2026-10-22 うにさん「Alt+F2を　カーソル位置に括弧を置く」（選択・確定に関係なく）
+            if not self._commit_composition_first(event, lambda e:self._place_brackets_at_cursor(widget)):
+                self._place_brackets_at_cursor(widget)
         elif control and shift and not alt:
             self._wrap_with_brackets('“','”',from_cycle=True,widget=widget)
         elif control and not alt:
-            self._wrap_with_parens(from_cycle=True,widget=widget)
+            # 2026-10-22 うにさん「Ctrl+F2を　直前の変換に対して括弧で括る」。変換候補の間も
+            # Ctrl+F2 は IME を通ってくるので、変換中ならその文字を確定して囲む（今までの流れ）
+            self._wrap_last_conversion(widget)
         elif shift and not alt:
             self._wrap_with_brackets('『','』',from_cycle=True,widget=widget)
         elif not alt:
@@ -17867,11 +17998,41 @@ class CorrectNoteApp:
             return None
         return self._on_toggle_bookmark_key(event)
 
+    def _commit_composition_first(self, event, action):
+        """
+        F1・F2 を変換中に押したら、先に確定してから動かす（F5 と同じ流れ）。
+
+        2026-10-22 うにさん「入力中にF2すると、入力中の1文字目だけが、上の行の
+        文字の末尾に入ります」「（F1 は）文字確定後に別の文字をクリックすると
+        引用します。打った文字の左に」。変換中のキーは、変換中の文字がまだ欄に
+        入っていないうちに届く。そこで位置や対象の語を決めると、確定した文字の
+        手前（行頭なら上の行の末尾）を指してしまう。確定した文字が欄に入って
+        から、カーソルをその後ろに置いて、同じキーをもう一度処理する。
+        受け取ったら True。
+        """
+        targets = tuple(w for w in (self.editor, getattr(self, '_quick_text', None)) if w is not None)
+        widget = getattr(event, 'widget', None)
+        if widget not in targets:
+            try:widget = self.root.focus_get()
+            except Exception:widget = None
+        if widget is None or widget not in targets:return False
+        import ime_watch
+        try:
+            if not ime_watch.composition_active(widget.winfo_id()):return False
+        except Exception:
+            return False
+        from types import SimpleNamespace
+        again = SimpleNamespace(widget=widget, keysym=getattr(event, 'keysym', ''), char='',
+                                state=getattr(event, 'state', 0), keycode=getattr(event, 'keycode', 0))
+        return self._complete_bracket_composition(None, None, widget, then=lambda:action(again))
+
     def _on_pick_key(self, event=None):
         # **IME が確定した `p`**（keysym が F1 に化けたもの）なら、
         # 引用モードに入ってはいけない（項目48-EH）。bind_all から
         # 来た場合は文字が既に入っているので、ここでは何もしない。
         if self._ime_fkey_skip(event) is not None:
+            return 'break'
+        if self._commit_composition_first(event, self._on_pick_key):
             return 'break'
         if self._copy_focused_selection(event,only_if_selected=True):
             return 'break'
@@ -17917,8 +18078,12 @@ class CorrectNoteApp:
         self._forget_bracket_cycle()
 
     def _on_bracket_other_key(self, event):
-        if getattr(event, 'keysym', '') not in (
-                'F5', 'Escape', 'Shift_L', 'Shift_R', 'Control_L',
+        keysym = getattr(event, 'keysym', '')
+        if keysym not in (self.BRACKET_KEY, 'Shift_L', 'Shift_R', 'Control_L',
+                          'Control_R', 'Alt_L', 'Alt_R'):
+            self._alt_bracket_at = None   # another key: a later Alt is the user's own
+        if keysym not in (
+                self.BRACKET_KEY, 'Escape', 'Shift_L', 'Shift_R', 'Control_L',
                 'Control_R', 'Alt_L', 'Alt_R'):
             self._forget_bracket_cycle()
 
@@ -18055,6 +18220,24 @@ class CorrectNoteApp:
         kinds = preferences.kinds() if preferences is not None else tuple(range(len(self.BRACKET_STYLES)))
         return next_bracket(kinds, current)
 
+    def _place_brackets_at_cursor(self, widget):
+        """Alt+F2: an empty pair at the cursor, whatever is selected or was just committed."""
+        self._bracket_target = ('caret',)
+        try:self._cycle_brackets(widget)
+        finally:self._bracket_target = None
+
+    def _wrap_last_conversion(self, widget):
+        """Ctrl+F2: wrap what is being converted, else the last IME commit still in the text."""
+        import ime_watch
+        try:composing = bool(ime_watch.composition_active(widget.winfo_id()))
+        except Exception:composing = False
+        last = None if composing else self._last_conversion_range(widget)
+        if last is not None:
+            self._bracket_target = ('range',) + last
+            self._forget_commit_run()
+        try:self._cycle_brackets(widget)
+        finally:self._bracket_target = None
+
     def _cycle_brackets(self, widget=None):
         state = self._live_bracket_cycle(widget)
         kind = self._next_bracket_kind(state['kind'] if state else None)
@@ -18065,6 +18248,96 @@ class CorrectNoteApp:
         else:
             self._wrap_with_brackets(*self.BRACKET_STYLES[kind],
                                      from_cycle=True,widget=widget)
+
+    # 確定した直後の文字（2026-10-22 うにさん「漢字変換中の F2は、何も起きませんでした」→「A
+    # 確定直後のF2」）。変換候補の間の括弧キーは IME が持っていきアプリに届かないので、
+    # Enter で確定したあとの括弧キーで、いま確定した文字を囲む。確定した文字は、Tk が
+    # IME の確定として届ける打鍵（%E が -3。括弧の確定待ちと同じ印）で分かる。ひとまとまり
+    # （同じ確定の字）は、次の待ち時間までに届いた分。キーの横取りも記録もしない（打鍵の
+    # 文字は持たず、位置の印だけ）。カーソル移動・ほかの打鍵・クリック・別のタブで捨てる。
+    COMMIT_RUN_TAG = 'CorrectNoteCommitRun'
+    _COMMIT_RUN_KEEP = ('Shift_L', 'Shift_R', 'Control_L', 'Control_R', 'Alt_L', 'Alt_R')
+
+    def _install_commit_run(self, widget):
+        command = getattr(self, '_commit_run_command', None)
+        if command is None:
+            command = self._commit_run_command = self.root.register(self._on_commit_run_event)
+            self.root.tk.call('bind', self.COMMIT_RUN_TAG, '<KeyPress>', f'{command} key %E %K %W')
+            self.root.tk.call('bind', self.COMMIT_RUN_TAG, '<ButtonPress>', f'{command} button 0 {{}} %W')
+            self.root.tk.call('bind', self.COMMIT_RUN_TAG, '<FocusOut>', f'{command} focus 0 {{}} %W')
+        tags = tuple(t for t in widget.bindtags() if t != self.COMMIT_RUN_TAG)
+        widget.bindtags((self.COMMIT_RUN_TAG,) + tags)
+
+    # One IME result reaches Tk as one character per event, with idle time in between (seen with
+    # a real IME: an idle-based end kept only the last character). The characters of one commit
+    # follow each other at once; typing the next reading always takes far longer.
+    COMMIT_RUN_GAP_S = 0.1
+
+    def _on_commit_run_event(self, kind, marker, keysym, path):
+        import time
+        run = getattr(self, '_commit_run', None)
+        try:widget = self.root.nametowidget(str(path))
+        except (KeyError, tk.TclError):return ''
+        if kind == 'key' and str(marker) == '-3':
+            now = time.monotonic()
+            if (run is not None and run['widget'] is widget and run['fresh']
+                    and now - run['last'] < self.COMMIT_RUN_GAP_S
+                    and widget.compare('insert', '==', run['end'])):
+                run['last'] = now   # more characters of the same commit
+            else:
+                self._commit_run_seq = getattr(self, '_commit_run_seq', 0) + 1
+                start, end = 'CommitRunStart%d' % self._commit_run_seq, 'CommitRunEnd%d' % self._commit_run_seq
+                self._forget_commit_run()
+                widget.mark_set(start, 'insert');widget.mark_gravity(start, 'left')
+                widget.mark_set(end, 'insert');widget.mark_gravity(end, 'right')
+                run = self._commit_run = dict(widget=widget, start=start, end=end, last=now, text='', fresh=True,
+                                              tab=self.session.current() if widget is self.editor else None)
+            # The character is inserted after this tag: read the run back once it is in.
+            self.root.after_idle(lambda:self._note_commit_run_text(run))
+            return ''
+        if kind == 'key' and (keysym in self._COMMIT_RUN_KEEP or keysym == self.BRACKET_KEY):
+            return ''
+        # Anything else: no longer "just" committed (plain F2), but still the last
+        # conversion for Ctrl+F2 while its text stays as it was.
+        if run is not None and (kind != 'focus' or run['widget'] is widget):
+            run['fresh'] = False
+        return ''
+
+    def _note_commit_run_text(self, run):
+        if getattr(self, '_commit_run', None) is not run:return
+        try:
+            run['text'] = run['widget'].get(run['start'], run['end'])
+        except tk.TclError:
+            self._forget_commit_run()
+
+    def _forget_commit_run(self):
+        run = getattr(self, '_commit_run', None)
+        self._commit_run = None
+        if run is not None:
+            try:run['widget'].mark_unset(run['start'], run['end'])
+            except tk.TclError:pass
+
+    def _just_committed_range(self, widget):
+        """(start, end) of the text the IME has just committed here, while nothing else happened."""
+        run = getattr(self, '_commit_run', None)
+        if run is None or not run.get('fresh'):return None
+        last = self._last_conversion_range(widget)
+        try:
+            if last is None or not widget.compare('insert', '==', run['end']):return None
+        except tk.TclError:
+            return None
+        return last
+
+    def _last_conversion_range(self, widget):
+        """(start, end) of the last IME commit here, while that text is still as committed."""
+        run = getattr(self, '_commit_run', None)
+        if run is None or run['widget'] is not widget or not run.get('text'):return None
+        try:
+            if widget is self.editor and self.session.current() is not run['tab']:return None
+            if widget.get(run['start'], run['end']) != run['text']:return None
+            return _stable_text_index(widget, run['start']), _stable_text_index(widget, run['end'])
+        except tk.TclError:
+            return None
 
     def _wrap_with_brackets(self, open_ch, close_ch, from_cycle=False, widget=None):
         """Wrap selection or insert a pair; consecutive actions replace it."""
@@ -18086,8 +18359,18 @@ class CorrectNoteApp:
         selected = editor.tag_ranges('sel')
         selection_before = ((_stable_text_index(editor,selected[0]), _stable_text_index(editor,selected[1]))
                             if selected else None)
-        f2_range = self._f2_bracket_range(editor)
-        if f2_range is not None:
+        target = getattr(self, '_bracket_target', None)
+        self._bracket_target = None
+        f2_range = self._f2_bracket_range(editor) if target is None else None
+        if target is not None and target[0] == 'caret':
+            # Alt+F2: the cursor, even with a selection or a fresh commit
+            start = end = cursor_before
+            mode = 'caret'
+        elif target is not None:
+            # Ctrl+F2: the last conversion
+            start, end = target[1], target[2]
+            mode = 'range'
+        elif f2_range is not None:
             start, end = (_stable_text_index(editor, value) for value in f2_range)
             mode = 'range'
             selection_before = None
@@ -18098,6 +18381,11 @@ class CorrectNoteApp:
             while (editor.compare(end, '>', start)
                    and editor.get(f'{end}-1c', end) == '\n'):
                 end = _stable_text_index(editor, f'{end}-1c')
+            mode = 'range'
+        elif self._just_committed_range(editor) is not None:
+            # 確定した直後の括弧キーは、いま確定した文字を囲む（2026-10-22 うにさん「A」）
+            start, end = self._just_committed_range(editor)
+            self._forget_commit_run()
             mode = 'range'
         else:
             start = end = cursor_before
@@ -18180,10 +18468,12 @@ class CorrectNoteApp:
         self._after_ime_char_insert(editor)
         return 'break'
 
-    def _complete_bracket_composition(self, kind, pair, editor):
+    def _complete_bracket_composition(self, kind, pair, editor, then=None):
         import ime_watch
         pending = getattr(self, '_pending_bracket_composition', None)
         if pending is not None:
+            # An F2 commit (then) is neither wrapped nor cycled by F5.
+            if then is not None or pending.get('then') is not None:return True
             if pending['kind'] == kind:self._clear_pending_bracket_composition()
             else:pending.update(kind=kind, pair=pair)
             return True
@@ -18200,7 +18490,7 @@ class CorrectNoteApp:
         suffix = editor.get(end, 'end-1c')
         pending = dict(kind=kind, pair=pair, comp=comp,
             prefix=prefix, suffix=suffix, tab=self.session.current(),widget=editor,
-            until=time.monotonic()+1.0)
+            until=time.monotonic()+1.0, then=then)
         self._pending_bracket_composition = pending
         self._start_bracket_ime_chars(editor)
         events = getattr(self, '_ime_result_events' if editor is self.editor else '_quick_ime_result_events', None)
@@ -18221,6 +18511,10 @@ class CorrectNoteApp:
             self._clear_pending_bracket_composition()
             return False
         self.root.after(10, lambda:self._finish_bracket_composition(pending))
+        # 押したキーが届いて確定を頼んだことを見えるようにする（2026-10-22。変換候補の間の
+        # キーが届いているかを、記録を取らずに画面で分かるように）
+        try:self.status.config(text='変換中の文字を確定しています…')
+        except Exception:pass
         return True
 
     def _finish_bracket_composition(self, pending):
@@ -18236,7 +18530,10 @@ class CorrectNoteApp:
                 or ime_watch.composition_active(editor.winfo_id())):
             if time.monotonic() < pending['until']:
                 self.root.after(10, lambda:self._finish_bracket_composition(pending))
-            else:self._clear_pending_bracket_composition()
+            else:
+                self._clear_pending_bracket_composition()
+                try:self.status.config(text='変換中の文字の確定を待ちましたが、届きませんでした')
+                except Exception:pass
             return
         # Wrap only the actual committed range. Never insert preedit guesses;
         # actual result delivery retains readings and undo history.
@@ -18249,6 +18546,14 @@ class CorrectNoteApp:
         if pending.get('reading'):
             if editor is self.editor:self._remember_ime_pair(pending['comp'],pending['reading'])
             else:input_work.quick_document(self,after).remember(left,end,pending['comp'],pending['reading'])
+        then = pending.get('then')
+        if then is not None:
+            # F2 pressed while converting: act on the committed text with the
+            # cursor after it, as if the user had confirmed it first.
+            editor.tag_remove('sel','1.0','end')
+            editor.mark_set('insert',f'1.0+{end}c')
+            then()
+            return
         pair = pending['pair']
         if pending['kind'] == 0:
             pair = ('(',')') if pending['comp'] and not has_fullwidth(pending['comp']) else self.BRACKET_STYLES[0]
@@ -18395,8 +18700,11 @@ class CorrectNoteApp:
         editor=self._bracket_widget(widget)
         """Use ASCII parentheses for an ASCII selection, otherwise fullwidth."""
         active = self._live_bracket_cycle(widget)
+        target = getattr(self, '_bracket_target', None)
         if active is not None:
             text = active['content']
+        elif target is not None:
+            text = editor.get(target[1], target[2]) if target[0] == 'range' else ''
         else:
             f2_range = self._f2_bracket_range(editor)
             if f2_range is not None:
@@ -18963,7 +19271,7 @@ class CorrectNoteApp:
                 and getattr(event, 'state', 0) & 0x4
                 and ime_confirmed_char_event(event) is None):
             return None
-        if keysym in ('F1', 'F2', 'Shift_L', 'Shift_R',
+        if keysym in ('F1', self.CANDIDATE_KEY, self.BRACKET_KEY, 'Shift_L', 'Shift_R',
                      'Control_L', 'Control_R', 'Alt_L', 'Alt_R',
                      'equal') \
                 and ime_confirmed_char_event(event) is None:
@@ -19059,6 +19367,8 @@ class CorrectNoteApp:
         got = self._ime_fkey_insert(event) if event is not None else None
         if got is not None:
             return got
+        if event is not None and self._commit_composition_first(event, self._on_quick_f1):
+            return 'break'
         if self._copy_focused_selection(event,only_if_selected=True):
             return 'break'
         if getattr(self, '_pick_mode', None):
@@ -19155,6 +19465,8 @@ class CorrectNoteApp:
         """
         tw = getattr(self, '_quick_text', None)
         if tw is None:
+            return 'break'
+        if event is not None and self._commit_composition_first(event, self._on_quick_f2):
             return 'break'
         # **候補が無い語で止まっても遡りは続ける**（項目48-GM。
         # 本体の F2 と同じ話。上の `_on_f2_candidates` を見ること）。
@@ -20256,6 +20568,8 @@ class CorrectNoteApp:
         # **IME が確定した `q`**（keysym が F2 に化けたもの）なら、
         # 候補一覧を開いてはいけない（項目48-EH）。
         if self._ime_fkey_skip(event) is not None:
+            return 'break'
+        if self._commit_composition_first(event, self._on_f2_candidates):
             return 'break'
         unified = self._layout_is_unified()
 
@@ -23968,8 +24282,8 @@ class CorrectNoteApp:
 
             def _on_message(hwnd, msg, wparam, lparam, uid, ref):
                 if msg == 0x0112 and wparam&0xfff0 == 0xf100 and not lparam:
-                    native = getattr(self,'_native_f5',None)
-                    if native is not None and native.consume_alt_menu(u32.GetMessageTime()):return 0
+                    # SC_KEYMENU from releasing the Alt of an Alt+F2 bracket.
+                    if self._consume_alt_bracket_menu():return 0
                 if msg in taskbar_messages:
                     self._drop_icon_pending = True
                 if msg == 0x010F and lparam & 0x0800:   # WM_IME_COMPOSITION・GCS_RESULTSTR
