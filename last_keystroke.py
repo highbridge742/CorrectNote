@@ -1867,7 +1867,7 @@ def _rough_convert(reading, store, dict_index, nth=0):
     return out
 
 
-def _known_kana_word(face, clause, typed, dict_index, tail=3, inflected=False):
+def _known_kana_word(face, clause, typed, dict_index, tail=3, inflected=False, head=0):
     """かなの顔が「世の中に在る語の読み（3字以上）＋手を付けていない付属」か。
 
     入口が漢字にしない語（冷蔵庫・大好き など、かなで書くのも普通の語）は
@@ -1878,21 +1878,25 @@ def _known_kana_word(face, clause, typed, dict_index, tail=3, inflected=False):
     """
     if dict_index is None or not _kana_str(face):
         return False
-    for k in range(len(face), 1, -1):
-        rest = face[k:]
-        if rest and not _untouched_tail(rest, clause, typed):
-            if len(rest) > tail:
-                break
-            continue
-        try:
-            if k >= 3 and dict_index.is_world_reading(face[:k]):
-                return True
-            # 用言の活用形（うえ＋た・とっ＋た）は世の中の読みの表に無い。
-            # 活用形の表に顔があれば語と見る（2字の語幹から）
-            if inflected and dict_index.inflected_surfaces_for_reading(face[:k]):
-                return True
-        except Exception:
-            return False
+    # 文節の頭の助詞（に＋とりかかる: 文節が前の助詞から始まる形。head 字・呼ぶ側が品詞で決める）は
+    # 末尾の付属と同じに外して見る（2026-10-25）。共通の頭の字を勝手に外すと しきゅうでん→きゅうでん が語になる
+    for h in sorted({0, head} if 0 < head <= len(face) - 3 else {0}):
+        body = face[h:]
+        for k in range(len(body), 1, -1):
+            rest = body[k:]
+            if rest and not _untouched_tail(rest, clause, typed):
+                if len(rest) > tail:
+                    break
+                continue
+            try:
+                if k >= 3 and dict_index.is_world_reading(body[:k]):
+                    return True
+                # 用言の活用形（うえ＋た・とっ＋た）は世の中の読みの表に無い。
+                # 活用形の表に顔があれば語と見る（2字の語幹から）
+                if inflected and dict_index.inflected_surfaces_for_reading(body[:k]):
+                    return True
+            except Exception:
+                return False
     return False
 
 
@@ -2388,6 +2392,27 @@ def _her_word(store, reading, surface):
         return any(e.get('surface') == surface and _used_entry(e) for e in store.lookup(reading))
     except Exception:
         return False
+
+
+def _her_word_trusted(store, reading, surface):
+    """稀の紫を消してよいほど本人の語か。身近さの表で層3以上（か判定なし）の2字の漢語は、試験の行を打ち続けただけで
+    2回に届く（切磋名 の 切磋）ので、初期なら付く紫を2回の学習で消さない: 4回以上で信じる（うに 10-25 06:53Z
+    「初期で直る、使うと直らない」判定の見直し）。層1〜2の語・漢語でない語は今までどおり（_her_word）。"""
+    if not _her_word(store, reading, surface):
+        return False
+    if len(surface) != 2 or not all(_kanji(c) for c in surface) or _kango_noun_head(surface) is None:
+        return True          # 漢語でない語（旅先・夕立）は今までどおり
+    try:
+        import kango_tier
+        tier = kango_tier.known_usage_tier(surface)
+    except Exception:
+        return True
+    if tier is not None and tier <= 2:
+        return True
+    try:
+        return any(e.get('surface') == surface and int(e.get('count') or 0) >= 4 for e in store.lookup(reading))
+    except Exception:
+        return True
 
 
 def _her_faces(store, reading):
@@ -3223,6 +3248,19 @@ def _clause_reads(text):
             return False
     return True
 
+def _mapped_start(text, s, corrected):
+    """text の位置 s を、入口の答え corrected の上の位置に写す（s より前の直しの字数の差だけ動く）。"""
+    if corrected == text:
+        return s
+    import difflib
+    shift = 0
+    for tag, a, b, c, d in difflib.SequenceMatcher(None, text, corrected, autojunk=False).get_opcodes():
+        if tag == 'equal' or b > s:
+            continue
+        shift += (d - c) - (b - a)
+    return max(0, min(len(corrected), s + shift))
+
+
 def repair_ime_clause(line, result, retry, input_method='kana', decisions=None,
                       dict_index=None, store=None, context_vec=None, surrounding=()):
     """
@@ -3239,12 +3277,18 @@ def repair_ime_clause(line, result, retry, input_method='kana', decisions=None,
     if base is None:
         return None
     done = result.get('corrected', line)
+    base_line = base
+    done_changed = ()
     if done and done != line:
         # 入口がすでに直した行（せ欄たく物→洗濯物）があれば、それより十分に
         # 軽くなる読み直しだけ採る（かなに戻すだけの直しで漢字の直しを潰さない）
         cost_done = morphology.path_cost(done)
         if cost_done is not None:
             base = min(base, cost_done)
+        import difflib
+        done_changed = tuple((o[1], o[2]) for o in difflib.SequenceMatcher(None, line, done, autojunk=False).get_opcodes()
+                             if o[0] != 'equal')
+    base_done = base
     toks = list(morphology.tokenize(line))
     if not toks:
         return None
@@ -3326,6 +3370,10 @@ def repair_ime_clause(line, result, retry, input_method='kana', decisions=None,
             # 枠を使い切った後は、文法で確かな印の文節（組み立ての形を持ちうる）だけ見る
             continue
         kana_line = line[:s] + typed + line[e:]
+        # 入口の直し（こみれから→これから）がこの文節の外だけなら、読み直しの行はその直しを持たないので、
+        # 比べる元は元の行の費用。文節に掛かる直しがあるときだけ、直した行より軽くなることを求める
+        # （本人の語彙で入口が別の所を直すと、文節の読み直しが線に届かなくなっていた。2026-10-25）
+        base = base_line if not any(a < e and s < b for a, b in done_changed) else base_done
         # 文法で確かな印（活用の形が合わない続き）の掛かる文節では、IME の語を残して余った字だけ抜いた形
         # （新しい**て**スマートフォン→新しいスマートフォン）は、費用の下がりが小さくても試し、入口がその
         # まま通せば採る（て を抜いても janome の費用は 748 しか下がらず CLAUSE_GAIN に届かなかった。
@@ -3659,7 +3707,14 @@ def repair_ime_clause(line, result, retry, input_method='kana', decisions=None,
                 if corrected == line:
                     continue
                 new_e = len(corrected) - (len(line) - e)
-                face = corrected[s:new_e]
+                # 入口が文節より前も直した形（本人の語彙で こみれから→これから が同時に直る）は、文節の頭の位置が
+                # 字数の差だけずれる（顔が とりかかる でなく りかかる になり、採れなかった。2026-10-25）
+                s_c = _mapped_start(trial_text, s, corrected)
+                face = corrected[s_c:new_e]
+                # 文節が前の助詞から始まる（に＋とりかかる）なら、助詞は語の判定・置く相手に入れない
+                _h = next((t.end - t.start for t in toks
+                           if t.start == s and t.pos == '助詞' and t.end - t.start <= 2
+                           and face.startswith(t.surface) and typed.startswith(t.surface)), 0)
                 if kind != 'placed' and _new_conjugation_mismatch(line, corrected):
                     # 入口を通っても、元の行に無い活用の形の合わない続きができる形（多**い**なる）は採らない
                     continue
@@ -3781,9 +3836,9 @@ def repair_ime_clause(line, result, retry, input_method='kana', decisions=None,
                 ok = (not kana_odd and gate_real >= CLAUSE_GAIN
                       and (_cost_per_char(corrected, cost) < CLAUSE_COST
                            or converted or grammar_fix or kept_kanji
-                           or (kana_face and _known_kana_word(face, line[s:e], typed, dict_index)))
+                           or (kana_face and _known_kana_word(face, line[s:e], typed, dict_index, head=_h)))
                       and (not kana_face or grammar_fix
-                           or _known_kana_word(face, line[s:e], typed, dict_index, tail=4, inflected=True)))
+                           or _known_kana_word(face, line[s:e], typed, dict_index, tail=4, inflected=True, head=_h)))
                 if (own and corrected == trial_text and real >= (1 if text in own_relax else CLAUSE_GAIN)
                         and not _rare_kango(own[1])):
                     # IME の語をそのまま残して余った字だけ抜いた形を入口がそのまま通したなら、
@@ -3806,8 +3861,10 @@ def repair_ime_clause(line, result, retry, input_method='kana', decisions=None,
                     # 軽くならなければかなのまま）。かなの形が門を通るならその上に置くだけ
                     # （漢字の形だけが共通の最終検査で止まったときのために、かなの形を残す）。
                     # かなの形が門を通らないときは、置いた形が漢字の直しと同じ門を通ること
-                    placed = _place_kanji(corrected, s, new_e, line[s:e], typed,
+                    placed = _place_kanji(corrected, s_c + _h, new_e, line[s + _h:e], typed[_h:],
                                           store, dict_index, context_vec, surrounding)
+                    if placed and _h:
+                        placed = (placed[0], face[:_h] + placed[1]) + tuple(placed[2:])
                     if placed and _new_conjugation_mismatch(line, placed[0]):
                         # 置いた形が打ち違いの印そのもの（聞き置く＋ながら: 基本形＋ながら）になるなら置かない
                         placed = None
@@ -3821,7 +3878,7 @@ def repair_ime_clause(line, result, retry, input_method='kana', decisions=None,
                     if placed and alt_cost is not None and alt_cost < cost:
                         # 線を割るかは、並ぶ表記の中で最も安い形の費用で見る（電気代/電機代: 表記の違いは根拠にしない）
                         parts0 = _kana_word_split(face, line[s:e], typed, dict_index)
-                        est = (_best_face_cost(corrected, s, new_e, parts0[0], parts0[1], store, dict_index)
+                        est = (_best_face_cost(corrected, s_c, new_e, parts0[0], parts0[1], store, dict_index)
                                if parts0 and len(parts0[0]) >= 2 else None)
                         gate_cost = min(alt_cost, est) if est is not None else alt_cost
                         strict = (base - gate_cost >= CLAUSE_GAIN
@@ -3833,7 +3890,7 @@ def repair_ime_clause(line, result, retry, input_method='kana', decisions=None,
                             if parts:
                                 extra['placed_word'] = (parts[0], placed[1][:len(placed[1]) - len(parts[1])])
                             corrected, face = placed[0], placed[1]
-                            new_e = s + len(face)
+                            new_e = s_c + len(face)
                             if len(placed) > 2 and placed[2]:
                                 extra['weak_pick'] = True
                             got = dict(got, corrected=corrected, **extra)
@@ -4004,9 +4061,10 @@ def repair_ime_clause(line, result, retry, input_method='kana', decisions=None,
         return None
     corrected = got.get('corrected', text)
     new_e = len(corrected) - (len(line) - e)
-    if new_e < s:
+    s_c = _mapped_start(text, s, corrected)
+    if new_e < s_c:
         return None
-    return text, got, (s, e, corrected[s:new_e])
+    return text, got, (s, e, corrected[s_c:new_e])
 
 
 def _mapped_span(text, corrected, a, b):
@@ -4291,7 +4349,9 @@ def with_last_keystroke_repair(fn):
         forms = [(inner.get('corrected', text), (lo, hi, face))]
         if inner.get('kana_fallback'):
             forms.append(inner['kana_fallback'])
-        elif inner.get('unsure_spans') and not inner.get('odd_spans'):
+        elif not inner.get('odd_spans') and (inner.get('unsure_spans') or _kana_str(face)):
+            # かなのまま残った文節（にとりかかる）は、入口が迷いを残さなくても漢字を置いた形を先に試す
+            # （本人の語彙では入口が迷いを残さず、かなの形だけが最終検査に行って落ちていた。2026-10-25）
             placed = _place_doubtful_run(inner.get('corrected', text), lo, line, options)
             if placed:
                 forms.insert(0, placed)
@@ -5548,7 +5608,7 @@ def _mark_rare_clauses(result, line, options):
         return result
     store = options.get('store')
     spans = [(a, b) for a, b in spans
-             if not (store is not None and _her_word(store, _region_reading(line, a, b), line[a:b]))]
+             if not (store is not None and _her_word_trusted(store, _region_reading(line, a, b), line[a:b]))]
     spans += sure
     if not spans:
         return result

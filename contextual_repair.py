@@ -9098,6 +9098,40 @@ def _native_semantic_homophone(target,surface,reading,repair,argument_fit):
     return target.text[old[0].end-len(before):]==surface[new[0].end-len(before):]
 
 
+def _world_word_break(row):
+    """IME が確定した読みのまま世の中にあるカタカナ語（同梱の表の語）の**中のキー**を変える手か（2026-10-25）。
+
+    `クリック詩ながら` → 本物の IME の読み戻しで共通入口の検算が外れ、文脈補正の候補 `クラックし`
+    （り→ら の隣接キー・読みの費用が少し安い）が `クリックし`（同じ読み）に勝った。本人が打った読み
+    （literal_kana・saved_ime_segment）がそのまま表の語になっている所は正しく書けている（48-LA と同じ考え）。
+    その中の字を別のキーに替える手は、同じ読みで通せる候補より後ろに置く。元の読みが表の語でないとき
+    （キングブリザード→ハングブリザード）は今までどおり。特定の語は名指ししない。"""
+    try:
+        repair=row.get('repair') or {}
+        steps=(repair,)+tuple(repair.get('steps',()) or ())
+        positions=[st.get('position') for st in steps
+                   if st.get('operation') not in (None,'same_reading') and isinstance(st.get('position'),int) and st.get('position')>=0]
+        if not positions:
+            return 0
+        reading=row.get('reading') or {}
+        segments=reading.get('segments',()) if isinstance(reading,dict) else getattr(reading,'segments',())
+        from loanword import hiragana_to_katakana as _h2k
+        import corrector as _corr
+        for seg in segments or ():
+            if len(seg)<4 or seg[3] not in ('literal_kana','saved_ime_segment'):
+                continue
+            a,b,rd=seg[0],seg[1],seg[2]
+            if not rd or len(rd)<3 or not all('ぁ'<=c<='ゖ' or c=='ー' for c in rd):
+                continue
+            if not _corr._in_word_table(_h2k(rd)):
+                continue
+            if any(a<=pos<b for pos in positions):
+                return 1
+    except Exception:
+        return 0
+    return 0
+
+
 def rank_candidates(rows):
     """SR-D total order, with group-wide treatment of optional numeric gaps.
 
@@ -9116,7 +9150,7 @@ def rank_candidates(rows):
     # A proved source contrast distinguishes specific senses. Broad case
     # compatibility alone cannot tie that relation through double counting.
     core=('native_predicate','source_relation','written_boundary','meaning','written_native','native_inflection','method_spelling','bases','script',
-          'proper','terminal','guesses','restricted_usage','common_usage','general_usage','nonadjacent_key')
+          'proper','terminal','guesses','restricted_usage','common_usage','general_usage','nonadjacent_key','world_word_break')
     cohorts={}
     for row in rows:
         # Once source, meaning and known usage tie, an unexplained distant
@@ -9125,6 +9159,8 @@ def rank_candidates(rows):
         operations=(row['repair'],)+tuple(row['repair'].get('steps',()))
         row['rank_evidence']['nonadjacent_key']=int(any(
             step.get('operation')=='nonadjacent_substitution' for step in operations))
+        # 打った読みのまま表にあるカタカナ語の中のキーを替える手は、同じ読みの候補より後ろ（2026-10-25）
+        row['rank_evidence']['world_word_break']=_world_word_break(row)
         # Explicitly judged restricted use remains negative evidence even
         # beside an unjudged word. Unknown usage is still not everyday proof.
         row['rank_evidence']['restricted_usage']=int(row['rank_evidence'].get('usage')==3)

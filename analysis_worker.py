@@ -466,6 +466,16 @@ class Runtime:
                     check_current_request()
                     load()
             except Exception:traceback.print_exc()  # Real preparation retries and reports failures.
+            try:
+                # The reading lattice (kana_lattice_place) loads its saved table here while no line is waiting;
+                # a failure only means the first line loads it (2026-10-25). Only a saved table: making it reads
+                # janome.sysdic.entries(), after which a DictIndex built in this process comes out empty
+                # (tools_local/lattice_memtest_20261025), so the warmup never makes it
+                from analysis_context import check_current_request
+                check_current_request()
+                import reading_lattice
+                reading_lattice.load(build=False)
+            except Exception:pass
             return dict(ready=getattr(self,'tables_ready',False))
         if kind=='prepare':
             from literal_lines import literal_only

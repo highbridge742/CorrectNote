@@ -37,8 +37,12 @@ def child():
    a.ruler_btn.invoke();marked({2,3});assert a.ruler_btn.cget('relief')=='sunken'
    assert a.editor_source_text()==original
    assert tuple(map(str,a.editor.tag_ranges('sel')))==selection
-   try:a.editor.edit_undo();raise AssertionError('ruler toggle dirtied undo')
+   # The ruler is a step of Ctrl+Z / Ctrl+Y (2026-10-25 うにさん), and the text stays as it is
+   a.editor.edit_undo();marked({2});assert a.editor_source_text()==original
+   a.editor.edit_redo();marked({2,3});assert a.editor_source_text()==original
+   try:a.editor.edit_undo();a.editor.edit_undo();a.editor.edit_undo();raise AssertionError('text undo after the rulers')
    except tk.TclError:pass
+   marked(set());a.editor.edit_redo();a.editor.edit_redo();marked({2,3});assert a.editor_source_text()==original
    a._capture_session();first=a.session.current();assert first['ruler_rows']==[2,3]
    a.session.add_tab(new_tab(text='別タブです。\n次の行です。',ruler_rows=[1]))
    a._load_active_tab();complete();marked({1})

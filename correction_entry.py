@@ -100,7 +100,8 @@ def _correct_line_strokes(line, store, context_vocab, decisions, input_method, c
                                        input_method=input_method, context_vec=context_vec, dict_index=dict_index,
                                        nearby_words=nearby_words, recent_words=recent_words,
                                        occurrence_readings=readings, occurrence_calculations=calculations)
-    result = plain(line)
+    result = _word_pair_mark(line, _lattice_place(line, plain(line), store, dict_index), store, dict_index, decisions)
+    result = _renyou_tail_slip(line, result, decisions, input_method)
     if not occurrence_strokes:
         return result
     try:
@@ -118,6 +119,38 @@ def _correct_line_strokes(line, store, context_vocab, decisions, input_method, c
                 return _stroke_repairs(line, result, strokes, input_method, run, convert)
         except (ImportError, OSError, AttributeError):
             return _stroke_repairs(line, result, strokes, input_method, run, None)
+    except Exception:
+        return result
+
+
+def _lattice_place(line, result, store, dict_index):
+    """かなのまま残った文節の頭の並び（かなの文法で説明の付かないもの）の区切りを読みの格子で決めて漢字を置く
+    （kana_lattice_place・2026-10-25）。置けなければ答えはそのまま。"""
+    try:
+        import kana_lattice_place
+        return kana_lattice_place.repair_line(line, result, store, dict_index)
+    except Exception:
+        return result
+
+
+def _word_pair_mark(line, result, store, dict_index, decisions):
+    """隣り合う語の組（名詞＋接尾・名詞＋格助詞＋かなの動詞）をつないだ読みが辞書の1語になる所
+    （word_pair_mark・2026-10-25）。候補1つなら置いて紫、複数なら紫。"""
+    try:
+        import word_pair_mark
+        return word_pair_mark.repair_line(line, result, store, dict_index, corrector._decided_spans(line, decisions))
+    except Exception:
+        return result
+
+
+def _renyou_tail_slip(line, result, decisions, input_method):
+    """動詞の連用形＋説明の付かない短い尾（つくり｜のす）の尾の1字を隣のキーに替えると助動詞の尾になる所
+    （renyou_tail_slip・2026-10-25）。候補1つなら置く。かな入力だけ。"""
+    if input_method != 'kana':
+        return result
+    try:
+        import renyou_tail_slip
+        return renyou_tail_slip.repair_line(line, result, corrector._decided_spans(line, decisions), input_method)
     except Exception:
         return result
 

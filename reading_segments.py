@@ -8905,6 +8905,11 @@ def native_adnominal_modifier_ranges(text):
                 # fragments within a proved modifier are not new word edges.
                 if any(t.has_reading and t.start<=start<t.end and t.start<start
                        or t.has_reading and t.start==start and end<t.end for t in tokens):continue
+                # A sahen noun written bare right before the modifier (該当あの範囲) cannot
+                # stand there without する/の/a pause; the kana is a slipped key, not a proved
+                # modifier. 昨日あの店 (adverbial noun) keeps its proof. 2026-10-25
+                if any(t.has_reading and t.end==start and t.pos=='名詞'
+                       and (t.pos_sub or '').startswith('サ変接続') for t in tokens):continue
                 out.append((offset+start,offset+end))
     return tuple(sorted(set(out)))
 

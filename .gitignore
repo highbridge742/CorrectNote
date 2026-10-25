@@ -132,3 +132,5 @@ word_book.json.tmp
 /WORK*.json
 # タブのバックアップ（tab_backup・2026-10-23）。本人の文章そのもの
 backups/
+# 読みの格子の表（reading_lattice が初回に作る控え・2026-10-25）。作り直せるので入れない
+reading_lattice_table.pickle.gz

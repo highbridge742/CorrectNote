@@ -30,6 +30,14 @@ class EditorGuides:
             pane.bindtags((self.tag,)+pane.bindtags())
             pane.bind('<Configure>',self.queue_draw,add=True)
         root.bind('<Destroy>',self._destroy,add=True)
+        # Ruler toggles take their turn in the editor's Ctrl+Z / Ctrl+Y history
+        # (2026-10-25 うにさん「ルーラーの挿入を、Undoの対象にする」), as text_format's styles:
+        # a step is due while the editor's text and tab are as they were when it was made.
+        self.history=[];self.redo=[]
+        observers=getattr(self.panes[0],'_correctnote_observers',None) if self.panes else None
+        if observers is not None:
+            observers.setdefault('undo_hooks',[]).append(self.undo_step)
+            observers.setdefault('changed',[]).append(self._text_changed)
 
     def _cancel(self,name):
         job=getattr(self,name);setattr(self,name,None)
@@ -112,11 +120,63 @@ class EditorGuides:
     def toggle(self):
         self._sync_owner()
         if self.active is None:return False
-        row=int(self.active.index('insert').split('.')[0]);rows=set(self._rows)
+        return self.toggle_row(int(self.active.index('insert').split('.')[0]))
+
+    def toggle_row(self,row):
+        """Put a ruler under this logical row, or take it away (the button: the cursor's row;
+        the line-number menu: the clicked row, 2026-10-25). One Ctrl+Z step either way."""
+        self._sync_owner()
+        row=int(row);before=set(self._rows);rows=set(before)
         if row in rows:rows.remove(row)
         else:rows.add(row)
         self.set_ruler_rows(rows)
+        if self._rows!=before:self._record(before,set(self._rows))
         return row in rows
+
+    # --- undo / redo -------------------------------------------------
+    HISTORY_LIMIT=200
+
+    def _text(self):
+        return self.panes[0].get('1.0','end-1c')
+
+    def _record(self,before,after):
+        try:
+            from analysis_work import next_step_seq
+            seq=next_step_seq(self.panes[0]);text=self._text()
+        except (ImportError,tk.TclError,IndexError):return
+        self.history.append((text,self._owner,frozenset(before),frozenset(after),seq))
+        del self.history[:-self.HISTORY_LIMIT]
+        self.redo.clear()
+
+    def _due(self,kind):
+        stack=self.history if kind=='undo' else self.redo
+        if not stack or self._closed:return None
+        self._sync_owner()
+        entry=stack[-1]
+        try:
+            if entry[1] is not self._owner or entry[0]!=self._text():return None
+        except tk.TclError:return None
+        return entry
+
+    def due_step_seq(self,kind):
+        """The number of the step Ctrl+Z / Ctrl+Y would take now, or None (analysis_work._hooks_in_turn)."""
+        entry=self._due(kind)
+        return None if entry is None else entry[4]
+
+    def undo_step(self,kind):
+        """Take one Ctrl+Z / Ctrl+Y step if a ruler change is next in line (its text and tab are current)."""
+        if self._due(kind) is None:return False
+        stack,other=(self.history,self.redo) if kind=='undo' else (self.redo,self.history)
+        entry=stack.pop()
+        self.set_ruler_rows(entry[2] if kind=='undo' else entry[3])
+        other.append(entry)
+        return True
+
+    def _text_changed(self,args=None):
+        if (self.redo and args and args[0] in ('insert','delete','replace')
+                and not getattr(self.panes[0],'_correctnote_replay_depth',0)):
+            # A new edit ends what can be redone, as for text.
+            self.redo.clear()
 
     def queue_draw(self,event=None):
         if not self._closed and self._draw_job is None:

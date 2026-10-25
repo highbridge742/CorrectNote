@@ -7909,7 +7909,10 @@ def rebuild_window_core(window, store, tokenize_fn, max_cost=3.0,
             if _c in _seen_rep:
                 continue
             try:
-                if store.has_reading(_c) or ordinary_dictionary_candidate(_c):
+                # 本人の語彙からは立っている語（solid）だけ。1回見ただけの語（刺繍 count 1）へは巻き戻さない
+                # （初期で直る しとゅう→しゅう が、使ううちに 刺繍 に化けた。うに 10-25 06:53Z 逆効果の見直し）
+                from vocabulary import entry_is_solid as _eis_rep
+                if any(_eis_rep(e) for e in store.lookup(_c)) or ordinary_dictionary_candidate(_c):
                     _repairs.append((_c, 0.7, 1))
                     _seen_rep.add(_c)
             except Exception:
@@ -14718,8 +14721,26 @@ def _ime_one_key_respell(chunk, readings, store, tokenize_fn, dict_index=None,
                 # （呼ぶ側→呼ぶ我が。行の自然さは行末の1語でも高く出た。2026-10-24・うにさんの誤判定）
                 _tail_free = (end is None or end >= len(line) or not (is_kanji(line[end]) or is_hiragana(line[end])
                                                                        or is_katakana(line[end])))
+                # 後ろが する（し・すれ・せよ）なら、戻し先はサ変の名詞（確認・取り掛かり ではなく 整理する の型）だけ。
+                # 学んだ語（取りかえ）へ戻して最終検査（suru_slot）で落ちると、紫だけ残って初期の道（する→る）を
+                # 塞いでいた（こみれから課題に取り掛かする・2026-10-25 うに「初期で直る、使うと直らない」の見直し）
+                def _suru_ok(e):
+                    if not _suru_follows:
+                        return True
+                    try:
+                        from morphology import tokenize as _tok2
+                        _t2 = _tok2(e['surface'])
+                        return bool(_t2) and _t2[-1].pos == '名詞' and (_t2[-1].pos_sub or '').startswith('サ変接続')
+                    except Exception:
+                        return True
+                _suru_follows = False
+                if end is not None and end < len(line):
+                    _after = line[end:end + 2]
+                    _suru_follows = any(_after.startswith(x) for x in ('する', 'すれ', 'せよ')) or (
+                        _after[:1] == 'し' and (len(_after) < 2 or _after[1] in 'てたまな、。'))
                 ents = [e for e in ents
                         if not (_tail_free and _last_pos(e['surface']) in ('連体詞', '接頭詞'))
+                        and _suru_ok(e)
                         and (_naturalness.gain_in_line(line, start, end, e['surface']) or 0)
                         >= _need(e)]
             if ents:
@@ -22251,6 +22272,14 @@ def _run_reading_merge_fixes(line, tokenize_fn, store, dict_index=None,
                             _ku_stem_ok = run[0][0] in _ef.order(ra)[0]
                         except Exception:
                             _ku_stem_ok = False
+                    if _ku_stem_ok and _ku_learned_outranks_everyday(run[0][0], ra, store):
+                        # 学んだ語が身近さの表で層3以上（囚虜）で、う を戻した先が層1の身近な語（終了）なら、
+                        # 学習は守りにしない。初期のままで直る行が、使ううちに直らなくなっていた（うに 10-25 06:53Z:
+                        # 初期で直る・使うと直らない判定の見直し。試験の行を打ち続けて 囚虜 が「立った」）
+                        _trace('読み繋ぎ',
+                               f'{surface!r} の語幹 {run[0][0]!r} は本人の語だが身近さの表で遠い（層3以上）ので、'
+                               f'学習を守りにしない（2026-10-25）')
+                        _ku_stem_ok = False
                     if _ku_stem_ok:
                         _trace('読み繋ぎ',
                                f'{surface!r} の語幹 {run[0][0]!r} は本人の立っている語か'
@@ -22283,6 +22312,28 @@ def _run_reading_merge_fixes(line, tokenize_fn, store, dict_index=None,
 # 「う挿入」を許す場所（お段・小書きの ょ の直後＝長音の脱字が
 # 起きる場所。項目48-KU）
 _KU_O_DAN = frozenset('おこごそぞとどのほぼぽもよろょ')
+
+
+def _ku_learned_outranks_everyday(stem, ra, store):
+    """48-KU の守り（本人の立っている語幹）を外す条件: 語幹が身近さの表で層3以上（または判定なし）の漢語で、
+    身近さの表（everyday_faces）にも無いとき。初期の知識（身近さの表）が学習より上に立つ場面。語は名指ししない。"""
+    try:
+        import kango_tier
+        tier = kango_tier.known_usage_tier(stem)
+    except Exception:
+        return False
+    if tier is not None and tier <= 2:
+        return False
+    try:
+        import everyday_faces
+        if stem in everyday_faces.order(ra)[0]:
+            return False          # 身近さの表にある形は学習に関わらず守る
+    except Exception:
+        pass
+    # 層3以上（か判定なし）の語幹は、本人の語彙で立っていても守りにしない（初期と同じ道へ: う を戻せる先が
+    # あれば戻し、無ければ初期と同じ紫）。試験の行を打ち続けて立った 切磋・囚虜 がここに来る
+    return True
+
 
 
 # 濁った字 → 清音（連濁の手・項目48-LC。読みの濁りは IME が付けた
@@ -23569,6 +23620,30 @@ def _native_degree_repeat(line,edge):
     return False
 
 
+def _glued_loan_completion(line, start, end, new_surface):
+    """カタカナの語に地続きのかな（ツール|めなゅー）をカタカナ（メニュー）に替えるだけの直しか。
+    元のかなは語でなく、できる語はカタカナの複合語（ツールメニュー）なので、目的語と述語の組の証明は求めない
+    （補正担当・2026-10-25。デバッグめなゅー）。差の前の字がカタカナで、差の元がかな（長音含む）2字以上、差の先がカタカナだけ。"""
+    original = line[start:end]
+    i = 0
+    while i < min(len(original), len(new_surface)) and original[i] == new_surface[i]:
+        i += 1
+    j = 0
+    while (j < min(len(original), len(new_surface)) - i
+           and original[len(original) - 1 - j] == new_surface[len(new_surface) - 1 - j]):
+        j += 1
+    src = original[i:len(original) - j]
+    dst = new_surface[i:len(new_surface) - j]
+    if len(src) < 2 or not dst:
+        return False
+    if not all(is_hiragana(c) or c == 'ー' for c in src):
+        return False
+    if not all(is_katakana(c) or c == 'ー' for c in dst):
+        return False
+    before = line[start + i - 1] if start + i > 0 else ''
+    return bool(before) and is_katakana(before)
+
+
 def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
                        decisions=None, halfwidth_taken=(), shift_taken=(),
                        lu_taken=(), conv_taken=(), loanword_module=None, spelling=False,
@@ -23756,8 +23831,12 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
         # An IME clause read back from its own typed reading with one key
         # put back (last_keystroke) is not proved source text either: its
         # written words are the IME's conversion of a slipped reading.
+        # カタカナの語に地続きの外来語の直し（ツール|めなゅー→メニュー）は、目的語がカタカナの複合語
+        # （ツールメニュー）の続きで、役割の表が知りようのない語。元のかなは語ですらないので、守る
+        # 元の組も無い（補正担当・2026-10-25。デバッグめなゅー）
+        _glued_loan = _glued_loan_completion(line, start, end, new_surface)
         if not ((spelling and ime_first_proof or ime_shift_proof)
-                and start==0 and end==len(line)) and not ime_clause_proof:
+                and start==0 and end==len(line)) and not ime_clause_proof and not _glued_loan:
             return None,'unproven_original_object_predicate'
     from oddness import preserves_bound_verb
     if not preserves_bound_verb(line,end,line[:start]+new_surface+line[end:],
@@ -27377,8 +27456,13 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                 while _bk > 0 and is_hiragana(line[_bk - 1]):
                     _bk -= 1
                 _head_free = (a - _bk) != 1
+                # 窓の直後にカタカナが切れ目なく続く（しとゅう**ガク**旅行）なら、かなとカタカナは IME が1つの
+                # 文節を途中で切った跡（しゅうがく→しゅう＋ガク）の見込みが強い。かなだけを漢字に固める（刺繍ガク）と
+                # 残りのカタカナと合わせた語（修学）に戻す道を閉め出すので、かなのままにする（2026-10-25）
+                _nf_end = a + len(window_ext)
+                _kata_follows = _nf_end < len(line) and is_katakana(line[_nf_end])
                 if (dict_index is not None and c_s == 0 and core_fix
-                        and _head_free
+                        and _head_free and not _kata_follows
                         and not any(is_kanji(_c) or is_katakana(_c)
                                     for _c in core_fix)):
                     _win_fix = core_fix + _rest
@@ -28314,9 +28398,13 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                 # 隣接キーを試す。ね→る で カーソル。見つからなければ
                 # 脱字も疑う」）。元がかなの語と機能語で説明できる
                 # （＝正しい語かもしれない）なら今までどおり並記を待つ。
+                # **カタカナの語に地続きのかな**（デバッグ|めなゅー）は、IME がカタカナ語の続きを変換し
+                # そこねた跡なので、末尾の ー を伸ばし・擬音とは見ない（補正担当・2026-10-25。
+                # 単独の うにゅーん・くぅーん は今までどおり擬音として守る）
+                _glued_kata = h_s > 0 and is_katakana(line[h_s - 1])
                 if _kata not in _same_column_text(line,h_s,h_s+_len) \
                         and not (_only_particles(h_run[_len:])
-                                 and not _is_expressive_strict(h_run[:_len])
+                                 and (_glued_kata or not _is_expressive_strict(h_run[:_len]))
                                  and _loan_typo_plausible(_body, _kata)):
                     _trace('外来語', f'{_body!r} → {_kata!r} は同じ行に'
                                      f'書かれていないので触らない')

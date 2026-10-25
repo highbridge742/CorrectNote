@@ -213,6 +213,26 @@ READ_ONLY_COMMANDS=frozenset(('bbox','cget','compare','configure','count','debug
                               'dump','get','index','mark','scan','search','see','tag','xview','yview'))
 
 
+def next_step_seq(widget):
+    """A number for a non-text Undo step on this widget, rising with each step (2026-10-25)."""
+    value=getattr(widget,'_correctnote_step_seq',0)+1
+    widget._correctnote_step_seq=value
+    return value
+
+
+def _hooks_in_turn(hooks,kind):
+    """Undo hooks whose owner tells its due step (due_step_seq(kind) -> number or None) go
+    newest first for Undo and oldest first for Redo; the others keep their order after them."""
+    ranked=[]
+    for order,hook in enumerate(tuple(hooks)):
+        due=getattr(getattr(hook,'__self__',None),'due_step_seq',None)
+        try:seq=due(kind) if due is not None else None
+        except Exception:seq=None
+        key=(0,-seq if kind=='undo' else seq,order) if seq is not None else (1,0,order)
+        ranked.append((key,hook))
+    return [hook for _key,hook in sorted(ranked,key=lambda item:item[0])]
+
+
 def observe_text(widget,on_edit=None,on_cursor=None,on_before_edit=None,track_change=None):
     """Share one Tcl observer for edits, Unicode undo and cursor notifications."""
     callbacks=getattr(widget,'_correctnote_observers',None)
@@ -269,9 +289,11 @@ def observe_text(widget,on_edit=None,on_cursor=None,on_before_edit=None,track_ch
                 whole['text']=after[1]
     def edit_command(*args):
         if args[:2] in (('edit','undo'),('edit','redo')):
-            # Steps that are not text edits (text_format: bold, underline...)
-            # take their turn in the same Ctrl+Z / Ctrl+Y history.
-            for hook in tuple(callbacks.get('undo_hooks',())):
+            # Steps that are not text edits (text_format: bold, underline...;
+            # editor_guides: the ruler) take their turn in the same Ctrl+Z /
+            # Ctrl+Y history. When several are due at the same text, Undo takes
+            # the newest step and Redo the oldest (next_step_seq, 2026-10-25).
+            for hook in _hooks_in_turn(callbacks.get('undo_hooks',()),args[1]):
                 if hook(args[1]):
                     if callbacks['cursor'] is not None:callbacks['cursor']()
                     return ''

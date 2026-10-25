@@ -301,9 +301,17 @@ class TextFormat:
         after = self.capture()
         if after == before:
             return
-        self.history.append((self._text(), before, after))
+        from analysis_work import next_step_seq
+        self.history.append((self._text(), before, after, next_step_seq(self.widget)))
         del self.history[:-self.HISTORY_LIMIT]
         self.redo.clear()
+
+    def due_step_seq(self, kind):
+        """The number of the step Ctrl+Z / Ctrl+Y would take now, or None (analysis_work._hooks_in_turn)."""
+        stack = self.history if kind == 'undo' else self.redo
+        if not stack or stack[-1][0] != self._text():
+            return None
+        return stack[-1][3] if len(stack[-1]) > 3 else 0
 
     def undo_step(self, kind):
         """Take one Ctrl+Z / Ctrl+Y step if a style change is next in line.

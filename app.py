@@ -334,7 +334,7 @@ APP_TITLE = 'CorrectNote'
 # 「判断に迷った箇所」から**「不自然な文字列」**へ入れ替え（既定オン・
 # 補正が入った範囲には付けない）、**かな書きのアルファベット読みを
 # 英字に直す**（`エフ2 → F2`）、スクロール後の反映（項目48-IZ〜）。
-APP_VERSION = '1.16.0'
+APP_VERSION = '1.16.1'
 
 # 控え（session.json・ime_readings）と語彙の自動保存の間合い（2026-10-20 うにさんの決定で5分）。
 # 以前は打つ手が止まって1.5秒ごとに丸ごと書き直していた。最初の変更から5分後にまとめて1回
@@ -11055,6 +11055,10 @@ class CorrectNoteApp:
             # Windows でも同時に届くことがあるため、両対応にしておく）
             w.bind('<Button-4>', lambda e: self._on_wheel_button(e, body=True))
             w.bind('<Button-5>', lambda e: self._on_wheel_button(e, body=True))
+        # 行番号の右クリックでメニュー（上へ・中央へスクロール、ルーラー、ブックマーク・2026-10-25 うにさん）
+        for gutter in (self.editor_gutter, self.result_gutter):
+            gutter.bind('<ButtonPress-3>', lambda e, g=gutter: self._on_gutter_right_press(e, g))
+            gutter.bind('<ButtonRelease-3>', lambda e, g=gutter: self._on_gutter_right_release(e, g))
 
         self.root.bind('<MouseWheel>', self._tab_wheel, add='+')
         self.root.bind('<Button-4>', self._on_wheel_button, add='+')
@@ -11096,6 +11100,45 @@ class CorrectNoteApp:
         enabled=self._editor_guides.toggle()
         self._sync_ruler_button()
         return enabled
+
+    def _toggle_ruler_at(self,line):
+        """The line-number menu: a ruler under that row, or none (the same rulers and Ctrl+Z as the button)."""
+        self._install_editor_guides()
+        enabled=self._editor_guides.toggle_row(line)
+        self._sync_ruler_button()
+        return enabled
+
+    def _ruler_at(self,line):
+        guides=getattr(self,'_editor_guides',None)
+        return guides is not None and line in guides.ruler_rows()
+
+    # ------------------------------------------------------------
+    # 行番号の右クリックメニュー（2026-10-25 うにさん）
+    # ------------------------------------------------------------
+    def _gutter_menu_items(self,line):
+        """行番号を右クリックしたときの項目（`_make_dropdown` の形・見出しは選べない灰色）。"""
+        ruler=self._ruler_at(line);marked=line in self.bookmarks
+        return [('― %d 行目 ―' % line,None),
+                ('  この行が上に来る位置にスクロール',lambda:self._goto_line(line,centered=False,move_cursor=False)),
+                ('  この行が中央に来る位置にスクロール',lambda:self._goto_line(line,centered=True,move_cursor=False)),
+                ('  行の下のルーラーを外す' if ruler else '  行の下にルーラーを入れる',lambda:self._toggle_ruler_at(line)),
+                ('  ブックマークを外す' if marked else '  ブックマークを入れる',lambda:self._toggle_bookmark(line))]
+
+    def _on_gutter_right_press(self,event,gutter):
+        # Not 'break': the window's own press starts a fresh right-button + wheel interval.
+        self._gutter_right_pending=(gutter,gutter._line_at_y(event.y),event.x_root,event.y_root)
+
+    def _on_gutter_right_release(self,event,gutter):
+        pending=getattr(self,'_gutter_right_pending',None);self._gutter_right_pending=None
+        if pending is None or pending[0] is not gutter or pending[1] is None:return None
+        # Right button + wheel switched tabs: the window's release finishes that gesture, no menu
+        if getattr(self,'_tab_wheel_used',False):return None
+        try:
+            if abs(int(event.x_root)-pending[2])>=8 or abs(int(event.y_root)-pending[3])>=8:return None
+        except (TypeError,ValueError):return None
+        self._close_dropdown()
+        self._make_dropdown(self._gutter_menu_items(pending[1]),pending[2],pending[3])
+        return 'break'
 
     def _sync_ruler_button(self):
         button=getattr(self,'ruler_btn',None);guides=getattr(self,'_editor_guides',None)
@@ -11577,17 +11620,21 @@ class CorrectNoteApp:
         except Exception:pass
         return 'break'
 
-    def _goto_line(self, line, centered=True):
-        """Move the cursor and place the destination at the window's middle."""
+    def _goto_line(self, line, centered=True, move_cursor=True):
+        """Move the cursor and place the destination at the window's middle.
+
+        move_cursor=False only scrolls (the line-number menu, 2026-10-25): the cursor, the selection
+        and the focus stay where they are."""
         self._drop_pending_scroll()
         idx = self.editor.index(f'{line}.0')
         was_syncing = getattr(self,'_syncing',False)
         self._syncing = True
         try:
             self._clear_navigation_padding()
-            self.editor.mark_set('insert',idx)
-            self.editor.tag_remove('sel','1.0','end')
-            self._forget_bracket_cycle()
+            if move_cursor:
+                self.editor.mark_set('insert',idx)
+                self.editor.tag_remove('sel','1.0','end')
+                self._forget_bracket_cycle()
             if centered:
                 self._navigation_padding_active = True
                 for widget in (self.editor,self.result_view):
@@ -11604,7 +11651,8 @@ class CorrectNoteApp:
         if scrollbar is not None:scrollbar.set(*self.editor.yview())
         self._update_header_visibility(self.editor.yview()[0])
         self._on_view_moved()
-        self.editor.focus_set()
+        if move_cursor:
+            self.editor.focus_set()
 
     def _sync_partner_to_line(self, src, dst):
         """
@@ -25976,6 +26024,12 @@ def main():
     if not _claim_single_instance():
         return
     _set_app_user_model_id()
+    # The data folder for caches that modules make on their own (reading_lattice's table, 2026-10-25).
+    # Set before any analysis child starts, so the children inherit it.
+    try:
+        os.environ['CORRECTNOTE_DATA_DIR'] = app_dir()
+    except Exception:
+        pass
     root = tk.Tk()
     CorrectNoteApp(root)
     root.mainloop()
