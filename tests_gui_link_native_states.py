@@ -59,6 +59,10 @@ def child():
      opened.assert_not_called();assert w.tag_ranges('sel');w.tag_remove('sel','1.0','end')
    assert a.editor_source_text()==source
    assert a._editor_guides.ruler_rows()=={1,2}
+   # The two rulers are steps of Ctrl+Z (2026-10-25 うにさん); after them, the links left nothing to undo
+   a.editor.edit_undo();root.update();assert a._editor_guides.ruler_rows()=={1}
+   a.editor.edit_undo();root.update();assert a._editor_guides.ruler_rows()==set()
+   assert a.editor_source_text()==source
    try:a.editor.edit_undo()
    except tk.TclError:pass
    else:raise AssertionError('link interaction added Undo')
