@@ -80,6 +80,10 @@ VOUCH_GAIN = 6000     # 行の費用がこれ以上下がる戻しは、文の�
                       # 見ても、語の内側（ごさい＝五歳）でも採る。迷いだけの行にも使う（2026-10-19）
 MAX_TRIALS = 5        # 読み直しの数の上限（2つ目を探す分も含む）
 FIRST_TRIALS = 5      # 1つ目が見つかるまでの上限（3→5・2026-10-19: おつかれさまてす→です が4番目だった）
+# 脱字の戻しが置き換えより組み立てで勝つときの差（これ以上なら決めない）
+INS_DISAGREE = 1000
+# 読める文節（辞書の語の並び）を読み直すときの、組み立ての良くなりの下限（corrector の MIN_GAIN_READABLE と同じ）
+READABLE_CLAUSE_GAIN = 5000
 NEED_SUB = 4000
 NEED_INSERT = 6000
 MIN_PATH_GAIN = 2000
@@ -228,10 +232,16 @@ def candidates(line, start, end, input_method='kana', free_del=()):
         for ch in keys:
             if ch == line[i] or _same_kana_size(ch, line[i]):
                 continue
+            if not romaji and ch in kl.same_key_kana_alternatives(line[i]):
+                # 同じキーの別の面（を↔わ: Shift の有無）は、字の単位の置き換えとして見ない（小書きと大きい字の入れ替えを
+                # 直さないのと同じ。別の面への置き換えは、入れ替わりの戻し（とを→をと）より先に採られ、写真とをった を
+                # 写真とわった にしていた）
+                continue
             # ローマ字: 同じ2字の枠の1字が隣のキー（si→sa）・濁点の付け外し（s↔z）・1打の抜け（ni→i）・
             # 子音の組の片方の抜け（shi→hi: ひ→し）
             if (adjacent_slip(line[i], ch, 'romaji') or ch in _ROMAJI_CLUSTER_DROP.get(line[i], '') if romaji
-                    else kl.kana_key_distance(line[i], ch) <= KEY_DISTANCE):
+                    else (kl.kana_key_distance(line[i], ch) <= KEY_DISTANCE
+                          and (kl.VERTICAL_OK.get() or not kl.is_vertical_distance(kl.kana_key_distance(line[i], ch))))):
                 text = line[:i] + ch + line[i + 1:]
                 if _plausible(text, i, i + 1):
                     out.setdefault(text, ('sub', i))
@@ -260,6 +270,50 @@ def candidates(line, start, end, input_method='kana', free_del=()):
             out.setdefault(text, ('edit', s))
     out.pop(line, None)
     return out
+
+
+def _drop_in_settled_runs(line, out):
+    """戻す字が、変換した語のあとに助詞・助動詞だけが3つ以上続く所（品詞｜として｜で｜は｜なく）か、伸ばし・擬音の形（ないでぇ）の中なら採らない。
+    ではなく→できなく・でぇ→てぇ のように、正しい文の機能語や話し言葉を1打で別の形にしていた
+    （2026-10-24・うにさんの誤判定）。伸ばしの形は補正の本体の窓と同じ決まり（corrector の `_is_expressive_kana_run`）"""
+    try:
+        import morphology
+        from corrector import _is_expressive_kana_run, _expressive_shift_ime_cue
+        toks = list(morphology.tokenize(line))
+    except Exception:
+        return out
+    settled_at = set()
+    k = 0
+    while k < len(toks):
+        m = k
+        while (m < len(toks) and toks[m].pos in ('助詞', '助動詞') and toks[m].surface
+               and all(_hira(c) for c in toks[m].surface) and (m == k or toks[m].start == toks[m - 1].end)):
+            m += 1
+        # 前の語が変換した語（漢字・カタカナを含む: 品詞｜としてではなく）のときだけ。かなだけの行（とど｜は｜まし｜た）は
+        # 解析が助詞・助動詞に割っただけのことが多い
+        if (m - k >= 3 and k > 0 and toks[k - 1].end == toks[k].start
+                and any(not _hira(c) for c in toks[k - 1].surface)):
+            settled_at.update(range(toks[k].start, toks[m - 1].end))
+        k = max(m, k + 1)
+    i = 0
+    while i < len(line):
+        if not _hira(line[i]):
+            i += 1
+            continue
+        j = i
+        while j < len(line) and _hira(line[j]):
+            j += 1
+        run = line[i:j]
+        try:
+            if _is_expressive_kana_run(run) and not _expressive_shift_ime_cue(run):
+                settled_at.update(range(i, j))
+        except Exception:
+            pass
+        i = j
+    if not settled_at:
+        return out
+    return {text: (kind, i) for text, (kind, i) in out.items()
+            if not (i in settled_at or (kind == 'ins' and i - 1 in settled_at and i in settled_at))}
 
 
 _ROMAJI_VOWELS = 'aiueo'
@@ -369,6 +423,11 @@ def _romaji_letter_edits(line, lo, hi):
                 if head is None:
                     return {}
                 spots.update(range(len(head) - 1, len(head) + 2))
+                # 英字の後ろの母音の抜け（yasumi→yasmi の u）も1打の戻しとして並べる。並べないと、英字を抜く
+                # 戻し（やみます）だけが候補に残り、そちらに決まる（2026-10-23・補正C）
+                if ch not in _ROMAJI_VOWELS and ch != 'n':
+                    for vw in _ROMAJI_VOWELS:
+                        variants.add(rom[:len(head) + 1] + vw + rom[len(head) + 1:])
         variants = {v for v in variants}
     for i in range(len(rom) - 1):
         if rom[i] != rom[i + 1] and (spots is None or i in spots or i + 1 in spots):
@@ -392,6 +451,135 @@ def _romaji_letter_edits(line, lo, hi):
         s, e_old, e_new = _diff_range(line, text)
         out.setdefault(text, (s, e_old, e_new))
     return out
+
+
+def _double_press_spots(line, start, end):
+    """[start, end) の中で、ローマ字の同じキーの2度押しで出た字の位置（子音の重ね＝っ、
+    前の字と同じ母音の重ね＝う の後ろの う）。"""
+    out = []
+    for k in range(max(0, start), min(len(line), end)):
+        ch = line[k]
+        nxt = line[k + 1] if k + 1 < len(line) else ''
+        if ch == 'っ' and _kana(nxt) and nxt not in 'あいうえおんっー' and _hira(nxt):
+            out.append(k)
+        elif ch in _ROMAJI_VOWEL_KANA and k > 0 and _hira(line[k - 1]):
+            rom = _kana_run_to_romaji(line[k - 1])
+            if rom and rom[-1] == _ROMAJI_VOWEL_KANA[ch]:
+                out.append(k)
+    return out
+
+
+def _tripled_key(line, k):
+    """line[k] の打鍵で、同じキーが3つ続くか（っった → ttt・にゅうう → uuu）。"""
+    for a in range(max(0, k - 3), k):
+        rom = _kana_run_to_romaji(line[a:k + 2])
+        if rom and any(rom[j] == rom[j + 1] == rom[j + 2] for j in range(len(rom) - 2)):
+            return True
+    return False
+
+
+_ROMAJI_VOWEL_KANA = {'あ': 'a', 'い': 'i', 'う': 'u', 'え': 'e', 'お': 'o'}
+
+
+def _drops_letter(line, text):
+    """`text` が `line` から英字を1つ抜いただけの行か（かなは変わらない）。"""
+    if len(text) != len(line) - 1:
+        return False
+    s, e_old, e_new = _diff_range(line, text)
+    return e_new == s and e_old - s == 1 and line[s].isascii() and line[s].isalpha()
+
+
+def _only_drops_keys(line, text):
+    """`text` が、`line` の英字を含む所から打鍵（英字）を抜いただけの行か。かなの単位では
+    いkれ→いけ（ikre→ike）・sつ→す（stsu→su）のように字が替わって見えるものも含む。"""
+    if text == line:
+        return False
+    s, e_old, e_new = _diff_range(line, text)
+    old, new = line[s:e_old], text[s:e_new]
+    if not any(ch.isascii() and ch.isalpha() for ch in old):
+        return False
+    ro = ''.join(ch if ch.isascii() else (_kana_run_to_romaji(ch) or '\0') for ch in old) if old else ''
+    # 小書きの字（ゃ・っ）は前後と組んで1つの音になるので、並び全体で引き直す
+    r_old = _kana_run_to_romaji(old) if old and all(_kana(ch) or (ch.isascii() and ch.isalpha()) for ch in old) else None
+    r_old = r_old or ro
+    r_new = _kana_run_to_romaji(new) if new else ''
+    if r_new is None or '\0' in r_old or len(r_new) >= len(r_old):
+        return False
+    it = iter(r_old)
+    return all(ch in it for ch in r_new)
+
+
+def _dangling_small_tsu(line, text):
+    """戻した行の、直した所に、後ろに子音のかなが続かない っ（行末・記号・母音の前）が新しくできたか。"""
+    s, e_old, e_new = _diff_range(line, text)
+    for k in range(s, min(e_new + 1, len(text))):
+        if text[k] == 'っ' and 'っ' not in line[s:e_old]:
+            nxt = text[k + 1] if k + 1 < len(text) else ''
+            if not (nxt and _hira(nxt) and nxt not in 'あいうえおんっーゃゅょぁぃぅぇぉ'):
+                return True
+    return False
+
+
+def _letter_by_converted(line):
+    """残った英字が、漢字・片仮名（IME が変換した字）に接しているか。そこでは IME が打ち間違いの読みを
+    すでに語に変えていて（加増ｋで・子ｄも）、英字を抜いても変換された語は元に戻らない。抜くだけの戻しは
+    当て推量になるので採らない（PC の本物の IME で、英字を抜くだけの誤補正の大半がこの形。2026-10-23・補正C）。"""
+    for i, ch in enumerate(line):
+        if ch.isascii() and ch.isalpha() and ch.islower():
+            for j in (i - 1, i + 1):
+                if 0 <= j < len(line) and not (line[j].isascii() and line[j].isalpha()):
+                    c = line[j]
+                    if '一' <= c <= '鿿' or c == '々' or ('ァ' <= c <= 'ヺ'):
+                        return True
+    return False
+
+
+def _reads_as_words_at(text, p):
+    """英字を抜いた行 `text` の、抜いた所 p の前後の字句が語として在るか（2026-10-23・補正C、補正担当の門）。
+    辞書は何でも切ってしまうので、切れた語が**その場所で語として立つか**を品詞のつながりで見る:
+    文の途中のフィラー（あたま→あ|たま）・かなの固有名詞（かこ）・動詞の連用形に直に付く の（きせ|の）・
+    形容詞の連用形に直に付く で（遅く|で）は、語として立っていない。"""
+    import morphology
+    try:
+        toks = [t for t in morphology.tokenize(text) if t.surface.strip()]
+    except Exception:
+        return True
+    # 抜いた所を含むかなの並び（あたま|少し の あたま）の字句と、その両隣
+    a, b = p, p
+    while a > 0 and _hira(text[a - 1]):
+        a -= 1
+    while b < len(text) and _hira(text[b]):
+        b += 1
+    near = [k for k, t in enumerate(toks) if t.start <= b and a <= t.end]
+    for k in near:
+        t = toks[k]
+        prev = toks[k - 1] if k else None
+        nxt = toks[k + 1] if k + 1 < len(toks) else None
+        if t.pos == 'フィラー' and prev is not None and prev.end == t.start and prev.pos not in ('記号',):
+            return False
+        if t.pos == '名詞' and t.pos_sub.startswith('固有名詞') and all(_hira(c) for c in t.surface):
+            return False
+        if t.surface[:1] in 'ゃゅょぁぃぅぇぉっ':
+            # 小書きの字で始まる語は無い（てんしゃ→てんし|ゃの）
+            return False
+        if t.pos == '助動詞' and t.base_form in ('き', 'けり', 'り', 'つ'):
+            # 文語の過去・完了は、いまの文に崩れたかなの切り方でだけ出る（えき→え|き）
+            return False
+        if nxt is not None and nxt.start == t.end and t.pos == '動詞':
+            # 活用の形は後ろに来る語を決める: ウ接続は う、タ接続は た・て（すも|ん・ねい|に は語として立たない）
+            if t.infl_form == '未然ウ接続' and not (nxt.pos == '助動詞' and nxt.base_form == 'う'):
+                return False
+            if t.infl_form == '連用タ接続' and not (nxt.surface[:1] in 'たてだで' or nxt.pos in ('助動詞',)):
+                return False
+        for a, b in ((prev, t), (t, nxt)):
+            if a is None or b is None or a.end != b.start:
+                continue
+            if a.pos == '動詞' and a.infl_form == '連用形' and b.pos == '助詞' and b.pos_sub == '連体化':
+                return False
+            if (a.pos == '形容詞' and a.infl_form.startswith('連用') and b.pos == '助詞'
+                    and b.pos_sub.startswith('格助詞') and b.surface == 'で'):
+                return False
+    return True
 
 
 def _diff_range(line, text):
@@ -778,7 +966,7 @@ def _kana_windows(line, spans):
 
 
 def repair(line, result, retry, input_method='kana', decisions=None,
-           dict_index=None, vouch=False, whole=None, widened=False):
+           dict_index=None, vouch=False, whole=None, widened=False, held=None):
     """
     `result`（`line` の補正結果）に短いかなの紫が残っていれば、1打を
     戻した行を `retry(行)` で読み直し、採れるものがあれば
@@ -850,7 +1038,7 @@ def repair(line, result, retry, input_method='kana', decisions=None,
         return None
     yomi0 = yomigram.logp_parts(line)[0]
     pool = []
-    for text, (op, i) in candidates(line, start, end, input_method).items():
+    for text, (op, i) in _drop_in_settled_runs(line, candidates(line, start, end, input_method)).items():
         if not _inside_position(op, i, start, end):
             continue
         cost = morphology.path_cost(text)
@@ -865,6 +1053,14 @@ def repair(line, result, retry, input_method='kana', decisions=None,
         # かな1字の抜き（費用の線を超えるもの）を英字単位の抜きより先に
         pool.sort(key=lambda row: (0 if row[4] == 'del' and row[0] >= NEED_SUB else 1, -row[0], row[3]))
     kana_del_clean = False
+    # 読みの並び（yomi）で勝った置き換えより、文の組み立て（gain）がはっきり良い脱字の戻し（1字足す）があれば、
+    # どちらとも決めない（書いてくだい: くだす は読みの並びで勝つが、組み立てでは ください のほうが良い。
+    # 迷うなら直さない・2026-10-24・うにさんの誤判定）
+    if pool and pool[0][4] == 'sub':
+        _top_gain = pool[0][1]
+        if any(row[4] == 'ins' and row[1] >= _top_gain + INS_DISAGREE and row[0] >= NEED_SUB - MARGIN
+               and _verb_insert(row[3], row[5]) for row in pool[1:]):
+            return None
     found = []
     trials = 0
     for score, gain, yomi, text, op, i in pool:
@@ -887,7 +1083,8 @@ def repair(line, result, retry, input_method='kana', decisions=None,
         else:
             lo, hi = _edit_range(op, i)
             hi_new = hi + (op == 'ins')
-        vouched = (vouch and op == 'sub' and gain >= VOUCH_GAIN and end - start >= 4
+        vouched = (vouch and (op == 'sub' or (op == 'swap' and (_particle_pair(text, i) or _particle_swap(line, text, i, i + 2, text[i:i + 2], dict_index))))
+                   and gain >= VOUCH_GAIN and end - start >= 4
                    and not (lo > 0 and line[lo - 1] in _DIGITS)
                    and not (input_method == 'romaji' and _breaks_familiar_word(line, lo, hi, dict_index, start, end))
                    and not (input_method == 'kana' and _breaks_familiar_word(line, lo, hi, dict_index, loose=True)))
@@ -953,16 +1150,62 @@ def repair(line, result, retry, input_method='kana', decisions=None,
     score, gain, yomi, text, op, got, i = found[0]
     if score < (NEED_INSERT if op == 'ins' else NEED_SUB):
         return None
+    if op == 'swap' and _particle_before_masu(text):
+        return None
+    if input_method == 'romaji' and op != 'del':
+        # ローマ字の2度押し（とまっった の っ・ぎゅうにゅうう の う）は、決まりでまとめない（うにさん 10-19）。
+        # その字をまとめれば読める行なら、ほかの字を替える戻し（とまとった・かぎりを）は当て推量で、
+        # 2度押しを残したまま別の語を作る。迷うなら直さず紫（2026-10-23・補正C）
+        if op == 'edit':
+            _lo, _hi, _hn = _diff_range(line, text)
+        else:
+            _lo, _hi = _edit_range(op, i)
+        for k in _double_press_spots(line, start, end)[:2]:
+            # 2度押しの字そのものを別の1字に替える戻し（かぎいを→かぎりを）も当て推量なので見る。入れ替わり
+            # （すうr→する）や英字を含む戻しは、その字が2度押しでない読み方なので見ない
+            if op != 'sub' and _lo <= k < max(_hi, _lo + 1):
+                continue
+            g2 = retry(line[:k] + line[k + 1:])
+            # 同じキーが3つ続く所（とまっった の ttt・ぎゅうにゅうう の uuu）は2度押しが確かなので、まとめた行に元と
+            # 同じ迷いが残るだけでもよい。2つだけ（をお・かぎい）はふつうの綴りにもあるので、まとめた行が読めるときだけ
+            if g2 and (_clean(g2) or (_tripled_key(line, k) and _same_doubt(g2, result, -1))):
+                if held is not None:
+                    held.append((start, end))
+                return None
+    if letter_entry and op == 'edit' and _drops_letter(line, text):
+        # 残った英字を抜くだけの戻し（やsみます→やみます）は、英字を残したまま読める1打の戻し（母音の抜け・
+        # 入れ替わり: やすみます）も並ぶ点で通るなら、どちらを打ちたかったか分からない。迷うなら直さず紫
+        from naturalness import MIN_GAIN_READABLE
+        # （2026-10-23・補正C。英字を抜く戻しは字が減るぶん費用で勝ちやすく、別の語を作っていた）
+        tried = 0
+        for _sc, _g, _y, t2, op2, _i2 in pool:
+            # 並ぶ＝費用の差が読める差（MIN_GAIN_READABLE）より小さい。大きく負ける戻し（なくhして→なくほして）は並ばない
+            if (t2 == text or op2 == 'del' or _drops_letter(line, t2)
+                    or _sc < max(NEED_SUB, score - MIN_GAIN_READABLE)):
+                continue
+            tried += 1
+            if tried > MAX_TRIALS:
+                break
+            g2 = retry(t2)
+            if g2 and _clean(g2):
+                if held is not None:
+                    held.append((start, end))
+                return None
     yomi_del = (doubt_run and op == 'del' and yomi >= WHOLE_DEL_YOMI and _clean(got)
                 or (doubt_run and op == 'sub' and yomi >= VOUCH_SUB_YOMI and _clean(got)))
     if (gain < MIN_PATH_GAIN and not yomi_del) or (yomi < MIN_YOMI_GAIN
-                                and not (vouch and op == 'sub' and gain >= VOUCH_GAIN and end - start >= 4)
+                                and not (op == 'swap' and _particle_pair(text, i))
+                                and not (vouch and (op == 'sub' or (op == 'swap' and (_particle_pair(text, i) or _particle_swap(line, text, i, i + 2, text[i:i + 2], dict_index)))) and gain >= VOUCH_GAIN and end - start >= 4)
                                 and not (doubt_run and op == 'del' and yomi >= WHOLE_DEL_YOMI)):
         return None
     if len(found) > 1 and score - found[1][0] < MARGIN:
         # 差が小さくても、並びの費用と読みの並びの両方で上回り（身近さで勝つ）、読みの並びが置き換えを採る線
         # （VOUCH_SUB_YOMI）を越えて良くなる候補は決める。どちらかが欠けるなら紫のまま（行使くなる→行使くばる +1.3 は採らない）
-        if not (gain > found[1][1] and yomi > found[1][2] and yomi >= VOUCH_SUB_YOMI):
+        # 隣り合う2字の入れ替わりの戻しは、1つの打ち違いで2字が直る（らか→から）ので、並びの費用が MARGIN 以上
+        # 良くなるなら、読みの並びが置き換えより低くても決める（置き換えは1字しか直らず、残りの字は片付かない）
+        if not (gain > found[1][1] and yomi > found[1][2] and yomi >= VOUCH_SUB_YOMI) \
+                and not (op == 'swap' and gain - found[1][1] >= MARGIN
+                         and (_particle_pair(text, i) or _function_word_at(text, i, i + 2, dict_index))):
             return None
     if yomi_del:
         got = dict(got, yomi_del=True)
@@ -2907,6 +3150,12 @@ def _clause_fragments(toks, s, e, store=None):
             if (len(t.surface) == 1 and t.pos not in _UNIT_GLUE
                     and not (t.pos == '名詞' and sub in ('接尾', '非自立', '数'))
                     and not (t.pos == '動詞' and sub in ('接尾', '非自立') and glued)
+                    # て・で に続く補助動詞（置いて**き**て・読んで**い**る）は語。て・で は助詞なので
+                    # glued に入らないが、補助動詞はまさにそこに付く（2026-10-23・補正C。正しい文
+                    # 財布を家に置いてきてしまった が 降りて に替わった）
+                    and not (t.pos == '動詞' and sub == '非自立' and p is not None and p.end == t.start
+                             and p.pos == '助詞' and p.pos_sub.startswith('接続助詞')
+                             and p.surface in ('て', 'で'))
                     and not (t.pos == '接頭詞' and t.surface in ('お', 'ご'))
                     and not _suru_form(toks, i)):
                 out.add(i)
@@ -2956,6 +3205,23 @@ def _clause_fragments(toks, s, e, store=None):
             out.add(i + 1)
     return out
 
+
+
+def _clause_reads(text):
+    """文節の表記がそのまま辞書の語の並びとして読めるか（記号・読めない字句が無い）。"""
+    try:
+        from morphology import tokenize
+        toks = list(tokenize(text))
+    except Exception:
+        return False
+    if not toks or not all(t.has_reading and t.pos != '記号' for t in toks):
+        return False
+    # 名詞のすぐ後に助詞なしで動詞が続く（取柄｜かかる）のは、語は読めても文節として読めない。
+    # する・できる（勉強する）は名詞に付くので除く（2026-10-24・うにさん「直前まで補正できていた」）
+    for a, b in zip(toks, toks[1:]):
+        if a.pos == '名詞' and b.pos == '動詞' and b.base_form not in ('する', 'できる', 'なる'):
+            return False
+    return True
 
 def repair_ime_clause(line, result, retry, input_method='kana', decisions=None,
                       dict_index=None, store=None, context_vec=None, surrounding=()):
@@ -3641,6 +3907,21 @@ def repair_ime_clause(line, result, retry, input_method='kana', decisions=None,
     if not found:
         return None
     found.sort(key=lambda row: -row[0])
+    # 並んだ候補の読みが3つ以上に割れ、元の文節がそのまま語として読める（見して）なら、どれにも決めない
+    # （燃して・乱して・満たして が並んで、どれを選んでも本人の文ではなかった。2026-10-24・うにさんの誤判定）
+    if len(found) > 2 and found[0][0] - found[2][0] < MARGIN:
+        _close = [row for row in found if found[0][0] - row[0] < MARGIN]
+        if len({_row_reading(row, line) for row in _close}) > 2 and all(
+                _clause_reads(line[row[1]:row[2]]) for row in _close):
+            return None
+    # 元の文節がそのまま語として読めるなら、脱字の戻し（1字足す: 見して→乱して）では替えない（脱字は低い優先度・
+    # うに 10-19。読める文節に字を足すと、別の語を作るだけになりやすい。2026-10-24・うにさんの誤判定）
+    found = [row for row in found if not (row[4].get('drop_fix') and _clause_reads(line[row[1]:row[2]]))]
+    # 元の文節がそのまま語として読めるなら、読み直しは組み立てがはっきり良くなるときだけ（読める並びと同じ高い敷居。
+    # 見して→濃して: 学習した語の読みへ1打で寄せた。2026-10-24・うにさんの誤判定）
+    found = [row for row in found if not (row[0] < READABLE_CLAUSE_GAIN and _clause_reads(line[row[1]:row[2]]))]
+    if not found:
+        return None
     if len(found) > 1 and found[0][0] - found[1][0] < MARGIN:
         # 費用の下がりが並んだら、読みの並びで大きく勝つものだけ採る
         # （わ**す**れて と わ**か**れて→かれて の削除が並ぶ、など）
@@ -3775,12 +4056,110 @@ def _found_cost(found):
     return morphology.path_cost(got.get('corrected', text))
 
 
+def _leftover_letter_runs(line):
+    """ローマ字入力の行で、かな・漢字に付いて残った小文字の英字の並び → [(始まり, 終わり)]（かいgを・おねsんに・仕事g続いた）。
+
+    かなに直らずに残った英字は打ち間違いの確かな跡（打鍵の入れ替わり・抜け）。IME は残った英字を全角で確定する
+    ことが多い（かいｇを）ので、全角の英字も同じに見る。英語の語（web・mail: 英語の品詞の表に在る語）・略語の表の
+    綴り（url）・大文字や数字や記号と続く並び（PC・Ctrl・mp3・.jpg）は見ない。語は名指ししない。
+    """
+    def half(ch):
+        return chr(ord(ch) - 0xFEE0) if 'Ａ' <= ch <= 'ｚ' or '０' <= ch <= '９' else ch
+
+    def letter(ch):
+        h = half(ch)
+        return h.isascii() and h.isalpha()
+
+    def alnum(ch):
+        h = half(ch)
+        return h.isascii() and h.isalnum()
+    out = []
+    i = 0
+    while i < len(line):
+        if not letter(line[i]):
+            i += 1
+            continue
+        j = i
+        while j < len(line) and alnum(line[j]):
+            j += 1
+        run = ''.join(half(c) for c in line[i:j])
+        # かなか漢字の後ろに付いて残った並び（仕事g続いた の g も）。行頭や記号・空白の後ろから始まる英字の並び
+        # （shoruiが届きます。の shorui）は、かなの中に紛れた英字ではなく、ローマ字の語そのもの（完了化の受け持ち）
+        left = i > 0 and (_kana(line[i - 1]) or _kanji(line[i - 1]))
+        prev = half(line[i - 1]) if i > 0 else ''
+        if (run.isalpha() and run.islower() and left
+                and not (prev and prev.isascii() and prev not in ' \t')
+                and not _english_word(run)):
+            out.append((i, j))
+        i = j
+    return out
+
+
+def _english_word(run):
+    # 英語の品詞の表の語（web・kg）か、同梱の略語の表の綴り（url・png: 小文字で書いた略語）
+    try:
+        import loanword
+        if run.upper() in loanword._ACRONYM_SEED:
+            return True
+    except Exception:
+        pass
+    try:
+        import en_pos
+        return bool(en_pos.available() and en_pos.codes_for(run))
+    except Exception:
+        return False
+
+
+def _mark_leftover_letters(result, line):
+    """残った英字（_leftover_letter_runs）が直しで消えていなければ、その並びと前後のかな（文節の中）に紫を残す
+    （迷うなら紫: うに 10-18。英字が残る行は少なくとも紫）。"""
+    shown = result.get('corrected') or line
+    runs = _leftover_letter_runs(shown)
+    if not runs:
+        return result
+    line = shown
+    fixed = [tuple(x[:2]) for x in (result.get('original_spans') or ())]
+    odd = [tuple(x[:2]) for x in (result.get('odd_spans') or ())]
+    extra = []
+    for a, b in runs:
+        if any(x < b and a < y for x, y in fixed):
+            continue
+        # 前後のかな（語の続き）まで広げる。広げるのは MAX_SPAN 字まで（_letter_span と同じ）
+        while a > 0 and _kana(line[a - 1]) and b - a < MAX_SPAN:
+            a -= 1
+        while b < len(line) and _kana(line[b]) and b - a < MAX_SPAN:
+            b += 1
+        if not any(x <= a and b <= y for x, y in odd) and (a, b) not in extra:
+            extra.append((a, b))
+    if not extra:
+        return result
+    out = dict(result)
+    out['odd_spans'] = list(result.get('odd_spans') or ()) + extra
+    return out
+
+
 def with_last_keystroke_repair(fn):
     """`corrector.correct_line` の外側に付ける（読み直しは入口を通す）。"""
     signature = inspect.signature(fn)
 
     @wraps(fn)
     def wrapped(line, *args, **kwargs):
+        import corrector
+        root = corrector._CORRECTION_SOURCE.get() is None and not _ACTIVE.get()
+        out = inner(line, *args, **kwargs)
+        if not root or not isinstance(out, dict) or out.get('original', line) != line:
+            return out
+        try:
+            bound = signature.bind(line, *args, **kwargs)
+            bound.apply_defaults()
+            method = bound.arguments.get('input_method', 'kana')
+        except TypeError:
+            return out
+        if method != 'romaji':
+            return out
+        return _mark_leftover_letters(out, line)
+
+    def inner(line, *args, **kwargs):
         import corrector
         root = corrector._CORRECTION_SOURCE.get() is None and not _ACTIVE.get()
         result = fn(line, *args, **kwargs)
@@ -3821,10 +4200,33 @@ def with_last_keystroke_repair(fn):
                                            options, decisions)
                 if out is not result:
                     return out
+        # 送り仮名・付属語のかなが同じ読みの漢字になった形（食べ田・確認島した）は、かなに戻した形を先に試す。
+        # 最終検査で止まれば紫を残す（_mark_rare_clauses）
+        absorbed = [f[:2] for f in _absorbed_kana_forms(line, options.get('dict_index')) if f[2]]
+        if absorbed:
+            out = _settle_clause_forms(result, line, absorbed, options, decisions)
+            if out is not result:
+                return out
+        if options.get('input_method', 'kana') == 'kana':
+            # 単独で残った ゛゜（前の字に付かなかった印）は打ち間違いの確かな跡。印のキーは小指の端で、隣の
+            # キー（せ・け・へ・ほ・゜）との打ち違い・余分な1打が起きやすい（2026-10-24・間違えやすいキーの傾向）
+            out = _standalone_mark_repair(result, line, retry, options, decisions)
+            if out is not result:
+                return out
+        import kana_layout
+        # 紫を手掛かりにした1打の戻し・文節の読み直しは横の隣だけで試す（縦は入口の候補だけ。keytend 2026-10-24）
+        vertical_token = kana_layout.VERTICAL_OK.set(False)
+        try:
+            return _after_mark(line, result, retry, options, decisions)
+        finally:
+            kana_layout.VERTICAL_OK.reset(vertical_token)
+
+    def _after_mark(line, result, retry, options, decisions):
+        held = []
         found = repair(line, result, retry,
                        input_method=options.get('input_method', 'kana'),
                        decisions=decisions,
-                       dict_index=options.get('dict_index'))
+                       dict_index=options.get('dict_index'), held=held)
         if not found or _suspect_left(found) or _fix_in_ime_clause(line, found, options.get('dict_index')):
             # 1打の直しが無いとき、直した所にまだ疑いの印が残るとき（前おが→前えが）、または直した所が IME の
             # 文節の中に掛かるとき（夕し**どん**の→夕し**んど**の: 打った読みを IME が変換した文節は丸ごと読み直せる）
@@ -3867,6 +4269,18 @@ def with_last_keystroke_repair(fn):
                            input_method=options.get('input_method', 'kana'),
                            decisions=decisions,
                            dict_index=options.get('dict_index'), vouch=True)
+        if found and held and any(a < found[2][1] and found[2][0] < b for a, b in held):
+            # 1打の戻しが「並ぶ戻しがあって決めない」とした所（英字を抜くか残すか・2度押しか）は、ほかの道
+            # （文節の読み直し・組み立ての戻し）でも直さない。決めない理由は道が替わっても同じ（2026-10-23・補正C）
+            found = None
+        if found and options.get('input_method') == 'romaji' and _dangling_small_tsu(line, found[0]):
+            # 残った子音1つを っ と読む戻し（まとめｔ→まとめっ）は、っ の後ろに子音が来ないので音にならない
+            found = None
+        if (found and options.get('input_method') == 'romaji' and _only_drops_keys(line, found[0])
+                and (_letter_by_converted(line) or not _reads_as_words_at(found[0], _diff_range(line, found[0])[0]))):
+            # 英字を抜くだけの戻しは、抜いた後が語として在るときだけ（きせtの→きせの は きせ が語にならない）。
+            # 在らなければ直さず、残った英字に紫（correction_entry._mark_leftover_letters）
+            found = None
         if found and _breaks_kana_word(line, found, options.get('dict_index'), result):
             found = None
         if found and _keeps_sure_mark(line, found):
@@ -4011,6 +4425,15 @@ def _breaks_kana_word(line, found, dict_index, result=None):
     # 直した後の並びは、入口に通す前のかなの行（text）の上で見る（入口が漢字に置いた行は位置がずれる）。
     # 字を抜いた直し（せつ**さ**めい→せつめい）は、抜いた所の前の字で見る
     kana = text if isinstance(text, str) else corrected
+    if _particle_swap(line, kana, lo, hi, face, dict_index) or (
+            len(face) == 2 and len(kana) == len(line) and hi - lo == 2 and sorted(line[lo:hi]) == sorted(face)
+            and _particle_pair(kana, lo)):
+        return False
+    if (len(face) == 2 and len(kana) == len(line) and hi - lo == 2 and sorted(line[lo:hi]) == sorted(face)
+            and _function_word_at(kana, lo, hi, dict_index) and not _function_word_at(line, lo, hi, dict_index)):
+        # 隣り合う2字の入れ替わりの戻しで、戻した2字が助詞・助動詞の字句になる（らか→から・いも→ない）。元の並びは
+        # 助詞・助動詞でなく、戻した並びは前後も語の連なりで読める
+        return False
     if len(kana) < len(line):
         a, b = max(lo - 1, 0), max(lo, 1)
     else:
@@ -4021,6 +4444,74 @@ def _breaks_kana_word(line, found, dict_index, result=None):
         # 助詞・助動詞の字を別の助詞・助動詞に替える直し（ようなも→ようにも）は語の中の直しでない
         return False
     return not (_bounded_kana_word(kana, a, b, dict_index, loose=True) or _one_kana_word_token(kana, a, b, dict_index))
+
+
+def _particle_pair(text, i):
+    """戻した行 text の位置 i から隣り合う2字が、どちらも1字の助詞の字（をの→のを・がを→をが）か。
+    助詞どうしの並びは読みの並び（yomigram）が語の並びほど頼れない（の を が 並ぶ形は少ない）ので、
+    入れ替わりの戻しを読みの並びの低さで止めない。字種で決める（の は字句の解析で名詞と取られることがある）。"""
+    return (0 <= i and i + 1 < len(text) and text[i] != text[i + 1]
+            and text[i] in _PARTICLE_CHARS and text[i + 1] in _PARTICLE_CHARS)
+
+
+_PARTICLE_CHARS = 'のをがにでとはもへや'
+
+
+def _particle_before_masu(text):
+    """字句の解析で、格助詞の直後に「ます」の連用形（まし・ませ）が続く並びが在るか（作り｜に｜まし は成り立たない）。"""
+    try:
+        import morphology
+        toks = list(morphology.tokenize(text))
+    except Exception:
+        return False
+    for k in range(1, len(toks)):
+        p = toks[k - 1]
+        if toks[k].surface in ('まし', 'ませ') and (
+                (p.pos == '助詞' and (p.pos_sub or '').startswith('格助詞'))
+                or (len(p.surface) == 1 and p.surface in 'にをがでへと' and p.end - p.start == 1)):
+            return True
+    return False
+
+
+def _word_then_particle(line, lo, hi, dict_index):
+    """入れ替える前の並びが、辞書の語（かなの読み）＋助詞として読めるか（びょうき｜を・かみ｜を）。
+    line[hi-1] が助詞の字で、その手前のかなの並び（語の頭は行頭・かな以外・助詞の字の次）が辞書の語の読みなら、
+    その並びは入れ替わりではなく語に助詞が付いた形なので、戻さない。"""
+    if dict_index is None or not (0 < hi <= len(line)) or line[hi - 1] not in _PARTICLE_CHARS:
+        return False
+    for s in range(max(0, lo - 5), lo + 1):
+        run = line[s:hi - 1]
+        if len(run) < 2 or not _hira_str(run):
+            continue
+        if s > 0 and _hira_str(line[s - 1]) and line[s - 1] not in _PARTICLE_CHARS:
+            continue
+        try:
+            if dict_index.surfaces_for_reading(run) or dict_index.inflected_surfaces_for_reading(run):
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def _particle_swap(line, kana, lo, hi, face, dict_index):
+    """隣り合う2字の入れ替わりの戻し（写真**とを**った→写真**をと**った）で、戻した行の並びの先頭の字が
+    名詞に続く格助詞（を・が・に・で・は・も）の字句になるもの。助詞が語の字と入れ替わった形で、
+    戻した並びが辞書の語である必要はない。"""
+    if len(face) != 2 or len(kana) != len(line) or hi - lo != 2 or sorted(line[lo:hi]) != sorted(face):
+        return False
+    if _word_then_particle(line, lo, hi, dict_index):
+        return False
+    import morphology
+    try:
+        toks = list(morphology.tokenize(kana))
+    except Exception:
+        return False
+    for k, t in enumerate(toks):
+        if t.start == lo and t.end == lo + 1:
+            return (t.pos == '助詞' and t.pos_sub.startswith(('格助詞', '係助詞')) and k > 0
+                    and toks[k - 1].pos in ('名詞', '助詞') and k + 1 < len(toks)
+                    and toks[k + 1].pos in ('動詞', '形容詞', '名詞', '副詞', '助詞'))
+    return False
 
 
 def _stem_before_case_particle(text, pos, end):
@@ -4434,6 +4925,599 @@ def _place_doubtful_run(corrected, lo, line, options):
     return None
 
 
+def _absorbed_kana_forms(line, dict_index=None):
+    """送り仮名・付属語のかなを IME が同じ読みの漢字にした形（食べ**田**・確認**島**した・出席し**魔**した・読ん**打**）→
+    [(かなに戻した行, (始まり, 終わり, かな))]。
+
+    用言（動詞・形容詞）か サ変の名詞・する の形の直後に、助詞を挟まず漢字の字句が付き、その字句を読みのかなに
+    戻すと、戻したかなが全部 付属語（助動詞・助詞・する／非自立の動詞の形）として前の用言に続き、前の語は
+    そのまま残る形。語は名指ししない: 品詞の並びと、戻した行の字句の並びで決める。前の語との組が語の表に在る
+    もの（食べ**物**・書き**方**）は語。
+    """
+    import morphology
+    try:
+        toks = list(morphology.tokenize(line))
+    except Exception:
+        return []
+    # 字句の読みの候補: IME の文節の打った読みから割り出した読み（確認**島**した＝かくにん＋しま＋した）→
+    # 辞書の読み（島＝とう・しま）
+    typed_of = {}
+    proven = set()   # 読みが打った読みで裏付けられた字句（文節の中で前に在る字句）
+    try:
+        for c in _ime_clauses(line, toks, dict_index):
+            cs, ce, typed = c[0], c[1], c[2]
+            idx = [k for k, u in enumerate(toks) if cs <= u.start and u.end <= ce]
+            for k in idx:
+                head = ''.join(_tok_reading(toks[m]) or '\0' for m in idx if m < k)
+                tail = line[toks[k].end:ce]
+                if (_kana_str(tail) or not tail) and typed.startswith(head) and typed.endswith(tail) \
+                        and len(typed) > len(head) + len(tail):
+                    typed_of.setdefault(k, typed[len(head):len(typed) - len(tail)])
+                    if k - 1 in idx and '\0' not in head:
+                        proven.add(k - 1)
+    except Exception:
+        pass
+    out = []
+    for i in range(1, len(toks)):
+        p, t = toks[i - 1], toks[i]
+        # 漢字だけの字句（かなを含む字句 付け は IME がかなを漢字にした跡ではない）
+        if p.end != t.start or not all(_kanji(c) for c in t.surface) or t.pos in ('動詞', '形容詞', '助動詞', '記号'):
+            continue
+        psub = p.pos_sub.split(':')[0]
+        # 前の用言は続きを要る形（連用・未然・仮定: 食べ・読ん・し）。基本形（いる＋語）は名詞に掛かる形で語
+        if not ((p.pos in ('動詞', '形容詞') and p.infl_form.startswith(('連用', '未然', '仮定')))
+                or (p.pos == '名詞' and psub == 'サ変接続')):
+            continue
+        if _attested_compound([p, t], None):
+            continue
+        cands = [typed_of.get(i), _tok_reading(t)]
+        try:
+            cands += list(dict_index.readings_for_surface(t.surface)) if dict_index is not None else []
+        except Exception:
+            pass
+        seen = set()
+        for rd in cands:
+            if not rd or rd in seen or not _kana_str(rd) or rd == t.surface:
+                continue
+            seen.add(rd)
+            got = _absorbed_try(line, toks, p, t, rd)
+            if got:
+                # 直しに使うのは、IME の打った読みが戻したかなと前の語の読みの両方を裏付けるときだけ（食べ田＝たべた）。
+                # 辞書の読みだけの形（浴＋田・阿＋多: 辞書が切った字句）は紫だけ
+                out.append(got + (typed_of.get(i) == rd and (i - 1) in proven,))
+                break
+    return out
+
+
+def _absorbed_try(line, toks, p, t, rd):
+    """字句 t を読み rd のかなに戻した行が、付属語の並びとして前の語 p に続き、行の費用が下がるなら (行, 置く範囲)。"""
+    import morphology
+    text = line[:t.start] + rd + line[t.end:]
+    try:
+        new = list(morphology.tokenize(text))
+    except Exception:
+        return None
+    lo, hi = t.start, t.start + len(rd)
+    # 前の語はそのまま
+    if not any(u.start == p.start and u.end == p.end and u.surface == p.surface for u in new):
+        return None
+    inner = [u for u in new if u.start < hi and lo < u.end]
+    # サ変の名詞の後ろは する の形から（確認＋しました）。用言の後ろは付属語から
+    if inner and p.pos == '名詞' and not (inner[0].pos == '動詞' and inner[0].base_form == 'する'):
+        return None
+    # 戻したかなは前の語の直後から字句として始まる（前の語に呑まれない）
+    if not inner or inner[0].start != lo:
+        return None
+    first = inner[0]
+    if not (first.pos == '助動詞' or (first.pos == '助詞' and first.pos_sub.startswith('接続助詞'))
+            or (first.pos == '動詞' and (first.base_form == 'する'
+                                         or first.pos_sub.split(':')[0] in ('非自立', '接尾')))):
+        return None
+
+    def functional(u):
+        sub = u.pos_sub.split(':')[0]
+        return (u.pos in ('助動詞', '助詞')
+                or (u.pos == '動詞' and (u.base_form == 'する' or sub in ('非自立', '接尾'))))
+    if not all(functional(u) for u in inner):
+        return None
+    c0, c1 = morphology.path_cost(line), morphology.path_cost(text)
+    if c0 is None or c1 is None or c1 >= c0:
+        return None
+    return (text, (t.start, t.end, rd))
+
+
+def _two_slip_clauses(line, toks, clauses, store, dict_index):
+    """1語に打ち違いが2つあって読み直せなかった IME の文節 → [(始まり, 終わり)]（紫だけ。答えは変えない）。
+
+    打ち違いが2つあると、1打の戻しでは語に届かず、IME は打った読みを語の切れ端の組に変換する（ちやくしゃする→
+    **血役者**する・はびしめる→**歯日占**める）。次の3つが揃う文節を異様とする（語は名指ししない）:
+    1. 打った読みも顔も語でない: 読みは世の中の語の読みに無く、顔は語の表・本人の語彙に無い
+    2. 顔の中に語の組として成り立たない継ぎ目が在る: 1字の漢字の名詞が助詞を挟まず次の語に直に付く（血＋役者・
+       歯＋日）か、名詞が助詞を挟まず自立の動詞に直に付き（日＋占める）、その組が語の表に無い。
+       正しい複合語（写真＋化: 接尾・電車＋移動: 語＋語）はここで外れる
+    3. 打った読みを2打まで戻すと、身近な語（索引で提案してよい語）の読みになる（ちゃくしゅ・はじめる）。
+       継ぎ目が在っても近くに語が無い組（くるま＋いどう）は、本人の言い回しとして触らない
+    """
+    if dict_index is None or not clauses:
+        return []
+    from contextual_repair import key_repairs, _render as _render_keys
+
+    def world(r):
+        try:
+            return dict_index.is_world_reading(r)
+        except Exception:
+            return False
+
+    def familiar(r):
+        try:
+            return bool(dict_index.surfaces_for_reading(r)) or bool(dict_index.inflected_surfaces_for_reading(r))
+        except Exception:
+            return False
+
+    def fits(r, kind, ending):
+        # 戻した読みの語が、文節の中で顔の語が担う役と同じ種類か（する の前ならサ変の名詞・動詞で終わるなら同じ
+        # 活用の語尾の動詞・それ以外は名詞）。役の違う語（快く・どうぞ）に届いても、打ち違いの跡とはしない
+        # 身近な語: 同梱の語の表に在る語（索引だけに在る語 来はじめる は数えない）
+        if not _seed_surfaces(r):
+            return False
+        try:
+            import morphology
+            if kind == 'verb':
+                if not r.endswith(ending):
+                    return False
+                faces = list(dict_index.inflected_surfaces_for_reading(r))
+                return any(len(ts) == 1 and ts[0].pos == '動詞'
+                           for ts in (list(morphology.tokenize(f)) for f in faces[:3]))
+            faces = list(dict_index.surfaces_for_reading(r))[:3]
+            for f in faces:
+                ts = list(morphology.tokenize(f))
+                if len(ts) == 1 and ts[0].pos == '名詞' and (kind != 'suru' or ts[0].pos_sub.startswith('サ変接続')):
+                    return True
+        except Exception:
+            return False
+        return False
+
+    def slips(r):
+        # 1打の打ち違いの読み: 直しに使う隣（同じ段の左右・巻き込み・入れ替え など）に、上下・斜めの隣のキーへの
+        # 置き換えも足す（上下・斜めは直さず紫: うに 10-19）。ここは紫を付けるかを決めるだけなので広く見る
+        out = {x.reading for x in key_repairs(r)}
+        try:
+            import kana_layout as kl
+            keys = tuple(key for c in r for key in kl.keystrokes(c))
+            for i, key in enumerate(keys):
+                p = kl.KANA_POSITIONS.get(key)
+                if p is None:
+                    continue
+                for other, q in kl.KANA_POSITIONS.items():
+                    if q[0] != p[0] and kl.physical_intrusion_keys_adjacent(p, q):
+                        rd = _render_keys(keys[:i] + (other,) + keys[i + 1:])
+                        if rd and _reading_str(rd):
+                            out.add(rd)
+        except Exception:
+            pass
+        out.discard(r)
+        return out
+
+    def near_word(r, kind, ending, dropped):
+        # dropped: 顔の切れを1つ丸ごと落とした読み（は＋しゃしん → しゃしん）。戻した語がそれ（か、その1打違い）なら、
+        # 落とした切れは語として足されたもの（歯＋写真・火＋管理: 本人の作った複合語）で、打ち違いの跡ではない
+        try:
+            near_dropped = set(dropped)
+            for d in dropped:
+                near_dropped |= slips(d)
+            one = slips(r)
+            for r1 in one:
+                if r1 not in near_dropped and world(r1) and fits(r1, kind, ending):
+                    return True
+            for r1 in one:
+                for r2 in slips(r1):
+                    if r2 != r and r2 not in near_dropped and world(r2) and fits(r2, kind, ending):
+                        return True
+        except Exception:
+            return False
+        return False
+
+    def seam(i):
+        t, u = toks[i], toks[i + 1]
+        if t.end != u.start:
+            return False
+        # 動詞の連用形＋動詞（照り＋かかる）は見ない: 複合動詞は作れる形が広く（見始める・飲み終える・走り合う）、
+        # 2打の近くに語があるかでは見分けられなかった（作った組 266 のうち 31 に紫が付いた）
+        if t.pos != '名詞':
+            return False
+        sub = t.pos_sub.split(':')[0]
+        usub = u.pos_sub.split(':')[0]
+        if len(t.surface) == 1 and _kanji(t.surface) and sub in _FRAGMENT_NOUN_SUBS and (
+                u.pos == '名詞' and usub not in ('数',) or (u.pos == '動詞' and usub == '自立')):
+            pass
+        elif (sub in _FRAGMENT_NOUN_SUBS + ('接尾',) and u.pos == '動詞' and usub == '自立'
+              and u.base_form not in ('する', 'できる', 'なる', 'いる', 'ある')):
+            pass
+        else:
+            return False
+        return not _attested_compound([t, u], store)
+
+    out = []
+    for c in clauses:
+        s, e, typed = c[0], c[1], c[2]
+        face_end = c[3] if len(c) > 3 else e
+        idx = [i for i, t in enumerate(toks) if s <= t.start and t.end <= face_end]
+        if len(idx) < 2 or not _reading_str(typed):
+            continue
+        # 末尾の付属（助詞・助動詞・する の形）は顔も読みも同じかななので外して、内容の部分を見る
+        k = len(idx)
+        while k > 1 and (toks[idx[k - 1]].pos in _UNIT_GLUE
+                         or (toks[idx[k - 1]].pos == '動詞' and toks[idx[k - 1]].base_form in ('する', 'できる'))) \
+                and _kana_str(toks[idx[k - 1]].surface):
+            k -= 1
+        body = idx[:k]
+        tail = line[toks[body[-1]].end:e]
+        if tail and not typed.endswith(tail):
+            continue
+        reading = typed[:len(typed) - len(tail)] if tail else typed
+        face = line[s:toks[body[-1]].end]
+        if len(body) < 2 or not reading or world(reading) or world(typed):
+            continue
+        if not any(seam(i) for i in body[:-1]):
+            continue
+        try:
+            if dict_index.readings_for_surface(face) or (store is not None and store.reading_of(face) is not None):
+                continue
+        except Exception:
+            pass
+        if store is not None and _her_word(store, reading, face):
+            continue
+        last = toks[body[-1]]
+        if last.pos == '動詞':
+            kind, ending = 'verb', _kana_tail(last.surface, limit=len(last.surface) - 1)
+        elif tail and idx[k:] and toks[idx[k]].pos == '動詞':
+            kind, ending = 'suru', ''
+        else:
+            kind, ending = 'noun', ''
+        dropped = []
+        pos = 0
+        for i in body:
+            pr = _tok_reading(toks[i])
+            if not pr or not reading.startswith(pr, pos):
+                dropped = []
+                break
+            dropped.append(reading[:pos] + reading[pos + len(pr):])
+            pos += len(pr)
+        # 落とすのは端の切れだけ（頭に足した語・後ろに足した語）。間の切れ（は**日**しめる）は割り込んだ1打の跡でありうる
+        dropped = [dropped[0], dropped[-1]] if dropped else []
+        if near_word(reading, kind, ending, [d for d in dropped if d]):
+            # 紫は文節の頭のかなの付属（の・を）を除いた所から
+            head = next((toks[i].start for i in body if not (_kana_str(toks[i].surface) and toks[i].pos in _UNIT_GLUE)), s)
+            out.append((head, toks[body[-1]].end))
+    return out
+
+
+def _stray_kanji_clauses(line, toks, clauses, store, dict_index):
+    """1打の打ち違いを IME が漢字の語にした跡（紛れ込んだ漢字）→ [(始まり, 終わり, 理由)]（紫だけ。答えは変えない）。
+
+    打ち違いの読みが語の読みになると、IME は珍しい姓・地名や1字の語を出し（新しい**阿久津**を買った・
+    降るらしい**手**）、行に異様の印が立たない。語は名指しせず、語が置かれた所と1打の戻しの両方で見る:
+    1. 述語で終わった行の後ろ・名詞の後ろ（組が世の中の語でない・接尾の語は除く）に付いた語で、その語の読みを
+       抜くのが1打の巻き込みの戻しになる（撮った**地**・これ**背**から）
+    2. 述語の直後で行が終わる語（姓・地名か身近でない語）で、1打戻すと述語に付く助動詞になる（降る**西井** → らしい）
+    3. を で終わる行（述語が無い・サ変の名詞は除く）の語で、1打戻すと動詞になる（友達を**夏** → 待つ）
+    4. 姓・地名か、語でない名詞の続き（加太＋系）で、1打戻した読みの語が後ろの 助詞＋述語 と語の組の表
+       （collocation_table）で組になる（**阿久津**を買った → 靴を買う・**加太系**を始める → 課題を始める）
+    打鍵は kana_layout の隣（上下・斜めを含む）。紫だけなので、上下・斜めの隣も広く見る。
+    """
+    if dict_index is None or not clauses:
+        return []
+    import morphology
+    import kango_tier
+    import collocation_repair as cr
+    from contextual_repair import key_repairs, _render as _render_keys
+
+    def slips(r, before='', after=''):
+        out = {x.reading: x.operation for x in key_repairs(r, before, after)}
+        try:
+            import kana_layout as kl
+            keys = tuple(key for c in r for key in kl.keystrokes(c))
+            for i, key in enumerate(keys):
+                p = kl.KANA_POSITIONS.get(key)
+                if p is None:
+                    continue
+                for other, q in kl.KANA_POSITIONS.items():
+                    if q[0] != p[0] and kl.physical_intrusion_keys_adjacent(p, q):
+                        rd = _render_keys(keys[:i] + (other,) + keys[i + 1:])
+                        if rd and _reading_str(rd):
+                            out.setdefault(rd, 'vertical')
+        except Exception:
+            pass
+        out.pop(r, None)
+        return out
+
+    def verb_face(v):
+        try:
+            faces = list(dict_index.inflected_surfaces_for_reading(v))[:3]
+        except Exception:
+            return None
+        for f in faces:
+            ts = list(morphology.tokenize(f))
+            if ts and ts[0].pos == '動詞' and ts[0].pos_sub.startswith('自立') and all(u.pos in _PRED_POS for u in ts):
+                return ts[0].base_form or f
+        return None
+
+    spans = [(c[0], c[3] if len(c) > 3 else c[1]) for c in clauses]
+    typed = {}
+    for c in clauses:
+        fe = c[3] if len(c) > 3 else c[1]
+        tail = line[fe:c[1]]
+        rd = c[2][:len(c[2]) - len(tail)] if tail and c[2].endswith(tail) else (None if tail else c[2])
+        if rd:
+            typed.setdefault((c[0], fe), rd)
+
+    def reading_of(x, y):
+        # 打った読み（IME の確定の読み）を先に。無ければ辞書の読みをつなぐ
+        return typed.get((toks[x].start, toks[y].end)) or ''.join(_tok_reading(u) for u in toks[x:y + 1])
+
+    def widest(t):
+        inside = [sp for sp in spans if sp[0] <= t.start and t.end <= sp[1]]
+        return max(inside, key=lambda x: x[1] - x[0]) if inside else None
+
+    def unattested_run(i):
+        # 同じ文節の中で名詞が2つ以上続き、続きが世の中の語でない（理科＋大・加太＋補遺）
+        a, b = widest(toks[i])
+        run = [u for u in toks if a <= u.start and u.end <= b and u.pos == '名詞']
+        if len(run) < 2 or toks[i] is not run[0]:
+            return False
+        if any(run[k].end != run[k + 1].start for k in range(len(run) - 1)):
+            return False
+        return not _attested_compound(run, store)
+
+    def frame_after(k):
+        # toks[k] の後ろが 助詞＋（副詞）＋述語 なら (助詞, 述語の基本形)
+        if k + 2 >= len(toks):
+            return None
+        p = toks[k + 1]
+        if p.pos != '助詞' or p.surface not in cr.PARTICLES:
+            return None
+        m = k + 2
+        while m < len(toks) and m < k + 4 and (toks[m].pos in cr._GAP_POS or toks[m].pos_sub in cr._GAP_SUB):
+            m += 1
+        if m >= len(toks):
+            return None
+        pred = cr._predicate(toks, m)
+        return (p.surface, pred[0]) if pred else None
+
+    out = []
+    for i, t in enumerate(toks):
+        if t.pos != '名詞' or not any(_kanji(ch) for ch in t.surface) or widest(t) is None:
+            continue
+        r = reading_of(i, i)
+        if not r or not _reading_str(r) or (store is not None and _her_word(store, r, t.surface)):
+            continue
+        p = toks[i - 1] if i > 0 and toks[i - 1].end == t.start else None
+        n = toks[i + 1] if i + 1 < len(toks) and toks[i + 1].start == t.end else None
+        if n is not None and n.pos == '記号' and i + 2 >= len(toks):
+            n = None
+        if p is not None and p.pos == '名詞' and _attested_compound([p, t], store):
+            continue
+        if n is not None and n.pos == '名詞' and _attested_compound([t, n], store):
+            continue
+        name = t.pos_sub.startswith('固有名詞')
+        if name and n is not None and n.pos_sub.startswith('接尾') and '人名' in n.pos_sub:
+            continue   # 田中さん・佐藤様（人名に付く接尾があれば名前として書いた）
+        proper = name and ('人名' in t.pos_sub or '地域' in t.pos_sub)
+        familiar = kango_tier.known_usage_tier(t.surface) in (1, 2)
+        pr = reading_of(i - 1, i - 1) if p else ''
+        nr = reading_of(i + 1, i + 1) if n else ''
+        after_pred = p is not None and p.pos in _PRED_POS
+        # 接尾の語（化・家・費）は語に付いて語を作る役なので、語＋接尾は継ぎ目と見ない（写真化・写真家）
+        seam = (p is not None and p.pos == '名詞' and not p.pos_sub.startswith(('数', '副詞可能', '非自立'))
+                and not t.pos_sub.startswith('接尾') and (n is None or n.pos == '助詞'))
+        obj_end = (p is not None and p.pos == '助詞' and p.surface == 'を' and n is None
+                   and not t.pos_sub.startswith('サ変接続'))
+        near = slips(r, pr[-1:], nr[:1])
+        why = None
+        a0, b0 = t.start, t.end
+        # 1. 抜くのが1打の巻き込みの戻し
+        if ((after_pred and n is None) or seam) and slips(pr + r + nr).get(pr + nr) == 'adjacent_intrusion':
+            why = '「%s」は前の語に1打余分に付いた跡かもしれません' % t.surface
+        # 2. 1打戻すと述語に付く助動詞
+        if why is None and after_pred and n is None and (proper or not familiar):
+            for v in near:
+                ts2 = list(morphology.tokenize(line[:t.start] + v + line[t.end:]))
+                keep = [u for u in ts2 if u.start == p.start and u.end == p.end]
+                mid = [u for u in ts2 if u.end > t.start and u.start < t.start + len(v)]
+                if (keep and mid and mid[0].start == t.start and mid[-1].end == t.start + len(v)
+                        and all(u.pos in ('助動詞', '助詞') for u in mid)
+                        and mid[-1].pos == '助動詞' and mid[-1].infl_form == '基本形'
+                        and not _conjugation_mismatch(ts2)):
+                    why = '「%s%s」かもしれません' % (p.surface, v)
+                    break
+        # 3. を で終わる行で、1打戻すと動詞
+        if why is None and obj_end:
+            for v in near:
+                f = verb_face(v)
+                if f:
+                    why = '「を%s」の打ち違いかもしれません' % f
+                    break
+        # 4. 姓・地名・語でない名詞の続きを1打戻すと、後ろの 助詞＋述語 と語の組になる
+        if why is None and (name or unattested_run(i)):
+            a, b = widest(t)
+            j, k = i, i
+            while (j > 0 and toks[j - 1].end == toks[j].start and toks[j - 1].pos in ('名詞', '接頭詞')
+                   and toks[j - 1].start >= a):
+                j -= 1
+            while k + 1 < len(toks) and toks[k + 1].start == toks[k].end and toks[k + 1].pos == '名詞' and toks[k + 1].end <= b:
+                k += 1
+            frame = frame_after(k)
+            if frame:
+                part, verb = frame
+                nouns = cr.table()[1].get((part, verb), ())
+                for x, y in [(j, k)] + ([(i, k)] if i != j else []):
+                    rr = reading_of(x, y)
+                    face = ''.join(u.surface for u in toks[x:y + 1])
+                    if not _reading_str(rr) or face in nouns:
+                        continue
+                    lp = _tok_reading(toks[x - 1]) if x > 0 else ''
+                    for v in slips(rr, lp[-1:], part):
+                        hit = sorted(f for f in nouns if cr._word_reading(f) == v)
+                        if hit:
+                            why = '「%s%s%s」より「%s%s%s」がよく使う組です' % (face, part, verb, hit[0], part, verb)
+                            a0, b0 = toks[x].start, toks[y].end
+                            break
+                    if why:
+                        break
+        if why and not any(a0 < e and s < b0 for s, e, _w in out):
+            out.append((a0, b0, why))
+    return out
+
+
+_PRED_POS = ('動詞', '助動詞', '形容詞')
+
+
+def _left_alone_spans(line, decisions):
+    """紫だけの段が触らない所: 明示の引用・守った語（_protected）と、「この補正は不要」で決めた文字列（corrector._decided_spans）。"""
+    spans = []
+    try:
+        spans += [tuple(r[:2]) for r in _protected(line, decisions)]
+    except Exception:
+        pass
+    try:
+        import corrector
+        spans += [tuple(r[:2]) for r in corrector._decided_spans(line, decisions)]
+    except Exception:
+        pass
+    return spans
+
+
+def mark_stray_kanji(line, result, store=None, dict_index=None, input_method='kana', decisions=None):
+    """補正の結果（答えを変えなかった行）に、紛れ込んだ漢字の紫と理由を足す（_stray_kanji_clauses）。答えは変えない。
+    直しの入口（読み直し・2回目の通し）の材料にしないため、correction_entry の最後の段で呼ぶ。"""
+    if (not isinstance(result, dict) or input_method not in ('kana', 'romaji')
+            or (result.get('corrected') or line) != line):
+        return result
+    try:
+        import morphology
+        toks = list(morphology.tokenize(line))
+        found = _stray_kanji_clauses(line, toks, _ime_clauses(line, toks, dict_index), store, dict_index)
+    except Exception:
+        return result
+    odd = [tuple(x[:2]) for x in (result.get('odd_spans') or ())]
+    # 明示の引用（「くたせさぃ」という文字列）と、本人が「直さない」と決めた文字列（守った語・この補正は不要）には印を付けない
+    odd += _left_alone_spans(line, decisions)
+    extra = [(a, b, w) for a, b, w in found if not any(s < b and a < e for s, e in odd)]
+    if not extra:
+        return result
+    out = dict(result)
+    out['odd_spans'] = list(result.get('odd_spans') or ()) + [[a, b] for a, b, _w in extra]
+    out['odd_reasons'] = list(result.get('odd_reasons') or ()) + [[a, b, w] for a, b, w in extra]
+    return out
+
+
+_SMALL_VOWEL_BASE = {'ぁ': 'a', 'ぃ': 'i', 'ぅ': 'u', 'ぇ': 'e', 'ぉ': 'o'}
+_KANA_VOWEL_ROWS = {'a': 'あかがさざただなはばぱまやらわゃ', 'i': 'いきぎしじちぢにひびぴみり', 'u': 'うくぐすずつづぬふぶぷむゆるゅ',
+                    'e': 'えけげせぜてでねへべぺめれ', 'o': 'おこごそぞとどのほぼぽもよろをょ'}
+
+
+def _small_vowel_combines(prev, small):
+    """小書きの母音 small が前の字 prev と1拍に組めるか（ふぁ・つぃ・くぉ・しぇ・ちぇ・てぃ・でぃ・とぅ）。"""
+    base = _SMALL_VOWEL_BASE[small]
+    if prev in 'うくぐすずつづぬふぶぷむゆるゔ':
+        return True
+    if prev in 'きぎしじちぢにひびぴみりい' and base == 'e':
+        return True
+    return prev in 'てでとど' and base in 'iu'
+
+
+def _impossible_kana_spans(line, toks):
+    """音と活用の決まりでありえないかなの並び → [(始まり, 終わり, 理由)]（紫だけ。答えは変えない）。
+
+    かな入力の Shift・濁点・二度押しの打ち違いは、かなのまま残ると語にも印にもならないことがある（進まな**ぃ**・
+    なっ**だ**・残**つ**ている・してい**るる**）。語は名指しせず、かなの並びそのものの決まりで見る:
+    1. 小書きの母音が前の字と1拍に組めない（なぃ・行頭の ぃ）。同じ母音の伸ばし（かわいぃ・すごぉい）は書き方として除く
+    2. っ の後ろに濁った た行（なっだ・きっで）: 音便の続きは った・って で、濁るのは ん の後ろ（読んだ）
+    3. 大きい つ の所を っ にすると動詞の音便（残っ・手伝っ）として読め、元の行ではその動詞に読めない（残つて）
+    4. 同じかなが2つ続き、1つ抜くと述語の形として読めるのに、元の行では余った字が辞書の語にならない切れ端
+       （む・ら・れ・える）か、その字だけの助動詞（る・るる・ん）になる（しているる・飲むむ・頼んんだ）
+    """
+    import morphology
+    out = []
+    n = len(line)
+
+    def plain(ch):
+        return chr(ord(ch) - 0x60) if 'ァ' <= ch <= 'ヶ' else ch
+
+    for i, c in enumerate(line):
+        small = plain(c)
+        if small in _SMALL_VOWEL_BASE:
+            # 語の中・語の終わりの小書き（くださぃ・かわいぃ・すごぉい）は話し言葉の書き方として残す。
+            # 見るのは語の頭（行頭・かなでない字の後ろ・格助詞や係助詞・記号の後ろ）に立つ小書きだけ（を**ぃ**れる・**ァ**ねの）
+            prev = plain(line[i - 1]) if i > 0 else ''
+            if prev == 'ー' or (_hira(prev) and _small_vowel_combines(prev, small)):
+                continue
+            if _hira(prev):
+                before = next((u for u in toks if u.end == i), None)
+                if before is None or not (before.pos == '記号' or (
+                        before.pos == '助詞' and before.pos_sub.startswith(('格助詞', '係助詞')))):
+                    continue
+            out.append((i, i + 1, '小書きの「%s」は語の頭に立てません' % c))
+        elif c == 'っ' and i + 1 < n and line[i + 1] in 'だでどぢづ':
+            # 濁りを外すと っ が述語の音便（なっ・もらっ）として読めるときだけ。外来語の音（ぴっづぁ・ぐっず・べっど）は
+            # っ の後に濁った字が来ても言えるので見ない
+            clear = chr(ord(line[i + 1]) - 1)
+            t2 = next((u for u in morphology.tokenize(line[:i + 1] + clear + line[i + 2:]) if u.start <= i < u.end), None)
+            if (t2 is not None and t2.pos in ('動詞', '助動詞', '形容詞') and t2.infl_form.startswith('連用タ接続')
+                    and t2.end == i + 1 and t2.start < i):
+                out.append((i, i + 2, '「っ%s」は続きの形としてありえません（「っ%s」か「ん%s」）'
+                            % (line[i + 1], clear, line[i + 1])))
+        elif c == 'つ' and 0 < i < n - 1 and line[i + 1] in 'てた':
+            t1 = next((u for u in toks if u.start <= i < u.end), None)
+            if t1 is not None and t1.has_reading and i + 1 < t1.end:
+                continue   # つ が語の中（かつて は辞書の語）
+            t2 = next((u for u in morphology.tokenize(line[:i] + 'っ' + line[i + 1:]) if u.start <= i < u.end), None)
+            if (t2 is not None and t2.pos == '動詞' and t2.infl_form.startswith('連用タ接続') and t2.surface.endswith('っ')
+                    and t2.start < i and not (t1 is not None and t1.pos == '動詞' and t1.base_form == t2.base_form)):
+                out.append((t2.start, i + 1, '「つ」は小さい「っ」の打ち忘れかもしれません（%s）' % t2.base_form))
+        elif i > 0 and c == line[i - 1] and c != 'ー' and _hira(c):
+            ts2 = list(morphology.tokenize(line[:i] + line[i + 1:]))
+            a = next((u for u in ts2 if u.start <= i - 1 < u.end), None)
+            if a is None or not a.has_reading or not (
+                    a.pos in ('動詞', '助動詞', '形容詞') or (a.pos == '名詞' and a.pos_sub.startswith('形容動詞語幹'))):
+                continue
+
+            def fragment(u):
+                if not all(_hira(ch) for ch in u.surface):
+                    return False
+                if u.pos == '動詞' and not u.pos_sub.startswith('非自立'):
+                    return True
+                if u.pos == '名詞' and not u.pos_sub.startswith('非自立') and (not u.has_reading or len(set(u.surface)) == 1):
+                    return True
+                return u.pos == '助動詞' and set(u.surface) == {c}
+            if (any(fragment(u) for u in toks if u.end > i - 1 and u.start <= i)
+                    and not any(fragment(u) for u in ts2 if u.end > i - 1 and u.start <= i - 1)):
+                out.append((i - 1, i + 1, '「%s」が1字余っているかもしれません' % (c + c)))
+    return out
+
+
+def mark_impossible_kana(line, result, input_method='kana', decisions=None):
+    """補正の結果（答えを変えなかった行）に、ありえないかなの並びの紫と理由を足す（_impossible_kana_spans）。"""
+    if (not isinstance(result, dict) or input_method not in ('kana', 'romaji')
+            or (result.get('corrected') or line) != line):
+        return result
+    try:
+        import morphology
+        found = _impossible_kana_spans(line, list(morphology.tokenize(line)))
+    except Exception:
+        return result
+    odd = [tuple(x[:2]) for x in (result.get('odd_spans') or ())]
+    # 明示の引用（「くたせさぃ」という文字列）と、本人が「直さない」と決めた文字列（守った語・この補正は不要）には印を付けない
+    odd += _left_alone_spans(line, decisions)
+    extra = [(a, b, w) for a, b, w in found if not any(s < b and a < e for s, e in odd)]
+    if not extra:
+        return result
+    out = dict(result)
+    out['odd_spans'] = list(result.get('odd_spans') or ()) + [[a, b] for a, b, _w in extra]
+    out['odd_reasons'] = list(result.get('odd_reasons') or ()) + [[a, b, w] for a, b, w in extra]
+    return out
+
+
 def _mark_rare_clauses(result, line, options):
     """読み直しが採れなかった行で、IME が明示的に稀と判定された語（稀代・現官）を出した文節は、迷いの印（紫）を
     元の行の上に残す（迷うなら紫: うに 10-18）。紫は「異様の印」で答えは変えない。"""
@@ -4451,8 +5535,13 @@ def _mark_rare_clauses(result, line, options):
     # 文法で確かな印（活用の形が合わない続き: 閑雅**て**・角**煮ください**・初める**た**）は、直せなくても紫を残す
     sure = [(toks[i].start, toks[i + 1].end) for i in sorted(_conjugation_mismatch(toks)) if i + 1 < len(toks)]
     # 打った読みの上の文法で確かな印（きりがないよう**な**も→霧が内容名も）も、直せなければ文節に紫（#80）
+    # 送り仮名・付属語のかなが漢字になった形で、戻しが採れなかったもの（迷うなら紫）
+    sure += [(f[1][0], f[1][1]) for f in _absorbed_kana_forms(line, options.get('dict_index'))]
     try:
-        sure += sorted(_reading_sure_clauses(line, _ime_clauses(line, toks, options.get('dict_index'))))
+        ime = _ime_clauses(line, toks, options.get('dict_index'))
+        sure += sorted(_reading_sure_clauses(line, ime))
+        # 1語に打ち違いが2つあって読み直せなかった文節（血役者する・歯日占める）も紫
+        sure += _two_slip_clauses(line, toks, ime, options.get('store'), options.get('dict_index'))
     except Exception:
         pass
     if not spans and not sure:
@@ -4576,3 +5665,93 @@ def _accept_clause_form(result, line, corrected, lo, hi, face, options, decision
     # 「なぜ異様と見たか」は元の行の理由のまま（直した語の根拠に出る）
     return out
 
+
+_MARKS = '゛゜'
+
+
+def _standalone_mark_variants(line, i):
+    """line[i] の単独の印を1打で戻した行の候補 → [行]（重なりなし・元の順）。
+
+    - ゛ のつもりで隣の ゜ を叩いた: 前の字に ゛ を付ける（前の字が ゛ を取れて ゜ を取れないとき）
+    - 余分な1打: 印を抜く。印のキーに指が掛かる（前の字のキーが ゛゜ のキーの隣: れ・け・せ・へ・ほ・ー）か、
+      前の字に印がもう付いている（が゜・べ゜）ときだけ。それ以外の字（あ゛・ん゛）の後ろの印は、その字自体が
+      紛れ込んだ打鍵で、印は前の字のためのことが多い（1字の戻しでは届かない）
+    隣のキーの字に替える戻しは、測りで外れが多かった（19件中1件）ので作らない。
+    """
+    from corrector import _MARK_COMPOSE_DAKUTEN, _MARK_COMPOSE_HANDAKUTEN
+    import kana_layout as kl
+    mark = line[i]
+    prev = line[i - 1] if i > 0 else ''
+    out = []
+    if mark == '゜' and prev in _MARK_COMPOSE_DAKUTEN and prev not in _MARK_COMPOSE_HANDAKUTEN:
+        out.append(line[:i - 1] + _MARK_COMPOSE_DAKUTEN[prev] + line[i + 1:])
+    base = kl.DAKUTEN_BASE.get(prev, prev)
+    pp = kl.KANA_POSITIONS.get(base)
+    def touching(p, q):
+        # 触れ合うキー（同じ段の左右・上下の段で重なるキー）。配列の段のずれ（ROW_OFFSET）で測る
+        if p is None or q is None or p == q or abs(p[0] - q[0]) > 1 or not kl.same_half(p, q):
+            return False
+        return abs((p[1] + kl.ROW_OFFSET.get(p[0], 0.0)) - (q[1] + kl.ROW_OFFSET.get(q[0], 0.0))) <= 1.0 + 0.3 * abs(p[0] - q[0])
+    near_mark = any(touching(pp, kl.KANA_POSITIONS.get(m)) for m in _MARKS)
+    if near_mark or base != prev:
+        out.append(line[:i] + line[i + 1:])
+    return out
+
+
+def _standalone_mark_repair(result, line, retry, options, decisions):
+    """行に単独の ゛゜ が1つだけ残るとき、1打の戻しを入口に通し、紫も迷いも残らない形を path_cost で選ぶ。
+
+    どれも残るなら直さずに印の字に紫を足す（迷うなら紫）。2つ以上の単独の印は1打では戻らないので見ない。
+    """
+    spots = [i for i, ch in enumerate(line) if ch in _MARKS]
+    if len(spots) != 1:
+        return result
+    i = spots[0]
+
+    def wordish(ch):
+        return ('ぁ' <= ch <= 'ゖ') or ('ァ' <= ch <= 'ヺ') or ch == 'ー' or ('一' <= ch <= '鿿')
+    # 印そのものを書いた所（「゛」・゛と゜）は見ない: 前が語の字で、後ろが語の字か句読点か行末のときだけ
+    if i == 0 or not wordish(line[i - 1]) or (i + 1 < len(line) and not (wordish(line[i + 1]) or line[i + 1] in '。、！？')):
+        return result
+
+    def purple():
+        out = dict(result)
+        spans = list(out.get('odd_spans') or ())
+        if out.get('corrected', line) == line and not any(a <= i < b for a, b in spans):
+            out['odd_spans'] = sorted(spans + [(i, i + 1)])
+        return out
+    if '一' <= line[i - 1] <= '鿿':
+        # 前が漢字: 印を付けるつもりのかなは IME が漢字に変えた文節の中にある（1字の戻しでは届かない）。紫だけ
+        return purple()
+    if not _standalone_mark_variants(line, i):
+        # 1打の戻しが1つも無い（前の字が印のキーから遠い・印の付かない字: あ゛ー・記号は゛です・は゜は）なら、
+        # 印は書くつもりで書いた（声の表記・印そのものの話）。紫も付けない（2026-10-25・1.16.0 の通しの検査）
+        return result
+    import morphology
+    best = None
+    base = result.get('corrected', line)
+    if base != line and not (result.get('odd_spans') or result.get('unsure_spans')) \
+            and not any(ch in _MARKS for ch in base):
+        # 補正がもう印を別の形にした（次の字に付けた: 遅れ゛て→遅れで）ときは、それも候補に並べる
+        best = (morphology.path_cost(base), base)
+    for text in _standalone_mark_variants(line, i):
+        got = retry(text)
+        if not isinstance(got, dict):
+            continue
+        corrected = got.get('corrected', text)
+        if got.get('odd_spans') or got.get('unsure_spans') or any(ch in _MARKS for ch in corrected):
+            continue
+        cost = morphology.path_cost(corrected)
+        if best is None or cost < best[0]:
+            best = (cost, corrected)
+    if best is not None:
+        corrected = best[1]
+        if corrected == base:
+            return result
+        lo, hi, new_hi = _diff_range(line, corrected)
+        # 抜くだけの戻しは前後の1字ごと置く（空の置き換えは最終検査で語として見られない）
+        lo, hi, new_hi = max(0, lo - 1), min(len(line), hi + 1), min(len(corrected), new_hi + 1)
+        out = _settle_clause_forms(result, line, [(corrected, (lo, hi, corrected[lo:new_hi]))], options, decisions)
+        if out is not result:
+            return out
+    return purple()

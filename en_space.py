@@ -396,6 +396,9 @@ _FORCE_SPLIT = {
     'inorder': 'in order', 'ontime': 'on time', 'athome': 'at home',
     'atwork': 'at work', 'atonce': 'at once', 'assoon': 'as soon',
     'aslong': 'as long', 'alittle': 'a little', 'afew': 'a few',
+    # 2026-10-16: wordfreq ではよく書かれる綴りなので、打ち違いの道
+    # （en_typo）は「書いたとおり」とみなす。ここで名指しで分ける
+    'alot': 'a lot',
 }
 
 # 英字の隣接（入れ替え・1字違いで届く語を探すとき）。表は `keyboard_layout`
@@ -1049,8 +1052,15 @@ def _looks_like_code(text):
         return True
     if text.rstrip().endswith(':') and ('(' in text or _STATEMENT_RE.match(text)):
         return True
+    # 名前に括弧が付いた呼び出し（`foo(abot)`。`file(s)` の複数の印は除く・
+    # 2026-10-16）
+    if _CALL_RE.search(text):
+        return True
     # 引用符でくくった1語と括弧（`hasattr(f, "readinto")`）
     return '(' in text and re.search(r'["\'][A-Za-z_]+["\']', text) is not None
+
+
+_CALL_RE = re.compile(r'[A-Za-z0-9_]\((?!e?s\))[^()]*\)')
 # この字の後ろは文頭（引用符・括弧・箇条書きの印・文末の記号）
 _SENTENCE_BREAK = frozenset('.!?:;\n-*>|)…—–"\'(“‘「『[（')
 
@@ -1126,7 +1136,7 @@ _SWAP3 = frozenset(('the', 'and', 'you', 'not', 'for', 'was', 'are', 'can',
                     'may', 'too', 'nor', 'yet', 'now'))
 
 
-def find_missing_spaces(line, store=None):
+def find_missing_spaces(line, store=None, _again=True):
     """
     行の中の英単語について、順番の入れ替え・スペースの入れ忘れを直す。
 
@@ -1143,7 +1153,9 @@ def find_missing_spaces(line, store=None):
             continue
         if s > 0 and (line[s - 1].isdigit() or line[s - 1] in _GLUED):
             continue
-        if e < len(line) and (line[e].isdigit() or line[e] in _GLUED):
+        # 文を終える `.` はくっついた記号ではない（2026-10-16・文末の語）
+        if e < len(line) and (line[e].isdigit() or line[e] in _GLUED) \
+                and not _sentence_period(line, e):
             continue
         key = word.lower()
         # 途中に大文字（GitHub・iPhone）／大文字だけ（HTMLCSS）は名前
@@ -1157,6 +1169,9 @@ def find_missing_spaces(line, store=None):
                 out.append((s, e, _recase(word, _FORCE_SPLIT[key])))
             continue
         if _known(key, store):
+            continue
+        if _quoted(line, s, e):
+            # 引用符に挟まれた語は、書いたとおりに挙げた語（"teh" は誤字の例）
             continue
         nxt = _WORD_RE.match(line, e + 1) if line[e:e + 1] == ' ' else None
         nxt = nxt.group(0) if nxt else None
@@ -1173,6 +1188,27 @@ def find_missing_spaces(line, store=None):
                 if not (swaps or nears):
                     out.append((s, e, lone))
             continue
+        # 2026-10-16（うにさんの選択「英語の補正を強化」）: 1つの打ち違いで
+        # 届く語のうち、使われやすさで1つに決まるものへ直す（`en_typo`。
+        # wnat → want・tge → the・shouls → should）。分け方もあるときは、
+        # 分けた語のほうが使われやすければ分ける（iam → i am。aim ではない）。
+        typo = _typo_fix(word, store, re.match(r'\s*[A-Za-z]', line[e:]) is not None,
+                         at_start)
+        # 2026-10-23: 前後の語が選ぶ語があればそれに、前後のどちらとも
+        # 組にならない語なら直さない（`en_context`）
+        chosen = _context_fix(line, s, e, word, typo)
+        if chosen is not None:
+            typo = chosen or None
+            if chosen:
+                out.append((s, e, chosen))
+                continue
+        if typo:
+            split = split_unknown_word(word, lex, nxt, at_start)
+            if split and _split_outweighs(split, typo):
+                out.append((s, e, split))
+            else:
+                out.append((s, e, typo))
+            continue
         # 隣接キー・順番の入れ替えを先に考える
         swaps, nears = _one_edit_words(key, lex, word[:1].isupper())
         if swaps or nears:
@@ -1188,7 +1224,94 @@ def find_missing_spaces(line, store=None):
         fixed = split_unknown_word(word, lex, nxt, at_start)
         if fixed:
             out.append((s, e, fixed))
+    # 2026-10-16: 語は知っているが、文の中で読むと違う語（`dont` `i think`
+    # `come form` `more then`）。`en_typo.line_fixes` が前後の語で決める。
+    try:
+        import en_typo
+        out.extend(en_typo.line_fixes(line, store, [(a, b) for a, b, _f in out]))
+    except Exception:
+        pass
+    if out and _again:
+        # 2026-10-23: 隣り合う2語の打ち違い（`knosw hen`）は、片方を直した
+        # 行で読み直すと、もう片方の前後が見える。直していない所の直しだけ足す
+        out.extend(_second_look(line, store, out))
     return out
+
+
+def _second_look(line, store, out):
+    """out を当てた行をもう一度読み、out に触れない語の直しを元の行の
+    位置に戻して返す。"""
+    out = sorted(out)
+    fixed, moved, at = [], [], 0      # moved: (元の始まり, 元の終わり, ずれ)
+    shift = 0
+    for s, e, f in out:
+        if s < at:
+            return []                 # 重なる直し（起きないはず）
+        fixed.append(line[at:s])
+        moved.append((at, s, shift))
+        fixed.append(f)
+        shift += len(f) - (e - s)
+        at = e
+    fixed.append(line[at:])
+    moved.append((at, len(line), shift))
+    more = []
+    for s, e, f in find_missing_spaces(''.join(fixed), store, _again=False):
+        for a, b, d in moved:
+            if a + d <= s and e <= b + d:
+                more.append((s - d, e - d, f))
+                break
+    return more
+
+
+def _sentence_period(line, e):
+    try:
+        import loanword
+        return loanword._sentence_period(line, e)
+    except Exception:
+        return False
+
+
+def _typo_fix(word, store, followed=True, at_start=None):
+    """`en_typo` の直し（使われやすさで1つに決まる打ち違い）。無ければ None。
+    followed: 後ろに語が続く（冠詞は語の前にしか立たない）。
+    at_start: 大文字で書き出した語が文頭か（文の中の大文字は名前）。"""
+    try:
+        import en_typo
+        return en_typo.fix_word(word, store, followed, at_start)
+    except Exception:
+        return None
+
+
+def _context_fix(line, s, e, word, typo):
+    """`en_context.unknown_fix`: 前後の語が選ぶ語・'' (typo を捨てる)・None。"""
+    try:
+        import en_context
+        return en_context.unknown_fix(line, s, e, word, typo)
+    except Exception:
+        return None
+
+
+def _quoted(line, s, e):
+    """引用符にそのまま挟まれた語（"cmp"）。書いたとおりの語として残す。"""
+    try:
+        import en_typo
+        return en_typo._quoted(line, s, e)
+    except Exception:
+        return False
+
+
+def _split_outweighs(split, typo):
+    """分けた語がどれも、直した語より使われやすいか。直した語が分けた
+    頭の語そのものなら、打った字を残して分ける（`hasa` は has でなく
+    has a。`asoon` は soon のまま・`arther` は rather のまま）。"""
+    try:
+        import en_typo
+        parts = split.lower().split(' ')
+        if len(parts) == 2 and parts[0] == typo.lower():
+            return True
+        return min(en_typo.zipf(p) for p in parts) > en_typo.zipf(typo)
+    except Exception:
+        return False
 
 
 def _recase(word, fixed):

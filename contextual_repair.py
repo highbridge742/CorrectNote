@@ -6109,12 +6109,22 @@ def _render(keys):
     return out
 
 
-@lru_cache(maxsize=128)
-def _key_neighbors(key):
+@lru_cache(maxsize=256)
+def _key_neighbors_for(key, vertical):
     import kana_layout as k
     return tuple((other, k.kana_key_distance(key, other)) for other in k.KANA_POSITIONS
                  if not k.same_physical_key(key, other)
-                 and 0 < k.kana_key_distance(key, other) <= 1.05)
+                 and 0 < k.kana_key_distance(key, other) <= 1.05
+                 and (vertical or not k.is_vertical_distance(k.kana_key_distance(key, other))))
+
+
+def _key_neighbors(key):
+    # 縦（同じ指の上下）を候補に使うかは kana_layout.VERTICAL_OK（読み直しの間は切る）。控えはその別ごと
+    import kana_layout as k
+    return _key_neighbors_for(key, k.VERTICAL_OK.get())
+
+
+_key_neighbors.cache_clear = _key_neighbors_for.cache_clear
 
 
 def key_repairs(reading, before='', after=''):

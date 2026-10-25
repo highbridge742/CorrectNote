@@ -95,6 +95,25 @@ ITEMS = (
     Item('en_pos.json.gz', 'en_pos',
          '英単語の品詞が分からず、英単語がすべて「英字」の大きさと色で出る',
          False),
+    # 英単語の使われやすさ（2026-10-16・en_typo.py。生成は
+    # tools_local/en_freq/build_en_freq.py。wordfreq 由来・CC BY-SA 4.0、
+    # 表示は中の "license"）。
+    Item('en_freq.json.gz', 'en_typo',
+         '英文の5字以下の打ち違い（wnat・teh）と、文の中で決まる語'
+         '（dont・come form・more then）が直らなくなる',
+         False),
+    # 英語の語の組と同じ音の語（2026-10-23・en_context.py。生成は
+    # tools_local/en_context/build_en_context.py。語の組は Google Books Ngram
+    # 由来・CC BY 3.0、同じ音は CMU Pronouncing Dictionary、表示は中の "license"）。
+    Item('en_context.json.gz', 'en_context',
+         '別の正しい語になった英語の打ち違い（come form・next weak・their is）'
+         'が直らなくなる',
+         False),
+    # 名詞の意味の類（2026-10-24・semantic_class.py。国立国語研究所『分類語彙表増補改訂版データベース』の
+    # 「体」の類）。
+    Item('wlsp_nouns.json.gz', 'semantic_class',
+         '名詞の意味の類が分からず、意味の合わない語の組を見分ける補正が効かなくなる',
+         False),
     Item('NOTICE_sudachi.txt', None,
          'SudachiDict（Apache-2.0）の表示が配布物から落ちる',
          False),

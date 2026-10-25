@@ -17,6 +17,10 @@ class InputPauseTests(unittest.TestCase):
         self.now=10.0
         self.clock=patch.object(scheduling.time,'monotonic',side_effect=lambda:self.now)
         self.clock.start();self.addCleanup(self.clock.stop)
+        # The mechanism with the waits it was written for (300 / 100); the defaults are 40 since
+        # 2026-10-23 (test_the_defaults_are_40ms)
+        for name,value in (('DISPLAY_QUIET_MS',300),('DISPLAY_QUIET_IME_MS',100)):
+            waits=patch.object(scheduling,name,value);waits.start();self.addCleanup(waits.stop)
         self.reset_app()
     def reset_app(self):
         self.now=10.0
@@ -27,6 +31,12 @@ class InputPauseTests(unittest.TestCase):
     def accepted(self):
         self.a._analyze_work,self.a._analyze_dependencies=scheduling.identity(self.a)
         self.a._analyze_text='synthetic'
+    def test_the_defaults_are_40ms(self):
+        # 2026-10-23 うにさん: both waits 40ms; the debug menu keeps the ranges 0-300 / 0-100
+        import importlib
+        fresh=importlib.reload(importlib.import_module('analysis_input'))
+        self.assertEqual((fresh.DISPLAY_QUIET_MS,fresh.DISPLAY_QUIET_IME_MS),(40,40))
+        self.assertEqual((fresh.DISPLAY_QUIET_MS_MAX,fresh.DISPLAY_QUIET_IME_MS_MAX),(300,100))
     def test_computation_starts_early_but_display_waits_for_quiet(self):
         a=self.a;scheduling.schedule(a);self.accepted()
         self.assertEqual(a.root.jobs[a._after_id][0],scheduling.COMPUTE_DELAY_MS)

@@ -6,6 +6,8 @@ BUTTONS = (
     ('last', '最終行', 'last_line_btn'),
     ('bookmark_previous', '▲ 前のブックマーク', 'bookmark_prev_btn'),
     ('bookmark_next', '▼ 次のブックマーク', 'bookmark_next_btn'),
+    # 2026-10-23 うにさん: 押すと F5 と同じ候補一覧（引用の左・狭いと「再」）
+    ('reconvert', '再変換', 'reconvert_btn'),
     ('quote', 'クリックして引用', 'pick_mode_btn'),
     ('list', '箇条書き', 'list_mode_btn'),
     ('quick', '簡易入力', 'quick_input_btn'),
@@ -21,6 +23,8 @@ BUTTONS = (
     ('bracket_double', '『』', 2),
     ('bracket_black', '【】', 3),
     ('bracket_quotes', '“”', 4),
+    # 2026-10-23 うにさん: 説明書を開く（右上の左右に並べる／1つにまとめるの左。狭いと短縮のあとで消える）
+    ('manual', '説明書', 'manual_btn'),
     ('layout_split', '左右に並べる', 'layout_split_btn'),
     ('layout_unified', '1つにまとめる', 'layout_unified_btn'),
 )
@@ -28,6 +32,7 @@ IDS = tuple(item[0] for item in BUTTONS)
 LABELS = {key: label for key, label, _ in BUTTONS}
 BRACKET_KINDS = {key: attr for key, _, attr in BUTTONS if type(attr) is int}
 LAYOUT_KEYS = ('layout_split','layout_unified')
+RIGHT_KEYS = ('manual',)     # on the right with the layout buttons when they follow it
 # Shown only after the user turns them on from the button menu.
 DEFAULT_HIDDEN = ('format_italic', 'format_underline', 'format_overstrike')
 
@@ -112,14 +117,15 @@ class ToolbarPreferences:
         menu.add_separator()
         menu.add_command(label='初期の表示と順番に戻す', command=self.reset)
 
-    def apply(self):
+    def apply(self, fit=True):
         toolbar = self.app._toolbar
         for key,widget in self.widgets.items():
             if key in self.hidden and widget.winfo_manager():widget.pack_forget()
         visible = [key for key in self.order if key not in self.hidden]
-        # Keep the original right alignment only for a trailing layout group.
+        # Keep the original right alignment only for a trailing layout group (and the manual
+        # button right before it).
         split = len(visible)
-        while split and visible[split-1].startswith('layout_'):
+        while split and (visible[split-1].startswith('layout_') or visible[split-1] in RIGHT_KEYS):
             split -= 1
         placement=[(key,'left') for key in visible[:split]]+[(key,'right') for key in reversed(visible[split:])]
         for index,(key,side) in enumerate(placement):
@@ -142,7 +148,8 @@ class ToolbarPreferences:
         self._hint_kinds=kinds
         for key, variable in self.variables.items():
             variable.set(key not in self.hidden)
-        self.app._queue_toolbar_fit()
+        if fit:
+            self.app._queue_toolbar_fit()
         if self.window is not None:
             self.refresh_list()
 

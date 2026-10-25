@@ -107,6 +107,7 @@
 「**正しく書いたものを壊さない**」に反する。
 """
 
+from cache_limits import size as _cache_size   # 控えの上限は cache_limits で1か所に（2026-10-24）
 import os
 import collections
 
@@ -2529,7 +2530,7 @@ _SHIMAU_CONTRACTED_BASES = frozenset(('ちゃう','じゃう','ちまう','じ�
 from functools import lru_cache
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _kana_nominal_alternative(text):
     """同じ読み全体に名詞があるなら、かな内部の動詞分割だけで禁止しない。"""
     if not (2<=len(text)<=16 and all('ぁ'<=c<='ゖ' or c=='ー' for c in text)):
@@ -2712,7 +2713,7 @@ def _derivational_connection(left, right, auxiliary, expected_pos=None):
     return False if considered else None
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _native_derivational_reading_boundary(text, original_cut, auxiliary):
     """48-AFY / Astra: same kana, a native verb stem and a native auxiliary.
 
@@ -2801,7 +2802,7 @@ def past_auxiliary_mismatch(a,b,include_finite_verbs=False,*,include_adjective_f
                for pos,form,base,rd in dictionary_inflections(a[0]) or ())
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def source_past_attachment_mismatch(text,a,b):
     """The unchanged completed object predicate owns a newly attached past.
 
@@ -3085,7 +3086,7 @@ def modern_ba_mismatch(a,b):
         and a[1].startswith(('動詞','形容詞','助動詞')) and a[6]!='仮定形')
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def changed_modern_ba_allowed(original,changed):
     from morphology import tokenize
     from difflib import SequenceMatcher
@@ -3102,7 +3103,7 @@ def changed_modern_ba_allowed(original,changed):
     return True
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def changed_conjunctive_case_allowed(changed,start,end):
     """48-AIH: a changed native te/de clause is not a direct object noun.
 
@@ -3177,6 +3178,71 @@ def noncontinuative_independent_verb_mismatch(a,b):
                    for pos,form,base,rd in dictionary_inflections(a[0]+b[0]) or ())
 
 
+def renyou_stray_noun_mismatch(a,b,line_end=False):
+    """動詞の連用形に、語にならない名詞が直に続く（寝クス・出かけ牟田・寝麻酔で行が終わる）。
+
+    連用形の後ろは 助動詞・助詞・動詞・接尾 か、連用形が名詞になった複合語
+    （打ち間違い・開き括弧）。後ろがカタカナの名詞・固有名詞・行の最後の名詞で、
+    続けても1語として在らないときだけ見る。
+    """
+    if (len(a)<7 or a[4]!=b[3] or a[1]!='動詞:自立' or a[6]!='連用形'):return False
+    bp=b[1] or ''
+    if not bp.startswith('名詞') or bp.startswith(('名詞:接尾','名詞:非自立','名詞:数','名詞:代名詞')):return False
+    import re
+    # かなだけの並びは解析が無理に切る（し＋ょくじちゅう）ので、後ろはカタカナか漢字の入った名詞に限る
+    if re.fullmatch(r'[ぁ-ゖー]+',b[0] or ''):return False
+    if not (re.fullmatch(r'[ァ-ヺ][ァ-ヺー]*',b[0] or '') or '固有名詞' in bp or line_end):return False
+    import seed_japanese
+    return not seed_japanese.is_unit((a[0] or '')+(b[0] or ''))
+
+
+def renyou_stray_noun_spans(text, tokenize_fn):
+    """`renyou_stray_noun_mismatch` の当たる範囲 (始まり, 終わり) の並び。
+
+    直しの手がかりには渡さない（渡すと 掃除をし羽田→掃除を舌 のような
+    読み直しを呼ぶ）。直せずに残った行へ紫だけを足すのに使う。
+    """
+    if not text or tokenize_fn is None:
+        return []
+    try:
+        toks = list(tokenize_fn(text))
+    except Exception:
+        return []
+    out = []
+    for i in range(len(toks) - 1):
+        last = all((t[1] or '').startswith('記号') for t in toks[i + 2:])
+        if renyou_stray_noun_mismatch(toks[i], toks[i + 1], last):
+            out.append((toks[i][3], toks[i + 1][4]))
+    return out
+
+
+def stray_katakana_letter_spans(text):
+    """ひらがなの直後に、カタカナが1字だけ挟まる・行の最後に付く所（降るラ沿い・送っフ）。
+
+    カタカナ1字の語は、記号や行頭の後ろ（イ形容詞・サ変）か、話し言葉の終わり（だよネ）にしか
+    立たない。ひらがなに続く1字で、後ろがひらがなか行の最後なら、打った読みの切れ端。
+    """
+    out = []
+    n = len(text or '')
+    for i in range(1, n):
+        c = text[i]
+        if not ('ァ' <= c <= 'ヺ') or c == 'ヶ':
+            continue
+        if not ('ぁ' <= text[i - 1] <= 'ゖ'):
+            continue
+        nxt = text[i + 1] if i + 1 < n else ''
+        if nxt and (('ァ' <= nxt <= 'ヺ') or nxt == 'ー'):
+            continue
+        if not nxt:
+            if c in 'ネヨナゾワサ':
+                continue
+        elif not ('ぁ' <= nxt <= 'ゖ'):
+            # 後ろが漢字なら記号の名前（イ形容詞とナ形容詞）のことがあるので見ない
+            continue
+        out.append((i, i + 1))
+    return out
+
+
 def auxiliary_connection_mismatch(a,b,previous=None):
     """Reuse native grammar for both target ownership and its complete tail."""
     return bool(noncontinuative_independent_verb_mismatch(a,b)
@@ -3192,7 +3258,7 @@ def auxiliary_connection_mismatch(a,b,previous=None):
             and infl_mismatch(a,b,previous)))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def changed_auxiliary_chain_allowed(changed,start,end,original=None):
     """Validate changed native chains through their unchanged auxiliaries."""
     from morphology import tokenize

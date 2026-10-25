@@ -75,6 +75,7 @@ def odd_partial_loanwords(line,dict_index,store,tokenize_fn):
     return out
 
 
+from cache_limits import size as _cache_size   # 控えの上限は cache_limits で1か所に（2026-10-24）
 from functools import lru_cache
 
 
@@ -84,7 +85,7 @@ def _continuative_head(token):
             and token.reading == token.surface)
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def continuative_reading_prefix(text):
     """辞書が原文のまま読める連用形。後半の修正候補から前半を逆算しない。"""
     if not text or not all('ぁ' <= c <= 'ゖ' for c in text):
@@ -113,7 +114,7 @@ def continuative_reading_prefix(text):
     return text[:size]
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def short_nominal_reading(text):
     """普通名詞／連用形に続く名詞の読み。未知の拗音境界を戻すだけ。"""
     if not (6 <= len(text) <= 20 and all('ぁ' <= c <= 'ゖ' or c == 'ー' for c in text)):
@@ -156,7 +157,7 @@ def short_nominal_reading(text):
 
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_nominal_units(text):
     """Exact written noun units, including a proved adjective + nominal sa.
 
@@ -191,7 +192,7 @@ def native_nominal_units(text):
     return tuple(units)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_case_adnominal_parts(text,allow_unknown_left=False):
     """Native N + case/no + N; retain both nouns and the actual particles."""
     if not text or 'の' not in text or len(text)>80:return ()
@@ -418,7 +419,7 @@ def _native_request_tail(parts):
 
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _native_open_predicate(surface,head,before=''):
     """Source-only native unfinished inflection; never candidate completion.
 
@@ -576,7 +577,7 @@ def _native_nominal_functional_tail(parts,explicit_nominal_case=False,
         and _productive_predicate(head[0]+suffix,head[0],before=before))))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_lexical_core_boundary_allowed(text,start,end):
     """48-AMS: preserve a native particle/auxiliary across lexical cuts.
 
@@ -620,7 +621,7 @@ def native_lexical_core_boundary_allowed(text,start,end):
     return True
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_candidate_continuation_allowed(source,source_end,changed,changed_end):
     """A new cut inside an unknown source word cannot leave an attributive stem.
 
@@ -697,7 +698,7 @@ def native_lexical_core_edit_allowed(text,start,end,surface):
     return not native_lexical_reading_faces(surface)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_functional_case_cuts(text):
     """48-ABN: retain an actual case and completed basic predicate.
 
@@ -892,7 +893,7 @@ def _small_number_surface_aliases():
             for n in range(1,100)}
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _native_counter_spelling_variants(face):
     """48-ALM: numeral spellings of an already attested complete count."""
     import re
@@ -953,7 +954,7 @@ def native_numeric_quantity_spans(text):
                  if native_counted_nominal_evidence(match.group()))
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def _native_kanji_number_spelling(text):
     """48-ALS: written integer structure, with native numeric characters.
 
@@ -1032,7 +1033,7 @@ def _katakana_nominal_inventory():
     return frozenset(KATAKANA_WORDS)
 
 
-@lru_cache(maxsize=8192)
+@lru_cache(maxsize=_cache_size(8192))
 def native_katakana_nominal_face(reading):
     """An unchanged loanword needs native or reviewed ordinary-noun evidence.
 
@@ -1105,7 +1106,7 @@ def _classified_nominal_readings():
     return {rd:tuple(sorted(faces)) for rd,faces in found.items()}
 
 
-@lru_cache(maxsize=8192)
+@lru_cache(maxsize=_cache_size(8192))
 def native_lexical_reading_faces(reading):
     """48-AJA: exact whole-word evidence, not mere cost-table keys.
 
@@ -1127,7 +1128,7 @@ def native_lexical_reading_faces(reading):
         for pos,form,base,rd in dictionary_inflections(face) or ())))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_continuative_reading_faces(reading):
     """An unchanged reading may use another attested reading of one verb.
 
@@ -1163,7 +1164,7 @@ def native_continuative_reading_faces(reading):
     return tuple(dict.fromkeys(out))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_continuative_prefix_cuts(reading):
     """Visit the same possible stems through the native and reading indices.
 
@@ -1180,7 +1181,7 @@ def native_continuative_prefix_cuts(reading):
     return tuple(sorted(cut for cut in cuts if 0<cut<len(reading)))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_source_finite_verb(reading):
     """The unchanged finite verb's grammar, without a positive meaning claim.
 
@@ -1234,7 +1235,7 @@ def native_source_finite_verb(reading):
     return False
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_coordinated_case_cut(text,grammar_only=False):
     """Actual coordinated nouns plus a final coordinator and case particle.
 
@@ -1290,7 +1291,7 @@ def native_coordinated_case_cut(text,grammar_only=False):
     return None
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_coordinated_syntax_ranges(text):
     """Explain original coordinated kana fragments without candidate proof."""
     if 'と' not in text:return ()
@@ -1303,7 +1304,7 @@ def native_coordinated_syntax_ranges(text):
     return tuple(out)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_source_predicate_ranges(text):
     """Source grammar is not disproved by an unclassified meaning label.
 
@@ -1363,14 +1364,14 @@ def native_common_noun_reading(surface, reading):
             or surface in _classified_nominal_readings().get(reading,()))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_common_noun_faces(reading):
     """Exact ordinary-noun alternatives, without usage-tier or repair guesses."""
     return tuple(face for face in native_lexical_reading_faces(reading)
                  if native_common_noun_reading(face,reading))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_deverbal_nominal_faces(reading):
     """A native continuative verb also listed as the very same common noun.
 
@@ -1389,7 +1390,7 @@ def native_deverbal_nominal_faces(reading):
     return tuple(found)
 
 
-@lru_cache(maxsize=16384)
+@lru_cache(maxsize=_cache_size(16384))
 def _native_nominal_reading_faces(reading):
     """Attested common-noun spellings with this exact complete reading.
 
@@ -1434,7 +1435,7 @@ def _native_nominal_reading_faces(reading):
 ACTION_RESULT_NOUNS=frozenset('結果 記録 履歴 手順 方法 状態 条件 予定 計画'.split())
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_polite_nominal_parts(text):
     """Native お/ご nominal prefix and an unchanged ordinary noun reading.
 
@@ -1464,7 +1465,7 @@ def native_polite_nominal_parts(text):
     return tuple(proofs)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_deictic_range(text):
     """An actual demonstrative location plus the native extent particle まで.
 
@@ -1480,7 +1481,7 @@ def native_deictic_range(text):
         and parts[1].surface=='まで' and parts[1].pos=='助詞' and parts[1].pos_sub=='副助詞')
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_plural_nominal_heads(text):
     """Native personal noun/pronoun + the attested plural suffix たち.
 
@@ -1509,7 +1510,7 @@ def native_plural_nominal_heads(text):
     return tuple(sorted(set(found)))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_deverbal_compound_parts(reading):
     """Exact nominal readings plus the verb-derived head's object meaning."""
     if not reading or not all('ぁ'<=c<='ゖ' or c=='ー' for c in reading):return ()
@@ -1524,7 +1525,7 @@ def native_deverbal_compound_parts(reading):
     return tuple(out)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_relational_compound_heads(reading):
     """Attested written noun compounds retain an independently fitting head.
 
@@ -1616,7 +1617,7 @@ def native_relational_compound_heads(reading):
     return tuple(sorted(heads))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_coordinated_nominal_parts(text):
     """Native N と N, retaining every original spelling and complete reading."""
     if 'と' not in text or not 3<=len(text)<=24:return ()
@@ -1685,7 +1686,7 @@ def native_coordinated_nominal_parts(text):
     return interpretations[0] if len(interpretations)==1 else ()
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_container_nominal_heads(text):
     """48-AMF: actual noun + classified container suffix, including rendaku.
 
@@ -1725,7 +1726,7 @@ def native_container_nominal_heads(text):
     return tuple(sorted(heads))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _native_suffix_nominal_pairs(text,suffix,rd,sub):
     """One exact native noun and suffix, with their unchanged readings."""
     if not text or not 2<=len(text)<=24:return ()
@@ -1775,7 +1776,7 @@ def _native_suffix_nominal_pairs(text,suffix,rd,sub):
     return tuple(sorted(set(found)))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_written_derived_nominal_faces(text):
     """An unchanged ordinary noun and an actual written nominal suffix.
 
@@ -1812,7 +1813,7 @@ def native_written_derived_nominal_faces(text):
     return ()
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_temporal_nominal_faces(text,include_ongoing=True):
     """Native action + phase noun, keeping its whole temporal identity.
 
@@ -1834,7 +1835,7 @@ def native_temporal_nominal_faces(text,include_ongoing=True):
     return tuple(sorted(set(found)))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_waiting_nominal_faces(text):
     """48-ANK / GPT-6 Astra / 2026-09-20: a native action awaiting its turn.
 
@@ -1854,7 +1855,7 @@ def native_waiting_nominal_faces(text):
                  if kind=='サ変接続' or 'person' in nominal_roles(host))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_inchoative_nominal_faces(text):
     """48-ANU: V-continuative + kake is a derived incomplete-action noun.
 
@@ -1887,7 +1888,7 @@ def native_inchoative_nominal_faces(text):
     return ()
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_action_value_nominal_faces(text):
     """A native continuative plus gai is a nominal value of that action.
 
@@ -1914,7 +1915,7 @@ def native_action_value_nominal_faces(text):
     return ()
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_attested_prefix_noun_readings(face):
     """A shipped whole noun with a native prefix and native noun head.
 
@@ -1953,7 +1954,7 @@ def native_attested_prefix_noun_readings(face):
                         if rd+tail in attested}))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_attested_prefix_noun_faces(reading):
     if not reading or not all('ぁ'<=c<='ゖ' or c=='ー' for c in reading):return ()
     from corrector import table_surfaces_for_reading
@@ -1978,7 +1979,7 @@ def native_attested_prefix_noun_faces(reading):
     return tuple(sorted(faces))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_written_sahen_relative(text):
     """A complete written sahen relative clause, using native inflection."""
     if not text or len(text)<3 or not native_attributive_predicate_end(text):return False
@@ -2000,7 +2001,7 @@ def native_written_sahen_relative(text):
     return False
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_written_sahen_nominal_parts(text):
     """An unchanged written action, literal suru chain and full noun reading.
 
@@ -2040,7 +2041,7 @@ def native_written_sahen_nominal_parts(text):
     return tuple(out)
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_prefix_sahen_relative_parts(text):
     """The original full prefix noun, actual suru tail and complete noun.
 
@@ -2077,7 +2078,7 @@ def native_prefix_sahen_relative_parts(text):
     return tuple(out)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_te_nominal_parts(text,allow_following=False):
     """A proved native te clause modifying an actual action noun with no.
 
@@ -2124,13 +2125,13 @@ def native_te_nominal_parts(text,allow_following=False):
     return tuple(dict.fromkeys(out))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_te_nominal_heads(text):
     return tuple(dict.fromkeys(head for start,end,heads in native_te_nominal_parts(text)
                                for head in heads))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_nominal_phrase_faces(text):
     """Return native nominal heads; never produce a replacement spelling."""
     if not text or not 1<=len(text)<=24 or not all('ぁ'<=c<='ゖ' or c=='ー' for c in text):
@@ -2397,7 +2398,7 @@ def native_word_fragment_context(source,start,end,tokenize):
     return False
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def completed_sahen_reading(text, allow_nonpolite=False, object_faces=None,
                             return_action=False, action_note_following=None,
                             subject_faces=None, case_argument=None, allow_open_tail=False, relative_faces=None, finite_only=False):
@@ -2605,7 +2606,7 @@ def completed_sahen_reading(text, allow_nonpolite=False, object_faces=None,
 
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_relative_action(head):
     """The unchanged finite relative clause and its already occupied cases."""
     from morphology import tokenize
@@ -2716,7 +2717,7 @@ def native_adverbial_sahen_relative_parts(text):
     return ()
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_written_adnominal_parts(text):
     """Same native adjective/adnominal proof with its unchanged written noun.
 
@@ -2779,7 +2780,7 @@ def native_written_adnominal_parts(text):
     return ()
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_adnominal_reading_parts(text, allow_predicative=False):
     """48-ZQ: native adjective/adnominal + ordinary noun in the same reading.
 
@@ -2906,7 +2907,7 @@ def _native_nominal_copula_tail(face,tail,connective='',conditional=False):
     return _completed_predicate_token(legacy)
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_nominal_comparison_head(text):
     """The same attested irregular comparison head, without changing its text."""
     from morphology import tokenize
@@ -2919,7 +2920,7 @@ def native_nominal_comparison_head(text):
     return None
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def completed_native_nominal_predicate(text, allow_topic=True, connective='', conditional=False, allow_written=False, nominal_end=None):
     """An exact native noun and copula in its actual connective context.
 
@@ -2973,7 +2974,7 @@ def completed_native_nominal_predicate(text, allow_topic=True, connective='', co
     return False
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def completed_native_state_clause(text):
     """An unchanged Nのまま(で) adjunct followed by a proved native clause.
 
@@ -3004,7 +3005,7 @@ def completed_native_state_clause(text):
     return False
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def completed_native_prerequisite_sequence(text):
     """Native Vてから + negative condition + a proved negative consequence.
 
@@ -3036,7 +3037,7 @@ def completed_native_prerequisite_sequence(text):
     return False
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def completed_native_reading(text):
     """Share native nominal phrases and completed clauses at every entry."""
     bare=text[:-1] if text and text[-1] in '。！？.!?' else text
@@ -3069,7 +3070,7 @@ def native_negative_predicate(text):
     return False
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_nominal_case_reading(particle):
     """The same native case/topic entry used by full boundary validation."""
     from morphology import dictionary_inflections
@@ -3179,7 +3180,7 @@ def native_nominal_case_boundary(source,original,cut,particle,faces,allow_known_
     return None
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _native_honorific_action_heads(text,allow_open=False,humble=False):
     """Shared お + continuative / ご + sahen with an attested honorific tail.
 
@@ -3213,7 +3214,7 @@ def _native_honorific_action_heads(text,allow_open=False,humble=False):
 
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_honorific_stem_parts(text):
     """Original honorific grammar owns its stem despite a pronoun best parse."""
     from morphology import tokenize,dictionary_inflections
@@ -3239,7 +3240,7 @@ def native_humble_action_heads(text):
     return _native_honorific_action_heads(text,humble=True)
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def _native_humble_tail(text):
     """An exact native いたす inflection with a complete unchanged tail.
 
@@ -3260,7 +3261,7 @@ def _native_humble_tail(text):
     return False
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def completed_native_verb_reading(text, allow_nonpolite=False, require_roles=True, finite_only=False):
     """Return a known content-verb head with the actual unchanged native tail.
 
@@ -3364,7 +3365,7 @@ def _native_open_case_head(text,particle,faces):
     return False
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_resultative_reading(text, object_faces, allow_nonpolite=False):
     """An unchanged adjective continuative + finite suru and its result object."""
     from semantic_roles import nominal_role_matches
@@ -3543,7 +3544,7 @@ def native_copular_case_faces(source,original,cut,particle,faces):
         and native_case_predicate_witness(face,particle,source[cut+len(particle):])))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_reopened_verb_case_frames(text):
     """Retain source-only positive seams for the shared spelling gate."""
     from analysis_context import check_current_request
@@ -3714,7 +3715,7 @@ def preserves_reopened_verb_case_spelling(line,start,end,surface):
 
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def completed_native_reading_clause(text, allow_nonpolite=False, require_nominal=False,
                                     require_object_fit=False, modifier_reading=None,
                                     return_action=False, action_note_following=None,
@@ -4006,7 +4007,7 @@ def completed_native_reading_clause(text, allow_nonpolite=False, require_nominal
     return False
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def completed_native_link_clause(text, allow_unclassified=False,
                                  require_nominal=False, nominal_constraint=None):
     """A complete linked clause, retaining any original nominal constraint.
@@ -4037,7 +4038,7 @@ def completed_native_link_clause(text, allow_unclassified=False,
                     require_roles=False,finite_only=True))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_ba_finite_forms(text):
     """Exact native hypothetical form + ba, projected only for clause proof.
 
@@ -4070,7 +4071,7 @@ def native_ba_finite_forms(text):
     return tuple(out)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def completed_native_reading_link(text, require_nominal=False, nominal_constraint=None,
                                   allow_unclassified=False):
     """A complete native clause plus its written connective, with no edits.
@@ -4226,7 +4227,7 @@ def completed_native_reading_link(text, require_nominal=False, nominal_constrain
     return False
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _native_completed_action_suffix(text, action, native_surface=False, allow_open_tail=False):
     """An already proved source action retains its complete literal tail."""
     if not isinstance(action,str) or not action:return ''
@@ -4258,7 +4259,7 @@ def _native_completed_action_suffix(text, action, native_surface=False, allow_op
     return ''
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_attributive_predicate_end(text):
     """A finite polite ending alone does not prove a new relative-clause seam."""
     from morphology import tokenize
@@ -4308,7 +4309,7 @@ def native_attributive_predicate_end(text):
                 and native_attributive_predicate_end(suffix))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_linked_reading_boundaries(text,nominal_constraint=None,allow_unclassified=False,
                                     allow_open_tail=False):
     """Both unchanged clauses prove the exact seam of their native link.
@@ -4377,7 +4378,7 @@ def _native_attributive_end_positions(text):
     return frozenset(ends)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def completed_native_reading_sequence(text, nominal_constraint=None, allow_unclassified=False):
     """48-ABU / GPT-6 / 2026-09-13: compose independently proved clauses.
 
@@ -4419,7 +4420,7 @@ def completed_native_reading_sequence(text, nominal_constraint=None, allow_uncla
     return False
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_bare_action_faces(text):
     """Ordinary native sahen spellings with this exact unedited reading."""
     if not text or not 2<=len(text)<=12 or not all('ぁ'<=c<='ゖ' for c in text):
@@ -4429,7 +4430,7 @@ def native_bare_action_faces(text):
                  if native_action_noun_reading(face,text))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_action_noun_reading(surface,reading):
     """Shared exact action-noun evidence for complete and omitted suru tails."""
     from morphology import dictionary_inflections,native_sahen_compound_reading
@@ -4440,7 +4441,7 @@ def native_action_noun_reading(surface,reading):
                    for pos,form,base,rd in dictionary_inflections(surface) or ()))
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_reading_polite_mismatches(text):
     """Apply the existing noun/masu seam to its unchanged native reading.
 
@@ -4479,7 +4480,7 @@ def native_reading_polite_mismatches(text):
     return tuple(dict.fromkeys(out))
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_written_action_attachment_heads(text):
     """Written native action nouns before their malformed polite attachment."""
     from morphology import tokenize,dictionary_inflections
@@ -4497,7 +4498,7 @@ def native_written_action_attachment_heads(text):
     return tuple(out)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_polite_action_prefixes(text):
     """48-AJC: unchanged action nouns before a native polite predicate end.
 
@@ -4527,7 +4528,7 @@ def native_polite_action_prefixes(text):
                  and native_bare_action_faces(text[:cut]))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_source_action_heads(text):
     """Same-reading action heads with their actual finite/open polite tails.
 
@@ -4549,7 +4550,7 @@ def native_source_action_heads(text):
     return tuple(dict.fromkeys(out))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _native_action_note_heads(text,require_link=True,allow_predicate=False):
     """Use the same clause proof and its exact action; never re-guess its boundary."""
     for cut in range(4,len(text)-1):
@@ -4574,7 +4575,7 @@ def _native_action_note_heads(text,require_link=True,allow_predicate=False):
 ACTION_NOTE_INTRODUCERS=frozenset('そして それから まず なぜ どうして なんで'.split())
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_action_note_introduction(text):
     if (not text or not 4<=len(text)<=80
             or not all('ぁ'<=c<='ゖ' for c in text)):return False
@@ -4594,7 +4595,7 @@ def native_action_note_introduction(text):
         and native_bare_action_faces(text[first.end:]))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def completed_native_action_note(text,require_link=True):
     """48-ABY: a linked instruction such as confirm-and-save may end in a noun.
 
@@ -4651,7 +4652,7 @@ def _native_temporal_heads():
                  if pos.startswith('名詞,') and rd in ('まえ','あと','のち','とき'))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _native_temporal_modifier(left,phase,nominal_constraint=None):
     """The unchanged action and native inflection select 前/後/時 together."""
     from morphology import tokenize
@@ -4686,7 +4687,7 @@ def _native_temporal_modifier(left,phase,nominal_constraint=None):
     return bool(ending)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_temporal_nominal_reading(text):
     """Source-only completed time phrase, also valid without a next predicate.
 
@@ -4703,7 +4704,7 @@ def native_temporal_nominal_reading(text):
     return False
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_mixed_kana_word_ranges(text):
     """The unchanged native noun and its attested functional tail survive mixing."""
     import re
@@ -4785,7 +4786,7 @@ def preserves_native_mixed_kana_words(original,changed):
     return _preserves_source_ranges(original,changed,native_mixed_kana_word_ranges(original))
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_temporal_nominal_ranges(text):
     return tuple((start,start+len(clause)) for start,clause in _native_source_clauses(text)
                  if native_temporal_nominal_reading(clause))
@@ -4795,7 +4796,7 @@ def preserves_native_temporal_nominal(original,changed):
     return _preserves_source_ranges(original,changed,native_temporal_nominal_ranges(original))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_temporal_reading_edges(text,nominal_constraint=None):
     """Native 前/後/時 + に joins independently proved unchanged clauses.
 
@@ -4822,7 +4823,7 @@ def native_temporal_reading_edges(text,nominal_constraint=None):
     return tuple(sorted(set(edges)))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def completed_native_temporal_clause(text,nominal_constraint=None):
     return bool(native_temporal_reading_edges(text,nominal_constraint))
 
@@ -4860,7 +4861,7 @@ def native_clock_readings():
     return frozenset(readings)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def completed_native_adjunct_clause(text):
     """An actual source/time argument preceding an independently proved clause.
 
@@ -4951,7 +4952,7 @@ def native_case_positions(text, parts=None, particles=('を',)):
             for marker in particles))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _native_argument_predicate_end(text, case, require_clause=False):
     """First unchanged native finite/link predicate after a source case."""
     from morphology import tokenize
@@ -4977,7 +4978,7 @@ def _native_argument_predicate_end(text, case, require_clause=False):
     return None
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_genitive_argument_slots(text, particles=('を','に','へ','で','と')):
     """48-AJF/AJO: original N-no-?-case and an independently native action.
 
@@ -5041,7 +5042,7 @@ def native_genitive_argument_slots(text, particles=('を','に','へ','で','と
 
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_genitive_nominal_splits(text, allow_unknown_left=False, original_context=None):
     """48-AKR: the original adnominal の and a complete nominal suffix.
 
@@ -5117,7 +5118,7 @@ def native_genitive_nominal_splits(text, allow_unknown_left=False, original_cont
     return tuple(out)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_relative_nominal_faces(text, action, occupied_cases):
     """A relative action may modify the noun before an unchanged genitive.
 
@@ -5144,7 +5145,7 @@ def native_relative_nominal_faces(text, action, occupied_cases):
     return tuple(dict.fromkeys(fitting))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_modified_argument_slots(text):
     """48-AKD: source modifiers and the same case/predicate repair boundary.
 
@@ -5202,7 +5203,7 @@ def native_modified_argument_slots(text):
 
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_modified_nominal_contexts(text):
     """48-AKD: unchanged nominal heads fitting both sides of a modifier.
 
@@ -5247,7 +5248,7 @@ def native_genitive_object_slots(text):
     return native_genitive_argument_slots(text,('を',))
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_coordinated_nominal_heads(text):
     """An actual adjective/て coordinates with an attested noun modifier.
 
@@ -5356,7 +5357,7 @@ def native_unknown_relative_object_action(text,parts):
     return ()
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_written_relative_action(text,allow_link=False,allow_finite=False,allow_note=False,allow_open_polite=False):
     """Actual written predicate and all its unchanged nominal arguments.
 
@@ -5458,7 +5459,7 @@ def native_written_relative_action(text,allow_link=False,allow_finite=False,allo
     return ()
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_written_preference_nominal_heads(text):
     """The actual N-ga-NA-na-N frame, keeping both original noun meanings."""
     if not any(stem in text for stem in ('好き','嫌い')):return ()
@@ -6212,7 +6213,7 @@ def native_written_action_nominal_parts(text):
     return bound[:2] if bound else ()
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_written_relative_nominal_heads(text):
     """Native relative clause plus its exact, semantically fitting head."""
     if not text or not 4<=len(text)<=80 or all('ぁ'<=c<='ゖ' or c=='ー' for c in text):return ()
@@ -6241,7 +6242,7 @@ def native_written_relative_nominal_heads(text):
     return tuple(dict.fromkeys(out))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_mixed_nominal_heads(text):
     """The same noun-compound relation with exact written/kana halves.
 
@@ -6274,7 +6275,7 @@ def native_mixed_nominal_heads(text):
     return tuple(dict.fromkeys(out))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_focused_nominal_parts(text):
     """Original noun/focus boundary with the same complete nominal proof."""
     from morphology import tokenize,dictionary_inflections
@@ -6312,7 +6313,7 @@ def _native_written_compound_nominal_heads(text):
     return ()
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_surface_nominal_heads(text, original_context=None):
     """48-ALT: the same nominal head in kana, written, or mixed genitives.
 
@@ -6345,7 +6346,7 @@ def native_surface_nominal_heads(text, original_context=None):
         text,original_context=original_context) for face in right))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_preposed_object_parts(text,allow_written_predicate=False,*,object_start=None):
     """48-AKW: retain an earlier nominal case with the same content object.
 
@@ -6404,13 +6405,13 @@ def native_preposed_object_parts(text,allow_written_predicate=False,*,object_sta
     return tuple(out)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_object_predicate_frames(text,allow_written_predicate=False):
     """Unchanged native object/case evidence shared by source and repair."""
     return _native_nominal_predicate_frames(text,'を',allow_written_predicate)
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def _native_nominal_predicate_frames(text,case_particle,allow_written_predicate=False):
     """One unchanged noun/case boundary with its complete predicate scope."""
     # A written finite verb can be two characters (見る / 読む). Its
@@ -6528,7 +6529,7 @@ def _native_nominal_predicate_frames(text,case_particle,allow_written_predicate=
     return tuple(cuts)
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_nominal_connective_boundaries(text):
     """Exact source noun/copula/link proof survives a swallowed best parse.
 
@@ -6558,7 +6559,7 @@ def native_nominal_connective_boundaries(text):
 
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_object_clause_edges(text):
     """Grammatical object/link edges for replacement scope, not intactness.
 
@@ -6601,7 +6602,7 @@ def native_object_clause_edges(text):
     return tuple(dict.fromkeys(edges))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_completed_clause_boundaries(text):
     """Actual source particles terminating an independently proved clause.
 
@@ -6706,7 +6707,7 @@ def native_completed_clause_boundaries(text):
 
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _native_adverbial_faces(reading):
     from corrector import table_surfaces_for_reading
     from morphology import dictionary_inflections
@@ -6725,7 +6726,7 @@ def _native_adverbial_faces(reading):
     return tuple(dict.fromkeys(lexical+native_temporal_nominal_faces(reading)))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _native_time_nominal_faces(reading,include_relative=False,include_ongoing=True):
     """Time nouns before an explicit particle, distinct from bare adverbs.
 
@@ -6753,7 +6754,7 @@ def _native_counter_prefixes(text, original):
             and t.pos in ('名詞','動詞','形容詞','副詞') for t in original))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_nominal_temporal_prefix(text):
     """48-AIU: an unchanged native N-no-mae/ato-ni supplies an adjunct edge.
 
@@ -6807,7 +6808,7 @@ def native_nominal_temporal_prefix(text):
     return False
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_adjective_adverbial_prefix(text,cut):
     """The full continuative belongs to the same actual adjective lemma.
 
@@ -6832,7 +6833,7 @@ def native_adjective_adverbial_prefix(text,cut):
                for pos,form,base,rd in dictionary_inflections(text[:cut]) or ())
 
 
-@lru_cache(maxsize=1024)
+@lru_cache(maxsize=_cache_size(1024))
 def native_reflexive_manner_prefix(text):
     """48-ALD: an actual reflexive noun plus de is an unchanged adjunct.
 
@@ -6850,7 +6851,7 @@ def native_reflexive_manner_prefix(text):
         len(text)-1,'で',reflexive,allow_compound_case=True) is not None)
 
 
-@lru_cache(maxsize=1024)
+@lru_cache(maxsize=_cache_size(1024))
 def native_counted_agent_prefix(text):
     """An unchanged cardinal person count + de marks the acting group.
 
@@ -6867,7 +6868,7 @@ def native_counted_agent_prefix(text):
         text,tokenize(text),len(prefix),'で',faces) is not None)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_adverbial_reading_cuts(text):
     """Unedited native adverbs, shared by source proof and argument ranges.
 
@@ -7008,7 +7009,7 @@ def native_adverbial_reading_cuts(text):
     return tuple(cuts)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_predicate_link_boundaries(text,predicate_start):
     """A known verb's connective ends its argument scope, not source meaning.
 
@@ -7080,7 +7081,7 @@ def native_predicate_link_boundaries(text,predicate_start):
     return tuple(boundaries)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_object_predicate_contexts(text,allow_written_predicate=False,include_written_mismatch=True):
     """Return (clause start, predicate start, faces) in the original text.
 
@@ -7169,7 +7170,7 @@ def native_object_predicate_contexts(text,allow_written_predicate=False,include_
     return tuple(result)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_adverbial_predicate_reading(text, allow_open_tail=True, finite_only=False):
     """Source evidence: a complete native adverb reading plus an actual verb.
 
@@ -7288,7 +7289,7 @@ def native_nominal_verb_prefix_ranges(text):
     return tuple(out)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_waiting_source_ranges(text):
     """The original waiting-state noun owns its head before a copular tail."""
     import re
@@ -7329,7 +7330,7 @@ def preserves_native_nominal_verb_prefix(original,changed):
 
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_pronoun_case_ranges(text):
     """An actual pronoun owns its native case/topic, despite an unknown tail.
 
@@ -7408,7 +7409,7 @@ def native_nominal_topic_prefix(text):
     return cut+2
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_degree_expression(text):
     """Source-only degree expression with a verified head and native excess.
 
@@ -7450,7 +7451,7 @@ def native_degree_expression(text):
     return False
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_literal_argument_chain(prefix):
     """A unique independent-noun/case chain when kana segmentation loses a case.
 
@@ -7511,7 +7512,7 @@ def _native_written_modifier_nominal_heads(text,parts):
     return ()
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _native_written_nominal_faces(text):
     """An attested nominal head, retaining the written word's own senses.
 
@@ -7610,7 +7611,7 @@ def _native_written_nominal_faces(text):
     return ()
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_degree_subject_clause(text):
     """A native noun subject and an unchanged degree predicate.
 
@@ -7641,7 +7642,7 @@ def native_degree_subject_clause(text):
     return False
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def completed_written_object_clause(text):
     """An exact native written object and its original complete predicate.
 
@@ -7682,7 +7683,7 @@ def _native_source_clauses(text):
         start=max(start,following)
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_degree_context_ranges(text):
     """Source ranges with the same completed degree proof, across punctuation.
 
@@ -7705,7 +7706,7 @@ def native_degree_context_ranges(text):
     return tuple(out)
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_prolonged_adverb_ranges(text):
     """Share the original expressive adverb proof, not the following clause."""
     if not any(c in text for c in 'ぁぃぅぇぉ'):return ()
@@ -7713,7 +7714,7 @@ def native_prolonged_adverb_ranges(text):
     return native_prolonged_adverb_token_ranges(tokenize(text))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_prolonged_clause(text):
     """48-AHG: same-vowel small kana can spell an unchanged spoken clause.
 
@@ -7742,7 +7743,7 @@ def native_prolonged_clause(text):
         or completed_native_reading_sequence(ordinary))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_continuative_source_boundaries(text):
     """Two original nominal-case clauses may join at an exact continuative.
 
@@ -7776,7 +7777,7 @@ def native_continuative_source_boundaries(text):
     return tuple(boundaries)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def completed_native_source_sequence(text):
     """48-AIA: retain a complete source sequence inside its actual clause.
 
@@ -7798,7 +7799,7 @@ def completed_native_source_sequence(text):
     return False
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_predicate_modifier_ranges(text):
     """48-AIZ: retain an actual i-adjective after a proved source object.
 
@@ -7832,7 +7833,7 @@ def preserves_native_predicate_modifier(original,changed):
                for start,end in spans)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_incomplete_polite_reading(text):
     """Source-only prefix of an attested polite ending; never completion.
 
@@ -7907,7 +7908,7 @@ def native_incomplete_polite_reading(text):
     return False
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_incomplete_nominal_reading(text):
     """48-AMY: an unchanged source-final noun and its actual case/focus.
 
@@ -7933,7 +7934,7 @@ def native_incomplete_nominal_reading(text):
     return False
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_incomplete_linked_reading(text):
     """Keep an unchanged native link followed by an attested open predicate.
 
@@ -7951,7 +7952,7 @@ def native_incomplete_linked_reading(text):
         allow_unclassified=True,allow_open_tail=True))
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_incomplete_subject_predicate(text):
     """Retain an original noun + actual nominative + open continuative.
 
@@ -7991,7 +7992,7 @@ def native_incomplete_subject_predicate(text):
     return _native_continuative_verb_end(bare)
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_incomplete_source_ranges(text):
     out=[]
     for start,clause in _native_source_clauses(text):
@@ -8041,7 +8042,7 @@ def _native_continuative_verb_end(stem):
         and _productive_predicate(host.surface+'ます',host.surface,before=stem[:host.start]))
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def attested_historical_auxiliary_ranges(text):
     """Retain an attested source spelling of auxiliary 申す, never propose it.
 
@@ -8102,7 +8103,7 @@ def attested_historical_auxiliary_ranges(text):
     return tuple(sorted(set(out)))
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_polite_auxiliary_chains(text, include_open=False):
     """Native polite tails; optionally include a proved open continuative."""
     from morphology import tokenize
@@ -8166,7 +8167,7 @@ def native_polite_auxiliary_chains(text, include_open=False):
     return tuple(dict.fromkeys(out))
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_independent_object_reading(text,start,end):
     """A complete source noun owns its actual case and fitting predicate."""
     if text[end:end+1]!='を':return False
@@ -8188,7 +8189,7 @@ def native_independent_object_reading(text,start,end):
         and native_object_predicate_proof(original,cut+1,faces,allow_link=True))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_negative_auxiliary_chains(text):
     """Actual negative auxiliary after an attested irrealis host."""
     from morphology import tokenize,dictionary_inflections
@@ -8361,7 +8362,7 @@ def _written_nominal_case_chain_allowed(parts,end):
     return True
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_written_nominal_ranges(text):
     """48-ANX: preserve a whole written noun run, not its following grammar.
 
@@ -8406,7 +8407,7 @@ def preserves_native_written_derivation(original,changed):
     return _preserves_source_ranges(original,changed,spans)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def source_honorific_name(text):
     """Share the existing source-only name/honorific grammar with anomaly checks.
 
@@ -8435,7 +8436,7 @@ def source_honorific_name(text):
     return False
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def source_honorific_name_ranges(text,case_only=False):
     from pos_grammar import _HONORIFICS
     out=[]
@@ -8482,7 +8483,7 @@ def source_honorific_name_ranges(text,case_only=False):
     return tuple(sorted(set(out)))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _opaque_source_nominal(noun):
     """The unchanged opaque source shape, shared by its actual case slots."""
     if not noun or not all('ぁ'<=c<='ゖ' or c=='ー' for c in noun):return False
@@ -8502,7 +8503,7 @@ def _opaque_case_markers():
     return ('を','が')+tuple(sorted(case for case in CASE_VERB_ROLES if len(case)==1 and case not in ('を','が')))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _opaque_predicate_roles(surface,following='',before='',case='を',normalized_action=None):
     """Use the same finite predicate's attested case, without naming its noun."""
     from semantic_roles import predicate_roles,_subject_predicate_roles
@@ -8527,7 +8528,7 @@ def _opaque_predicate_roles(surface,following='',before='',case='を',normalized
     return frozenset(roles)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _opaque_source_case_edges(clause,cases):
     """A literal case may be swallowed or independently tokenized exactly."""
     import morphology as M
@@ -8549,7 +8550,7 @@ def _opaque_source_case_edges(clause,cases):
     return tuple(out)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _opaque_simple_object_ranges(text):
     """Unchanged unknown nominal + actual case + complete native predicate.
 
@@ -8604,7 +8605,7 @@ def _opaque_simple_object_ranges(text):
     return tuple(ranges)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _opaque_preposed_object_ranges(text):
     """An opaque case/genitive head before the same known object/action.
 
@@ -8646,7 +8647,7 @@ def _opaque_preposed_object_ranges(text):
     return tuple(dict.fromkeys(ranges))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _known_subject_opaque_object_ranges(text):
     """The same native nominative subject and opaque accusative object.
 
@@ -8674,7 +8675,7 @@ def _known_subject_opaque_object_ranges(text):
     return tuple(dict.fromkeys(out))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def source_opaque_object_ranges(text):
     """Keep an unchanged native prefix and opaque object as separate proofs."""
     ranges=list(_opaque_simple_object_ranges(text))
@@ -8710,7 +8711,7 @@ def preserves_opaque_source_object(original, changed):
         tuple((start,end) for start,cut,end in source_opaque_object_ranges(original)))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def attested_source_expression(text):
     """Whole attested source expression/name or native adjective stem + tan.
 
@@ -8760,13 +8761,13 @@ def attested_source_expression(text):
     return False
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def attested_source_expression_ranges(text):
     return tuple((start,start+len(clause)) for start,clause in _native_source_clauses(text)
                  if attested_source_expression(clause))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_adnominal_modifier_parts(reading, allow_predicative=False, allow_written=False):
     """Exact modifier proof, independent of the identity of its right noun.
 
@@ -8808,7 +8809,7 @@ def native_adnominal_modifier_parts(reading, allow_predicative=False, allow_writ
     return ()
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def _native_non_nominal_modifier_tail(text):
     """Positive source evidence that the remainder supplies no nominal host.
 
@@ -8853,7 +8854,7 @@ def _native_non_nominal_modifier_tail(text):
     return bool(core and core[-1][1].startswith('助動詞') and _completed_predicate_token(core[-1]))
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_adnominal_modifier_ranges(text):
     from morphology import tokenize
     from pos_grammar import native_object_functional_tail_frames
@@ -8921,7 +8922,7 @@ def preserves_native_adnominal_modifier(source,start,end,surface):
     return True
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_lexical_phrase_ranges(text):
     """Original fields and modifier+noun prefixes sharing nominal proof."""
     from morphology import tokenize
@@ -8941,7 +8942,7 @@ def native_lexical_phrase_ranges(text):
     return tuple(dict.fromkeys(out))
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_paused_nominal_ranges(text):
     """Retain a native nominal/case plus an explicit comma-delimited pause.
 
@@ -8973,7 +8974,7 @@ def native_paused_nominal_ranges(text):
     return tuple(out)
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_open_nominal_fragment(text):
     """A clipped case + native noun + adnominal ending remains an open note.
 
@@ -8997,7 +8998,7 @@ def native_open_nominal_fragment(text):
     return bool(native_surface_nominal_heads(text[first.end:last.start]))
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_context_ranges(text):
     """48-AHB: retain proved source grammar, even beside a malformed tail.
 
@@ -9133,7 +9134,7 @@ def _nominal_de_iru_ranges(text,mark):
     return tuple(out)
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def attested_nominal_polite_variant(text):
     """Preserve an attested original copular style; never generate that style.
 
@@ -9159,7 +9160,7 @@ def attested_nominal_polite_variant(text):
     return False
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_kahen_derivational_source(text):
     """Prove an original kana KAHEN stem and its completed native suffix.
 
@@ -9194,7 +9195,7 @@ def native_kahen_derivational_source(text):
     return False
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def intact_native_reading(text,allow_incomplete=True):
     """Known source grammar, including a native open or sequential tail.
 
@@ -9450,7 +9451,7 @@ def _written_case_meanings_preserved(text,predicate_start,parts,faces):
     return True
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _native_written_predicate_conflicts(text):
     """Original full-context anomalies shared by projection and source seams."""
     from morphology import tokenize
@@ -9478,7 +9479,7 @@ def _native_written_predicate_conflicts(text):
     return tuple(conflicts)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _native_partitive_object_projections(text,predicate_start,faces):
     """An explicit genitive subset retains its own unchanged nominal source.
 
@@ -9509,7 +9510,7 @@ def _native_partitive_object_projections(text,predicate_start,faces):
     return tuple(out)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_object_predicate_proof(text, predicate_start, faces, allow_link=False, return_action=False):
     """Shared nominal/case proof, retaining a written argument's own meaning.
 
@@ -9712,7 +9713,7 @@ def native_object_predicate_proof(text, predicate_start, faces, allow_link=False
                     nominal_constraint=constraint))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_argument_predicate_contexts(text,include_written_mismatch=True):
     """Share native noun/case boundaries without inventing source errors.
 
@@ -9734,7 +9735,7 @@ def native_argument_predicate_contexts(text,include_written_mismatch=True):
     return tuple(dict.fromkeys(out))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_argument_predicate_cuts(text):
     """The same anomaly search boundary for each attested source case."""
     return tuple(dict.fromkeys(cut for start,cut,faces in
@@ -9743,7 +9744,7 @@ def native_argument_predicate_cuts(text):
         and not native_object_predicate_proof(text[start:],cut-start,faces)))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_object_predicate_cuts(text):
     """Repair boundaries only; no anomaly or output is inferred here."""
     # Written noun/auxiliary mismatches share source argument validation,
@@ -9755,7 +9756,7 @@ def native_object_predicate_cuts(text):
                  and not native_object_predicate_proof(text[start:],cut-start,faces)))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_nominal_spelling_faces(reading):
     """Full written noun spellings, excluding a merely grammatical kana phrase."""
     from morphology import native_spelling_only
@@ -9804,7 +9805,7 @@ def native_nominal_spelling_faces(reading):
                  if face!=reading and native_spelling_only(reading,face)))
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_nominal_compound_spelling(reading,surface):
     """A complete, same-reading nominal compound with each relation proved."""
     from morphology import native_spelling_only
@@ -9814,7 +9815,7 @@ def native_nominal_compound_spelling(reading,surface):
         and all(nominal_compound_support(surface[:a],face) for a,b,face in units[1:]))
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_nominal_tail_heads(text):
     """Existing ordinary noun heads; neither an anomaly nor a repair answer."""
     from morphology import tokenize
@@ -9833,7 +9834,7 @@ def native_nominal_tail_heads(text):
     return tuple(out)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_nominal_tail_spellings(reading,heads):
     """Join exact native noun readings with the unchanged source noun head."""
     out=[]
@@ -9845,7 +9846,7 @@ def native_nominal_tail_spellings(reading,heads):
     return tuple(out)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_written_nominal_coordination(text):
     """Actual noun/genitive members joined by native coordinating particles.
 
@@ -9895,7 +9896,7 @@ def native_interrogative_nominal(text,tokenize_fn):
     return interrogative_nominal_support(parts[0][0],parts[1][0])
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def native_likeness_predicate_ranges(text):
     """Finite native predicate + auxiliary you + its actual copular form.
 
@@ -9925,7 +9926,7 @@ def native_likeness_predicate_ranges(text):
     return tuple(out)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _native_phonetic_mixed_noun(text):
     """Share the preserved whole noun's dictionary spelling and exact reading.
 

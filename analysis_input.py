@@ -14,11 +14,16 @@ from analysis_worker import state_key
 # 可能な限り早く補正する」): a newer key supersedes the computation in the child,
 # and the display still waits for the quiet period. It was 80ms.
 COMPUTE_DELAY_MS = 1
-DISPLAY_QUIET_MS = 300
+# 40ms (2026-10-23 うにさん「このデフォルトを画像のとおりにする」・it was 300). The debug menu's range
+# stays 0-300 (its upper end is the _MAX below, else it would be the default)
+DISPLAY_QUIET_MS = 40
+DISPLAY_QUIET_MS_MAX = 300
 # After an IME commit the phrase is done, so its correction need not wait as
 # long as after a single key (2026-10-17, provisional until うにさん decides:
 # 案C, the commit only; single keys keep DISPLAY_QUIET_MS).
-DISPLAY_QUIET_IME_MS = 100
+# 40ms (2026-10-23 うにさん・it was 100). The range stays 0-100
+DISPLAY_QUIET_IME_MS = 40
+DISPLAY_QUIET_IME_MS_MAX = 100
 
 
 def quiet_ms(app):

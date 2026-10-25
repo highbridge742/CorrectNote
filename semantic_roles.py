@@ -27,6 +27,7 @@ KNOWLEDGE_VERSION = '2026-10-04d'
 ROLE_ASSIGNMENT_ACTIONS = ('指名','任命','選任','選出','推薦')
 TRANSLATION_ACTIONS=frozenset('翻訳 和訳 英訳 直訳 意訳 訳す'.split())
 
+from cache_limits import size as _cache_size   # 控えの上限は cache_limits で1か所に（2026-10-24）
 from functools import lru_cache
 
 # 48-AHO / GPT-6 Astra / 2026-09-16: these temporal readings need a
@@ -63,7 +64,7 @@ def adverbial_reading_needs_host(face,reading):
                             | DEPENDENT_DEGREE_READINGS)
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def unadorned_nominal_prefix_parts(text):
     """48-AIS: 素 + an unchanged native common noun, as an unadorned thing.
 
@@ -83,7 +84,7 @@ def unadorned_nominal_prefix_parts(text):
     return ('素','す',host,tuple(sorted({row[3] for row in rows})))
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def unadorned_nominal_prefix_ranges(text):
     if '素' not in text:return ()
     from morphology import tokenize
@@ -817,7 +818,7 @@ _COUNTER_CORE_ROLES={
 }
 
 
-@lru_cache(maxsize=1024)
+@lru_cache(maxsize=_cache_size(1024))
 def counted_object_roles(quantity):
     """Positive type evidence for an exact native quantity, or None.
 
@@ -871,7 +872,7 @@ def _native_storage_compound_role(surface):
     return False
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def nominal_roles(surface):
     """Known senses plus a native adjective's productive attribute noun."""
     roles=frozenset(NOUN_ROLES.get(surface,()))
@@ -979,7 +980,7 @@ def _argument_prefix(context,start,tokenize):
 
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def following_shared_object(text,start,end):
     """A following conjunct supplies a possible omitted object for spelling.
 
@@ -1141,7 +1142,7 @@ def _token_case_argument_before(context,start,tokenize,through_object=False):
     return noun[0],particle[0]
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def classified_nominal_action(surface, reading):
     """A native ordinary noun with an independently classified action use."""
     if surface not in VERB_ROLES:
@@ -1153,7 +1154,7 @@ def classified_nominal_action(surface, reading):
                for pos,form,base,rd in dictionary_inflections(surface) or ()))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _case_roster(case):
     """格ごとの述語の意味の表。
 
@@ -1222,7 +1223,7 @@ def _native_verb_reading_lexemes():
     return {rd:tuple(sorted(words)) for rd,words in result.items()}
 
 
-@lru_cache(maxsize=8192)
+@lru_cache(maxsize=_cache_size(8192))
 def _native_lexeme_forms(word,form,reading):
     """Only native entries can attest a written inflection of this lemma."""
     from morphology import dictionary_inflections
@@ -1275,7 +1276,7 @@ def _resultative_adjective_readings():
     return {reading:frozenset(roles) for reading,roles in out.items()}
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def resultative_adjective_roles(reading):
     from morphology import dictionary_inflections
     roles=set();known=_resultative_adjective_readings()
@@ -1297,7 +1298,7 @@ _BENEFACTIVE_CASES={
 }
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_te_auxiliary_forms(surface,form,reading):
     """Exact auxiliary forms, including lexical-POS benefactive verbs.
 
@@ -1312,7 +1313,7 @@ def native_te_auxiliary_forms(surface,form,reading):
             or row[0].startswith('動詞,自立,') and row[2] in benefactive))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_benefactive_case_roles(surface,form,reading,tail,case,before=''):
     if case not in _BENEFACTIVE_CASES or not tail:return frozenset()
     from morphology import tokenize,dictionary_inflections
@@ -1339,7 +1340,7 @@ def native_benefactive_case_roles(surface,form,reading,tail,case,before=''):
     return frozenset(('person',))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_verb_lexemes(surface,form,reading):
     """Exact inflection/reading senses; literal kana retains attested spellings."""
     from morphology import dictionary_inflections,native_suru_form
@@ -1366,7 +1367,7 @@ def native_verb_lexemes(surface,form,reading):
 _OBJECT_ROLE_READINGS={'開く':('ひらく',),'開ける':('あける',)}
 
 
-@lru_cache(maxsize=8192)
+@lru_cache(maxsize=_cache_size(8192))
 def native_verb_roles(surface, form, reading, subject=False, case=None, tail=None, before="", allow_open_tail=False):
     """Bind meaning and a supplied grammatical tail to the same native lemma.
 
@@ -1438,7 +1439,7 @@ def native_verb_roles(surface, form, reading, subject=False, case=None, tail=Non
     return frozenset(roles)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def coordinated_nominal_role_groups(surface):
     """48-AKQ / GPT-6 Astra, 2026-09-19: preserve roles member by member.
 
@@ -1482,7 +1483,7 @@ def support(object_word, predicate):
     return bool(nominal_role_matches(object_word,predicate_roles(predicate)))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _action_head(surface, following, before=""):
     """Only use predicate roles where a native verb/suru attachment exists."""
     from morphology import tokenize
@@ -1630,7 +1631,7 @@ def candidate_internal_argument_evidence(surface, following, before=""):
     return None
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def changed_nominal_object_allowed(original, changed):
     """48-AIO: an adjective conditional cannot become an unsupported noun.
 
@@ -1903,7 +1904,7 @@ def _following_case_role(parts,index,word,case):
     return False
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_case_support(text):
     """Positive native argument links for comparing already admitted candidates.
 
@@ -1928,7 +1929,7 @@ def native_case_support(text):
     return tuple(supported)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def original_argument_evidence(surface,before,after,source):
     """Positive roles of the exact written word, before homophone guessing.
 
@@ -2088,7 +2089,7 @@ def proved_action_case_support(noun,particle,action,context=''):
     return bool(nominal_role_matches(noun,roles))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_preference_relative_support(argument,head,stem,reading):
     """A preference has a person experiencing it and a liked/disliked item.
 
@@ -2142,7 +2143,7 @@ SUBJECT_ONLY_PREDICATES = frozenset(
     '誕生 生誕 実在 存在 死ぬ 亡くなる 生まれる 冴える さえる ある 有る 在る あり'.split())
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _independent_accusative_clause(text):
     """48-AIP: syntax establishes the next clause's own object ownership.
 
@@ -2471,7 +2472,7 @@ def conflicting_object_predicates(text,tokens):
             or _borrowed_return_case_conflict(text,tokens,row[0],row[1],row[2])]
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def changed_object_conflict_allowed(original, changed):
     """48-AJK: a proved semantic conflict needs a positively fitting repair.
 
@@ -2614,7 +2615,7 @@ def subject_before(context,start,tokenize, *, allow_direct_topic=False):
     return noun[0] if actual_ga or direct_topic or noun[0] in topic_heads else ''
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _subject_predicate_roles(surface,following):
     from morphology import tokenize,dictionary_inflections
     head=_action_head(surface,following[:8])
@@ -2658,7 +2659,7 @@ ACCUSATIVE_BASIC_LEMMA_READINGS=frozenset('する おく みる いう おもう
 NOMINAL_COORDINATION_GROUPS=(frozenset('性 数 格 人称 時制 相 態 法'.split()),)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def is_nominal_coordination(text):
     """An entire written nominal list made of distinct members of one class."""
     if not text or not all('一'<=c<='鿿' for c in text):
@@ -2713,7 +2714,7 @@ SPATIAL_OPERATIONS=frozenset('移動 移設 回転 旋回 クリック ダブル
 
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def retained_nominal_head_support(original,candidate):
     """A whole native noun can preserve the source's written nominal head.
 
@@ -2748,7 +2749,7 @@ def interrogative_nominal_support(left,right):
     return left in ('何','なに','なん') and 'interrogative_category_head' in nominal_roles(right)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def deverbal_nominal_support(left,right,reading=None):
     """A native action noun/suffix retains its verb's explicit object role."""
     from morphology import dictionary_inflections
@@ -2762,7 +2763,7 @@ def deverbal_nominal_support(left,right,reading=None):
         and form=='連用形' and rd in nouns)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def nominal_input_method_evidence(context,start,end,surface,reading):
     """A native input action is a means of an actual text-processing noun.
 
@@ -2794,7 +2795,7 @@ def nominal_input_method_evidence(context,start,end,surface,reading):
     return None
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def nominal_compound_support(left,right):
     """Positive relation of two already identified nominal candidate parts."""
     from seed_japanese import is_unit
@@ -2897,7 +2898,7 @@ def temporal_case_support(surface,case,form=None,reading=None):
     return False
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def relative_method_evidence(surface,following):
     """48-AQK: an available means is the default reading of a bare method head.
 
@@ -3086,7 +3087,7 @@ def finite_clause_addressee(parts, auxiliary_index):
             and native_suru_form(parts[i-1].surface,parts[i-1].infl_form,parts[i-1].reading,False))
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def _motion_tail_cannot_take_object(text,object_word):
     """A finite path motion cannot own an earlier textual/photographic object.
 

@@ -2471,10 +2471,11 @@ def _source_adnominal_particle_spans(line, store):
     return tuple(out)
 
 
+from cache_limits import size as _cache_size   # 控えの上限は cache_limits で1か所に（2026-10-24）
 from functools import lru_cache
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def closed_subject_topic_spans(line):
     """A closed N-ga-N-topic field lacks the predicate joining its two slots.
 
@@ -2557,6 +2558,115 @@ def native_object_functional_tail_frames(text):
 def _native_object_predicate_mismatches(text):
     return tuple(dict.fromkeys((start,end) for start,end,cut,reading
         in native_object_functional_tail_frames(text)))
+
+
+def _impossible_connection_spans(line):
+    """
+    **いまの日本語の文では起こらない品詞のつながり**（2026-10-23・補正C）。
+
+    かなが1打崩れると、解析は文語や珍しい読みまで持ち出して、無理に
+    語の並びに切る（始め＋り・週に＋つ・掃除＋れ・作り＋ま＋なし＋た）。
+    どの語も辞書に在るので「語に読める」ことになり、印が立たなかった。
+    見るのは語ではなく**つながりそのもの**:
+
+      ・文語の完了の助動詞（り・つ・けり）が語に直に付く
+      ・名詞に受け身・可能の助動詞（る・らる）が直に付く（動詞にしか付かない）
+      ・文語の形容詞（なし）に た が付く
+      ・用言の直後にフィラー（ま・え）が来る
+      ・用言の連用形に、仮名書きの固有名詞が直に付く（寝＋みす）
+      ・体言に続く形（おん）の後に用言が来る
+
+    正しい608行と説明書の 883 行では1つも立たない（実測）。
+    **印だけ**——`odd_kana_spans`（直しの入口にもなる）には入れず、
+    corrector の紫（`_odd_spans_for_line`）にだけ足す。入口にしたら
+    文脈補正が `週につに` を `週にもつに` に崩した（実測）。
+    """
+    try:
+        from morphology import tokenize
+        from literal_examples import protected_ranges, overlaps
+    except Exception:
+        return ()
+    try:
+        ts = [t for t in tokenize(line) if t.surface.strip()]
+    except Exception:
+        return ()
+    out = []
+
+    def _anchored_kana(k):
+        # 字句 k の前後（2つ前から1つ先）に、漢字・片仮名の字句があるか。かなばかりの並びは、解析が語の切れ目を
+        # 当てずっぽうに引く（たま|ね|ぎ・かん|り|ょうご・つく|え|の）ので、品詞のつながりを見ても当てにならない。
+        # 漢字・片仮名に接していれば、語の切れ目が確かな支えを持つ（2026-10-23・補正C v8。かなだけの正しい行に紫）
+        for u in ts[max(0, k - 2):k + 2]:
+            if any(not _is_hira(c) and c not in 'ー。、，．,.!?！？' for c in u.surface):
+                return True
+        return False
+
+    for i, t in enumerate(ts):
+        p = ts[i - 1] if i else None
+        if p is None or p.end != t.start:
+            continue
+        if not _anchored_kana(i):
+            continue
+        nx = ts[i + 1] if i + 1 < len(ts) else None
+        a, b = p.start, t.end
+        # 片仮名に接するかな（スク**り**ーン・シャ**つ**）は、片仮名の語の中の字の打ち違い。
+        # 語として混在した綴りの判定は別の道（混在の名詞）に任せ、ここでは見ない
+        if any(0 <= k < len(line) and ('ァ' <= line[k] <= 'ヺ' or line[k] == 'ー')
+               for k in (t.start - 1, t.end)) and all(_is_hira(c) for c in t.surface):
+            continue
+        if t.pos == '助動詞' and t.base_form in ('り', 'つ', 'けり'):
+            pass
+        elif t.pos == '助動詞' and t.base_form in ('る', 'らる') and p.pos == '名詞':
+            pass
+        elif (t.pos == '形容詞' and (t.infl_form or '').startswith('文語')
+                and nx is not None and nx.start == t.end
+                and nx.pos == '助動詞' and nx.base_form == 'た'):
+            a, b = t.start, nx.end
+        elif t.pos == 'フィラー' and p.pos == '動詞' and not line[t.start:].startswith(('まうす', 'もうす')):
+            pass
+        elif (t.pos == '名詞' and (t.pos_sub or '').startswith('固有名詞')
+                and all(_is_hira(c) for c in t.surface)
+                and p.pos == '動詞' and (p.infl_form or '').startswith('連用')):
+            pass
+        elif (p.pos == '動詞' and p.infl_form == '体言接続特殊'
+                and t.pos == '動詞'):
+            pass
+        elif (p.pos == '助詞' and p.pos_sub.startswith('格助詞') and p.surface in ('へ', 'に', 'で', 'を', 'が')
+                and t.pos == '助詞' and t.pos_sub.startswith('格助詞') and t.surface in ('を', 'が')):
+            # 格助詞が2つ重なる（カレーへを）
+            pass
+        elif (p.pos == '助詞' and p.pos_sub == '並立助詞' and p.surface == 'と'
+                and t.pos == '助詞' and t.pos_sub.startswith('格助詞')
+                and 'と' not in line[:p.start]):
+            # 並べる と の後に格助詞が来るのは、AとBとを のように並べるときだけ（靴とを・週末とに）
+            pass
+        elif (p.pos == '助詞' and p.pos_sub == '係助詞' and p.surface == 'は'
+                and ((t.pos == '助動詞' and t.base_form == 'だ')
+                     or (t.pos == '助詞' and t.pos_sub.startswith('格助詞')))):
+            # は の後に格助詞・助動詞が直に来る（駅はで）
+            pass
+        elif (p.pos == '助動詞' and p.base_form == 'た' and t.pos == '助動詞'
+                and t.base_form in ('ぬ', 'ない', 'ます', 'た', 'れる', 'られる', 'せる', 'させる', 'たい', 'まい', 'ん')):
+            # た の後に、用言に付く助動詞が来る（送ったぬ）
+            pass
+        elif (t.pos == '助動詞' and t.base_form == 'らしい' and p.pos == '動詞'
+                and (p.infl_form or '').startswith(('未然', '連用'))):
+            # らしい は終わりの形・体言に付く（降りらしい）
+            pass
+        elif (p.pos == '動詞' and p.pos_sub == '非自立' and p.base_form == 'いる'
+                and (p.infl_form or '').startswith('連用') and t.pos == '動詞' and t.pos_sub == '自立'):
+            # 補助の いる の連用形に用言が直に付く（書いてい送った）
+            pass
+        elif (p.pos == '助動詞' and p.base_form in ('ます', 'た', 'です') and p.infl_form == '基本形'
+                and t.pos == '助詞' and t.pos_sub == '係助詞' and t.surface == 'は'
+                and (nx is None or line[t.end:].strip(' 　') in ('', '。', '．', '!', '！', '?', '？'))):
+            # 言い切った後に は で文が終わる（寝ますは）。ありますは、… のように続くのは話し言葉にある
+            pass
+        else:
+            continue
+        if not overlaps(a, b, protected_ranges(line)):
+            out.append((a, b))
+    return tuple(out)
 
 
 def odd_kana_spans(line, dict_index=None, store=None, preserve_unknown_source=True):

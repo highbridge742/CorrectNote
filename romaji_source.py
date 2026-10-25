@@ -4,6 +4,7 @@
 This module proves a path; it does not generate vocabulary or choose meanings.
 An exhausted state budget is unknown, never a completed negative result.
 """
+from cache_limits import size as _cache_size   # 控えの上限は cache_limits で1か所に（2026-10-24）
 from dataclasses import dataclass
 from functools import lru_cache
 import heapq
@@ -22,7 +23,7 @@ class KeyEvidence:
     visited:int
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def _feed(pending,chunk,final=False):
     from halfwidth import ROMAJI_TO_KANA,_ROMAJI_KEYS
     pending+=chunk;out=[]

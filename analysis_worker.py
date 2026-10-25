@@ -29,10 +29,36 @@ def state_key(app):
              app.ime_readings.revision() if getattr(app,'ime_readings',None) is not None else 0))
 
 
+# state_key: 0 id(store) 1 store.revision 2 choices.revision 3 _analysis_state_revision 4 id(dict_index)
+# 5 dict_index.ready 6 id(context_vec) 7 (input method, keyboard) 8 recent_words 9 (id(ime), ime revision)
+_FIXED=(0,3,4,5,6,7)
+VOCAB,CHOICE,RECENT=1,2,8
+
+
 def same_model_state(previous,current):
-    """Only saved IME readings may differ; all other correction inputs match."""
+    """Rows may be checked one by one: the same stores and settings. The vocabulary, the choice memory and the
+    recent words may have moved (each row says what it used: used_keys, 2026-10-24); the IME readings too."""
+    return bool(previous is not None and len(previous)==len(current)==10
+                and all(previous[i]==current[i] for i in _FIXED) and previous[-1][0]==current[-1][0])
+
+
+def only_ime_moved(previous,current):
+    """Only the saved IME readings differ (the worker may update them in place; anything else is a full reset
+    of its stores — the vocabulary and the choice memory too)."""
     return bool(previous is not None and len(previous)==len(current)==10
                 and previous[:-1]==current[:-1] and previous[-1][0]==current[-1][0])
+
+
+def choices_moved(previous,current):
+    """The choice memory moved: kept corrections stay, but their display units are built again (units read
+    the choices outside correct_line, so used_keys does not see them — 2026-10-24)."""
+    return bool(previous is not None and len(previous)==len(current)==10 and previous[CHOICE]!=current[CHOICE])
+
+
+def model_moved(previous,current):
+    """The vocabulary or the choice memory moved (not only IME readings or recent words)."""
+    return bool(previous is not None and len(previous)==len(current)==10
+                and (previous[VOCAB]!=current[VOCAB] or previous[CHOICE]!=current[CHOICE]))
 
 
 def result_compatible(app,result,previous,current=None):
@@ -41,11 +67,45 @@ def result_compatible(app,result,previous,current=None):
     if not same_model_state(previous,current):return False
     if result is None:return False
     if result.get('original')=='':return True
+    if any(previous[i]!=current[i] for i in (VOCAB,CHOICE,RECENT)) and not _keys_unchanged(app,result,previous,current):
+        return False
+    if previous[-1][1]==current[-1][1]:return True
     reads=result.get('_ime_evidence')
     if reads is None:return False
     ime=getattr(app,'ime_readings',None)
     return all(tuple(ime.readings_for(surface) if ime is not None else ())==values
                for surface,values in reads)
+
+
+def _keys_unchanged(app,result,previous,current):
+    """The row did not use what moved (used_keys of correction_entry, used_changes in this process)."""
+    used=result.get('used_keys')
+    if not isinstance(used,dict) or used.get('whole'):return False
+    if previous[RECENT]!=current[RECENT] and used.get('recent'):return False
+    import used_changes
+    evidence=result.get('_context_evidence')
+    for index,attribute,kind in ((VOCAB,'store','vocab'),(CHOICE,'choices','choice')):
+        if previous[index]==current[index]:continue
+        keys=used_changes.changed(getattr(app,attribute,None),previous[index],current[index])
+        if keys is None or keys.intersection(used.get(kind) or ()):return False
+        # the loanword / English tables (used_keys loan, 2026-10-24): only a changed word that can be in them
+        # (a katakana or English spelling, an en: reading) redoes the row
+        if used.get('loan'):
+            import used_keys
+            if any(used_keys.is_loan_change(key,key) for key in keys):return False
+        if index==VOCAB:
+            # the context vocabulary is built from the store (読み → 表記): a row that read a changed reading
+            # there, or all of it, is redone too
+            if not isinstance(evidence,dict) or evidence.get('whole') or keys.intersection(evidence.get('keys') or ()):
+                return False
+    return True
+
+
+try:
+    import used_changes as _used_changes
+    _used_changes.install()          # note which keys change in this process (memory only)
+except Exception:
+    pass
 
 
 def snapshot(app):
@@ -122,7 +182,9 @@ class Runtime:
 
     def set_state(self,data):
         identity=data.get('_state_identity')
-        if identity is not None and same_model_state(self._state_identity,identity):
+        # only_ime_moved, not same_model_state: rows may be kept across a vocabulary change (used_keys), but the
+        # worker's own stores must be the new ones (2026-10-24)
+        if identity is not None and only_ime_moved(self._state_identity,identity):
             # Saved input readings affect correction evidence, not the native
             # document context extractors. Keep those unchanged rows while
             # applying the complete latest reading map before the next task.
@@ -448,7 +510,8 @@ class Runtime:
                     context_vec=self.context_vec,dict_index=self.index,
                     nearby_words=nearby,recent_words=task.get('recent',()),
                     occurrence_readings=task.get('readings',()),
-                    occurrence_calculations=task.get('calculations',()))
+                    occurrence_calculations=task.get('calculations',()),
+                    occurrence_strokes=occurrence_strokes(task.get('readings',())))
                 ime_evidence=tuple(sorted(self._ime_queries.items()))
             finally:
                 self._ime_queries=None
@@ -478,7 +541,54 @@ class Runtime:
                     corrected_units=corrected_units,original_units=original_units)
 
 
+def occurrence_strokes(readings):
+    """The commits whose keys are known, as correction_entry.correct_line takes them:
+    [(start, end, surface, reading, strokes, shifts)] (shift_slip.ShiftStrokeClock.take)."""
+    return [(x.start,x.end,x.surface,x.reading,tuple(x.strokes),tuple(getattr(x,'shifts',()))) for x in readings or ()
+            if getattr(x,'strokes',())]
+
+
+def _take_usage():
+    """How the correction stages were used since the last answer (numbers only, usage_counts), or None."""
+    try:
+        import usage_counts
+        return usage_counts.take()
+    except Exception:
+        return None
+
+
+def merge_usage(result):
+    """In the main process: add a child's numbers once (the answer no longer carries them)."""
+    if isinstance(result,dict) and 'usage' in result:
+        usage=result.pop('usage')
+        if usage:
+            try:
+                import usage_counts
+                usage_counts.merge(usage)
+            except Exception:
+                pass
+
+
+def _exit_with_parent():
+    """End this process when the main window's process is gone (2026-10-23 うにさん: a child kept ~600-850 MB
+    after its parent was killed or crashed). `daemon=True` covers only a parent that exits normally. With
+    `spawn` the child already holds a handle to its parent (`multiprocessing.parent_process()`, opened at
+    start, so a reused process id cannot fool it); a thread waits on it and ends the process when it fires."""
+    import os
+    import threading
+    parent=mp.parent_process()
+    if parent is None:return None
+    def watch():
+        try:parent.join()
+        except Exception:return
+        os._exit(0)
+    thread=threading.Thread(target=watch,name='exit-with-parent',daemon=True)
+    thread.start()
+    return thread
+
+
 def _serve(inbox,outbox):
+    _exit_with_parent()
     from tsf_worker import worker_connection_scope
     # Native IME answers are kept per typed line for this worker's life
     # (ime_session.line_answers_scope, 2026-10-17 speed).
@@ -518,6 +628,10 @@ def _serve_requests(inbox,outbox,connection_owner):
                     result=runtime.execute(request['task'])
                     check_current_request()
             else:result=runtime.execute(request['task'])
+            if request.get('usage') and isinstance(result,dict) and request['task']['kind'] in ('line','units'):
+                # how the correction stages were used (numbers only, usage_counts): sent with the answer when the
+                # app's Worker asked for it, kept out of Runtime.execute's own answer (2026-10-24)
+                result=dict(result,usage=_take_usage())
             outbox.put((request['id'],result,None))
         except SupersededAnalysis:
             continue
@@ -599,12 +713,13 @@ class Worker:
     def submit(self,task,state=None):
         if self.closed:raise RuntimeError('Analysis worker is closed')
         self.serial+=1
-        self.inbox.put_nowait(dict(id=self.serial,task=task,state=state))
+        self.inbox.put_nowait(dict(id=self.serial,task=task,state=state,usage=True))
         return self.serial
     def poll(self,request_id):
         while True:
             try:identifier,result,error=self.outbox.get_nowait()
             except queue.Empty:break
+            merge_usage(result)      # counted when it arrives, even when the answer is not used
             self.ready[identifier]=(result,error)
         value=self.ready.pop(request_id,None)
         # Requests superseded by edits or another tab are never retained as text history.

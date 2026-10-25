@@ -22,6 +22,17 @@ def insertion_offsets(selected, distance, from_end=False):
     return offsets, clamped
 
 
+PLACEHOLDER = 'ここに挿入する文字を入れてください'
+
+
+def input_field_colors(panel, ink):
+    """(地, 枠, 案内の字) for an input box on this panel: a little towards the ink, so it stands
+    apart from the window in every colour scheme, light or dark."""
+    import appearance
+    return (appearance.mix(panel, ink, .06), appearance.mix(panel, ink, .28),
+            appearance.mix(panel, ink, .45))
+
+
 class BulkInsertDialog:
     def __init__(self, app, colors):
         self.app = app
@@ -74,16 +85,28 @@ class BulkInsertDialog:
         tk.Label(body, text='0は指定側の端、文字数を超える値は反対側の端に挿入します。',
                  bg=panel, fg=ink, anchor='w').pack(fill='x', pady=(4, 10))
         tk.Label(body, text='挿入する文字列', bg=panel, fg=ink, anchor='w').pack(fill='x')
+        # 入力欄らしく、周りと違う地と枠（2026-10-23 うにさん「一括挿入の文字列欄が入力欄に見えない」）。
+        # 色は配色から作る（PANEL を INK へ少し寄せた地・もう少し寄せた枠・焦点があれば ACCENT の枠）
+        field, edge, hint = input_field_colors(panel, ink)
         self.text = tk.Text(body, width=38, height=3, wrap='char', undo=True,
-                            exportselection=False, bg=panel, fg=ink, insertbackground=ink,
-                                 selectbackground=accent, selectforeground=ink)
+                            exportselection=False, bg=field, fg=ink, insertbackground=ink,
+                                 selectbackground=accent, selectforeground=ink,
+                            relief='flat', highlightthickness=1, highlightbackground=edge,
+                            highlightcolor=accent, padx=6, pady=4)
         self.text.pack(fill='x', pady=(4, 8))
+        # 空のあいだは薄い字の案内（値には入らない。欄の中の札で、打ち始めたら消える）
+        self.placeholder = tk.Label(self.text, text=PLACEHOLDER, bg=field, fg=hint,
+                                    font=self.text.cget('font'), cursor='xterm', padx=0, pady=0, bd=0)
+        self.placeholder.bind('<Button-1>', lambda e: (self.text.focus_set(), 'break')[1])
+        for sequence in ('<KeyPress>', '<KeyRelease>', '<<Paste>>', '<<Cut>>', '<<Modified>>', '<FocusIn>'):
+            self.text.bind(sequence, lambda e: self.text.after_idle(self._show_placeholder), add=True)
         # The same observer as the other panes (Unicode-safe edits, and an
         # emoji is first measured in the emoji font: in Tk 8.6.12+ this pane's
         # ＭＳ ゴシック would otherwise give it one em for the whole process).
         from analysis_work import observe_text
-        observe_text(self.text)
+        observe_text(self.text, on_edit=lambda *args: self.text.after_idle(self._show_placeholder))
         self.text.insert('1.0', self.app.settings.get('bulk_insert_text') or '')
+        self._show_placeholder()
         self.message = tk.Label(body, text='本文の選択部分を行ごとに処理します。縦線が挿入位置です。',
                                 bg=panel, fg=ink, anchor='w', wraplength=400)
         self.message.pack(fill='x', pady=(0, 8))
@@ -109,6 +132,28 @@ class BulkInsertDialog:
         self._start_preview()
         win.deiconify(); self.text.focus_set()
         self.queue_preview()
+
+    def refresh_colors(self):
+        """The colour scheme changed while open: the box's own colours again (they are made from it)."""
+        if self.window is None:
+            return
+        panel, ink, accent = self.colors()
+        field, edge, hint = input_field_colors(panel, ink)
+        try:
+            self.text.configure(bg=field, highlightbackground=edge, highlightcolor=accent)
+            self.placeholder.configure(bg=field, fg=hint)
+        except tk.TclError:
+            pass
+
+    def _show_placeholder(self):
+        try:
+            self.text.edit_modified(False)      # the next change of any kind sends <<Modified>> again
+            if self.text.get('1.0', 'end-1c'):
+                self.placeholder.place_forget()
+            else:
+                self.placeholder.place(x=int(self.text.cget('padx')), y=int(self.text.cget('pady')))
+        except tk.TclError:
+            pass
 
     def _start_preview(self):
         self._preview_traces = [(var, var.trace_add('write', self.queue_preview))

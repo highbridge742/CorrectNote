@@ -169,9 +169,71 @@ def _looks_unnatural(text):
     """
     try:
         import charngram
-        return charngram.looks_unnatural(text)
+        if not charngram.looks_unnatural(text):
+            return False
     except Exception:
         return False
+    # **辞書の語の内側は数えない**（2026-10-23・うにさん「逆効果に
+    # なっている判定は見直さなければならない」）。
+    #
+    # 表はアプリの文書8万字ぶんの3連なので、そこに出てこない漢字の
+    # 語は、正しくても内側の3連が全部「見たことがない」になる。
+    # 実測で、AI 判定の表（kango_tier）の「よく使う」2字の漢字語
+    # 2,581語のうち 48%（返事・課題・電気・会議・天気・写真…）を
+    # 「日本語の並びとして無理」と言っていた。おかしいのは
+    # **並び**であって語ではない、というこの検品の前提（charngram の
+    # 説明）どおり、語の内側の3連は敷居ちょうどの点に置き、
+    # **語と語の継ぎ目**（と語でない字）だけで決める。
+    # 解析できなければ今までどおり。
+    try:
+        import charngram
+        spans = _known_word_spans(text)
+        if spans is None:
+            return True
+        parts = charngram.trigram_logps(text)
+        if not parts:
+            return False
+        floor = charngram.MIN_SCORE
+        total = 0.0
+        for i, lp in parts:
+            a, b = max(0, i - 2), min(len(text), i + 1)
+            if any(s <= a and b <= e for s, e in spans):
+                lp = max(lp, floor)
+            total += lp
+        return total / len(parts) < floor
+    except Exception:
+        return True
+
+
+def _known_word_spans(text):
+    """
+    `text` の中で**辞書に載っている漢字・片仮名の語**の範囲
+    `[(start, end), ...]`。解析できなければ None。
+
+    かなだけの語は数えない（かなの並びは表に十分出てくるので、
+    内側の3連もそのまま測れる。`メモちょが` の `ちょ` のような
+    切れ端を語として扱わないため）。
+    """
+    try:
+        import morphology
+        if not morphology.HAS_JANOME:
+            return None
+        tokenize = morphology.tokenize
+    except Exception:
+        return None
+    spans = []
+    try:
+        for t in tokenize(text):
+            surf = t.surface or ''
+            if len(surf) < 2 or not t.has_reading:
+                continue
+            if not any('\u4e00' <= ch <= '\u9fff' or ch == '々'
+                       or '\u30a1' <= ch <= '\u30fa' for ch in surf):
+                continue
+            spans.append((t.start, t.end))
+    except Exception:
+        return None
+    return spans
 
 
 MIN_GAIN_READABLE = 5000

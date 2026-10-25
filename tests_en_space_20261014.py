@@ -76,11 +76,15 @@ class MissingSpaceTest(unittest.TestCase):
                      # 5字以下の語（固有名詞と短い語の名簿・seed_english_names）
                      'We ate meat and goat.', 'The acre has an odor.',
                      'To and fro.', 'Tis the season.', 'It sat atop the hill.',
-                     'a meme and a dodo', 'The onus is on us.',
-                     # アポストロフィを落とした短縮形は触らない
-                     'arent you coming', 'they werent here'):
+                     'a meme and a dodo', 'The onus is on us.'):
             with self.subTest(line=line):
                 self.assertEqual(apply(line), line)
+
+    def test_dropped_apostrophe_is_not_split(self):
+        # アポストロフィを落とした短縮形は割らない。2026-10-16 からは
+        # en_typo が ' を戻す（うにさんの選択「英語の補正を強化」）
+        self.assertEqual(apply('arent you coming'), "aren't you coming")
+        self.assertEqual(apply('they werent here'), "they weren't here")
 
     def test_proper_nouns_untouched(self):
         for line in ('Justin went home.', 'I met Justin yesterday.',

@@ -83,7 +83,7 @@ def clean_ruler_rows(rows):
 
 def new_tab(text='', path=None, saved=True, cursor='1.0', scroll=0.0,
             title=None, bookmarks=None, top=None, file_format=None, calculations=None,ruler_rows=None,
-            text_styles=None):
+            text_styles=None, backup_id=None):
     """タブ1つぶんの控えを作る。
 
     top: 画面のいちばん上に見えていた**行番号**（1始まり）。
@@ -109,6 +109,8 @@ def new_tab(text='', path=None, saved=True, cursor='1.0', scroll=0.0,
     if records:tab['calculations'] = records
     styles = clean_text_styles(text_styles)
     if styles:tab['text_styles'] = styles
+    # タブのバックアップの名札（tab_backup・2026-10-23）。まだファイルの無いタブを、閉じるまで見分ける
+    if isinstance(backup_id, str) and backup_id:tab['backup_id'] = backup_id
     return tab
 
 
@@ -201,8 +203,11 @@ class SessionStore:
         # Saving the same tab must not replace its live document identity.
         current = self.tabs[i]
         if current is not tab:
+            backup_id = current.get('backup_id')
             current.clear()
             current.update(tab)
+            if backup_id and not current.get('backup_id'):
+                current['backup_id'] = backup_id     # the tab's backups stay with it
 
     def add_tab(self, tab=None, activate=True):
         """タブを1つ足す。戻り値はその位置。"""
@@ -318,6 +323,7 @@ class SessionStore:
                 calculations=t.get('calculations'),
                 ruler_rows=t.get('ruler_rows'),
                 text_styles=t.get('text_styles'),
+                backup_id=t.get('backup_id'),
             ))
         if not clean:
             return False

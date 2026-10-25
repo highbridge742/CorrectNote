@@ -13,6 +13,8 @@ class QuickInputPauseTests(unittest.TestCase):
         self.app.root=Root();self.now=10.0
         clock=patch.object(Q.time,'monotonic',side_effect=lambda:self.now)
         clock.start();self.addCleanup(clock.stop)
+        # The mechanism with the wait it was written for (250); the default is 40 since 2026-10-23
+        waits=patch.object(Q,'DISPLAY_QUIET_MS',250);waits.start();self.addCleanup(waits.stop)
 
     completed=QuickAsyncTests.completed
     edit=QuickAsyncTests.edit

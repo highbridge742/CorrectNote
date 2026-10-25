@@ -55,19 +55,22 @@ class AttestedNominalCandidateTests(unittest.TestCase):
         from kana_layout import kana_key_distance
         self.assertEqual(kana_key_distance('す','い'),1.0)
         self.assertGreater(kana_key_distance('と','て'),1.0)
-        for generator in (R.key_repairs,R.nonadjacent_key_repairs,
+        # 2026-10-24（keytend・うにさん「縦も入れる方向で詰める」）: と（S）↔て（W）は薬指の上下で、置き換えの隣になった
+        # （横より一段弱い 1.05）。まとがい は横の まちがい と縦の まてがい が並び、たべます／やきます の文脈で まてがい
+        self.assertTrue(any(row.reading=='まてがい' for row in R.key_repairs('まとがい')))
+        for generator in (R.nonadjacent_key_repairs,
                           R.adjacent_shift_key_repairs,R.neighbor_shift_key_repairs):
             self.assertFalse(any(row.reading=='まてがい' for row in generator('まとがい')))
         self.assertTrue(any(row.reading=='まちがい' for row in R.key_repairs('まとがい')))
         self.assertTrue(any(row.reading=='まてがい' and row.operation=='adjacent_substitution'
                             for row in R.key_repairs('まてがす')))
-        for source in ('まとがいをたべます。','まとがいをやきます。'):
+        for source,expected in (('まとがいをたべます。','マテガイを食べます。'),('まとがいをやきます。','マテガイを焼きます。')):
             with self.subTest(source=source):
                 a=initial()
                 result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                     context_vec=None,decisions=a.decisions)
-                self.assertEqual(result['corrected'],source)
-                self.assertTrue(result['odd_spans'])
+                self.assertEqual(result['corrected'],expected)
+                self.assertFalse(result['odd_spans'])
                 self.assertEqual(result['analysis_status'],'complete')
         for source in ('「まてがすをたべます」と入力します。','「まとがいをたべます」と入力します。'):
             a=initial()

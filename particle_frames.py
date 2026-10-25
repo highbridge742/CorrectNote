@@ -4,6 +4,7 @@
 48-AGK / GPT-6 Astra / 2026-09-15. Source evidence precedes key search;
 explicit menus may offer hypotheses without automatically accepting them.
 """
+from cache_limits import size as _cache_size   # 控えの上限は cache_limits で1か所に（2026-10-24）
 import re
 
 def _is_hiragana(ch):
@@ -498,7 +499,7 @@ def interrogative_extent_frames(source):
         out.append(dict(start=noun.start,end=case.end,surface=reading,reading=reading))
     return tuple(out)
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def converted_connective_nominal_frames(source):
     """A finite verb exposes an unbacked noun join with a connective reading."""
     from morphology import tokenize,dictionary_inflections
@@ -658,7 +659,7 @@ def broken_nominal_te_frames(source):
     return tuple(out)
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def broken_accusative_adverb_frames(source):
     """An actual object is stranded before particles/adverbs and a return verb.
 
@@ -784,7 +785,7 @@ def changed_written_suru_allowed(source,start,end,surface):
     return True
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def unlinked_past_predicate_frames(source):
     """An actual completed past predicate cannot directly modify a finite verb.
 
@@ -860,7 +861,7 @@ def changed_past_link_allowed(source,start,end,surface):
     return True
 
 
-@lru_cache(maxsize=1024)
+@lru_cache(maxsize=_cache_size(1024))
 def _following_native_motion(text):
     """An unchanged finite movement, optionally with its native destination."""
     from morphology import tokenize

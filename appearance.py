@@ -84,7 +84,7 @@ THEMES = {
         'SUSPECT_BG': '#f0d5c7', 'EDITOR_SEL_BG': '#dae5d3', 'RESULT_SEL_BG': '#cddac5', 'HOVER_BG': '#f0f4ea',
         'FOUND_BG': '#f3e7ab', 'FOUND_CUR_BG': '#f1c360', 'UNSURE_BG': '#e1d4e8', 'HISTORY_HINT_BG': '#ddecea',
         'HISTORY_HINT_LINE': '#ae5719', 'QUICK_SENT_BG_A': '#c6e3db', 'QUICK_SENT_BG_B': '#a1beee', 'WS_LINE_A': '#d3d8ce',
-        'WS_LINE_B': '#e4e9df', 'WS_TAB_A': '#eef2e8', 'WS_TAB_B': '#e9ede3',
+        'WS_LINE_B': '#dee3d9', 'WS_TAB_A': '#eef2e8', 'WS_TAB_B': '#e9ede3',
     }),
     'sora': dict(dark=False, fixed_fg='#c4564a', palette={
         'BG': '#e2eaf3', 'PANEL': '#f4f7fb', 'INK': '#1c2a3a', 'RULE': '#c4d2e0',
@@ -93,7 +93,7 @@ THEMES = {
         'SUSPECT_BG': '#f1d7d3', 'EDITOR_SEL_BG': '#dae4f1', 'RESULT_SEL_BG': '#cbdaec', 'HOVER_BG': '#f1f5fa',
         'FOUND_BG': '#f4e7b5', 'FOUND_CUR_BG': '#f2c366', 'UNSURE_BG': '#e2d5f4', 'HISTORY_HINT_BG': '#dfedf7',
         'HISTORY_HINT_LINE': '#b05819', 'QUICK_SENT_BG_A': '#cce8d4', 'QUICK_SENT_BG_B': '#a2bff7', 'WS_LINE_A': '#d5dadf',
-        'WS_LINE_B': '#e6eaee', 'WS_TAB_A': '#f0f3f7', 'WS_TAB_B': '#ebeef3',
+        'WS_LINE_B': '#dfe3e7', 'WS_TAB_A': '#f0f3f7', 'WS_TAB_B': '#ebeef3',
     }),
     'yoru': dict(dark=True, fixed_fg='#f08a7a', palette={
         'BG': '#0f1624', 'PANEL': '#172035', 'INK': '#e3e8f2', 'RULE': '#2b3650',

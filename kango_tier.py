@@ -50,6 +50,7 @@
 2026-10-05: 公開済みの入力範囲と元の判定から、省略されていた段3を復元。
 後の評価と意味名簿の肯定根拠を優先し、入力範囲外を評価済みにしない。
 """
+from cache_limits import size as _cache_size   # 控えの上限は cache_limits で1か所に（2026-10-24）
 from functools import lru_cache
 import json
 import os
@@ -373,7 +374,7 @@ def _aligned_candidate_usage_tier(parts,reading):
     return next(iter(tiers)) if len(tiers)==1 and tiers.issubset({1,2,3}) else None
 
 
-@lru_cache(maxsize=8192)
+@lru_cache(maxsize=_cache_size(8192))
 def candidate_usage_tier(surface,reading=None):
     """A native inflection retains the explicit usage judgment of its lemma.
 

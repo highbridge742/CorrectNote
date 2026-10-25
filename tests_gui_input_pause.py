@@ -24,7 +24,9 @@ def child():
             time.sleep(.002)
     def body():return a.editor.get('1.0','1.end')
     try:
-        with patch.object(app,'GlobalHotkeys',return_value=Mock()),patch.object(app.CorrectNoteApp,'_learn_now',lambda *v:None):
+        # The waits this was written for (300 / 100); the defaults are 40ms since 2026-10-23
+        with patch.object(analysis_input,'DISPLAY_QUIET_MS',300),patch.object(analysis_input,'DISPLAY_QUIET_IME_MS',100), \
+                patch.object(app,'GlobalHotkeys',return_value=Mock()),patch.object(app.CorrectNoteApp,'_learn_now',lambda *v:None):
             a=app.CorrectNoteApp(root);root.geometry('900x480+0+0');root.deiconify()
             until(lambda:not a._foreground_analysis_pending() and a._analyze_work==work.token(a))
             assert a.line_results[0]['corrected']==wanted,a.line_results[0]

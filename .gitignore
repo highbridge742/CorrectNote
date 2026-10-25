@@ -130,3 +130,5 @@ word_book.json.tmp
 /.codex/
 /WORK*.md
 /WORK*.json
+# タブのバックアップ（tab_backup・2026-10-23）。本人の文章そのもの
+backups/

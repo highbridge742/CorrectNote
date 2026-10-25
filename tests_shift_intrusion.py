@@ -24,7 +24,15 @@ class SourceShiftIntrusionTests(unittest.TestCase):
                 and K.kana_key_distance(key,x[2])<=1.0},expected)
         for key,expected in (('y',set('tu')),('h',set('gj'))):
             self.assertEqual({x for x in C._QWERTY_POS if C._qwerty_adjacent(key,x)},expected)
-        for a,b in (('ん','く'),('ん','や'),('く','み'),('く','こ')):
+        # 2026-10-24（keytend・うにさん「縦も入れる方向で詰める」）: 同じ指の1段上下（ん・く／ん・や／く・み）は
+        # 置き換えの隣になった（横より一段弱い VERTICAL_DISTANCE）。指の違う く・こ は今も置き換えではない
+        for a,b in (('ん','く'),('ん','や'),('く','み')):
+            self.assertEqual(K.kana_key_distance(a,b),K.VERTICAL_DISTANCE)
+            self.assertTrue(any(r.reading==b and r.operation=='adjacent_substitution'
+                for r in Q.key_repairs(a)))
+            self.assertTrue(any(r.reading==b and r.operation=='adjacent_intrusion'
+                for r in Q.key_repairs(a+b)))
+        for a,b in (('く','こ'),):
             self.assertGreaterEqual(K.kana_key_distance(a,b),K.FAR)
             self.assertLessEqual(K.intrusion_key_distance(a,b),1.0)
             self.assertFalse(any(r.reading==b and r.operation=='adjacent_substitution'
@@ -43,12 +51,17 @@ class SourceShiftIntrusionTests(unittest.TestCase):
         self.assertTrue(L._qwerty_intrusion_near('y','h'))
         self.assertEqual(K.kana_key_distance('ゃ','や'),0.3)
         self.assertEqual(K.kana_key_distance('か','が'),0.4)
-        self.assertFalse(any(r for r in K.mark_slip_candidates('さ','へ')))
+        # 2026-10-24（keytend）: へ（^）は ゛（@）と同じ小指の1段上で、印のキーの隣になった（さへ→ざ）
+        self.assertTrue(any(face=='ざ' for face,cost in K.mark_slip_candidates('さ','へ')))
         self.assertTrue(any(face=='ざ' for face,cost in K.mark_slip_candidates('さ','せ')))
 
     def test_katakana_seed_gate_retains_vertical_intrusion_only(self):
         import loanword as L
-        for a,b in (('ん','く'),('ん','や'),('く','み'),('く','こ')):
+        # 2026-10-24（keytend）: 同じ指の1段上下は置き換えでも説明が付く。指の違う く・こ は巻き込みだけ
+        for a,b in (('ん','く'),('ん','や'),('く','み')):
+            with self.subTest(typed=a,intended=b,vertical=True):
+                self.assertTrue(L.typo_explains_seed_word('にゅうりょ'+a,'にゅうりょ'+b))
+        for a,b in (('く','こ'),):
             with self.subTest(typed=a,intended=b):
                 self.assertFalse(L.typo_explains_seed_word('にゅうりょ'+a,'にゅうりょ'+b))
                 self.assertTrue(L.typo_explains_seed_word('にゅうりょ'+a+b,'にゅうりょ'+b))

@@ -289,6 +289,26 @@ def logp_parts(text):
     return (total, n)
 
 
+def trigram_logps(text):
+    """
+    **3連ごとの対数確率** `[(i, logp), ...]`（2026-10-23）。
+
+    i は `'^^' + text + '$'` の中での3連の頭。3連が覆う本文の字は
+    `text[max(0, i - 2):min(len(text), i + 1)]`。表が無ければ `[]`。
+    """
+    table = _load()
+    if not table or not text:
+        return []
+    s = '^^' + text + '$'
+    out = []
+    for i in range(len(s) - 2):
+        g = s[i:i + 3]
+        out.append((i, math.log((table.get(g, 0) + _FLOOR)
+                                / (_CONTEXT.get(g[:2], 0)
+                                   + _FLOOR * _VOCAB))))
+    return out
+
+
 def score(text):
     """
     1文字あたりの対数確率（0に近いほど日本語の並びらしい）。

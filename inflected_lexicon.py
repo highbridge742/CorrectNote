@@ -20,6 +20,7 @@
 一般の名詞候補に掛かる新聞頻度の敷居を、活用形へ流用しない。
 個人履歴は作らず、既存のDictIndexと同じ走査・派生キャッシュを共有する。
 """
+from cache_limits import size as _cache_size   # 控えの上限は cache_limits で1か所に（2026-10-24）
 from functools import lru_cache
 
 
@@ -31,7 +32,7 @@ def include_entry(surface, reading, pos, sub):
             and all('ぁ' <= c <= 'ゖ' or '一' <= c <= '鿿' or c in '々ー' for c in surface))
 
 
-@lru_cache(maxsize=8192)
+@lru_cache(maxsize=_cache_size(8192))
 def dictionary_readings(surface):
     """単語・活用形の完全一致の読み。候補名詞の頻度による刈り込み前に引く。"""
     import morphology as m
@@ -46,7 +47,7 @@ def dictionary_readings(surface):
                                for _, reading in sorted(rows)))
 
 
-@lru_cache(maxsize=8192)
+@lru_cache(maxsize=_cache_size(8192))
 def has_nominal_entry(surface):
     """活用形を文中で誤分割した名詞列と、辞書に実在する名詞を区別する。"""
     import morphology as m

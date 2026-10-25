@@ -347,7 +347,12 @@ r.after(30,tick);r.mainloop()
                 a.layout_split_btn.invoke();root.update();assert not a._layout_is_unified()
                 a.pick_mode_btn.invoke();assert a._pick_mode=='f1';a._end_pick_mode()
                 root.minsize(900,480);root.geometry('900x520');root.update();until(lambda:a._toolbar_fit_job is None)
-                assert all(button.winfo_ismapped() and button.winfo_width()==button.winfo_reqwidth() for button in widgets), [(b.cget('text'),b.winfo_width(),b.winfo_reqwidth(),b.winfo_ismapped()) for b in widgets]
+                # At the smallest window, buttons that do not fit are taken away in the order うにさん set
+                # (2026-10-23: 説明書 first, then the brackets from the right, ...); the rest are whole
+                dropped=[w for w in a._toolbar_dropped if w.winfo_exists()]
+                assert dropped==[w for w in a._toolbar_drop_order()][:len(dropped)],[w.cget('text') for w in dropped]
+                assert all(button in dropped or (button.winfo_ismapped() and button.winfo_width()==button.winfo_reqwidth()) for button in widgets), [(b.cget('text'),b.winfo_width(),b.winfo_reqwidth(),b.winfo_ismapped()) for b in widgets]
+                assert all(not button.winfo_ismapped() for button in dropped)
                 print(json.dumps(dict(overlap=overlap_geometry,stage_widths=widths,independent_minimize=True),ensure_ascii=False),flush=True)
                 print('WORD_BOOK_RESPONSIVE_PASSED',flush=True)
                 return
@@ -367,8 +372,11 @@ r.after(30,tick);r.mainloop()
                 book.add('単語一'); book.add('単語二'); book.add('とても長い単語' * 15); root.update()
                 win = book.window
                 border = max(0, win.winfo_rootx() - win.winfo_x())
-                assert win.winfo_x() + win.winfo_width() + 2 * border <= root.winfo_x(), (win.geometry(), root.geometry())
-                assert win.winfo_x() >= area[0]
+                # The button opens it near the mouse pointer, inside that monitor (2026-10-22)
+                px, py = win.winfo_pointerxy()
+                pointer_area = app.monitor_work_area(px, py) or area
+                assert pointer_area[0] <= win.winfo_x() and win.winfo_y() >= pointer_area[1], (win.geometry(), pointer_area)
+                assert win.winfo_y() + win.winfo_height() <= pointer_area[3], (win.geometry(), pointer_area)
                 assert win.winfo_width() == normal_window_width(win,a._word_book_initial_width())
                 assert book.buttons[2].winfo_reqwidth() > book.buttons[2].winfo_width()
                 font = tkfont.Font(root=root, font=a._editor_font())

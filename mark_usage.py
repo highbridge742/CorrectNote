@@ -4,6 +4,7 @@
 Design and counterexamples: GPT-6 / 2026-09-11 / 48-YK.
 This identifies uses of the original glyphs, without correction candidates.
 """
+from cache_limits import size as _cache_size   # 控えの上限は cache_limits で1か所に（2026-10-24）
 import re
 from functools import lru_cache
 
@@ -17,7 +18,7 @@ _NAMED_SYMBOL = re.compile(r'(?:濁点|半濁点|記号|文字|印)(?:は|が|[:
 _FORM_DESCRIPTION = re.compile(r'(?<![ぁ-ゖァ-ヶ一-鿿])([ぁ-ゖァ-ヶ][' + _MARKS + r'])(?=は(?:濁点|半濁点)を付けた形)')
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def intentional_ranges(line):
     """Keep codepoint positions; composing the mark would erase the notation."""
     if not any(c in _MARKS for c in line):
@@ -74,7 +75,7 @@ def intentional_ranges(line):
     return tuple(sorted(set(out)))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def unattached_positions(line):
     """A mark inside Japanese text must attach, or have an explicit notation use.
 

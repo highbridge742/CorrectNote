@@ -83,28 +83,25 @@ class ActionNoteTests(unittest.TestCase):
                     self.assertEqual(r['analysis_status'],'complete')
         finally:set_active(None)
 
-    @unittest.skipUnless(M.HAS_JANOME,'native action and excluded original directions')
-    def test_object_action_fixtures_keep_old_direction_negatives(self):
+    @unittest.skipUnless(M.HAS_JANOME,'native action and same-finger vertical keys')
+    def test_object_action_fixtures_same_finger_vertical_are_repaired(self):
+        # 2026-10-24（keytend・うにさん「縦も入れる方向で詰める」）: 前は「縦は直さない」の負の例だった3つ。
+        # あ↔い（3/E・中指）・る↔り（./L・薬指）・ん↔く（Y/H・人差し指）は同じ指の1段上下で、置き換えの隣になった
         import app,contextual_repair as Q
         from tests_analysis_async import initial
         from last_choice import set_active
-        cases=(('せあり','せいり','しりょうをせありしてください。'),
-               ('せいる','せいり','しりょうをせいるしてください。'),
-               ('かんにん','かくにん','きろくをかんにんしてほぞんします。'))
+        cases=(('せあり','せいり','しりょうをせありしてください。','資料を整理してください。'),
+               ('せいる','せいり','しりょうをせいるしてください。','資料を整理してください。'),
+               ('かんにん','かくにん','きろくをかんにんしてほぞんします。','記録を確認して保存します。'))
         try:
-            for typed,reading,source in cases:
+            for typed,reading,source,expected in cases:
                 with self.subTest(source=source):
-                    for generator in (Q.key_repairs,Q.nonadjacent_key_repairs,
-                                      Q.adjacent_shift_key_repairs,Q.neighbor_shift_key_repairs):
-                        self.assertNotIn(reading,{r.reading for r in generator(typed)})
+                    self.assertTrue(any(r.reading==reading and r.operation=='adjacent_substitution'
+                                        for r in Q.key_repairs(typed)))
                     a=initial();r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                         decisions=a.decisions,context_vec=None)
-                    unchanged_action={
-                        'しりょうをせありしてください。':'資料をせありしてください。',
-                        'しりょうをせいるしてください。':'しりょうをせいるしてください。',
-                        'きろくをかんにんしてほぞんします。':'記録をかんにんしてほぞんします。'}
-                    self.assertEqual(r['corrected'],unchanged_action[source])
-                    self.assertTrue(r['odd_spans'])
+                    self.assertEqual(r['corrected'],expected)
+                    self.assertEqual(r['odd_spans'],[])
                     self.assertEqual(r['analysis_status'],'complete')
         finally:set_active(None)
 
@@ -133,7 +130,9 @@ class ActionNoteTests(unittest.TestCase):
         import app,contextual_repair as Q,kana_layout as L
         from tests_analysis_async import initial
         from last_choice import set_active
-        positives=(('かくなん','かくにん','確認して保存'),('かくせん','かくらん','撹乱して保存'))
+        # 2026-10-24（keytend）: かくせん は横（せ→ら）の かくらん と縦（く→ん）の かんせん が並び、
+        # 身近さで 観戦 が選ばれる。縦の ゆ・よ・の（数字の段・下の段の同じ指）は置き換えの隣になった
+        positives=(('かくなん','かくにん','確認して保存'),('かくせん','かくらん','観戦して保存'))
         try:
             for typed,reading,expected in positives:
                 with self.subTest(source=typed):
@@ -144,10 +143,19 @@ class ActionNoteTests(unittest.TestCase):
                     self.assertEqual(r['corrected'],expected)
                     self.assertEqual(r['odd_spans'],[])
                     self.assertEqual(r['analysis_status'],'complete')
-            for typed in ('かくゆん','かくよん','かくのん','かくわん','かくりん'):
+            for typed,expected in (('かくゆん','確認して保存'),('かくよん','撹乱して保存'),('かくのん','確認して保存')):
+                with self.subTest(source=typed,vertical=True):
+                    self.assertTrue({'かくにん','かくらん'} & {r.reading for r in Q.key_repairs(typed)})
+                    a=initial();r=app.correct_line(typed+'してほぞん',a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
+                    self.assertEqual(r['corrected'],expected)
+                    self.assertEqual(r['odd_spans'],[])
+            # り（L）→ら（O）も同じ指の上下で候補には出るが、行は直さず紫（最終検査で止まる）。わ は斜めで候補にもならない
+            self.assertIn('かくらん',{r.reading for r in Q.key_repairs('かくりん')})
+            for typed in ('かくわん','かくりん'):
                 with self.subTest(source=typed):
                     for generator in (Q.key_repairs,Q.nonadjacent_key_repairs,Q.adjacent_shift_key_repairs,Q.neighbor_shift_key_repairs):
-                        self.assertFalse({'かくにん','かくらん'} & {r.reading for r in generator(typed)})
+                        if typed=='かくわん':
+                            self.assertFalse({'かくにん','かくらん'} & {r.reading for r in generator(typed)})
                     a=initial();source=typed+'してほぞん'
                     r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,decisions=a.decisions,context_vec=None)
                     self.assertEqual(r['corrected'],source)

@@ -249,6 +249,20 @@ def within_one_edit(a, b):
 _GLUED_SYMBOLS = '._-@/:'
 
 
+def _sentence_period(text, e):
+    """text[e] は文を終える `.` か（後ろが行末・空白・閉じ括弧・全角）。
+
+    2026-10-16: `.` を一律に「くっついた記号」として外していたので、
+    文末の語（`tomorrow mornung.`）は英語の補正に一度も掛からなかった。
+    `file.txt` `example.com` のように後ろに英数字が続く `.` は今までどおり。
+    """
+    if e >= len(text) or text[e] != '.':
+        return False
+    after = text[e + 1:e + 2]
+    return (not after or after.isspace() or after in '\'")]}’”'
+            or not after.isascii())
+
+
 # 英語の語形変化の語尾。単数複数・時制の違いを「打ち間違い」と
 # 取り違えないためだけに持つ、ごく短い表。
 # **これは英単語の辞書ではない**（外部の辞書は持ち込まない方針）。
@@ -1894,6 +1908,7 @@ def fix_english_word(word, store, for_learning=False):
     budget = allowed_edits(len(key))
     best = None
     second = None
+    family = False
     index = _indexed(store, '_english_index_cache', vocab)
     learned = _english_vocabulary(store)
     for known in _distance1_candidates(key, vocab, index):
@@ -1943,6 +1958,12 @@ def fix_english_word(word, store, for_learning=False):
             # 英単語の辞書は持たない方針なので、単数複数や時制を
             # 正しく判断する材料は無い。**判断が付かないものは
             # 直さない**（設計原則3）。
+            #
+            # 2026-10-16: 外した語は、ほかの候補を勝たせる理由にもしない。
+            # 外したまま残りで決めると `unclea → uncles`（unclear・unclean
+            # を外した）`droppes → droppers`（dropped を外した）と、
+            # 判断が付かないはずの語を別の語に変えていた（下で手を引く）。
+            family = True
             continue
         d = edit_distance(key, known, limit=budget)
         if d > budget:
@@ -1956,6 +1977,8 @@ def fix_english_word(word, store, for_learning=False):
         return None
     if second is not None and second[0] == best[0]:
         return None
+    if family and not for_learning:
+        return None
     if _override and _english_count(store, best[1]) < 2:
         # 一度しか書いていない語を上書きしてよいのは、
         # **二度以上書いている語**だけ（歯止めは勝った語に掛ける）。
@@ -1967,6 +1990,22 @@ def fix_english_word(word, store, for_learning=False):
         # に読み替えるのが素直。`_override` の側も `own == 1`＝
         # **立っていない**という同じ2値なので、対になっている。
         return None
+    # **ずっと使われやすい語へ1つの打ち違いで届くなら、珍しい語へは直さない**
+    # （2026-10-16・`en_typo`）。直し先は6字以上の語だけなので、`shouls` は
+    # should（語尾違いとして候補から外れる）でなく shoals に、`staret` は
+    # start（5字）でなく starlet に直していた。手を引けば、英文の中では
+    # `en_space` が使われやすさで should・start に直す。覚える側（for_learning）
+    # は今までどおり「直せる＝誤字なので覚えない」と答える。
+    if not for_learning:
+        try:
+            import en_typo
+            # プログラムの語（struct・memoize・popen）は書いたとおり
+            if en_typo.leave(key) or en_typo.rival_outweighs(
+                    key, best[1],
+                    learned=best[1] in learned and best[1] not in _english_seed()):
+                return None
+        except Exception:
+            pass
     # **頭だけ大文字の語は、1文字の置き換えだけの直しをしない**
     # （2026-08-16・実機で `Claude → Clause` と壊した）。
     # 頭だけ大文字で辞書に無い語は固有名詞であることが多く、
@@ -2293,7 +2332,8 @@ def find_english_runs(line, min_len=MIN_ENGLISH_LENGTH):
         s, e = m.start(), m.end()
         if s > 0 and (line[s - 1].isdigit() or line[s - 1] in _GLUED_SYMBOLS):
             continue
-        if e < len(line) and (line[e].isdigit() or line[e] in _GLUED_SYMBOLS):
+        if e < len(line) and (line[e].isdigit() or line[e] in _GLUED_SYMBOLS)\
+                and not _sentence_period(line, e):
             continue
         runs.append((s, e, word))
     return runs

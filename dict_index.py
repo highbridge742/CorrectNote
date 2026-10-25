@@ -180,6 +180,7 @@ class DictIndex:
         if self.ready:
             return bool(self._by_reading)
         if self._load_cache():
+            self._register_world()
             return True
         if not HAS_JANOME:
             # janome が無ければ空索引として動く
@@ -187,7 +188,17 @@ class DictIndex:
             return False
         self._build(progress)
         self._save_cache()
+        self._register_world()
         return bool(self._by_reading)
+
+    def _register_world(self):
+        # 形態素解析が、感動詞に割れたかなの名詞（おてほん）を1語に戻す裏付けに使う
+        if self._world:
+            try:
+                import morphology
+                morphology._WORLD_READING = self.is_world_reading
+            except Exception:
+                pass
 
     # ------------------------------------------------------------
     # 引く

@@ -64,8 +64,8 @@ class KanaLayoutTest(unittest.TestCase):
         self.assertEqual(KL.kana_key_distance('か', 'が'), 0.4)
         self.assertEqual(KL.kana_key_distance('ざ', 'は'), KL.FAR)      # 2打鍵の違い（48-FX）
         self.assertEqual(KL.kana_key_distance('ゅ', 'よ'), KL.FAR)      # Shift と別キー
-        self.assertEqual(KL.mark_key_neighbors('゛'), ('せ',))
-        self.assertEqual(KL.mark_key_neighbors('゜'), ())
+        self.assertEqual(KL.mark_key_neighbors('゛'), ('け', 'せ', 'へ', 'ほ'))  # 2026-10-24 keytend: 同じ指の1段上下も隣
+        self.assertEqual(KL.mark_key_neighbors('゜'), ('へ', 'む', 'ー'))  # 2026-10-24 keytend: 同じ指の1段上下も隣
         self.assertEqual(KL.same_key_kana_alternatives('あ'), ('ぁ',))
         self.assertEqual(KL.same_key_kana_alternatives('わ'), ('を',))
         self.assertEqual(KL.same_key_kana_alternatives('゛'), ())
@@ -114,7 +114,7 @@ class KanaLayoutTest(unittest.TestCase):
         self.assertEqual(KL.kana_key_distance('が', 'さ'), KL.FAR)         # 面もキーも違う
         self.assertEqual(KL.kana_key_distance('ざ', 'は'), KL.FAR)
         near = dict(KL.nearby_candidates('か', include_phonetic=False))
-        self.assertEqual(set(near), {'か', 'え', 'が', 'た'})
+        self.assertEqual(set(near), {'か', 'え', 'が', 'た', 'し'})  # 2026-10-24 keytend: 同じ指の1段上下も隣
         # 印のキーで打たないので、印の隣の誤りは出ない
         self.assertEqual(KL.mark_key_neighbors('゛'), ())
         self.assertEqual(KL.mark_slip_candidates('か', 'た'), ())
@@ -153,8 +153,8 @@ class KanaLayoutTest(unittest.TestCase):
         self.assertEqual(KL.kana_key_distance('が', 'ざ'), KL.FAR)
         self.assertEqual(KL.kana_key_distance('い', 'き'), 2.0)           # 間に ゛
         # ゛（L）を狙って隣を叩く: い（K）・き（;）。Shift の字（も・ゆ）と同じキーの わ は入らない
-        self.assertEqual(KL.mark_key_neighbors('゛'), ('い', 'き'))
-        self.assertEqual(KL.mark_key_neighbors('゜'), ('ぁ', 'ほ'))
+        self.assertEqual(KL.mark_key_neighbors('゛'), ('い', 'き', 'を'))  # 2026-10-24 keytend: 同じ指の1段上下も隣
+        self.assertEqual(KL.mark_key_neighbors('゜'), ('ぁ', 'へ', 'ほ'))  # 2026-10-24 keytend: 同じ指の1段上下も隣
         self.assertEqual(KL.SHIFT_KANA_PAIR['ぁ'], 'そ')
         self.assertEqual(KL.SHIFT_KANA_PAIR['や'], 'を')
         self.assertEqual(KL._SHIFT_NEIGHBORS, {'left': frozenset('す'), 'right': frozenset('れ')})
@@ -185,13 +185,13 @@ class KanaLayoutTest(unittest.TestCase):
 
     def test_foreign_caches_are_cleared_on_switch(self):
         import vocabulary as V
-        self.assertEqual(CR._key_neighbors('か'), (('す', 1.0), ('ん', 1.0)))   # JIS: す か ん
+        self.assertEqual(CR._key_neighbors('か'), (('え', 1.05), ('す', 1.0), ('ん', 1.0), ('き', 1.05)))   # JIS: す か ん、上 え・下 き（keytend）
         self.assertEqual(V._sub_cost('か', 'ん'), 1.0)
         K.apply(kana='nicola')
-        self.assertEqual(CR._key_neighbors('か'), (('た', 1.0),))               # NICOLA: 。か た
+        self.assertEqual(CR._key_neighbors('か'), (('た', 1.0), ('し', 1.05)))   # NICOLA: 。か た、下 し（keytend）
         self.assertGreater(V._sub_cost('か', 'ん'), 1.0)
         K.apply()
-        self.assertEqual(CR._key_neighbors('か'), (('す', 1.0), ('ん', 1.0)))
+        self.assertEqual(CR._key_neighbors('か'), (('え', 1.05), ('す', 1.0), ('ん', 1.0), ('き', 1.05)))
         self.assertEqual(V._sub_cost('か', 'ん'), 1.0)
 
     def test_spec_carries_the_kana_layout(self):

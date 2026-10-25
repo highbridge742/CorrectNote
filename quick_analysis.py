@@ -21,7 +21,9 @@ def _scope(app):
 # From the keystroke itself (2026-10-17, as the editor's analysis_input; it was
 # 80ms): a newer key supersedes the computation in the child.
 COMPUTE_DELAY_MS = 1
-DISPLAY_QUIET_MS = 250
+# 40ms (2026-10-23 うにさん「簡易入力の待ちも250から40にする」). The debug menu's range stays 0-250
+DISPLAY_QUIET_MS = 40
+DISPLAY_QUIET_MS_MAX = 250
 
 
 def _pause_identity(scope):

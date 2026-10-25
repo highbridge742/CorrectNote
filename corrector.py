@@ -14582,7 +14582,8 @@ def _ime_pair_readings(chunk, line=None, start=None, end=None, span=12):
     return out
 
 
-def _ime_one_key_respell(chunk, readings, store, tokenize_fn, dict_index=None):
+def _ime_one_key_respell(chunk, readings, store, tokenize_fn, dict_index=None,
+                         line=None, start=None, end=None, ties=None):
     """
     **打った読みそのものに1打の誤りがあるときの設計30**（2026-10-17）。
 
@@ -14618,13 +14619,33 @@ def _ime_one_key_respell(chunk, readings, store, tokenize_fn, dict_index=None):
     except Exception:
         return None
     found = {}
+    reached = set()
     for rd in readings:
         if not all(is_hiragana(c) or c == 'ー' for c in rd):
             continue
         try:
-            if dict_index.is_world_reading(rd) or store.lookup(rd):
+            if store.lookup(rd):
                 continue
-            if _reads_as_typed(chunk, rd, tokenize_fn, dict_index):
+            # 打った読みが世の中の語でも、本人の語彙に無く、行の上で1打を
+            # 戻した語のほうがずっと自然なら見る（2026-10-23・`察して堅持を`）
+            worldly = dict_index.is_world_reading(rd)
+            if worldly and line is None:
+                continue
+            # 塊が、打った読みのいちばん身近な語の表記そのまま（緑＝みどり）なら、IME は正しく変換している。
+            # 1打を戻した別の語（戻り）に替えない（2026-10-24・うにさん 誤判定「数詞が緑」）
+            if worldly and _everyday_face_of(chunk, rd):
+                continue
+            faithful = worldly or _reads_as_typed(chunk, rd, tokenize_fn, dict_index)
+            # 4'. 打ったとおりに読める表記でも、行の上で直し先のほうが
+            # 明らかに自然なら見る（2026-10-22・`課題をば占める`）。
+            # 行が無い呼び方では今までどおり触らない
+            if faithful and line is None:
+                continue
+            # 打ったとおりに読める塊が、隣の漢字と続いて1つの漢字の並びの一部（側｜置詞）なら、その片方だけを
+            # 1打で別の語（我が）に替えない。行の自然さは隣の並び（置詞）の珍しさで大きく出てしまう
+            # （2026-10-24・うにさんの誤判定）
+            if (faithful and line is not None and start is not None and end is not None
+                    and ((start > 0 and is_kanji(line[start - 1])) or (end < len(line) and is_kanji(line[end])))):
                 continue
             rows = key_repairs(rd)
         except Exception:
@@ -14635,24 +14656,251 @@ def _ime_one_key_respell(chunk, readings, store, tokenize_fn, dict_index=None):
             try:
                 if not dict_index.is_world_reading(row.reading):
                     continue
+                # 直し先は、本人の語彙で確かな語（2回以上・同梱の語）だけ。1回見ただけの語（製する・大同）へは
+                # 戻さない（2026-10-24・うにさん 誤判定「即補正する」「タブ移動」。学習で補正を悪くしない）
                 ents = [e for e in store.lookup(row.reading)
                         if e['surface'] != chunk
-                        and any(is_kanji(c) for c in e['surface'])]
+                        and any(is_kanji(c) for c in e['surface'])
+                        and e.get('solid', True)]
             except Exception:
                 continue
+            if ents and line is not None:
+                # 並びの数は自然さで絞る前に数える（絞った残りが1つでも、
+                # 打ちたかった読みは分からない）
+                reached.add(row.reading)
+                # 直し先は語彙の語なので、文字の並びの検品（2字の語は
+                # 前後の継ぎ目だけで低く出る）は使わず、行ごとの自然さで見る
+                # 打った読みが世の中の語なら、読める並びと同じ高い敷居。
+                # 語でない読みなら、打ち違いは確かなので行が少し良くなれば足りる
+                # 語のあとに助詞1字がかなのまま付いた塊（卵焼きは・川は）で、その助詞を削る・替える戻しは、
+                # 読める並びと同じ高い敷居。読みに助詞が付くと世の中の読みには無いので、低い敷居だと
+                # 学習で立った語（卵焼き・乾き）へ戻した（2026-10-23・学習で正しい行が崩れた）
+                _tail = chunk[-1:] if (len(chunk) > 1 and any(is_kanji(c) for c in chunk[:-1])
+                                       and rd.endswith(chunk[-1])) else ''
+                # 読みが助詞で終わっても、直し先の表記が助詞を呑む（以下は→会派）なら同じく助詞を削る戻し（2026-10-24）
+                _tail_cut = bool(_tail) and _tail in 'はがをにでともへの' and (
+                    not row.reading.endswith(_tail) or not all(e['surface'].endswith(_tail) for e in ents))
+                # 頭に助詞1字がかなのまま付いた塊（「よくある質問」の下）で、その助詞を替える戻しも同じ
+                # （の下→ました→真下。かな入力で の・ま は隣。2026-10-24・うにさん「の下は対策して」）
+                _head = chunk[:1] if (len(chunk) > 1 and any(is_kanji(c) for c in chunk[1:])
+                                      and rd.startswith(chunk[0])) else ''
+                _head_cut = bool(_head) and _head in 'はがをにでともへの' and (
+                    not row.reading.startswith(_head) or not all(e['surface'].startswith(_head) for e in ents))
+                _particle_cut = _tail_cut or _head_cut
+                # 助詞を除いた残り（以下・下）が、打った読みどおりの世の中の語なら、IME は語と助詞を正しく分けて
+                # 変換している。助詞をまたぐ1打の戻し（いかは→かいは＝会派、のした→ました＝真下）は打ち違いでは
+                # ない（2026-10-24・うにさんの誤判定「以下は分岐を」）
+                if _particle_cut and faithful:
+                    _stem = chunk[:-1] if _tail_cut else chunk[1:]
+                    _stem_rd = rd[:-1] if _tail_cut else rd[1:]
+                    if (_stem_rd and dict_index.is_world_reading(_stem_rd)
+                            and _reads_as_typed(_stem, _stem_rd, tokenize_fn, dict_index)):
+                        continue
+                # 打ったとおりに読める塊（IME が打った読みどおりに変換した語・行った＝いった）を、品詞の違う語
+                # （行った＝動詞＋た → 一致＝名詞）へ1打で戻すのは、文の組み立てが変わるので読める並びと同じ高い敷居。
+                # 低い敷居だと学習で立った語（一致）へ戻した（2026-10-24・うにさんの誤判定）。同じ品詞の語
+                # （取れかかる→取り掛かる・辺名地→返事）へは今までどおり。全部を高くすると、それらが直らなくなった
+                # （2026-10-24・うにさん「直前まで補正できていた」）
+                def _last_pos(s):
+                    try:
+                        from morphology import tokenize as _tok
+                        _t = _tok(s)
+                        return _t[-1].pos if _t else ''
+                    except Exception:
+                        return ''
+                _chunk_pos = _last_pos(chunk) if faithful else ''
+
+                def _need(e):
+                    if worldly or (faithful and (_particle_cut or _last_pos(e['surface']) != _chunk_pos)):
+                        return _naturalness.MIN_GAIN_READABLE
+                    return 1000
+                # 後ろに語を要する語（連体詞・接頭詞: 我が）へは、後ろに語が無い（行末・記号の前）なら戻さない
+                # （呼ぶ側→呼ぶ我が。行の自然さは行末の1語でも高く出た。2026-10-24・うにさんの誤判定）
+                _tail_free = (end is None or end >= len(line) or not (is_kanji(line[end]) or is_hiragana(line[end])
+                                                                       or is_katakana(line[end])))
+                ents = [e for e in ents
+                        if not (_tail_free and _last_pos(e['surface']) in ('連体詞', '接頭詞'))
+                        and (_naturalness.gain_in_line(line, start, end, e['surface']) or 0)
+                        >= _need(e)]
             if ents:
                 found[row.reading] = (rd, row, ents)
+    if len(reached | set(found)) > 1:
+        found = dict(found, **{r: None for r in reached if r not in found})
     if len(found) != 1:
         if found:
             _trace('打った読み', f'{chunk!r} → 1打を戻した読みが '
                                  f'{sorted(found)} と並ぶ。触らない')
+            if ties is not None:
+                ties.append(sorted(found))
         return None
     target, (rd, row, ents) = next(iter(found.items()))
+    # **「届く読みが1つだけ」は、語彙の漢字の語しか数えていなかった**
+    # （2026-10-23・補正C・うにさん「逆効果になっている判定は見直さなければ
+    # ならない」）。1打を戻すと、かなで書く語（これ）や、助詞＋語
+    # （は＋はやく）にも届くことがある。それを数えないと、本当に打ちたかった
+    # 読みを見ないまま、ほかの語に決めてしまう（`濃きれ～` を見切れに、
+    # `今日素速く` の は を落として 早く に）。行が在るときは、そういう読みも
+    # 同じ行の自然さで並べ、決めた読みが**明らかに**勝つときだけ採る。
+    # 届いた読みのほうが明らかに勝つならそちらに決め、差が無ければ触らない
+    if line is not None:
+        try:
+            _mine = max((_naturalness.gain_in_line(line, start, end, x['surface']) or 0)
+                        for x in ents)
+            _rival = _one_key_rival_reading(chunk, readings, store, dict_index,
+                                            line, start, end, set(found) | reached)
+        except Exception:
+            _rival = None
+        if _rival is not None:
+            _rg, _rsf, _rr, _rrd, _rrow = _rival
+            _margin = _naturalness.MIN_GAIN_READABLE
+            if _rg >= _mine + _margin:
+                _trace('打った読み', f'{chunk!r} → 1打を戻した読み {_rr!r}'
+                                     f'（{_rsf!r}）が {target!r} より明らかに自然')
+                return (0, _rsf), {'surface': _rsf, 'count': 0}, _rr
+            # 競う読みと差の内で並ぶとき: 決めた読みが字を1つ削る戻しで、競う読みは打った字を全部残したまま
+            # 1字を替える戻し（すはやく → はやく に対して すばやく）なら、どちらを打ちたかったか分からないので触らない。
+            # それ以外の並びは決めた読みのまま進む（v2 は並ぶと全部触らず、これまで直っていた
+            # 部屋の掃除を取た→した・明日は脚板→明日 など17行を止めた。うにさんの決まり「迷うなら1つに決める」）
+            # 前に助詞が無いとき（今日素速く）だけ: 助詞が書かれていれば（今日は素速く）、後ろは語の側なので決める
+            if (_rg + _margin > _mine and len(_rrd) == len(_rr) and len(target) < len(_rrd)
+                    and start and line[start - 1] not in _ONE_KEY_HEAD_PARTICLES):
+                _trace('打った読み', f'{chunk!r} → 1打を戻した読みが '
+                                     f'{target!r} と {_rr!r} で並ぶ。触らない')
+                if ties is not None:
+                    ties.append([target, _rr])
+                return None
     e = min(ents, key=lambda x: (-x.get('count', 0), x['surface']))
+    if line is not None:
+        # 行があるときは、表記も行の上の自然さで選ぶ。読みのかなのままも
+        # 候補に入れる（`掃除を取た` の した を `下` にしない）
+        _opts = [(x['surface'], x) for x in ents] + [(target, dict(e, surface=target))]
+        # 同じ読みの辞書の表記も並べる（語彙に 速く しか無くても 早く、選択 しか無くても 洗濯 を選べるように）
+        try:
+            # 名詞は日常語の段（kango_tier 段1）の表記だけ（珍しい同音語 捨身 は並べない）
+            for _sf in (list(dict_index.inflected_surfaces_for_reading(target))
+                        + [x for x in dict_index.surfaces_for_reading(target)
+                           if _kango_tier_of(x) == 1 and any(is_kanji(c) for c in x)]):
+                if _sf not in (o[0] for o in _opts) and _sf != chunk:
+                    _opts.append((_sf, dict(e, surface=_sf, count=0)))
+        except Exception:
+            pass
+        _g = [(_naturalness.gain_in_line(line, start, end, sf) or 0, x.get('count', 0), sf, x)
+              for sf, x in _opts]
+        # 自然さの差が小さい表記どうし（早く・速く）は、よく使う表記を採る
+        _top = max(t[0] for t in _g)
+        # 並んだら、後ろの字と続けて辞書の語になる表記（洗濯＋物）を先に
+
+        try:
+            from seed_japanese import is_unit as _sj_unit
+        except Exception:
+            def _sj_unit(_w):
+                return False
+
+        def _joins(sf):
+            for _k in (1, 2):
+                _w = sf + line[end:end + _k]
+                if len(_w) > len(sf) and (dict_index.readings_for_surface(_w)
+                                          or _sj_unit(_w)):
+                    return True
+            return False
+        e = max((t for t in _g if t[0] >= _top - 1000),
+                key=lambda t: (_joins(t[2]), t[1], t[0]))[3]
     _trace('打った読み', f'{chunk!r} → 打った読み {rd!r} は語に無く、'
                          f'1打（{row.operation}）を戻した {target!r} だけが'
                          f'語彙の語に届く')
     return (-e.get('count', 0), e['surface']), e, target
+
+
+def _loose_kanji_pair(chunk, tokenize_fn, store, dict_index):
+    """
+    塊の中で、**1字の漢字の語が2つ続き、2字合わせても語にならない**所が
+    在るか（`祖約`＝祖＋約）。IME が打ち違えた読みを1字ずつの漢字で
+    丸めたときの形（2026-10-23・補正C）。どちらかの字が、反対隣の字と
+    合わせて語になるなら（`他日性` の 日＝他日）、その字は語の一部なので数えない。
+    """
+    if tokenize_fn is None:
+        return False
+    ts = [t for t in tokenize_fn(chunk) if t[0].strip()]
+
+    def _word(text):
+        try:
+            if store.reading_of(text) or dict_index.readings_for_surface(text):
+                return True
+        except Exception:
+            return True
+        try:
+            import seed_japanese as _sj
+            return bool(_sj.is_unit(text))
+        except Exception:
+            return False
+
+    def _single(k):
+        return 0 <= k < len(ts) and len(ts[k][0]) == 1 and is_kanji(ts[k][0])
+
+    for i in range(len(ts) - 1):
+        if not (_single(i) and _single(i + 1)):
+            continue
+        if _word(ts[i][0] + ts[i + 1][0]):
+            continue
+        if i > 0 and _word(ts[i - 1][0][-1:] + ts[i][0]):
+            continue
+        if i + 2 < len(ts) and _word(ts[i + 1][0] + ts[i + 2][0][:1]):
+            continue
+        return True
+    return False
+
+
+# 1打を戻した読みの頭に付いてよい助詞（`は＋はやく`）
+_ONE_KEY_HEAD_PARTICLES = frozenset('はがをにでともへや')
+
+
+def _one_key_rival_reading(chunk, readings, store, dict_index, line, start, end,
+                           taken):
+    """
+    `_ime_one_key_respell` が決めた読みと競う、**語彙の漢字の語では
+    ない**1打の戻し（2026-10-23・補正C）。
+
+    数えるのは、世の中の読みそのもの（かなで書く語・`これ`）と、
+    助詞1字＋世の中の読み（`は＋はやく`）。表記は、かなのまま・辞書の
+    活用形・日常語の段の表記。行の自然さがいちばん良いものを
+    `(差, 表記, 読み, 打った読み, 戻し)` で返す。無ければ None。
+    """
+    from contextual_repair import key_repairs
+    best = None
+    for rd in readings:
+        if not all(is_hiragana(c) or c == 'ー' for c in rd):
+            continue
+        worldly = dict_index.is_world_reading(rd)
+        need = _naturalness.MIN_GAIN_READABLE if worldly else 1000
+        for row in key_repairs(rd):
+            r = row.reading
+            if row.operation == 'same_reading' or r in taken or r == rd:
+                continue
+            if dict_index.is_world_reading(r):
+                head, body = '', r
+            elif (len(r) >= 3 and r[0] in _ONE_KEY_HEAD_PARTICLES
+                    and dict_index.is_world_reading(r[1:])):
+                head, body = r[0], r[1:]
+            else:
+                continue
+            faces = [body]
+            try:
+                faces += list(dict_index.inflected_surfaces_for_reading(body))
+                faces += [x for x in dict_index.surfaces_for_reading(body)
+                          if _kango_tier_of(x) == 1 and any(is_kanji(c) for c in x)]
+                faces += [e['surface'] for e in store.lookup(body)]
+            except Exception:
+                pass
+            for f in dict.fromkeys(faces):
+                sf = head + f
+                if sf == chunk:
+                    continue
+                g = _naturalness.gain_in_line(line, start, end, sf)
+                if g is None or g < need:
+                    continue
+                if best is None or g > best[0]:
+                    best = (g, sf, r, rd, row)
+    return best
 
 
 def _ime_exact_respell(chunk, store, tokenize_fn, dict_index=None,
@@ -15956,6 +16204,8 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
 
     # --- 2. ひらがなに開く（**当て推量の読みは使わない**）---
     readings = []
+    # 読みの記録が無いとき（_prov が None）も定義しておく（ci_smoke_test で UnboundLocalError・2026-10-23）
+    _typed_rd = []
     try:
         from kanji_guess import _IME_READINGS_PROVIDER as _prov
         if _prov is not None:
@@ -17495,7 +17745,7 @@ def _fix_odd_split_compound(run, store, tokenize_fn, dict_index,
         out = []
         for surface in table_surfaces_for_reading(reading, limit=10) or ():
             if (len(surface) != 2 or not all(is_kanji(c) for c in surface)
-                    or _kt_split.tier(surface) > 2):
+                    or _kango_tier_of(surface) > 2):
                 continue
             try:
                 ts = [t for t in tokenize_fn(surface) if t[0].strip()]
@@ -17541,7 +17791,7 @@ def _fix_odd_split_compound(run, store, tokenize_fn, dict_index,
         for reading, (cost, edits) in _reading_variants(part).items():
             for surface in _faces(reading, ordinary_only=True):
                 got.append((surface, reading, cost, edits,
-                            _kt_split.tier(surface)))
+                            _kango_tier_of(surface)))
         part_cache[part] = got
         return got
 
@@ -17736,7 +17986,7 @@ def _fix_known_head_compound(run, store, tokenize_fn, dict_index,
             continue
         preserved = bool(preserved_head and head == preserved_head[0])
         hk = preserved_head[1] if preserved else _known_head_kanji(head, store)
-        if not hk or (not preserved and _kt.tier(hk) > 2):
+        if not hk or (not preserved and _kango_tier_of(hk) > 2):
             continue
         # --- T を既存の道で直す（1手以内・同じ上限）---
         best_t = None
@@ -17774,7 +18024,7 @@ def _fix_known_head_compound(run, store, tokenize_fn, dict_index,
             tk = got[0] if isinstance(got, tuple) else got
             if not tk or len(tk) != 2 or not all(is_kanji(c) for c in tk):
                 continue
-            if _kt.tier(tk) > 2:
+            if _kango_tier_of(tk) > 2:
                 continue
             best_t = tk
             break
@@ -23323,7 +23573,7 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
                        decisions=None, halfwidth_taken=(), shift_taken=(),
                        lu_taken=(), conv_taken=(), loanword_module=None, spelling=False,
                        ime_first_proof=False, ime_shift_proof=False, ime_clause_proof=False,
-                       ime_stray_proof=False, ime_purple_proof=False):
+                       ime_stray_proof=False, ime_purple_proof=False, ime_line_proof=False):
     """共通の最終検査。原文座標の候補と、安定した判定理由IDを返す。
 
     Noneはこの候補の不採用。異様判定の撤回や候補総数ゼロを意味しない。
@@ -23446,7 +23696,7 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
                                     attested_source_expression_ranges(line)):
         return None,'attested_source_expression'
     from reading_segments import preserves_native_written_derivation
-    if not spelling and not preserves_native_written_derivation(line,line[:start]+new_surface+line[end:]):
+    if not spelling and not ime_line_proof and not preserves_native_written_derivation(line,line[:start]+new_surface+line[end:]):
         return None,'completed_written_derivation'
     from reading_segments import preserves_native_temporal_nominal
     if not preserves_native_temporal_nominal(line,line[:start]+new_surface+line[end:]):
@@ -23568,8 +23818,12 @@ def _check_replacement(line, replacement, store, tokenize_fn, dict_index=None,
         from morphology import original_spelling_facts
         spelling_facts=(original_spelling_facts(line) if len(new_surface)==end-start else ())
         literal_keys=_literal_romaji_repetition(original,new_surface)
+        # 2026-10-16: an English word spells its own double letters (call,
+        # need, office). Only a seam inside the new word is excused.
+        english_word=category=='英語' and new_surface.isascii()
         if not seams or not all(_repeated_nominal_seam(joined,edge,tokenize_fn)
                 or (literal_keys and start<edge<start+len(new_surface))
+                or (english_word and start<edge<start+len(new_surface))
                 or _native_degree_repeat(joined,edge)
                 or any(f.start<edge<f.end and joined[f.start:f.end]==f.normal
                        for f in spelling_facts) for edge in seams):
@@ -23716,6 +23970,21 @@ def _finish_halfwidth_candidate(line, start, end, fixed, store, tokenize_fn,
 
 from contextual_repair import with_contextual_repair as _with_contextual_repair
 from last_keystroke import with_last_keystroke_repair as _with_last_keystroke_repair
+
+
+def _everyday_face_of(surface, reading):
+    """surface が reading のいちばん身近な表記か（everyday_faces の並びの先頭）。表が無ければ False。"""
+    try:
+        import everyday_faces
+        faces, _ = everyday_faces.order(reading)
+        return bool(faces) and faces[0] == surface
+    except Exception:
+        return False
+
+
+def _usage_site_list():
+    """correct_line の直しを集める入れ物。usage_counts が数える入れ物に差し替える（答えは変えない・2026-10-24）。"""
+    return []
 
 
 @_with_line_result
@@ -24443,7 +24712,7 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
     if not tokens:
         return empty
 
-    replacements = []
+    replacements = _usage_site_list()   # 置き場ごとの使われ方を数える入れ物（ふだんはただの list・usage_counts）
 
     # 文頭の「?」は、箇条書きの「・」を打とうとして、
     # 変換前の記号のまま確定してしまったものである可能性が高い。
@@ -24556,6 +24825,111 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
                                  find_trailing_kanji_runs,
                                  find_leading_kanji_runs,
                                  reading_combos_with_rank)
+
+        # --- 確定の文節そのものを塊にする（設計30 の4つ目の口・2026-10-22）---
+        # ほかの口が直さなかった所だけを見る（入口が先に直した 洗濯物 を潰さない）
+        # 字種で切る3つの口は `ば占める`（かな＋漢字＋送り仮名）のような
+        # 文節を拾えない。を／ば／占める と語に読めるので印も立たない。
+        # 本人が一度に確定した文節（IME の対）が行に在り、打った読みが
+        # 世の中の読みに無いときだけ、1打の戻し（`_ime_one_key_respell`）
+        # に掛ける。打った読みがそのまま語の読みなら（読みは正しい）
+        # この口では触らない。
+        _clause_route_spans = []
+        # 直さなかったが**迷った**範囲（あとで unsure に足す・2026-10-23 補正C）
+        _clause_route_unsure = []
+        if _CORRECTION_INPUT_METHOD.get() == 'kana' and dict_index is not None:
+            try:
+                from kanji_guess import _IME_READINGS_PROVIDER as _clp
+            except Exception:
+                _clp = None
+            _cl_n = len(line)
+            for _cs in range(_cl_n if _clp is not None else 0):
+                for _ce in range(min(_cl_n, _cs + 12), _cs, -1):
+                    _cc = line[_cs:_ce]
+                    if not any(is_kanji(c) for c in _cc):
+                        continue
+                    # 漢字の直後のかなで始まる範囲は、そのかなが前の語の
+                    # 送り仮名か助詞（`今日は祖約` の は）。前の語から切り離さない
+                    if _cs > 0 and is_hiragana(_cc[0]) and is_kanji(line[_cs - 1]):
+                        continue
+                    if any(not (_ce <= s or _cs >= e)
+                           for s, e in list(halfwidth_taken) + list(kanji_taken)
+                           + [tuple(r[:2]) for r in replacements]):
+                        continue
+                    try:
+                        _crs = [r for r in _ime_pair_readings(_cc, line, _cs, _ce)
+                                if r and all(is_hiragana(c) or c == 'ー' for c in r)]
+                    except Exception:
+                        _crs = []
+                    if not _crs:
+                        continue
+                    try:
+                        if store.reading_of(_cc) or dict_index.readings_for_surface(_cc):
+                            continue
+                    except Exception:
+                        pass
+                    # 本人が確定した文節がこの範囲より広く、はみ出した側に
+                    # 機能語でない字が残るなら、文節の一部だけを直すことになる
+                    # （`作りる真下` の `作りる` だけ、`教派は祖約` の `は祖約` だけ）
+                    _cl_part = False
+                    for _a in range(max(0, _cs - 12), _cs + 1):
+                        for _b in range(_ce, min(_cl_n, _a + 16) + 1):
+                            if (_a, _b) == (_cs, _ce):
+                                continue
+                            try:
+                                if not _clp(line[_a:_b]):
+                                    continue
+                            except Exception:
+                                continue
+                            _rest = [x for x in (line[_a:_cs], line[_ce:_b]) if x]
+                            if any(not _is_functional_strict(x) for x in _rest):
+                                _cl_part = True
+                                break
+                        if _cl_part:
+                            break
+                    if _cl_part:
+                        continue
+                    _cties = []
+                    _cb = _ime_one_key_respell(_cc, _crs, store, tokenize_fn, dict_index,
+                                               line, _cs, _ce, ties=_cties)
+                    if _cb is None:
+                        # **迷うなら紫**（うにさんの方針）。決めずに触らないときも
+                        # 印は残す。印を付けるのは、1打の戻しが並んで決めなかった
+                        # ときと、打った読みが世の中の読みに無く、1字の漢字が
+                        # 語にならない組で並ぶ（`祖約`）とき。打ったとおりに
+                        # 読めるかどうか（`_reads_as_typed`）だけでは決めない
+                        # ——活用（通って）や連濁（作りで）でも「読めない」と
+                        # 出て、正しい行に印が付いた（608行で4行・実測）
+                        _sure_slip = False
+                        if not _cties:
+                            try:
+                                _sure_slip = (all(not dict_index.is_world_reading(_r)
+                                                  for _r in _crs)
+                                              and _loose_kanji_pair(_cc, tokenize_fn,
+                                                                    store, dict_index))
+                            except Exception:
+                                _sure_slip = False
+                        # 印は、本人が**この範囲を一度に確定した**ときだけ
+                        # （隣の文節から組み立てた読みは、読みの取り違えが混じる。
+                        # 正しい行の `雨が降り`＝あめがおり で実測）
+                        try:
+                            _exact = bool(_clp(_cc))
+                        except Exception:
+                            _exact = False
+                        if _exact and (_cties or _sure_slip):
+                            _trace('確定の文節', f'{_cc!r} → 直さないが、'
+                                                 f'{"1打の戻しが並ぶ" if _cties else "1字の漢字が語にならない組で並ぶ"}'
+                                                 f'ので印を残す')
+                            _clause_route_unsure.append((_cs, _ce))
+                        continue
+                    _ck, _ce_ent, _crd = _cb
+                    _trace('確定の文節', f'{_cc!r} → 打った読み {_crs} の1打を戻して '
+                                         f'{_ce_ent["surface"]!r}')
+                    replacements.append((_cs, _ce, _ce_ent['surface'],
+                                         _ce_ent.get('category', 'その他')))
+                    kanji_taken.append((_cs, _ce))
+                    _clause_route_spans.append((_cs, _ce))
+                    break
 
         # --- かな2〜3文字＋漢字1文字の塊（方針1-C） ---
         # かなの並びの最後の1音だけが漢字に化けた形
@@ -26188,6 +26562,12 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
     #     として返す。単語として成立していないことは分かるが、
     #     何に直すべきか確信が持てない、という状態の表現。
     unsure_spans = []
+    try:
+        # 印を残した範囲に、あとの（短い・別の）範囲の直しが掛かったら、直した方が正しい（印は外す）
+        unsure_spans.extend(sp for sp in _clause_route_unsure
+                            if not any(a < sp[1] and sp[0] < b for a, b, *_r in replacements))
+    except NameError:
+        pass
     taken_all = halfwidth_taken + hiragana_taken
     # **連続の輪は worklist**（項目48-PI・2026-09-03）。
     # 連続まるごとを今までどおり通し、**何も直らず「色だけ付ける」に
@@ -27436,6 +27816,15 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
             # A possible adnominal homophone alone cannot erase that relation.
             from semantic_roles import genitive_nominal_support
             if _tail36=='の' and genitive_nominal_support(_sf,_nx[0]):continue
+            # 日常に使う名詞（身近さの表の段1・2: 本・手・子）は、そのまま名詞として読むのが先。
+            # 「本の返却日」の 本 を ほんの（連体詞）に開くのは、正しい文の誤補正（2026-10-23・補正C）。
+            # 開くのは、名詞として身近でない字（度・某）が連体詞の形で現れるときだけ
+            try:
+                from kango_tier import known_usage_tier as _kut36
+                if _kut36(_sf) in (1, 2):
+                    continue
+            except Exception:
+                pass
             _merged = _rd + _tail36
             try:
                 _mt = [t for t in tokenize_fn(_merged) if t[0]]
@@ -28058,9 +28447,13 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
     # 文字が二重になる・消えるといった破綻を構造的に防ぐための砦。
     checked = []
     for replacement in replacements:
+        _in_cr = tuple(replacement[:2]) in locals().get('_clause_route_spans', ())
+        # 確定の文節の口で取った直しは、文節の証明として最終検査へ渡す
+        # （打った読みの1打の戻し＋行の自然さで決めている。`変度を`→`返事を`）
         accepted, reason = _check_replacement(
             line, replacement, store, tokenize_fn, dict_index, decisions,
-            halfwidth_taken, _shift_taken, lu_taken, conv_taken, _LW)
+            halfwidth_taken, _shift_taken, lu_taken, conv_taken, _LW,
+            ime_clause_proof=_in_cr, ime_line_proof=_in_cr)
         if accepted is not None:
             checked.append(accepted)
         else:

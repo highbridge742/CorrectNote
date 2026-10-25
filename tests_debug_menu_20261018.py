@@ -45,10 +45,10 @@ class DebugTimingsTests(unittest.TestCase):
         self.assertEqual(debug_menu.default('ime_poll_active', a), app.CorrectNoteApp._IME_POLL_ACTIVE_MS)
         self.assertEqual(debug_menu.default('busy_gap', a), app.CorrectNoteApp.ANALYZE_BUSY_GAP_MS)
         # タブのホイールの既定と上限（2026-10-18 うにさんの指定。2026-10-19 に
-        # 同じ向き 50・逆向き 30 へ。離したあとの項目は外した。2026-10-20 に同じ向きを 65 へ）
+        # 同じ向き 50・逆向き 30 へ。離したあとの項目は外した。2026-10-20 に同じ向きを 65 へ、2026-10-25 に 80 へ）
         self.assertEqual([debug_menu.default(k, a) for k in
                           ('tab_wheel_step', 'tab_wheel_same', 'tab_wheel_reverse')],
-                         [120, 65, 30])
+                         [120, 80, 30])
         self.assertEqual([debug_menu.maximum(k, a) for k in
                           ('tab_wheel_step', 'tab_wheel_same', 'tab_wheel_reverse')],
                          [300, 200, 300])
@@ -57,13 +57,18 @@ class DebugTimingsTests(unittest.TestCase):
         for key in debug_menu.KEYS:
             self.assertLessEqual(debug_menu.minimum(key), debug_menu.default(key, a), key)
             self.assertLessEqual(debug_menu.default(key, a), debug_menu.maximum(key, a), key)
-            if not key.startswith('tab_wheel'):
+            if not key.startswith(('tab_wheel', 'copy_', 'find_', 'quote_', 'backup_')) \
+                    and key not in ('ime_quiet', 'key_quiet', 'quick_quiet'):    # 待ち以外（ホイール・表示）
                 # 待ちの上限は今の既定
                 self.assertEqual(debug_menu.maximum(key, a), debug_menu.default(key, a), key)
             # 繰り返して見に行くものは 0 にしない（空回り）
             if key.endswith('poll') or key.startswith('ime_poll'):
                 self.assertGreaterEqual(debug_menu.minimum(key), 1, key)
-        self.assertEqual(debug_menu.values(a)['key_quiet'], 300)
+        # 2026-10-23 うにさん: the three waits default to 40ms; their ranges stay (100 / 300 / 250)
+        self.assertEqual([debug_menu.default(k, a) for k in ('ime_quiet', 'key_quiet', 'quick_quiet')], [40, 40, 40])
+        self.assertEqual([debug_menu.maximum(k, a) for k in ('ime_quiet', 'key_quiet', 'quick_quiet')],
+                         [100, 300, 250])
+        self.assertEqual(debug_menu.values(a)['key_quiet'], 40)
 
     def test_save_and_load_at_the_next_start(self):
         s = Settings(self.path)
@@ -76,7 +81,7 @@ class DebugTimingsTests(unittest.TestCase):
         self.assertEqual(saved, {'key_quiet': 120, 'busy_gap': 2, 'tab_wheel_step': 40})
         # 次の起動（モジュールの定数は一度既定へ戻してから読む）
         debug_menu.apply(bare_app(Settings()), {})
-        self.assertEqual(analysis_input.DISPLAY_QUIET_MS, 300)
+        self.assertEqual(analysis_input.DISPLAY_QUIET_MS, 40)
         b = bare_app(Settings(self.path))
         debug_menu.apply(b)
         self.assertEqual(analysis_input.DISPLAY_QUIET_MS, 120)
@@ -98,12 +103,12 @@ class DebugTimingsTests(unittest.TestCase):
             self.assertIsNone(debug_menu.parse('key_quiet', text, a), text)
         self.assertEqual(debug_menu.normalize(
             {'key_quiet': -5, 'ime_poll_active': 0, 'ime_poll_idle': 3, 'unknown': 1,
-             'busy_gap': True, 'poll': '10', 'ime_quiet': 100, 'bg_gap': 9999}, a),
+             'busy_gap': True, 'poll': '10', 'ime_quiet': 40, 'bg_gap': 9999}, a),
             {'ime_poll_idle': 3})
         self.assertEqual(debug_menu.normalize(['key_quiet', 1], a), {})
         # 上限が既定より上の項目（タブのホイール）: 既定と同じものは残さない
         self.assertEqual(debug_menu.normalize(
-            {'tab_wheel_step': 120, 'tab_wheel_same': 65, 'tab_wheel_reverse': 300,
+            {'tab_wheel_step': 120, 'tab_wheel_same': 80, 'tab_wheel_reverse': 300,
              'tab_wheel_release': 30, 'tab_wheel_step_x': 1}, a),
             {'tab_wheel_reverse': 300})      # the removed tab_wheel_release key is skipped
         self.assertEqual(debug_menu.parse('tab_wheel_step', '500', a), 300)
@@ -115,12 +120,12 @@ class DebugTimingsTests(unittest.TestCase):
                 f.write(body)
             b = bare_app(Settings(self.path))
             debug_menu.apply(b)
-            self.assertEqual(analysis_input.DISPLAY_QUIET_MS, 300, body)
+            self.assertEqual(analysis_input.DISPLAY_QUIET_MS, 40, body)
             self.assertNotIn('_IME_POLL_ACTIVE_MS', b.__dict__)
             self.assertEqual(debug_menu.values(b)['ime_poll_active'], 30, body)
         # 範囲の外の値は丸めて入れる
         self.assertEqual(debug_menu.set_value(a, 'ime_quiet', 999, save=False), 100)
-        self.assertNotIn('ime_quiet', a.settings.get('debug_timings'))
+        self.assertEqual(a.settings.get('debug_timings')['ime_quiet'], 100)   # the top of the range, not the default (40)
         self.assertEqual(debug_menu.set_value(a, 'ime_poll_active', -1, save=False), 1)
         self.assertEqual(a._IME_POLL_ACTIVE_MS, 1)
 
@@ -133,15 +138,34 @@ class DebugTimingsTests(unittest.TestCase):
         self.assertEqual(quick_analysis.DISPLAY_QUIET_MS, 10)
         debug_menu.set_value(a, 'key_quiet', debug_menu.default('key_quiet', a))
         debug_menu.set_value(a, 'busy_gap', debug_menu.default('busy_gap', a))
-        self.assertEqual(analysis_input.DISPLAY_QUIET_MS, 300)
+        self.assertEqual(analysis_input.DISPLAY_QUIET_MS, 40)
         self.assertNotIn('ANALYZE_BUSY_GAP_MS', a.__dict__)
         self.assertEqual(a.settings.get('debug_timings'), {'quick_quiet': 10})
-        debug_menu.set_value(a, 'quick_quiet', 250)
-        self.assertEqual(quick_analysis.DISPLAY_QUIET_MS, 250)
+        debug_menu.set_value(a, 'quick_quiet', 40)
+        self.assertEqual(quick_analysis.DISPLAY_QUIET_MS, 40)
         self.assertEqual(Settings(self.path).get('debug_timings'), {})
         # DEFAULTS の空の辞書を共有して書き換えていない
         import settings as S
         self.assertEqual(S.DEFAULTS['debug_timings'], {})
+
+    def test_a_wait_left_at_the_old_default_moves_to_the_new_one_once(self):
+        # 2026-10-23 うにさん「アップデート適用前に、変更前のデフォルトに設定している場合は、新しいデフォルトに
+        # 変更する」: a file from before with the old defaults (100 / 300 / 250) gets the new 40ms once; a value
+        # chosen otherwise stays; after that, the old numbers are ordinary choices
+        with open(self.path, 'w', encoding='utf-8') as f:
+            json.dump({'debug_timings': {'ime_quiet': 100, 'key_quiet': 300, 'quick_quiet': 250, 'busy_gap': 2}}, f)
+        s = Settings(self.path)
+        self.assertEqual(s.get('debug_timings'), {'busy_gap': 2})
+        a = bare_app(s)
+        self.assertEqual([debug_menu.values(a)[k] for k in ('ime_quiet', 'key_quiet', 'quick_quiet')], [40, 40, 40])
+        with open(self.path, 'w', encoding='utf-8') as f:
+            json.dump({'debug_timings': {'ime_quiet': 70, 'key_quiet': 120}}, f)
+        self.assertEqual(Settings(self.path).get('debug_timings'), {'ime_quiet': 70, 'key_quiet': 120})
+        # Once: a file already of the new version keeps 300 as the user's choice
+        s = Settings(self.path)
+        a = bare_app(s)
+        debug_menu.set_value(a, 'key_quiet', 300)
+        self.assertEqual(Settings(self.path).get('debug_timings'), {'ime_quiet': 70, 'key_quiet': 300})
 
     def test_an_empty_save_leaves_patched_module_constants_alone(self):
         a = bare_app(Settings())
@@ -209,17 +233,17 @@ class DebugTimingsTests(unittest.TestCase):
             nav._tab_wheel(self.event(1000, -150), over_tabs=True)
             nav._tab_wheel(self.event(1100, -120), over_tabs=True)
             self.assertEqual(nav._next_tab.call_count, 0)
-            # 同じ向きは 65ms、逆向きは 30ms のあいだ受け付けない（境目の両側）
+            # 同じ向きは 80ms、逆向きは 30ms のあいだ受け付けない（境目の両側）
             step = A.TAB_WHEEL_STEP
             nav = self.wheel_host()
             nav._tab_wheel(self.event(2000, -step), over_tabs=True)
-            nav._tab_wheel(self.event(2064, -step), over_tabs=True)
+            nav._tab_wheel(self.event(2079, -step), over_tabs=True)
             self.assertEqual(nav._next_tab.call_count, 1)
-            nav._tab_wheel(self.event(2065, -step), over_tabs=True)
+            nav._tab_wheel(self.event(2080, -step), over_tabs=True)
             self.assertEqual(nav._next_tab.call_count, 2)
-            nav._tab_wheel(self.event(2094, step), over_tabs=True)
+            nav._tab_wheel(self.event(2109, step), over_tabs=True)
             self.assertEqual(nav._next_tab.call_count, 2)
-            nav._tab_wheel(self.event(2095, step), over_tabs=True)
+            nav._tab_wheel(self.event(2110, step), over_tabs=True)
             self.assertEqual([c[0] for c in nav._next_tab.call_args_list], [(1,), (1,), (-1,)])
             # 変えた待ちが使われる（逆向き 300ms）
             nav = self.wheel_host(); debug_menu.apply(nav, {'tab_wheel_reverse': 300})
@@ -268,9 +292,16 @@ class DebugTimingsTests(unittest.TestCase):
             'IME の変換が始まったかを見張る間隔', '裏のタブの補正を始めるまで',
             '簡易入力：打ってから、補正を出すまでの待ち',
             'タブを切り替えるホイールの量（1目盛り＝120）', 'タブを切り替えたあと、同じ向きを受け付けるまで',
-            'タブを切り替えたあと、逆向きを無視する間'])
-        self.assertEqual(len(debug_menu.ITEMS), 14)
-        self.assertEqual(debug_menu.SECTIONS, (('ime_quiet', '【解析】'), ('tab_wheel_step', '【タブ移動】')))
+            'タブを切り替えたあと、逆向きを無視する間',
+            # 【表示】（2026-10-23 うにさん: コピーした範囲・検索で見つかった文字の大きさ）
+            'コピーした範囲（行の一部だけのとき）の文字の大きさ',
+            '検索の窓が出ている間の、見つかった文字の大きさ',
+            'コピーした範囲の白い枠：縮み始める大きさ', 'コピーした範囲の白い枠：本来の大きさへ縮むまで',
+            'コピーした範囲の白い枠：線の太さ', '引用モードの間の、メモ欄・簡易入力の地の色の濃さ',
+            'タブのバックアップを、1タブにつき残す数', '手動のバックアップを、1タブにつき残す数'])
+        self.assertEqual(len(debug_menu.ITEMS), 22)
+        self.assertEqual(debug_menu.SECTIONS, (('ime_quiet', '【解析】'), ('tab_wheel_step', '【タブ移動】'),
+                                               ('copy_emphasis', '【表示】'), ('backup_keep', '【保存】')))
 
     def test_removed_items_ignore_old_saved_values(self):
         with open(self.path, 'w', encoding='utf-8') as f:
@@ -321,12 +352,12 @@ class DebugWindowTkTests(unittest.TestCase):
         self.settle()
         self.assertEqual(dlg.title(), 'デバッグメニュー')
         self.assertIs(self.a.open_debug_menu(), dlg)   # 2つ目は開かない
-        self.assertEqual(len(dlg._debug_rows), 14)    # tab_wheel_release was removed (2026-10-19)
+        self.assertEqual(len(dlg._debug_rows), 22)    # tab_wheel_release was removed (2026-10-19); 5 display rows, 2 backup rows (2026-10-23)
         self.assertNotIn('tab_wheel_release', dlg._debug_rows)
-        # 【タブ移動】の並びと既定（2026-10-19 うにさん: 同じ向き 50・逆向き 30。2026-10-20 に同じ向き 65）
+        # 【タブ移動】の並びと既定（2026-10-19 うにさん: 同じ向き 50・逆向き 30。2026-10-20 に同じ向き 65、2026-10-25 に 80）
         self.assertEqual([(k, dlg._debug_rows[k]['number'].get()) for k in
                           ('tab_wheel_step', 'tab_wheel_same', 'tab_wheel_reverse')],
-                         [('tab_wheel_step', 120), ('tab_wheel_same', 65), ('tab_wheel_reverse', 30)])
+                         [('tab_wheel_step', 120), ('tab_wheel_same', 80), ('tab_wheel_reverse', 30)])
         def texts(widget):
             for child in widget.winfo_children():
                 if isinstance(child, tk.Label):
@@ -340,7 +371,7 @@ class DebugWindowTkTests(unittest.TestCase):
                                else str(heads[1][0].grid_info()['pady']).split()[0]), 0)
         self.assertLess(heads[1][0].winfo_y(), dlg._debug_rows['tab_wheel_step']['entry'].master.winfo_y())
         row = dlg._debug_rows['key_quiet']
-        self.assertEqual((row['text'].get(), row['number'].get()), ('300', 300))
+        self.assertEqual((row['text'].get(), row['number'].get()), ('40', 40))
         self.assertEqual((float(row['scale'].cget('from')), float(row['scale'].cget('to'))), (0.0, 300.0))
         # スライダー → 数値の欄・当てる
         row['scale'].set(120); self.settle()
@@ -364,8 +395,8 @@ class DebugWindowTkTests(unittest.TestCase):
         # デフォルトに戻す
         self.dlg = dlg = self.a.open_debug_menu(); self.settle()
         dlg._debug_rows['key_quiet']['button'].invoke()
-        self.assertEqual(analysis_input.DISPLAY_QUIET_MS, 300)
-        self.assertEqual(dlg._debug_rows['key_quiet']['text'].get(), '300')
+        self.assertEqual(analysis_input.DISPLAY_QUIET_MS, 40)
+        self.assertEqual(dlg._debug_rows['key_quiet']['text'].get(), '40')
         dlg._debug_reset_all()
         self.assertNotIn('_IME_POLL_ACTIVE_MS', self.a.__dict__)
         dlg.destroy(); self.settle()

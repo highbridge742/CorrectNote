@@ -19,7 +19,7 @@ computed as before. Only the latest composition is kept; no text history.
 import keyboard_layout
 import analysis_context
 import analysis_work_app as input_work
-from analysis_worker import state_key, same_model_state, result_compatible
+from analysis_worker import state_key, only_ime_moved, result_compatible
 
 _ROW_FIELDS = ('line', 'input_method', 'keyboard', 'recent', 'readings', 'calculations')
 
@@ -121,7 +121,9 @@ def context_for(app, text):
         return None
     prepared = spec['value'].get('prepared')
     current = state_key(app)
-    if prepared is None or not (spec['state'] == current or same_model_state(spec['state'], current)):
+    # the prepared context came from the stores of its time: only an IME reading may have moved since
+    # (2026-10-24: the rows' own check now lets the vocabulary move too)
+    if prepared is None or not (spec['state'] == current or only_ime_moved(spec['state'], current)):
         return None
     return prepared
 

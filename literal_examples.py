@@ -4,6 +4,7 @@
 判定設計: GPT-6 / 2026-09-10〜11 / 48-XM・48-YB。
 括弧だけでは保護しない。誤字の例・入力した文字列の引用と、実辞書の活用形を説明する記述を扱う。
 """
+from cache_limits import size as _cache_size   # 控えの上限は cache_limits で1か所に（2026-10-24）
 import re
 from functools import lru_cache
 
@@ -96,7 +97,7 @@ _WORD_AFTER = re.compile(r'\s*(?:という|といった)\s*(?:言葉|ことば|�
                          r'(?=$|[\s、。，．:：;；!?！？がはをにでとのもだ])')
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _native_mentioned_word(surface):
     from morphology import dictionary_inflections
     entries=dictionary_inflections(surface) or ()
@@ -146,7 +147,7 @@ def _unquoted_word_ranges(line,quoted):
     return out
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def _native_inflected_form(surface):
     from morphology import dictionary_inflections
     return any(pos.startswith(('動詞,', '形容詞,', '助動詞,'))
@@ -191,7 +192,7 @@ _UPPER_IDENTIFIER = re.compile(r'(?<![A-Za-zＡ-Ｚａ-ｚ0-9０-９])'
     r'[A-ZＡ-Ｚ][A-ZＡ-Ｚ0-9０-９]{1,15}(?![A-Za-zＡ-Ｚａ-ｚ0-9０-９])')
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def named_identifier_parts(line):
     matches=tuple(_UPPER_IDENTIFIER.finditer(line))
     if not matches:return []
@@ -225,7 +226,7 @@ def named_identifier_ranges(line):
     return [(a,b) for a,code,b in named_identifier_parts(line)]
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_reading_gloss_ranges(line):
     """48-ABC: the parenthesis explicitly repeats the preceding native reading.
 

@@ -61,7 +61,9 @@ def child(phase):
                 print('BULK_RESTART_OK',flush=True);return
             for dark in (True,False):
                 a._apply_theme(dark);settle()
-                assert d.text.cget('bg')==app.PANEL and d.text.cget('fg')==app.INK
+                # The box has its own input colours, made from the scheme (2026-10-23)
+                import bulk_insert
+                assert d.text.cget('bg')==bulk_insert.input_field_colors(app.PANEL,app.INK)[0] and d.text.cget('fg')==app.INK
                 assert d.position.cget('bg')==app.PANEL and d.position.cget('fg')==app.INK
             ordered=a._toolbar.pack_slaves()
             assert ordered.index(a.bulk_insert_btn)==ordered.index(a.word_book_btn)+1

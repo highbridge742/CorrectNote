@@ -25,6 +25,16 @@ def word_book_position(app_bounds, window_size, work_area, gap=6, number_left=No
     return int(x), int(y)
 
 
+def word_book_near_pointer(pointer, window_size, work_area, avoid=()):
+    """Outer-frame coordinates just below and right of the mouse pointer, like Quick Input, inside
+    the work area of the pointer's monitor; a book too low or too wide moves up or left (2026-10-22
+    うにさん「単語帳を呼び出した時に、別のディスプレイに単語帳ウインドウが出ました。簡易入力の
+    ようにカーソルの近くに呼ぶ。ただし画面の下に見切れないだけ上には動かす」). Not over Quick
+    Input when it is shown (avoid・window_place, 2026-10-23)."""
+    import window_place
+    return window_place.near_pointer(pointer, window_size, work_area, avoid)
+
+
 def caption_width(window, hwnd=None):
     """Client width at which the title bar's icon clears its buttons.
 
@@ -113,7 +123,7 @@ class _WordBookNative:
                                       c.c_size_t, c.c_ssize_t, c.c_size_t, c.c_size_t)
         signatures = {
             'GetAncestor': ([W.HWND, W.UINT], W.HWND),
-            'GetForegroundWindow': ([], W.HWND),
+            'GetForegroundWindow': ([], W.HWND), 'GetFocus': ([], W.HWND),
             'ReleaseCapture': ([], W.BOOL),
             'PostMessageW': ([W.HWND, W.UINT, c.c_size_t, c.c_ssize_t], W.BOOL),
             'GetWindowThreadProcessId': ([W.HWND, c.POINTER(W.DWORD)], W.DWORD),
@@ -143,6 +153,7 @@ class _WordBookNative:
             # that was in front. Prefer the ordered foreground event stream.
             if msg == 0x0021:  # WM_MOUSEACTIVATE precedes a click activation.
                 self._remember(u.GetForegroundWindow())
+                self._complete_own_composition()
             if not self.event_hook and msg == 0x0006 and (wp & 0xffff) in (1, 2):
                 self._remember(lp)
             if msg == 0x0082:
@@ -189,6 +200,29 @@ class _WordBookNative:
             if hook:
                 setattr(self, name, None)
                 self.user.UnhookWinEvent(hook)
+
+    def _complete_own_composition(self):
+        """Commit CorrectNote's own unconfirmed IME string as a click on the word book begins.
+
+        2026-10-22 うにさん「変換中に単語帳の登録文字をクリックすると、変換の文字が消えて
+        ペーストされる」「単語帳クリックは、変わらず、入力中の文字が消えます」: the IME drops the
+        conversion when the word book is clicked. Asking it to commit first (the memo's or quick
+        input's own window, this thread's focus; never another app's) keeps the text; the word
+        then goes after it (app._insert_word_book_text). Only IMM is called here, never Tk."""
+        try:
+            focus = self.user.GetFocus()
+            if not focus:
+                return
+            from ctypes import wintypes as W
+            pid = W.DWORD()
+            self.user.GetWindowThreadProcessId(focus, self.c.byref(pid))
+            if pid.value != os.getpid():
+                return
+            import ime_watch
+            if ime_watch.composition_active(focus):
+                ime_watch.complete_composition(focus)
+        except Exception:
+            pass
 
     def _remember_focus(self, hwnd):
         if not hwnd or not self.user.IsWindow(hwnd):
@@ -465,7 +499,7 @@ class WordBook:
                 # うにさん「単語帳ボタンで単語帳を閉じられなくなりました」)
                 self.close()
         else:
-            self.open(give_back=give_back, outside=outside)
+            self.open(give_back=give_back, outside=outside, near_pointer=True)
 
     def _give_back_after_open(self):
         """Give the front back to the other app that was in front (and its text box), so
@@ -500,7 +534,7 @@ class WordBook:
         except Exception:
             pass
 
-    def open(self, give_back=False, outside=None):
+    def open(self, give_back=False, outside=None, near_pointer=False):
         if self.window is not None:
             self.window.lift()
             return
@@ -575,17 +609,39 @@ class WordBook:
                 self.width = floor
                 win.geometry('%dx%d' % (floor, win.winfo_height()))
                 win.update_idletasks()
-        self._place()
+        self._place(near_pointer)
         self.app.word_book_btn.config(relief='sunken', fg=accent)
         self.save()
         self.app.root.after(0, self._give_back_after_open)
 
-    def _place(self):
+    def _place(self, near_pointer=False):
+        """Opened by the user (button, hotkey): near the mouse pointer (word_book_near_pointer).
+        Shown again at start-up: beside the editor as before (word_book_position)."""
         win, root = self.window, self.app.root
         root.update_idletasks()
         win.update_idletasks()
         border = max(0, win.winfo_rootx() - win.winfo_x())
         title = max(0, win.winfo_rooty() - win.winfo_y())
+        if near_pointer:
+            try:
+                px, py = win.winfo_pointerxy()
+            except tk.TclError:
+                px = py = None
+            if px is not None and px != -1:
+                size = (win.winfo_width() + 2 * border, win.winfo_height() + title + border)
+                area = self.work_area(px, py) if self.work_area else None
+                if area is None:
+                    area = (0, 0, win.winfo_screenwidth(), win.winfo_screenheight())
+                import window_place
+                quick = window_place.outer_rect(getattr(self.app, '_quick_win', None))
+                x, y = word_book_near_pointer((px, py), size, area, avoid=(quick,) if quick else ())
+                win.geometry('+%d+%d' % (x, y))
+                # The first showing settles a moment later (the frame without a maximize
+                # button, Tk's map) and puts the book back where Windows first put it (2026-10-22
+                # うにさん「最初はカーソルの近くに出るが、すぐに左の離れたほうや、画面の左上に
+                # 飛んで行ってしまいます」): hold the place until then.
+                self._hold_place(x, y, 6)
+                return
         root_border = max(0, root.winfo_rootx() - root.winfo_x())
         left, top = root.winfo_x(), root.winfo_y()
         right = left + root.winfo_width() + 2 * root_border
@@ -600,6 +656,18 @@ class WordBook:
         number_left = gutter.winfo_rootx() + (numbers[0] if numbers else 0)
         x, y = word_book_position((left, top, right, bottom), size, area, number_left=number_left)
         win.geometry('+%d+%d' % (x, y))
+        self._hold_place(x, y, 6)
+
+    def _hold_place(self, x, y, tries):
+        win = self.window
+        if win is None or tries <= 0 or getattr(self, '_drag_anchor', None) is not None:
+            return
+        try:
+            if (win.winfo_x(), win.winfo_y()) != (x, y):
+                win.geometry('+%d+%d' % (x, y))
+        except tk.TclError:
+            return
+        self.app.root.after(50, lambda: self._hold_place(x, y, tries - 1))
 
     def _start_drag(self, event):
         self._drag_anchor = None
@@ -718,8 +786,29 @@ class WordBook:
             self.scroll.pack_forget()
         self.window.geometry('%dx%d' % (self.width, min(requested, maximum)))
         self.window.update_idletasks()
+        self._keep_above_bottom()
         self.canvas.configure(scrollregion=self.canvas.bbox('all'))
         self.canvas.yview_moveto(1)
+
+    def _keep_above_bottom(self):
+        """A book grown by a new word moves up rather than past the bottom of its screen
+        (2026-10-22, as Quick Input does)."""
+        win = self.window
+        if win is None or not self.work_area or not win.winfo_ismapped():
+            return
+        try:
+            x, y = win.winfo_x(), win.winfo_y()
+            title = max(0, win.winfo_rooty() - y)
+            border = max(0, win.winfo_rootx() - x)
+            height = win.winfo_height() + title + border
+            area = self.work_area(x + 10, y + 10)
+            if not area:
+                return
+            top = max(area[1], min(y, area[3] - height))
+            if top != y:
+                win.geometry('+%d+%d' % (x, top))
+        except tk.TclError:
+            pass
 
     def add(self, text):
         if not text:
@@ -830,7 +919,9 @@ class WordBook:
             field = top.focus_lastfor()
         except tk.TclError:
             return False
-        insert = getattr(self.app, '_insert_ime_text', None)
+        # While the memo is converting, the word goes after the unconfirmed string (2026-10-22)
+        insert = (getattr(self.app, '_insert_word_book_text', None)
+                  or getattr(self.app, '_insert_ime_text', None))
         return bool(insert and field is not None and insert(text, field))
 
     def remove_menu(self, event, index):

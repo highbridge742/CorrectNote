@@ -64,12 +64,32 @@ ITEMS = (
     # 「右ボタンを離したあと、逆向きを無視する間」（tab_wheel_release）は外した
     # （2026-10-19 うにさん。離したあとも上の「逆向き」で抑える）。保存に残った鍵は
     # normalize が読み飛ばす。
+    # 表示の倍率（2026-10-23 うにさん。待ちではないが、ここで試して決める）
+    ('copy_emphasis', 'コピーした範囲（行の一部だけのとき）の文字の大きさ',
+     'app', 'COPY_EMPHASIS_PERCENT', '%', 100, '100％は元の大きさ（大きくしない）。それより小さくはしない'),
+    ('find_emphasis', '検索の窓が出ている間の、見つかった文字の大きさ',
+     'app', 'FIND_EMPHASIS_PERCENT', '%', 100, '100％は元の大きさ（大きくしない）。それより小さくはしない'),
+    ('copy_frame_scale', 'コピーした範囲の白い枠：縮み始める大きさ',
+     'app', 'COPY_FRAME_START_PERCENT', '%', 100, '100％は縮まない（はじめから本来の大きさ）'),
+    ('copy_frame_ms', 'コピーした範囲の白い枠：本来の大きさへ縮むまで',
+     'app', 'COPY_FRAME_MS', 'ms', 0, '0 は縮む動きなしで、すぐ本来の大きさに出す'),
+    ('copy_frame_width', 'コピーした範囲の白い枠：線の太さ',
+     'app', 'COPY_FRAME_WIDTH', 'px', 1, '0 だと線が見えない。1px が下限'),
+    ('quote_tint', '引用モードの間の、メモ欄・簡易入力の地の色の濃さ',
+     'app', 'QUOTE_TINT_PERCENT', '%', 0, '0 は地の色を変えない（ボタンの色だけ）'),
+    # タブのバックアップ（2026-10-23 うにさん「1タブにつき残す数はパラメータ（既定5、0〜20、0なら作らない）」）
+    ('backup_keep', 'タブのバックアップを、1タブにつき残す数',
+     'app', 'BACKUP_KEEP', '件', 0, '0 はバックアップを作らない'),
+    # 手動のバックアップ（2026-10-23 うにさん「n の既定は5、範囲は0〜20。0なら項目を灰色に」）
+    ('backup_manual_keep', '手動のバックアップを、1タブにつき残す数',
+     'app', 'BACKUP_MANUAL_KEEP', '件', 0, '0 はファイルメニューの「手動でバックアップを作成」を灰色にする'),
 )
 KEYS = tuple(item[0] for item in ITEMS)
 # 窓の見出し（その鍵の項目の前に出す・2026-10-18 うにさん）。2つ目からは前に1行あける。
 # 打鍵から計算を始めるまで・下準備と打った行を見に行く間隔（1ms／5ms）の4項目は、
 # うにさんの指定で窓から外した（コードの値はそのまま）。
-SECTIONS = (('ime_quiet', '【解析】'), ('tab_wheel_step', '【タブ移動】'))
+SECTIONS = (('ime_quiet', '【解析】'), ('tab_wheel_step', '【タブ移動】'), ('copy_emphasis', '【表示】'),
+            ('backup_keep', '【保存】'))
 _BY_KEY = {item[0]: item for item in ITEMS}
 _ORIGINAL = {}   # 書き換えたモジュールの定数の、書き換える前の値
 
@@ -207,10 +227,13 @@ def open_window(app, colors=None):
     place = getattr(app, '_place_dialog', None)
     if place is not None:
         place(dlg, 640, 620)
-    tk.Label(dlg, text='補正が始まるまでの待ち（とタブのホイール）を、その場で縮めて試せます。'
-             '最大はおおむね今の既定です。補正の答えは変わりません。',
+    tk.Label(dlg, text='補正が始まるまでの待ち（とタブのホイール・表示の倍率）を、その場で変えて試せます。'
+             '待ちの最大はおおむね今の既定です。補正の答えは変わりません。',
              bg=bg, fg=ink, justify='left', wraplength=600,
              font=('Yu Gothic UI', 9)).pack(anchor='w', padx=12, pady=(10, 6))
+    # 補正の段の使われ方（usage_counts・2026-10-24）
+    tk.Button(dlg, text='補正の段の使われ方…', command=lambda: open_usage_window(app, colors)).pack(
+        anchor='w', padx=12, pady=(0, 6))
     outer = tk.Frame(dlg, bg=bg)
     outer.pack(fill='both', expand=True, padx=(12, 0), pady=(0, 6))
     canvas = tk.Canvas(outer, bg=bg, highlightthickness=0)
@@ -337,4 +360,56 @@ def open_window(app, colors=None):
     dlg.bind('<Destroy>', forget, add='+')
     dlg._debug_rows = rows
     dlg._debug_reset_all = reset_all
+    return dlg
+
+
+USAGE_HEADINGS = ('効果があった段', '使われたが効果がなかった段', '使われていない段')
+
+
+def usage_text():
+    """usage_counts.table() の3つの分け方を、窓に出す文にする（段の名前と数だけ）。"""
+    import usage_counts
+    try:
+        usage_counts.install()          # 呼ばれていない段も名前で並ぶように（答えは変えない）
+    except Exception:
+        pass
+    parts = ['数える単位は1行（同じ行で何度呼ばれても1回）。called＝呼ばれた行・used＝働いた行・'
+             'effect＝その直しが答えに残った行。']
+    for heading, rows in zip(USAGE_HEADINGS, usage_counts.table()):
+        parts.append('')
+        parts.append('【%s】 %d' % (heading, len(rows)))
+        for name, called, used, effect in rows:
+            parts.append('  %-48s called %7d  used %7d  effect %7d' % (name, called, used, effect))
+    return '\n'.join(parts)
+
+
+def open_usage_window(app, colors=None):
+    """補正の段の使われ方（usage_counts.table）を見るだけの窓。"""
+    colors = dict(colors or {})
+    bg = colors.get('bg', '#f6f4ee')
+    ink = colors.get('ink', '#1c2b2d')
+    panel = colors.get('panel', bg)
+    old = getattr(app, '_usage_window', None)
+    if old is not None:
+        try:
+            if old.winfo_exists():
+                old.destroy()
+        except tk.TclError:
+            pass
+    dlg = tk.Toplevel(app.root)
+    app._usage_window = dlg
+    dlg.title('補正の段の使われ方')
+    dlg.configure(bg=bg)
+    place = getattr(app, '_place_dialog', None)
+    if place is not None:
+        place(dlg, 760, 620)
+    bar = tk.Scrollbar(dlg)
+    bar.pack(side='right', fill='y')
+    text = tk.Text(dlg, bg=panel, fg=ink, relief='flat', wrap='none', font=('Consolas', 9),
+                   yscrollcommand=bar.set)
+    bar.configure(command=text.yview)
+    text.pack(side='left', fill='both', expand=True)
+    text.insert('1.0', usage_text())
+    text.configure(state='disabled')
+    dlg._usage_text = text
     return dlg

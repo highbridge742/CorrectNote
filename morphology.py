@@ -27,6 +27,7 @@ janome があれば正確に区切れる。無い場合も動くよう、
     pip install janome
 """
 
+from cache_limits import size as _cache_size   # 控えの上限は cache_limits で1か所に（2026-10-24）
 import threading
 import re
 from functools import lru_cache
@@ -431,7 +432,7 @@ def normalize_marks(text, swap_across=False, dropped=None, miskeyed=None):
     return ''.join(out)
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def colloquial_adjective_forms(line):
     """48-WM: 終止・連体の「い」を小さく書いた、辞書で確かめられる形容詞。
 
@@ -472,7 +473,7 @@ def _restore_colloquial_adjectives(line, tokens):
     return out
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def colloquial_auxiliary_forms(line):
     """48-XR: 助動詞の未然形＋小書きぅを、本文を保って推量のうと読む。
 
@@ -559,7 +560,7 @@ def _spelling_adjective_boundary(line,start,end):
     return True
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def original_spelling_facts(line):
     """Confirmed source spelling anomalies, without generating lexical guesses."""
     if not HAS_JANOME or not any(c in line for c in 'ぃぅ'):
@@ -588,7 +589,7 @@ def original_spelling_facts(line):
 _YOON_BASES = frozenset('きぎしじちぢにひびぴみりふゔてでとど')
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def kana_syllable_ranges(text):
     # A written kana syllable cannot supply an internal word boundary.
     # This proves a source range, never the existence of a dictionary word.
@@ -605,7 +606,7 @@ def kana_syllable_ranges(text):
     return tuple(out)
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def mixed_kana_syllable_ranges(text):
     return tuple((start,end) for start,end in kana_syllable_ranges(text)
                  if ('ぁ'<=text[start]<='ゖ')!=('ぁ'<=text[start+1]<='ゖ'))
@@ -619,7 +620,7 @@ def mixed_kana_syllable_scope(line,start,end):
                    for lo,hi in mixed_kana_syllable_ranges(line))
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def preserves_native_adverbial_word(original,changed):
     """A native temporal/adverbial noun keeps its word boundary and sense.
 
@@ -793,7 +794,7 @@ def _restore_colloquial_auxiliaries(line, tokens):
             for t in _tokenize_janome(normal)]
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _nominal_reading_evidence(reading):
     from corrector import table_surfaces_for_reading
     for sf in table_surfaces_for_reading(reading, limit=8):
@@ -821,6 +822,40 @@ def _nominal_reading_tokens(text):
         if len(tail)>=2 and _nominal_reading_evidence(tail):
             return prefix+[Token(tail,'名詞',tail,tail,t.end,len(text),True,'一般')]
     return []
+
+
+# 世の中の読みの集合（dict_index が読み込まれたときに入る）。かなの名詞の切れ目の裏付けに使う
+_WORLD_READING = None
+
+
+def _restore_interjection_split_nouns(line, tokens):
+    """かなで書いた名詞が、頭の1字の感動詞（お・え…）＋切れ端に割れた形を1語に戻す
+    （おてほん＝お/て/ほん → お手本 の読みの名詞。2026-10-23）。
+
+    文の途中で感動詞が後ろのかなに直に付くことは無い。かなの並びの頭から
+    語の切れ目までを長い順に見て、辞書に名詞の読みとして在るところで1語にする。
+    表記や同音語は選ばない（本文はかなのまま）。"""
+    import re
+    out=list(tokens)
+    for match in re.finditer(r'[ぁ-ゖー]{3,}',line):
+        a,b=match.span()
+        ids=[i for i,t in enumerate(out) if a<=t.start and t.end<=b]
+        if len(ids)<2:
+            continue
+        lo=ids[0]
+        first=out[lo]
+        if first.start!=a or first.pos!='感動詞' or len(first.surface)!=1:
+            continue
+        for j in range(ids[-1],lo,-1):
+            end=out[j].end
+            if end-a<3:
+                break
+            text=line[a:end]
+            if _nominal_reading_evidence(text) or (
+                    _WORLD_READING is not None and _WORLD_READING(text)):
+                out[lo:j+1]=[Token(text,'名詞',text,text,a,end,True,'一般')]
+                break
+    return out
 
 
 def _restore_unknown_predicates(line, tokens):
@@ -1104,11 +1139,12 @@ def _tokenize_field(line):
         tokens = _restore_colloquial_adjectives(line, tokens)
         tokens = _restore_nominal_readings(line, tokens)
         tokens = _restore_unknown_predicates(line, tokens)
+        tokens = _restore_interjection_split_nouns(line, tokens)
         return contextualize_tokens(tokens)
     return _tokenize_fallback(line)
 
 
-@lru_cache(maxsize=8192)
+@lru_cache(maxsize=_cache_size(8192))
 def dictionary_base_pos(surface):
     """48-VU: 同梱辞書の完全一致から、基本形として可能な品詞の詳細をすべて返す。
 
@@ -1131,7 +1167,7 @@ def dictionary_base_pos(surface):
 
 
 
-@lru_cache(maxsize=8192)
+@lru_cache(maxsize=_cache_size(8192))
 def dictionary_paradigms(surface):
     """完全一致する辞書項の品詞・活用型・活用形・原形・読み。"""
     if not HAS_JANOME or not surface:
@@ -1147,7 +1183,7 @@ def dictionary_paradigms(surface):
         return None
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def dictionary_prefix_paradigms(text):
     """Actual native entries at the unchanged start, from one trie lookup.
 
@@ -1211,7 +1247,7 @@ def native_dependent_noun_ending_possible(text):
     return completed(False)
 
 
-@lru_cache(maxsize=8192)
+@lru_cache(maxsize=_cache_size(8192))
 def dictionary_inflections(surface):
     """表記の全辞書項。未登録は空tuple、辞書なし/失敗はNone。"""
     forms=dictionary_paradigms(surface)
@@ -1221,7 +1257,7 @@ def dictionary_inflections(surface):
                  for pos,kind,form,base,reading in forms))
 
 
-@lru_cache(maxsize=8192)
+@lru_cache(maxsize=_cache_size(8192))
 def native_suru_form(surface,form,reading,allow_potential=True):
     """48-AIT: the grammatical suru is native サ変, not a godan homograph.
 
@@ -1235,7 +1271,7 @@ def native_suru_form(surface,form,reading,allow_potential=True):
                for pos,kind,inflection,base,rd in dictionary_paradigms(surface) or ())
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_potential_origins(surface,form,reading,pos_prefix='動詞,自立,'):
     """Native ichidan/godan pairs with the same spelling stem and reading.
 
@@ -1290,7 +1326,7 @@ def native_te_auxiliary_attachment_mismatch(previous,auxiliary):
                     dictionary_inflections(a.surface+b.surface) or ()))
 
 
-@lru_cache(maxsize=8192)
+@lru_cache(maxsize=_cache_size(8192))
 def native_potential_auxiliary(surface,form,reading):
     """An attested potential of a native non-independent godan auxiliary."""
     origins=tuple(row for row in native_potential_origins(surface,form,reading,'動詞,非自立,')
@@ -1479,7 +1515,7 @@ def _restore_polite_aux_boundaries(tokens):
     return out
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_sahen_compound_reading(surface):
     """An independently classified action with a native sahen suffix.
 
@@ -1569,7 +1605,7 @@ def _contextualize_nominal_actions(tokens):
     return out
 
 
-@lru_cache(maxsize=8192)
+@lru_cache(maxsize=_cache_size(8192))
 def _nominal_suffix_parts(surface):
     """一般名詞＋一般接尾辞の辞書上の区切りを返す。語の名簿は増やさない。"""
     if len(surface)<3 or not all('一'<=c<='鿿' for c in surface):
@@ -1677,7 +1713,7 @@ def _restore_imperative_emphasis(tokens):
     return out
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _native_adverbial_noun(surface,reading,voiced_suffix=False):
     """Same spelling/reading has a native adverbial nominal use."""
     readings={reading}
@@ -1689,7 +1725,7 @@ def _native_adverbial_noun(surface,reading,voiced_suffix=False):
                for pos,form,base,rd in dictionary_inflections(surface) or ())
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _native_nominal_case_entry(surface, reading):
     """Same spelling and reading may have a noun sense as well as an adverb sense."""
     entries=[(pos,base) for pos,form,base,rd in dictionary_inflections(surface) or ()
@@ -2306,7 +2342,7 @@ _CLAUSAL_OBJECT_BASES = frozenset("""
 """.split())
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def allows_bare_clause_object(following):
     """「風起こるを知る」のような、名詞化した節を受ける述語か。
 
@@ -2325,7 +2361,7 @@ def allows_bare_clause_object(following):
     return False
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def native_excess_head(surface, reading):
     """48-AGP: native V-continuative / adjective stem before bound sugiru.
 
@@ -2347,7 +2383,7 @@ def native_excess_head(surface, reading):
     return None
 
 
-@lru_cache(maxsize=1024)
+@lru_cache(maxsize=_cache_size(1024))
 def native_final_particle_tail(reading):
     """The entire reading is an attested sequence of sentence particles."""
     if not reading:return True
@@ -2426,7 +2462,7 @@ def _native_small_particle_tail(word,index,parts):
     return False
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def colloquial_particle_normal_form(line):
     """Read a proved casual final よ without changing text or positions."""
     if not HAS_JANOME or 'ょ' not in line:return line
@@ -2457,7 +2493,7 @@ def colloquial_particle_normal_form(line):
     return result
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def source_yoon_spans(text):
     """Malformed palatalized syllables in the original kana sequence.
 

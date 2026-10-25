@@ -132,6 +132,11 @@ POS_FONT_DEFAULTS_VERSION = '3'
 # 2: 印を一度オフにした（重かった）。3: Ctrl を押している間だけ出る下線に
 # なったので、一度オンに戻した（2026-10-12 うにさん）。
 CTRL_BOUNDARIES_DEFAULTS_VERSION = '3'
+# 2: the debug menu's two waits (ime_quiet・key_quiet) default to 40ms (2026-10-23 うにさん「このデフォルトを
+#    画像のとおりにする。アップデート適用前に、変更前のデフォルトに設定している場合は、新しいデフォルトに変更する」).
+#    A file from before keeps a value the user chose, and lets one set to the old default (100 / 300) go.
+DEBUG_TIMINGS_DEFAULTS_VERSION = '2'
+DEBUG_TIMINGS_OLD_DEFAULTS = {'ime_quiet': 100, 'key_quiet': 300, 'quick_quiet': 250}   # quick_quiet: 「簡易入力の待ちも250から40にする」
 
 
 DEFAULTS = {
@@ -300,6 +305,8 @@ DEFAULTS = {
     # デバッグメニューで縮めた待ち（2026-10-18 うにさん）。既定と違うものだけ
     # 入れる（鍵→ms など）。読むときに debug_menu.normalize で範囲の外を捨てる。
     'debug_timings': {},
+    # デバッグメニューの既定の版（上の DEBUG_TIMINGS_DEFAULTS_VERSION）
+    'debug_timings_defaults': DEBUG_TIMINGS_DEFAULTS_VERSION,
 }
 
 # 古い設定ファイルからの読み替え。
@@ -405,7 +412,7 @@ class Settings:
             elif key in allowed:
                 if value in allowed[key]:
                     self.values[key] = value
-            elif key in ('pos_font_defaults', 'ctrl_boundaries_defaults'):
+            elif key in ('pos_font_defaults', 'ctrl_boundaries_defaults', 'debug_timings_defaults'):
                 continue    # 下で古い初期値を移してから新しい版にする
             elif isinstance(default, str):
                 # 決められた候補を持たない文字列の設定
@@ -415,6 +422,14 @@ class Settings:
                     self.values[key] = value
         if data.get('pos_font_defaults') != POS_FONT_DEFAULTS_VERSION:
             _move_to_new_pos_defaults(self.values, data)
+        if data.get('debug_timings_defaults') != DEBUG_TIMINGS_DEFAULTS_VERSION:
+            # Once: a wait left at the old default goes to the new one (by leaving the saved value out)
+            timings = dict(self.values.get('debug_timings') or {})
+            for key, old in DEBUG_TIMINGS_OLD_DEFAULTS.items():
+                if timings.get(key) == old:
+                    timings.pop(key)
+            self.values['debug_timings'] = timings
+            self.values['debug_timings_defaults'] = DEBUG_TIMINGS_DEFAULTS_VERSION
         if data.get('ctrl_boundaries_defaults') != CTRL_BOUNDARIES_DEFAULTS_VERSION:
             # 印は Ctrl を押している間だけになったので一度オンにする
             # （2026-10-12 うにさん）。あとでオフにした人の設定は、新しい

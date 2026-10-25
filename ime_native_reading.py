@@ -7,10 +7,11 @@ then require ordinary
 first conversion to reproduce the complete original text. This is a source
 hypothesis, not observed key history or a table of desired corrections.
 """
+from cache_limits import size as _cache_size   # 控えの上限は cache_limits で1か所に（2026-10-24）
 from functools import lru_cache
 
 
-@lru_cache(maxsize=4096)
+@lru_cache(maxsize=_cache_size(4096))
 def _native_alternatives(character):
     from morphology import dictionary_inflections
     from okurigana import NEEDS_OKURIGANA

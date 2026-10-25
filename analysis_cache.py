@@ -169,7 +169,9 @@ import zlib
 # 2026-10-09a: 候補キャッシュを語彙identity/revisionごとに分離。
 # 2026-10-22a: v1.15.1。補正（corrector・contextual_repair・last_keystroke・loanword・oddness）の
 #              答えが変わるので、古い控えを使わない（public_nominal_cache も同じ印で作り直し）。
-ENGINE_STAMP = '2026-10-22a'
+# 2026-10-24a: v1.16。10-23・10-24 の束（文節の道・語の組・打鍵間隔・シフトの抜け・キー傾向・
+#              形式名詞をかなのまま 等）で補正の答えが変わるので、古い控えを使わない（public_nominal_cache も同じ印）。
+ENGINE_STAMP = '2026-10-24a'
 
 # 控えの形式の版。作りを変えたら上げる（古い控えは捨てられる）。
 CACHE_VERSION = 1
@@ -333,6 +335,10 @@ def _engine_source_stamp(app_dir):
                  # 英文のスペースの入れ忘れ（項目48-ES）と、その名簿。
                  # キーボードの配列の表（項目48-KB）
                  'en_space.py', 'seed_english_names.py', 'keyboard_layout.py',
+                 # 英語の打ち違いと、その使われやすさの表（2026-10-16）
+                 'en_typo.py', 'en_freq.json.gz',
+                 # 前後の語で決める英語の取り違えと、その語の組の表（2026-10-23）
+                 'en_context.py', 'en_context.json.gz',
                  # **1語として在るかの表**（項目48-FC）。
                  # 差し替えると補正の答えが変わるので見張る。
                  'seed_japanese.py', 'seed_japanese.txt.gz'):

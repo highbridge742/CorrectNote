@@ -13,6 +13,11 @@ class Occurrence:
     end:int
     surface:str
     reading:str
+    # The keys typed for this commit (stroke_keys・shift_slip・keystroke_doubt・2026-10-24): [(key, pressed ms), ...]
+    # and the Shift presses [(down ms, up ms), ...], in memory only, moved and dropped with the reading. Empty when
+    # they are not known.
+    strokes:tuple=()
+    shifts:tuple=()
 
 
 @dataclass(frozen=True)
@@ -82,7 +87,7 @@ class Document:
         self.text=text
         return True
 
-    def remember(self,start,end,surface,reading):
+    def remember(self,start,end,surface,reading,strokes=(),shifts=()):
         from ime_readings import reading_to_hiragana,is_kana_reading,literal_reading_core
         reading=reading_to_hiragana(reading)
         if not 0<=start<end<=len(self.text) or self.text[start:end]!=surface:
@@ -92,7 +97,8 @@ class Document:
             if core is None:return False
             lo,hi,reading=core
             surface=surface[lo:hi];start,end=start+lo,start+hi
-        entry=Occurrence(start,end,surface,reading)
+            strokes=shifts=()   # the keys were for the whole commit, not for this part of it
+        entry=Occurrence(start,end,surface,reading,tuple(strokes),tuple(shifts) if strokes else ())
         live=tuple(x for x in self.occurrences if x.end<=start or end<=x.start)+(entry,)
         live=tuple(sorted(live,key=lambda x:(x.start,x.end,x.reading)))
         if live==self.occurrences:return False

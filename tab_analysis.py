@@ -3,7 +3,7 @@
 
 No history is written. Shared text-only disk caches remain a separate concern.
 """
-from analysis_worker import state_key,same_model_state,result_compatible
+from analysis_worker import state_key,same_model_state,result_compatible,model_moved,choices_moved
 from analysis_cache import reusable_result
 import analysis_work_app as work
 
@@ -60,6 +60,11 @@ def completed(app,text,owner=None):
         current=state_key(app);previous=saved['dependencies']
         if previous==current:return saved
         if same_model_state(previous,current):
+            if model_moved(previous,current):
+                # The vocabulary or the choice memory moved (2026-10-24): the saved context was built from the
+                # old store. Keep this baseline; the background step prepares the context again and keeps the
+                # rows that did not use what moved (background_values → rebase_background)
+                return None
             results=[r if result_compatible(app,r,previous,current) else None for r in saved['results']]
             if all(r is not None for r in results):
                 saved['dependencies']=current
@@ -166,8 +171,10 @@ def restore_previous(app,text,lines):
         if (base.get('prepared') or {}).get('context') is not None:
             import analysis_async
             analysis_async._save_context(app,text,base['prepared'])
-    app._units_cache.update(base.get('units',{}))
-    app._suspect_units_cache.update(base.get('suspect',{}))
+    if not choices_moved(base['dependencies'],dependencies):
+        # the units were built with the choice memory of their time (2026-10-24): after it moved they are built again
+        app._units_cache.update(base.get('units',{}))
+        app._suspect_units_cache.update(base.get('suspect',{}))
     if same and parked:
         app._units_cache.update(parked.get('units',{}))
         app._suspect_units_cache.update(parked.get('suspect_units',{}))
@@ -211,6 +218,8 @@ def background_values(app,text,owner,saved):
     if results is None:
         base=previous_values(app,owner)
         if not base or not same_model_state(base.get('dependencies'),state_key(app)):return {}
+        if choices_moved(base.get('dependencies'),state_key(app)):
+            return dict(previous=base,units={},suspect_units={})      # built again with the new choices
         return dict(previous=base,units=dict(base.get('units',{})),suspect_units=dict(base.get('suspect',{})))
     units,suspect=getattr(app,'_tab_units_cache',{}).get(text,({},{}))
     return dict(results=list(results),units=dict(units),suspect_units=dict(suspect))
@@ -247,6 +256,7 @@ def background_compatible(app,state):
     owner=state.get('owner')
     current=state_key(app);previous=state.get('dependencies')
     if (owner is None or not same_model_state(previous,current)
+            or model_moved(previous,current)      # its context is from the old store: start from the baseline
             or tuple(state.get('readings',()))!=_readings(app,owner)
             or tuple(state.get('calculations',()))!=_calculations(app,owner)):
         return False

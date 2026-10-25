@@ -4,13 +4,14 @@
 These are reading-level style judgments, not typo/answer pairs. An explicit
 user choice still takes precedence. Native forms prove the same inflection.
 """
+from cache_limits import size as _cache_size   # 控えの上限は cache_limits で1か所に（2026-10-24）
 from functools import lru_cache
 
 # Everyday note-writing defaults; the rare written forms remain valid words.
 KANA_ACTION_READINGS=frozenset(('まとめる','ためらう','うなずく'))
 
 
-@lru_cache(maxsize=1024)
+@lru_cache(maxsize=_cache_size(1024))
 def prefers_kana(face,reading,before="",following=""):
     from morphology import dictionary_inflections,native_spelling_only
     if not face or not any('一'<=c<='鿿' for c in face):return False
@@ -30,7 +31,7 @@ def prefers_kana(face,reading,before="",following=""):
     return False
 
 
-@lru_cache(maxsize=1024)
+@lru_cache(maxsize=_cache_size(1024))
 def person_reference(before,following):
     """Positive person meaning in the same explicit case or copular slot."""
     from morphology import tokenize

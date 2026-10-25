@@ -45,10 +45,14 @@ class FamiliarSpellingTests(unittest.TestCase):
             readings=Q.reading_evidence(target,tk,a.dict_index)
             self.assertEqual({r.text for r in readings},{source})
             for reading in readings:
-                for generator in (Q.key_repairs,Q.nonadjacent_key_repairs,
+                # 2026-10-24（keytend・うにさん「縦も入れる方向で詰める」）: 同じ指の1段上下は置き換えの隣になった
+                # （い E ↔ し D は中指の上下）
+                self.assertIn('しゅうせい',{r.reading for r in Q.key_repairs(reading.text)})
+                for generator in (Q.nonadjacent_key_repairs,
                                   Q.adjacent_shift_key_repairs,Q.neighbor_shift_key_repairs):
                     self.assertNotIn('しゅうせい',{r.reading for r in generator(reading.text)})
-        for generator in (Q.key_repairs,Q.nonadjacent_key_repairs,
+        self.assertIn('し',{r.reading for r in Q.key_repairs('い')})
+        for generator in (Q.nonadjacent_key_repairs,
                           Q.adjacent_shift_key_repairs,Q.neighbor_shift_key_repairs):
             self.assertNotIn('し',{r.reading for r in generator('い')})
         proof=next(r for r in Q.key_repairs('とゅうせい') if r.reading=='しゅうせい')
@@ -85,7 +89,11 @@ class FamiliarSpellingTests(unittest.TestCase):
                     self.assertEqual({r.text for r in readings},{span})
                     for generator in (Q.key_repairs,Q.nonadjacent_key_repairs,
                                       Q.adjacent_shift_key_repairs,Q.neighbor_shift_key_repairs):
-                        self.assertNotIn(wanted,{r.reading for r in generator(span)})
+                        if generator is Q.key_repairs and span!='あ゛かく':
+                            # 2026-10-24（keytend・うにさん「縦も入れる方向で詰める」）: 同じ指の1段上下は置き換えの隣になった（き G↔か T・め /↔け :）。あ゛かく は今も届かない
+                            self.assertIn(wanted,{r.reading for r in generator(span)})
+                        else:
+                            self.assertNotIn(wanted,{r.reading for r in generator(span)})
         # Old cross-row substitutions stay excluded; observed held outputs
         # are not completion expectations. The new inputs use real neighbors.
         for source,wanted,pressed,intended in (('い゛','で','い','て'),('す','か','す','か'),('れ','け','れ','け')):
@@ -821,13 +829,17 @@ class FamiliarSpellingTests(unittest.TestCase):
             for generator in (Q.key_repairs,Q.nonadjacent_key_repairs,
                               Q.adjacent_shift_key_repairs,Q.neighbor_shift_key_repairs):
                 with self.subTest(reading=reading,generator=generator.__name__):
-                    self.assertNotIn(expected,{r.reading for r in generator(reading)})
+                    if generator is Q.key_repairs and reading.startswith('きくにん'):
+                        # 2026-10-24（keytend・うにさん「縦も入れる方向で詰める」）: 同じ指の1段上下は置き換えの隣になった（き G↔か T）
+                        self.assertIn(expected,{r.reading for r in generator(reading)})
+                    else:
+                        self.assertNotIn(expected,{r.reading for r in generator(reading)})
         try:
             source='予定を聞く人しました。';a=initial()
             r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                                decisions=a.decisions,context_vec=None)
-            self.assertEqual(r['corrected'],source)
-            self.assertTrue(r['odd_spans'])
+            self.assertEqual(r['corrected'],'予定を確認しました。')   # keytend: きくにん→かくにん（縦）
+            self.assertFalse(r['odd_spans'])
             self.assertEqual(r['analysis_status'],'complete')
             a=initial();source='予定を書く人しました。'
             with patch.object(C,'_check_replacement',return_value=(None,'test_common_gate')):
@@ -855,7 +867,9 @@ class FamiliarSpellingTests(unittest.TestCase):
         import app,corrector as C,contextual_repair as Q
         from tests_analysis_async import initial
         from last_choice import set_active
-        for generator in (Q.key_repairs,Q.nonadjacent_key_repairs,
+        # 2026-10-24（keytend・うにさん「縦も入れる方向で詰める」）: 同じ指の1段上下は置き換えの隣になった
+        self.assertIn('しょくざい',{r.reading for r in Q.key_repairs('いょくざい')})
+        for generator in (Q.nonadjacent_key_repairs,
                           Q.adjacent_shift_key_repairs,Q.neighbor_shift_key_repairs):
             self.assertNotIn('しょくざい',{r.reading for r in generator('いょくざい')})
         for reading,pressed in (('とょくざい','と'),('はょくざい','は')):
@@ -871,6 +885,7 @@ class FamiliarSpellingTests(unittest.TestCase):
             self.assertIn('いょくざい',{r.text for r in readings})
             result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                                     decisions=a.decisions,context_vec=None)
+            # keytend: い→し（縦）は候補に出るが、読み直しの道では縦を使わないので行は元のまま＋紫
             self.assertEqual(result['corrected'],source)
             self.assertTrue(result['odd_spans'])
             self.assertEqual(result['analysis_status'],'complete')
@@ -1572,18 +1587,21 @@ class FamiliarSpellingTests(unittest.TestCase):
         from kana_layout import kana_key_distance
         self.assertEqual(kana_key_distance('と','し'),1.0)
         self.assertGreater(kana_key_distance('い','し'),1.0)
-        for generator in (Q.key_repairs,Q.nonadjacent_key_repairs,
+        # 2026-10-24（keytend・うにさん「縦も入れる方向で詰める」）: 同じ指の1段上下は置き換えの隣になった
+        self.assertTrue(any(row.reading=='しらべて' for row in Q.key_repairs('いらべて')))
+        for generator in (Q.nonadjacent_key_repairs,
                           Q.adjacent_shift_key_repairs,Q.neighbor_shift_key_repairs):
             self.assertFalse(any(row.reading=='しらべて' for row in generator('いらべて')))
         self.assertTrue(any(row.reading=='しらべて' and row.operation=='adjacent_substitution'
                             for row in Q.key_repairs('とらべて')))
-        for source in ('時刻をいらべて駅へ向かいます。','資料をいらべて帰ります。'):
+        for source,expected in (('時刻をいらべて駅へ向かいます。','時刻を調べて駅へ向かいます。'),
+                                ('資料をいらべて帰ります。','資料を調べて帰ります。')):
             with self.subTest(source=source):
                 a=initial()
                 result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,
                     decisions=a.decisions,context_vec=None)
-                self.assertEqual(result['corrected'],source)
-                self.assertTrue(result['odd_spans'])
+                self.assertEqual(result['corrected'],expected)   # keytend: い→し（縦）
+                self.assertFalse(result['odd_spans'])
                 self.assertEqual(result['analysis_status'],'complete')
         source='「時刻をとらべて駅へ向かいます」と入力しました。';a=initial()
         result=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """One physically justified intrusion plus one missing key in a relative verb."""
+from cache_limits import size as _cache_size   # 控えの上限は cache_limits で1か所に（2026-10-24）
 from functools import lru_cache
 
 
@@ -42,7 +43,7 @@ def _frames(source):
     return tuple(fields)
 
 
-@lru_cache(maxsize=2048)
+@lru_cache(maxsize=_cache_size(2048))
 def _finite_faces(reading, heads):
     import morphology as M
     from reading_segments import native_lexical_reading_faces

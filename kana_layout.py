@@ -25,6 +25,7 @@
 「押し間違えた可能性のある文字」を距離付きで列挙する。
 """
 
+from cache_limits import size as _cache_size   # 控えの上限は cache_limits で1か所に（2026-10-24）
 import functools
 import math
 import os
@@ -293,7 +294,7 @@ def single_key_drop_adjacency(typed, restored, max_distance=1.0):
                    for j in (i-1,i+1) if 0<=j<len(keys)) for i in positions)
 
 
-@functools.lru_cache(maxsize=4096)
+@functools.lru_cache(maxsize=_cache_size(4096))
 def multiple_key_drop_adjacency(typed, restored, max_distance=1.0):
     """48-AJM: pure multi-key deletion cannot bypass original adjacency.
 
@@ -526,11 +527,51 @@ def physical_keys_adjacent(p1, p2):
                 and same_half(p1, p2))
 
 
+# 指の受け持ち（タッチタイピングの標準）。列 0〜8 は 小・薬・中・人・人・人・人・中・薬、9 から右は小指。
+_FINGER_OF_COLUMN = (0, 1, 2, 3, 3, 4, 4, 5, 6)
+
+
+def _finger(p):
+    c = p[1]
+    return _FINGER_OF_COLUMN[c] if 0 <= c < len(_FINGER_OF_COLUMN) else 7
+
+
+import contextvars as _contextvars
+#: 縦の置き換えを候補に使ってよいか。補正の後の読み直し（last_keystroke の1打の戻し・文節の読み直し）の間は切る:
+#: そこは紫を手掛かりに正しい行の語も1打で替えてみる道で、縦まで広げると正しい語を別の語に替えた（合わない→合せない）
+VERTICAL_OK = _contextvars.ContextVar('VERTICAL_OK', default=True)
+
+
+def is_vertical_distance(d):
+    return d == VERTICAL_DISTANCE
+
+
+#: 同じ指の上下の置き換えの距離。横の隣（1.0）より少し遠く、隣として数える上限（1.05）の内側。
+VERTICAL_DISTANCE = 1.05
+
+
+def same_finger_vertical(p1, p2):
+    """同じ指で1段上・下のキーか（かな入力の置き換えの縦・2026-10-24）。
+
+    一般のタイピングの誤りでは、置き換えは同じ段の左右が最多で、次が同じ指の
+    上下（左右のおよそ 1/3〜1/2）。斜め（隣の指の上下）は採らない。うにさん
+    10-24「縦も入れる方向で詰める」。巻き込みの隣（physical_intrusion_keys_adjacent）
+    の中で、指が同じものだけ。
+    """
+    if p1 is None or p2 is None or abs(p1[0] - p2[0]) != 1:
+        return False
+    return (_finger(p1) == _finger(p2)
+            and physical_intrusion_keys_adjacent(p1, p2))
+
+
 @functools.lru_cache(maxsize=None)
 def _base_distance(c1, c2):
-    """Substitution distance; a different keyboard row is excluded."""
+    """Substitution distance: same row, or the same finger one row up/down."""
     p1,p2=KANA_POSITIONS.get(c1),KANA_POSITIONS.get(c2)
-    if p1 is None or p2 is None or p1[0]!=p2[0]:return FAR
+    if p1 is None or p2 is None:return FAR
+    if p1[0]!=p2[0]:
+        # 縦は横より一段弱い（同じ点の候補が並ぶと横が勝つ）。隣の広さ 1.05 の内側に置く
+        return VERTICAL_DISTANCE if same_finger_vertical(p1,p2) else FAR
     return _intrusion_base_distance(c1,c2)
 
 
@@ -592,7 +633,7 @@ def kana_key_distance(c1, c2, *, intrusion=False):
     2つのかな文字の「押し間違えやすさ」を距離で返す。
     0 に近いほど間違えやすい。FAR(99) は無関係。
 
-    置換は同じ段の左右だけを隣接とする。intrusion=True は巻き込み専用で、
+    置換は同じ段の左右と同じ指の上下を隣接とする。intrusion=True は巻き込み専用で、
     従来の上下・斜めを含む距離を使う。同一キーのShift・印は別扱い。
     **かな2文字と用途だけで決まる純粋な計算**なので、まるごと控える。
     組み合わせはかなの種類ぶんしか無い（数千通り）ので、
@@ -938,7 +979,7 @@ def mark_slip_enabled():
     return os.environ.get('CN_MARK_SLIP','1') != '0'
 
 
-@functools.lru_cache(maxsize=2048)
+@functools.lru_cache(maxsize=_cache_size(2048))
 def mark_slip_candidates(base, pressed, max_dist=1.05):
     """48-XO: 清音＋隣接キーを、清音＋濁点/半濁点の1打置換として読む。"""
     if base in MARK_OF or len(keystrokes(pressed)) != 1:
