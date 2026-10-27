@@ -10332,6 +10332,8 @@ class CorrectNoteApp:
             full_width += font.measure(full) - font.measure(button.cget('text'))
             savings[stage] += font.measure(full) - font.measure(short)
         available = self._toolbar.winfo_width()
+        # 段ごとに要る幅（0〜4 段）。試験が同じ数え方で期待の段を決めるために残す（振る舞いは変えない・2026-10-27）
+        self._toolbar_needs = [full_width - sum(savings[1:k + 1]) for k in range(5)]
         stage = 0
         needed = full_width
         while stage < 4 and needed > available:

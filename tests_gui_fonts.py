@@ -182,8 +182,13 @@ class FontTkTests(unittest.TestCase):
             row=int(sahen.grid_info()['row'])
             spinbox=next(w for w in form.grid_slaves(row=row,column=1)
                          if isinstance(w,tk.Spinbox))
-            gap=spinbox.winfo_x()-(sahen.winfo_x()+sahen.winfo_width())
+            # The label column is as wide as its widest label (連体詞・限定詞 since 冠詞 has its own row, 2026-10-26);
+            # the columns stay compact when the spinbox starts right after that column, not after 名詞（サ変）
+            column=[w for w in form.grid_slaves(column=0) if isinstance(w,tk.Label)]
+            label_right=max(w.winfo_x()+w.winfo_width() for w in column)
+            gap=spinbox.winfo_x()-label_right
             self.assertLessEqual(gap,8)
+            self.assertGreaterEqual(spinbox.winfo_x()-(sahen.winfo_x()+sahen.winfo_width()),0)
 
             buttons={w.cget('text'):w for w in children
                      if isinstance(w,tk.Button)}
