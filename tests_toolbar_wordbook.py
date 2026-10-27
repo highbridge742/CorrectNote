@@ -50,7 +50,10 @@ def child(phase):
             assert not errors, errors
             if predicate(): return
             time.sleep(.005)
-        raise AssertionError((getattr(a, '_analyze_last_error', None), a.status.cget('text')))
+        raise AssertionError((getattr(a, '_analyze_last_error', None), a.status.cget('text'),
+                              getattr(getattr(a, '_toolbar', None), 'winfo_width', lambda: None)(),
+                              getattr(a, '_toolbar_label_stage', None), getattr(a, '_toolbar_fit_job', None),
+                              getattr(a, '_toolbar_needs', None)))
 
     def done():
         return (not a._foreground_analysis_pending() and a._analyze_text == a.editor_source_text()
@@ -334,9 +337,11 @@ r.after(30,tick);r.mainloop()
                 print('TOOLBAR_NEEDS test', needs, 'app', getattr(a, '_toolbar_needs', None), flush=True)
                 needs=list(a._toolbar_needs[:4])
                 before=content();widths=[]
+                # How much wider the window is than the toolbar (measured, not assumed)
+                offset=root.winfo_width()-a._toolbar.winfo_width()
                 for stage in (0,1,2,3,2,1,0):
                     available=needs[stage]+4 if stage==0 else (needs[stage-1]+needs[stage])//2
-                    root.geometry('%dx520' % (available+32));root.update()
+                    root.geometry('%dx520' % (available+offset));root.update()
                     # Native border rounding can differ from the requested
                     # geometry by pixels. Require the measured width to enter
                     # this exact stage's interval, not an assumed client width.
@@ -347,10 +352,15 @@ r.after(30,tick);r.mainloop()
                     # _fit_toolbar_labels: the first stage whose width fits). On the CI desktop the widths measured
                     # at a narrower window differ from those at 1800 (2026-10-27), so the target interval above only
                     # steers the window; the label stage must agree with the app's numbers at that moment.
+                    # The app may go one stage further when the buttons laid out are wider than its font estimate
+                    # (the safety step in _fit_toolbar_labels): never less, and every button stays shown whole.
+                    root.update_idletasks()
                     latest=a._toolbar_needs;width=a._toolbar.winfo_width()
                     expected=next((k for k in range(4) if latest[k]<=width),4)
-                    assert a._toolbar_label_stage==expected,(stage,expected,a._toolbar_label_stage,available,width,needs,latest)
-                    stage=expected
+                    assert a._toolbar_label_stage>=expected,(stage,expected,a._toolbar_label_stage,available,width,needs,latest)
+                    stage=a._toolbar_label_stage
+                    row=sum(a._toolbar_width_of(w) for w in a._toolbar.pack_slaves())
+                    assert row<=width,(stage,row,width)
                     for button,long,short,threshold in variants:
                         assert button.cget('text')==(short if stage>=threshold else long)
                     for button in widgets:

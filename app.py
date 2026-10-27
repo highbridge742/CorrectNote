@@ -10339,10 +10339,20 @@ class CorrectNoteApp:
         while stage < 4 and needed > available:
             stage += 1
             needed -= savings[stage]
-        for button, full, short, threshold in variants:
-            label = short if stage >= threshold else full
-            if button.cget('text') != label:
-                button.config(text=label)
+        def apply_labels(stage):
+            for button, full, short, threshold in variants:
+                label = short if stage >= threshold else full
+                if button.cget('text') != label:
+                    button.config(text=label)
+        apply_labels(stage)
+        # 安全弁（2026-10-27・CI）: 字の幅の見積り（font.measure）は、実際のボタンの幅と食い違うことがある
+        # （CI の画面で、見積り 1555 に対して実際に並べると 1591。最後の「説明書」が押し出されて消えた）。
+        # 字を替えた後に、実際に並べた幅（_drop_toolbar_buttons と同じ数え方）で入るかを見て、入らなければ
+        # 次の段へ進む。ボタンを押し出すのは、全部の段で縮めても入らないときだけ。
+        while stage < 4 and sum(self._toolbar_width_of(w) for w in visible) > available:
+            stage += 1
+            needed -= savings[stage]
+            apply_labels(stage)
         # The additional ruler must still fit the existing minimum window.
         # Restore normal spacing when the window becomes wider again.
         reduction = min(4, (max(0, needed - available) + 2 * len(visible) - 1) // (2 * len(visible))) if visible else 0
