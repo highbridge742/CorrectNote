@@ -1097,6 +1097,11 @@ CorrectNote起動時に登録を試みます。
 <li><b>英単語の活用形</b>：lemminflect（Brad Jascob）。<a href="https://github.com/bjascob/LemmInflect/blob/master/LICENSE">MIT License</a></li>
 <li><b>常用漢字の表</b>：KANJIDIC2（Electronic Dictionary Research and Development Group）。<a href="https://www.edrdg.org/edrdg/licence.html">CC BY-SA 4.0</a></li>
 <li><b>常用漢字の表</b>：kanji-data（David Gouveia）。<a href="https://github.com/davidluzgouveia/kanji-data/blob/master/LICENSE">MIT License</a></li>
+<li><b>日本語の1語として在る表記</b>：SudachiDict（Works Applications Co., Ltd.。UniDic と NEologd の一部を含む）。<a href="https://www.apache.org/licenses/LICENSE-2.0">Apache License 2.0</a></li>
+<li><b>書籍を基準にした語の並べ替え・漢字の音訓</b>：UniDic（The UniDic Consortium）。<a href="https://clrd.ninjal.ac.jp/unidic/">修正 BSD License</a></li>
+<li><b>漢字の音訓（補い）</b>：Unihan データベース（Unicode, Inc.）。<a href="https://www.unicode.org/license.txt">Unicode License</a></li>
+<li><b>英単語の一覧</b>（英単語の品詞と使われやすさの表の範囲）：SCOWL（Kevin Atkinson）。<a href="http://wordlist.aspell.net/scowl-readme/">SCOWL License</a></li>
+<li><b>英単語の組の多さ</b>（辞書ファイルの入手元）：symspellpy（mammothb）。<a href="https://github.com/mammothb/symspellpy/blob/master/LICENSE">MIT License</a></li>
 </ul>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p>
 </section>
