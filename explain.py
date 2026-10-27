@@ -611,6 +611,56 @@ def candidate_pos_line(surface, tokenize_fn):
     return name
 
 
+def _number_spans(text, prev_text='', next_text='', source_context=None):
+    """`text` の中で、色が1つの数（数詞）として塗る範囲 `(始まり, 終わり)`。
+
+    判定は色と同じ `pos_font._NUMBER` の1本（48-GN）——数字の前の
+    マイナス（`-5`・`－５`・`−3.2`）と、数字の間の小数点・桁区切り
+    （`-1,234.5`）。`7-3`・`2026-10-26`・`a-1` のハイフンは入らない
+    （2026-10-26 うにさん「数字の前のマイナスを、数詞のフォントカラーに
+    含める」）。前後の字は、行（`source_context`）か隣の単位の字で見る。"""
+    try:
+        from pos_font import _NUMBER
+    except Exception:
+        return []
+    before, after = (prev_text or '')[-1:], (next_text or '')[:2]
+    if source_context is not None and len(source_context) == 3:
+        source, start, end = source_context
+        if isinstance(source, str) and source[start:end] == text:
+            before, after = source[max(0, start - 1):start], source[end:end + 2]
+    found = []
+    for m in _NUMBER.finditer(before + text + after):
+        a = max(m.start() - len(before), 0)
+        z = min(m.end() - len(before), len(text))
+        if a < z:
+            found.append((a, z))
+    return found
+
+
+def _join_number_tokens(text, toks, spans):
+    """色が1つの数と塗る範囲に入る語を、1語の数詞にまとめる。"""
+    if not spans or ''.join(t[0] for t in toks) != text:
+        return toks
+    starts, position = [], 0
+    for t in toks:
+        starts.append(position)
+        position += len(t[0])
+    out, i = [], 0
+    while i < len(toks):
+        hit = next(((a, z) for a, z in spans if a == starts[i]), None)
+        if hit is not None:
+            j = i
+            while j < len(toks) and starts[j] + len(toks[j][0]) <= hit[1]:
+                j += 1
+            if j > i and starts[j - 1] + len(toks[j - 1][0]) == hit[1]:
+                out.append((text[hit[0]:hit[1]], '名詞:数', '', '', True, ''))
+                i = j
+                continue
+        out.append(toks[i])
+        i += 1
+    return out
+
+
 def _pos_lines(text, tokenize_fn=None, store=None, pos_hint=None,
                infl_hint='', atomic_hint=False, known_hint=True,
                prev_text='', next_text='', dict_index=None,
@@ -656,6 +706,11 @@ def _pos_lines(text, tokenize_fn=None, store=None, pos_hint=None,
                 from morphology import HAS_JANOME
                 if HAS_JANOME:
                     return [UNKNOWN_POS+'（原文の語の区切りに揃っていません）']
+    # **色が数詞と塗る範囲は、数詞と言う**（2026-10-26）——数字の前の
+    # マイナス・小数点・桁区切りだけを選んでも、色と同じ行を名乗る。
+    _numbers = _number_spans(text, prev_text, next_text, source_context)
+    if (0, len(text)) in _numbers:
+        return [pos_name('名詞:数', text, '', '', has_reading=True)]
     # **1字の助詞は、行の文脈の品詞で言う**（項目48-PW・2026-09-04）。
     # この関数は範囲の文字列だけを解析し直すので、`が`・`で` を単独で
     # 掛けると janome は文頭の「接続詞」（だが・それで の類）と
@@ -707,6 +762,7 @@ def _pos_lines(text, tokenize_fn=None, store=None, pos_hint=None,
     toks = context_tokens or _tokens_for(text, tokenize_fn)
     if not toks:
         return [UNKNOWN_POS]
+    toks = _join_number_tokens(text, toks, _numbers)
     if (store is not None and len(toks) >= 2 and len(text) >= 4
             and all('ぁ' <= c <= 'ゖ' or c == 'ー' for c in text)):
         try:
@@ -915,7 +971,7 @@ def english_pos_name(written, info):
     notes = ['英語']
     if whole:
         notes.append(f'{whole} の一部')
-    row = en_pos.CATEGORY.get(code, en_pos.UNKNOWN)
+    row = name if name == '冠詞' else en_pos.CATEGORY.get(code, en_pos.UNKNOWN)
     if row != name:
         notes.append(f'色は{row}の行')
     others = []
@@ -925,6 +981,23 @@ def english_pos_name(written, info):
             others.append(label)
     if others:
         notes.append('ほかの読み：' + '・'.join(others))
+    try:
+        import ui_lang
+        english_ui = not ui_lang.is_japanese()
+    except Exception:
+        english_ui = False
+    if english_ui:
+        # 英語の表示では「英語」と書かない（英語の画面で英語の語なのは見れば分かる・2026-10-26 うにさん
+        # 「Englishと書かれているのは要る？翻訳漏れがある」）。残りの注も英語で組む
+        tr = ui_lang.tr
+        en_notes = []
+        if whole:
+            en_notes.append(f'part of {whole}')
+        if row != name:
+            en_notes.append(f'colored as {tr(row)}')
+        if others:
+            en_notes.append('also ' + ', '.join(tr(o) for o in others))
+        return tr(name) + (f' ({"; ".join(en_notes)})' if en_notes else '')
     return f'{name}（{"。".join(notes)}）'
 
 

@@ -71,9 +71,9 @@ class EnglishPosMenuTest(unittest.TestCase):
 
     def test_words_say_their_english_part_of_speech(self):
         got = self._labels(_LINES[0])
-        self.assertEqual(got['I'][0][1], ['代名詞（英語。色は名詞の行）'])
+        self.assertEqual(got['I'][0][1], ['代名詞（英語）'])   # 代名詞 has its own colour row (2026-10-26)
         self.assertEqual(got['think'][0][1], ['動詞（英語）'])
-        self.assertEqual(got['the'][0][1], ['冠詞（英語。色は連体詞の行）'])
+        self.assertEqual(got['the'][0][1], ['冠詞（英語）'])
         self.assertTrue(got['state'][0][1][0].startswith('名詞（英語'))
         self.assertEqual(got['of'][0][1], ['前置詞（英語。色は助詞の行）'])
         self.assertEqual(got['power'][0][1], ['名詞（英語）'])
@@ -146,9 +146,14 @@ class EnglishPosMenuTest(unittest.TestCase):
         for line in _LINES:
             spans = [m.span() for m in pos_font._LATIN.finditer(line)]
             judged = en_pos.judge(line, spans)
+            # a / an / the は「冠詞」の行、this などほかの限定詞は連体詞の行（2026-10-26）
             self.assertEqual(en_pos.categories(line, spans),
-                             [en_pos.CATEGORY[code] if code else en_pos.UNKNOWN
-                              for _codes, code, _whole in judged])
+                             ['冠詞' if code == 'D' and en_pos._key(line[a:z]) in en_pos.ARTICLES
+                              else en_pos.CATEGORY[code] if code else en_pos.UNKNOWN
+                              for (a, z), (_codes, code, _whole) in zip(spans, judged)])
+        spans = [m.span() for m in pos_font._LATIN.finditer('this book and the pen')]
+        self.assertEqual(en_pos.categories('this book and the pen', spans)[0::3],
+                         ['連体詞', '冠詞'])
 
 
 if __name__ == '__main__':

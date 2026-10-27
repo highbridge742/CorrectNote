@@ -232,6 +232,12 @@ def context(app,text,lines):
     return None
 
 
+def _tab_has_kana(text):
+    # The file tab's whole text decides half-width -> full-width (2026-10-26・analysis_work.tab_has_kana)
+    from analysis_work import tab_has_kana
+    return tab_has_kana(text)
+
+
 def _unit_values(app,result,value):
     key=(result['original'],result['corrected'])
     if not hasattr(app,'_units_cache'):app._units_cache={}
@@ -254,8 +260,11 @@ def line_step(app,count):
         i=todo[pos];lines=app._prev_lines
         if not 0<=i<min(len(lines),len(app.line_results)):
             app._analyze_pos+=1;continue
-        units_only=getattr(app,'_analyze_units_only',False)
         res=app.line_results[i]
+        # Restoring from the saved values builds only the display units; a row the saved values left
+        # unfinished (a tab saved part-way, analysis_cache partial・2026-10-27) is corrected here in full
+        from tab_analysis import reusable_result
+        units_only=getattr(app,'_analyze_units_only',False) and reusable_result(res)
         from literal_lines import literal_only,result as literal_result,units as literal_units
         if literal_only(lines[i]):
             res=literal_result(lines[i])
@@ -285,7 +294,8 @@ def line_step(app,count):
                     nearby=() if units_only else app._nearby_words_for(i),
                     lines=lines if units_only else None,
                     recent=app.recent_words.words() if getattr(app,'recent_words',None) is not None else (),
-                    readings=input_work.line_readings(app,i,lines),calculations=input_work.line_calculations(app,i,lines),attested=getattr(app,'_attested_surfaces',{}))
+                    readings=input_work.line_readings(app,i,lines),calculations=input_work.line_calculations(app,i,lines),attested=getattr(app,'_attested_surfaces',{}),
+                    tab_has_kana=None if units_only else _tab_has_kana(getattr(app,'_analyze_text',None)))
                 import ime_speculation
                 value=None if units_only else ime_speculation.take(app,i,task)
                 if value is None:
@@ -355,7 +365,8 @@ def background_step(app,st):
                 keyboard=keyboard_layout.spec(app.settings),
                 nearby=nearby,attested=st['attested'],
                 recent=app.recent_words.words() if getattr(app,'recent_words',None) is not None else (),
-                readings=_background_readings(st,i),calculations=_background_readings(st,i,'calculations')),scope,background=True)
+                readings=_background_readings(st,i),calculations=_background_readings(st,i,'calculations'),
+                tab_has_kana=None if units_only else _tab_has_kana(st['text'])),scope,background=True)
     if value is None:return
     if st['ctx'] is None:
         _save_context(app,st['text'],value)

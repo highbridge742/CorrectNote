@@ -1,7 +1,11 @@
 # -*- coding: utf-8 -*-
 """Small decimal arithmetic parser for explicitly requested quote calculations."""
-from decimal import Decimal, DecimalException, localcontext
+from decimal import Decimal, DecimalException, ROUND_DOWN, localcontext
 import re
+
+# Answers keep 4 decimal places; the 5th and beyond are cut toward zero, never rounded
+# (2026-10-26 うにさん「計算モードの答えは、小数点第4位までとし、第5位からは切り捨てる」).
+_PLACES = Decimal('0.0001')
 
 
 _INPUT_CHARACTERS = {c + 0xFEE0: c for c in range(0x21, 0x7F)}
@@ -56,12 +60,90 @@ def calculate(expression):
             value = parse(0, 0)
             if position != len(tokens) or not value.is_finite():
                 return None
+            try:
+                value = value.quantize(_PLACES, rounding=ROUND_DOWN)
+            except DecimalException:
+                pass        # too many digits to carry 4 places: no fraction worth cutting is left
             if value == 0:
                 return '0'
             result = format(value, 'f')
             return result.rstrip('0').rstrip('.') if '.' in result else result
     except (ValueError, DecimalException, RecursionError):
         return None
+
+
+# A formula typed onto an answer (12+3 → 15, then *2) is worked out from the answer as shown, not
+# from the whole text (12+3*2 would be 18): 15*2 → 30 (2026-10-26 うにさん「計算の答えが出た直後に限り、
+# さらに答えを使った計算式を組んだ場合、再計算する」). Such a calculation keeps `splits`: where, in its
+# text, each earlier answer ended. The pairs seen here are remembered so the display, which only has the
+# text and the answer, can still tell such an answer is right.
+_CHAINS = {}
+
+
+def evaluate(surface, splits=()):
+    """The answer of `surface`, worked out answer by answer at `splits` (no splits: calculate)."""
+    splits = tuple(splits or ())
+    if not splits:
+        return calculate(surface)
+    if (not isinstance(surface, str) or list(splits) != sorted(set(splits))
+            or any(type(s) is not int or not 0 < s < len(surface) for s in splits)):
+        return None
+    value, position = '', 0
+    for split in splits:
+        value = calculate(value + surface[position:split])
+        if value is None:
+            return None
+        position = split
+    rest = surface[position:].translate(_INPUT_CHARACTERS).lstrip(' \t')
+    if not rest or rest[0] not in '+-*/':
+        return None         # what follows an answer starts with an operator
+    value = calculate(value + rest)
+    if value is not None:
+        _CHAINS[(surface, value)] = splits
+        while len(_CHAINS) > 4096:
+            _CHAINS.pop(next(iter(_CHAINS)))
+    return value
+
+
+def known_splits(surface, result):
+    """Splits of an answer worked out from earlier answers, when it is one; else ()."""
+    if calculate(surface) == result:
+        return ()
+    return _CHAINS.get((surface, result), ())
+
+
+def answers(surface):
+    """Every answer `surface` may be showing: the plain one and any worked out from earlier answers."""
+    found = [calculate(surface)]
+    found.extend(value for (text, value) in _CHAINS if text == surface and value not in found)
+    return [value for value in found if value is not None]
+
+
+_FORMULA_RUN = re.compile(r'[0-9０-９.．+\-*/×÷−＋－＊／()（） 　]+')
+_NOT_A_FORMULA = (re.compile(r'[0-9]+(?:-[0-9]+){2,}'),     # 2026-10-26・03-1234-5678
+                  re.compile(r'[0-9]+(?:/[0-9]+){2,}'))     # 2026/10/26
+
+
+def written_formula(text):
+    """The formula written at the start of `text` (= typed in front of it), or ''.
+
+    Dates and telephone numbers (digits joined by two or more - or /) are not formulas."""
+    match = _FORMULA_RUN.match(text or '')
+    run = match.group(0).rstrip(' 　') if match else ''
+    normalized = run.translate(_INPUT_CHARACTERS).strip()
+    if (not normalized or quote_enter_kind(run)[0] != 'calculation'
+            or any(rx.fullmatch(normalized) for rx in _NOT_A_FORMULA) or calculate(run) is None):
+        return ''
+    return run
+
+
+def continuation(text):
+    """`text` typed right after an answer, when it carries the answer on (*2 ・ + 3 ・ ÷4); else ''."""
+    normalized = (text or '').translate(_INPUT_CHARACTERS).strip(' \t')
+    if (not normalized or normalized[0] not in '+-*/' or not any(c.isdigit() for c in normalized)
+            or _FORMULA_RUN.fullmatch(text) is None or calculate('0' + normalized) is None):
+        return ''
+    return text
 
 
 def clean_calculations(source,records):
@@ -71,10 +153,12 @@ def clean_calculations(source,records):
     for record in records:
         if not isinstance(record,dict):continue
         start,end,surface=(record.get(k) for k in ('start','end','surface'))
+        splits=record.get('splits') or ()
+        if not isinstance(splits,(list,tuple)):continue
         if (type(start) is not int or type(end) is not int
                 or not isinstance(surface,str) or not 0<=start<end<=len(source)
-                or source[start:end]!=surface or calculate(surface) is None):continue
-        valid.append(dict(start=start,end=end,surface=surface))
+                or source[start:end]!=surface or evaluate(surface,splits) is None):continue
+        valid.append(dict(start=start,end=end,surface=surface,**({'splits':list(splits)} if splits else {})))
     clean=[];end=0
     for record in sorted(valid,key=lambda x:(x['start'],x['end'])):
         if record['start']<end:continue
@@ -84,14 +168,28 @@ def clean_calculations(source,records):
 
 def continued_expression(source,calculations,start,end):
     """Extend a new quote range through adjacent, still-valid explicit formulas."""
-    if not 0<=start<end<=len(source):return start,''
+    start,expression,_splits=continued_calculation(source,calculations,start,end)
+    return start,expression
+
+
+def continued_calculation(source,calculations,start,end):
+    """Like continued_expression, also giving where each earlier answer ends (see evaluate).
+
+    The new part is worked out from the earlier answer as shown (12+3 → 15, then *2 → 30)."""
+    if not 0<=start<end<=len(source):return start,'',()
     previous={item.end:item for item in calculations
               if 0<=item.start<item.end<=start
               and source[item.start:item.end]==item.surface
-              and calculate(item.surface)==item.result}
-    while start in previous:
-        start=previous[start].start
-    return start,source[start:end]
+              and evaluate(item.surface,getattr(item,'splits',()))==item.result}
+    if start not in previous:return start,source[start:end],()
+    item=previous[start]
+    if not continuation(source[start:end]):
+        # Not an operator after the answer (digits typed onto 15 → 152): one formula, as before
+        while start in previous:
+            start=previous[start].start
+        return start,source[start:end],()
+    splits=tuple(getattr(item,'splits',()))+(item.end-item.start,)
+    return item.start,source[item.start:end],splits
 
 
 def apply_to_result(result, calculations, decisions=None, tokenize_fn=None, dict_index=None):
@@ -100,7 +198,7 @@ def apply_to_result(result, calculations, decisions=None, tokenize_fn=None, dict
     source=result['original']
     accepted=[item for item in calculations if 0<=item.start<item.end<=len(source)
               and source[item.start:item.end]==item.surface
-              and calculate(item.surface)==item.result
+              and evaluate(item.surface,getattr(item,'splits',()))==item.result
               and not (decisions is not None and decisions.blocks(item.surface,item.result))]
     if not accepted:return result
     def overlaps(start,end):
@@ -138,13 +236,13 @@ def calculation_spans(record, include_identity=False):
     while position<len(spans):
         start,end,kind,before=spans[position];position+=1
         if kind!='fixed' or not 0<=start<end<=len(text):continue
-        result=calculate(before)
-        if result is None or before==result and not include_identity:continue
-        while text[start:end]!=result and position<len(spans):
+        results=answers(before)
+        if not results or before in results and not include_identity:continue
+        while text[start:end] not in results and position<len(spans):
             first,last,next_kind,next_before=spans[position]
             if first!=end or next_kind!=kind or next_before!=before:break
             end=last;position+=1
-        if text[start:end]==result:yield start,end,before,result
+        if text[start:end] in results:yield start,end,before,text[start:end]
 
 
 def source_calculations(record,result):
@@ -156,7 +254,7 @@ def source_calculations(record,result):
     for (start,end),detail in zip(spans,details):
         before,value,category=detail
         if (category=='計算' and 0<=start<end<=len(record['original'])
-                and record['original'][start:end]==before and calculate(before)==value):
+                and record['original'][start:end]==before and value in answers(before)):
             found.append((start,end,before,value))
     return tuple(sorted(found))
 

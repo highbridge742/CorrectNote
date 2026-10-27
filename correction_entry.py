@@ -67,8 +67,12 @@ def _restore_fullwidth(line, half, result):
 def correct_line(line, store, context_vocab=None, decisions=None,
                  input_method='kana', context_vec=None, dict_index=None,
                  nearby_words=(), recent_words=(), occurrence_readings=(), occurrence_calculations=(),
-                 occurrence_strokes=()):
+                 occurrence_strokes=(), tab_has_kana=None):
     """補正エンジンの入口。
+
+    tab_has_kana: このファイルタブの文字列に平仮名か片仮名が1字以上あるか（tab_context.tab_has_kana で字で数える・
+    バイトでは見ない）。False なら半角のまま打った部分の補正（半角→全角）は掛けない（完全に英語の環境での誤検知を防ぐ・
+    うに 2026-10-26）。None（渡されない）は今まで通り。
 
     occurrence_strokes: 確定ごとの打鍵 [(start, end, surface, reading, strokes[, shifts])]（strokes・shifts は
     shift_slip.ShiftStrokeClock.take() の [(キーの字, 押した ms)]・[(シフトの押し ms, 離し ms)]）。中身のないシフトがあれば
@@ -82,6 +86,8 @@ def correct_line(line, store, context_vocab=None, decisions=None,
     import used_keys as _used_keys
     token, record = _used_keys.start()
     try:
+      from tab_context import tab_kana as _tab_kana
+      with _tab_kana(tab_has_kana):
         result = _correct_line_strokes(line, store, context_vocab, decisions, input_method, context_vec, dict_index,
                                        nearby_words, _used_keys.RecentWords(recent_words or ()),
                                        occurrence_readings, occurrence_calculations, occurrence_strokes)
@@ -102,6 +108,9 @@ def _correct_line_strokes(line, store, context_vocab, decisions, input_method, c
                                        occurrence_readings=readings, occurrence_calculations=calculations)
     result = _word_pair_mark(line, _lattice_place(line, plain(line), store, dict_index), store, dict_index, decisions)
     result = _renyou_tail_slip(line, result, decisions, input_method)
+    result = _degree_adverb(line, result, dict_index, decisions)
+    result = _dangling_verb(line, result, decisions)
+    result = _kanji_doubt(line, result, store, dict_index, decisions)
     if not occurrence_strokes:
         return result
     try:
@@ -139,6 +148,35 @@ def _word_pair_mark(line, result, store, dict_index, decisions):
     try:
         import word_pair_mark
         return word_pair_mark.repair_line(line, result, store, dict_index, corrector._decided_spans(line, decisions))
+    except Exception:
+        return result
+
+
+def _kanji_doubt(line, result, store, dict_index, decisions):
+    """常用漢字表の外の字を含む語を疑い、一般のミスタイプを当てて行がより自然になれば紫か直す（kanji_doubt・2026-10-26）。"""
+    try:
+        import kanji_doubt
+        return kanji_doubt.repair_line(line, result, store, dict_index, corrector._decided_spans(line, decisions))
+    except Exception:
+        return result
+
+
+def _dangling_verb(line, result, decisions):
+    """後ろに て・た の続かない音便形の動詞（くだい）に抜けた1字を足す（dangling_verb・2026-10-26）。
+    行の費用で1つに決まれば置く、並べば紫。"""
+    try:
+        import dangling_verb
+        return dangling_verb.repair_line(line, result, corrector._decided_spans(line, decisions))
+    except Exception:
+        return result
+
+
+def _degree_adverb(line, result, dict_index, decisions):
+    """程度の副詞が受ける述語の無い名詞にかかる所（とても思い→とても重い・degree_adverb・2026-10-26）。
+    同じ読みの形容詞が1つに決まれば置く、決まらなければ紫。"""
+    try:
+        import degree_adverb
+        return degree_adverb.repair_line(line, result, dict_index, corrector._decided_spans(line, decisions))
     except Exception:
         return result
 

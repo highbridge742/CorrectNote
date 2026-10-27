@@ -23,6 +23,9 @@ from unittest.mock import Mock, patch
 
 import clipboard_keep
 
+# 試験の中では外の窓へキーを送らない（quick_return・文変換の門。子のプロセスにも引き継がれる・2026-10-27）
+os.environ['CORRECTNOTE_NO_EXTERNAL_PASTE'] = '1'
+
 
 class FakeClipboard:
     """Stands in for the Windows clipboard: {format: data} and a sequence number."""

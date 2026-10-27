@@ -36,7 +36,8 @@
     版1  2026-08-25  うにさんの的リスト（見本なし）から11対
 """
 
-VERSION = 7
+VERSION = 9
+# 版8（2026-10-25・補正担当）: 対に「直前の語」の手がかり（p[9]）を足せるように。思→重い に程度の副詞。
 # 版7（2026-09-14・GPT-6 Astra）: 既存の漢字1字の動詞手がかりを、実辞書の送り仮名付き活用でも照合。
 # 版6（2026-09-14・GPT-6 Astra）: 既存の語尾制約が認める原文は他の同音経路でも保持。
 # 版5（2026-09-14・GPT-6 Astra）: 共通の元の主語・目的語の意味が成立すれば保持。対は増やさない。
@@ -69,7 +70,10 @@ PAIRS = (
      ('動作', '処理', '起動', '速度', '読み込み', 'アプリ', 'タブ', '解析',
       '荷物'),
      ('気持ち', '心', '昔', '考え', '相手'),
-     ('ます', 'まし', 'のほか', 'やり', 'つき', '込'), None),
+     ('ます', 'まし', 'のほか', 'やり', 'つき', '込'), None,
+     None, None),
+     # 版9: 版8 の程度の副詞の一覧（とても思い）は外した。程度の副詞＋受ける述語の無い名詞は
+     # degree_adverb.py が品詞で一般に見る（うにさん 2026-10-26「正しいと思います。それで進めて」）
     ('重', '思', ('い',),
      ('私', '僕', 'あなた', '彼', '彼女'),
      ('動作', '処理', '起動', '速度', '読み込み', 'アプリ', 'タブ', '解析',
@@ -271,6 +275,7 @@ def find_fix(surface, material, after='', prev='', source=''):
         only_after = p[6] if len(p) > 6 else None
         prev_ok = p[7] if len(p) > 7 else None
         following_action = p[8] if len(p) > 8 else None
+        prev_words = p[9] if len(p) > 9 else None
         if stem != x:
             continue
         if tails is not None and tail not in tails:
@@ -310,4 +315,14 @@ def find_fix(surface, material, after='', prev='', source=''):
                 continue
         if _hits(to_cues, material):
             return y + tail
+        # 版8: 直前の語そのもの（程度の副詞）が手がかりの対。切れ目なく前に付くときだけ
+        # 後ろが助詞 が・を・は・も・に・の（思いが強い＝名詞の 思い）のときは見ない。行末・句読点・
+        # です・ので・から・と・か などの、形容詞の終止形に続く形だけ
+        if prev_words and prev and not prev[-1:].isspace() and (
+                not after or after[:1] in '。、！!？? 　' or any(after.startswith(o) for o in (
+                    'です', 'ので', 'のに', 'から', 'し', 'と', 'か', 'ね', 'よ', 'な', 'って', 'ん', 'けど', 'けれど', 'が、'))):
+            from morphology import tokenize
+            parts = tokenize(prev)
+            if parts and parts[-1].end == len(prev) and parts[-1].surface in prev_words:
+                return y + tail
     return None

@@ -29,7 +29,8 @@ class NavigationDetailsTests(unittest.TestCase):
         fn=corrector.make_tokenizer(VocabularyStore())
         examples=[
             ('私は本を読む。次へ進む！',['私は','本を','読む。','次へ','進む！']),
-            ('ここには、何もない。',['ここに','は、','何も','ない。']),
+            # Particles in a row (に＋は) stop once, after the last (2026-10-13・tests_text_navigation)
+            ('ここには、何もない。',['ここには、','何も','ない。']),
             ('読むから、分かるよ！次へ。',['読むから、','分かるよ！','次へ。']),
             ('しかし、私は進む。',['しかし、','私は','進む。']),
             ('はさみと橋',['はさみと','橋']),

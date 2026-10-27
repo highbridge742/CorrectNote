@@ -86,6 +86,13 @@ class QuickReturnRulesTests(unittest.TestCase):
 @unittest.skipUnless(sys.platform == 'win32', 'Windows focus')
 class QuickReturnWindowsTests(unittest.TestCase):
     def setUp(self):
+        # 本物の窓で前面と焦点を戻すところまで見る。Ctrl+V は送らず、門で止めた数を見る（2026-10-27。
+        # 前面が人の窓に替わっていると、本物の Ctrl+V がそちらへ行ってしまうため）
+        saved = os.environ.get('CORRECTNOTE_NO_EXTERNAL_PASTE')
+        os.environ['CORRECTNOTE_NO_EXTERNAL_PASTE'] = '1'
+        self.addCleanup(lambda: os.environ.pop('CORRECTNOTE_NO_EXTERNAL_PASTE', None) if saved is None
+                        else os.environ.__setitem__('CORRECTNOTE_NO_EXTERNAL_PASTE', saved))
+        quick_return.SENT.clear()
         self.child = subprocess.Popen([sys.executable, '-X', 'utf8', '-c', CHILD],
                                       stdout=subprocess.PIPE, stdin=subprocess.DEVNULL,
                                       text=True, encoding='utf-8')
@@ -126,7 +133,10 @@ class QuickReturnWindowsTests(unittest.TestCase):
         self.root.clipboard_clear(); self.root.clipboard_append('簡易入力の文')
         self.assertTrue(quick_return.restore(target, self.root, paste=True))
         self.assertEqual(int(u.GetForegroundWindow() or 0), self.source.foreground)
-        self.assertEqual(self.last_text(), '簡易入力の文')
+        end = time.monotonic() + 2.0
+        while time.monotonic() < end and not quick_return.SENT:
+            self.root.update(); time.sleep(.02)
+        self.assertEqual(quick_return.SENT, ['ctrl+v'])     # 貼る1回（門で止めた）
 
     def test_a_visit_to_another_app_meanwhile_still_goes_back(self):
         """2026-10-19 うにさん: opened from A, the user went to app B, came back to quick

@@ -276,13 +276,66 @@ def particle_intrusion_candidates(source, start, end, dict_index=None):
     return [candidate for frame in particle_frames(source,start,end,dict_index)
             for candidate in (drop_candidate(source,frame),) if candidate is not None]
 
+def _kata_stem_kana_tail(surface):
+    """カタカナの語幹に ひらがなの尾が付いた綴りか（ツクれ・メデタい・コワく）。ー は語幹側。"""
+    if not surface or len(surface) < 2:
+        return False
+    i = 0
+    while i < len(surface) and ('ァ' <= surface[i] <= 'ヶ' or surface[i] == 'ー'):
+        i += 1
+    if i == 0 or i >= len(surface):
+        return False
+    return all('ぁ' <= c <= 'ゖ' for c in surface[i:])
+
+
+def _attested_surfaces(attested, reading):
+    try:
+        return set(attested.get(reading) or ()) if attested else set()
+    except Exception:
+        return set()
+
+
+def _surface_established(surface, reading, store, dict_index=None):
+    """
+    いま表示されている表記そのものが**成り立っている語**か（2026-10-25・うにさん「候補が変な状態」:
+    カレー に スロー・スルー・コリー、課題 に 個体 のような、2打も違う候補が並んでいた）。
+
+    語彙に同じ表記がある ／ 索引でその読みの表記に入っている ／ かなの表記で世の中の読みにある、
+    のどれかなら成り立っている。成り立っている語に 2打違いの打ち間違いを疑う理由は薄い
+    （元の文字列が意味をなさない 乱後 のような語とは話が別。2.5 の遠い取り違えも同じ）。
+    判定できないときは「成り立っていない」側（今までどおり広く出す）。
+    """
+    if not surface or not reading:
+        return False
+    try:
+        if any(e.get('surface') == surface for e in store.lookup(reading)):
+            return True
+    except Exception:
+        pass
+    if dict_index is None:
+        return False
+    try:
+        if surface in (dict_index.surfaces_for_reading(reading) or []):
+            return True
+        if all('ぁ' <= c <= 'ゖ' or c == 'ー' for c in surface) \
+                and dict_index.is_world_reading(reading):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def build_candidates(surface, reading, store, find_readings,
                      max_dist=1.6, max_edits=2,
                      max_homophones=8, max_typos=8, dict_index=None,
                      context_vec=None, surrounding_words=None,
-                     attested=None):
+                     attested=None, input_method=None):
     """
     ある語について、選び直せる候補を作る。
+
+    input_method: 'kana' / 'romaji' / None。打ち間違いの探索に渡す（2026-10-25・うにさん
+        「れ と ら、か と く は隣接判定ではないはず」: かな入力では音の取り違えを数えない）。
+        None なら今までどおり。
 
     surface: いま表示されている表記
     reading: 形態素解析が返した読み（無ければ空でよい）
@@ -320,6 +373,13 @@ def build_candidates(surface, reading, store, find_readings,
 
     def push(cand_surface, cand_reading, kind):
         if not cand_surface or cand_surface in seen:
+            return
+        # **カナの語幹＋かなの活用語尾（ツクれ・メデタい）は打ち間違いの候補に出さない**
+        # （うにさん 2026-10-25 22:21Z「ツクれ、など、やや変なものは残る」。辞書には
+        #   こういう綴りが活用形ごとに入っているが、人が書く形ではない。本人がメモに
+        #   書いている表記（attested）なら出す）
+        if kind == 'typo' and _kata_stem_kana_tail(cand_surface) \
+                and cand_surface not in _attested_surfaces(attested, cand_reading):
             return
         seen.add(cand_surface)
         out.append({'surface': cand_surface,
@@ -413,15 +473,25 @@ def build_candidates(surface, reading, store, find_readings,
         # --- 2. 打ち間違いで届く範囲の語 ---
         # 隣接キー・脱字・押しすぎ・順序間違いをまとめて扱う探索を流用する。
         try:
-            found = find_readings(reading, store, max_dist=max_dist,
-                                  max_edits=max_edits)
+            try:
+                found = find_readings(reading, store, max_dist=max_dist,
+                                      max_edits=max_edits,
+                                      input_method=input_method)
+            except TypeError:
+                # 入力方式を受け取らない探索（古い呼び出し・試験の偽物）
+                found = find_readings(reading, store, max_dist=max_dist,
+                                      max_edits=max_edits)
         except Exception:
             found = []
         n_typo = 0
+        # 成り立っている語（カレー・課題）に 2打違いの候補は出さない（`_surface_established`）
+        _established = _surface_established(surface, reading, store, dict_index)
         for cand_reading, _cost, edits in found:
             if n_typo >= max_typos:
                 break
             if edits == 0 or cand_reading == reading:
+                continue
+            if _established and edits >= 2:
                 continue
             surfaces = [e['surface'] for e in store.lookup(cand_reading)[:2]]
             if not surfaces and dict_index is not None:
@@ -559,7 +629,8 @@ def build_candidates(surface, reading, store, find_readings,
         # 自動補正の再構築と同じ探索（find_similar_readings）を
         # 候補づくりにも使う。ここは選ぶのがユーザーなので、
         # 自動補正のような厳しい関門は掛けず、届く範囲を広く見せる。
-        if n_typo < max_typos:
+        # 成り立っている語には遠い取り違えを疑わない（元が意味をなさない語のための道）
+        if n_typo < max_typos and not _established:
             try:
                 from vocabulary import find_similar_readings
                 far = find_similar_readings(reading, store, max_cost=4.0)

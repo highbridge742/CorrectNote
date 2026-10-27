@@ -1184,7 +1184,7 @@ def predicate_roles(surface, following='', before='', case=None):
     # homophones, where borrowing another lemma's meaning is possible.
     meanings={frozenset(roster.get(base,()))
               for base in native_verb_lexemes(t.surface,t.infl_form,t.reading)}
-    if not following or len(meanings)<=1:
+    if not following or len(meanings)<=1 and any(meanings):
         return native_verb_roles(t.surface,t.infl_form,t.reading,case=case)
     # Candidate context supplies the actual suffix. The semantic role and
     # that suffix must belong to the same native verb, including kana forms.
@@ -1203,8 +1203,10 @@ def predicate_roles(surface, following='', before='', case=None):
         if link.end>hi:break
         if (link.pos=='助詞' and link.pos_sub=='接続助詞'
                 and link.surface in ('て','で') and link.has_reading):
+            # 2026-10-26: このつなぎの道では可能形の元の動詞の意味を借りない
+            # （荷物を起きて本を読みます を 送れて にしない・可能の意味は節の尾で確かめたときだけ）。
             roles=native_verb_roles(t.surface,t.infl_form,t.reading,case=case,
-                tail=full[t.end:link.end],before=full[lo:t.start])
+                tail=full[t.end:link.end],before=full[lo:t.start],allow_potential=False)
             if roles:return roles
     return frozenset()
 
@@ -1368,7 +1370,8 @@ _OBJECT_ROLE_READINGS={'開く':('ひらく',),'開ける':('あける',)}
 
 
 @lru_cache(maxsize=_cache_size(8192))
-def native_verb_roles(surface, form, reading, subject=False, case=None, tail=None, before="", allow_open_tail=False):
+def native_verb_roles(surface, form, reading, subject=False, case=None, tail=None, before="", allow_open_tail=False,
+                      allow_potential=True):
     """Bind meaning and a supplied grammatical tail to the same native lemma.
 
     Without a tail, source role lookup retains its former lexical scope.
@@ -1401,7 +1404,7 @@ def native_verb_roles(surface, form, reading, subject=False, case=None, tail=Non
         # the actual potential tail before consulting its native godan origin;
         # a homophone's incompatible conjugation cannot lend its role.
         from morphology import native_potential_origins
-        potential=native_potential_origins(surface,form,reading)
+        potential=native_potential_origins(surface,form,reading) if allow_potential else ()
         if potential and tail is not None:
             from contextual_repair import _allows_grammatical_tail,_productive_predicate
             from reading_segments import _native_open_predicate

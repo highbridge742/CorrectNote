@@ -106,6 +106,25 @@ def capture(source):
     return Target(source.foreground, source.focus, source.process, source.thread, text_box)
 
 
+SENT = []   # 門で止めた送り（試験はこれを数える・2026-10-27）
+
+
+def external_input_blocked():
+    """外の窓へキー（Ctrl+V・Ctrl+C）を送らない（試験・確かめの中）。文変換と同じ門で、環境変数
+    CORRECTNOTE_NO_EXTERNAL_PASTE=1 のとき（2026-10-27・試験が本物の Ctrl+V を前面の窓へ送りかけた）。"""
+    return os.environ.get('CORRECTNOTE_NO_EXTERNAL_PASTE') == '1'
+
+
+def send_ctrl_v(u):
+    """いま前面の窓へ Ctrl+V を送る。門が閉じていれば送らずに SENT に残して False。"""
+    if external_input_blocked():
+        SENT.append('ctrl+v')
+        return False
+    for vk, flags in ((0x11, 0), (0x56, 0), (0x56, 2), (0x11, 2)):   # Ctrl+V
+        u.keybd_event(vk, 0, flags, 0)
+    return True
+
+
 def _ours_in_front():
     pid = W.DWORD()
     u = _user()
@@ -148,8 +167,7 @@ def restore(target, root, paste=False):
         def send():
             if u.GetForegroundWindow() != target.foreground:
                 return      # something else came forward meanwhile
-            for vk, flags in ((0x11, 0), (0x56, 0), (0x56, 2), (0x11, 2)):   # Ctrl+V
-                u.keybd_event(vk, 0, flags, 0)
+            send_ctrl_v(u)
         try:
             root.after(PASTE_DELAY_MS, send)
         except Exception:

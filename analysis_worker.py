@@ -515,13 +515,20 @@ class Runtime:
             keyboard_layout.apply_spec(task.get('keyboard'))   # 配列・形（48-KB）
             self._ime_queries={}
             try:
+                # Whether the file tab has kana (half-width -> full-width only then, 2026-10-26), passed when
+                # correct_line takes it (tab_context); None or an older correct_line: as before
+                tab_kana=task.get('tab_has_kana')
+                extra=dict(tab_has_kana=tab_kana) if tab_kana is not None and _takes_tab_has_kana(correct_line) else {}
                 result=correct_line(task['line'],self.store,context_vocab=tracked,
                     decisions=self.decisions,input_method=task['input_method'],
                     context_vec=self.context_vec,dict_index=self.index,
                     nearby_words=nearby,recent_words=task.get('recent',()),
                     occurrence_readings=task.get('readings',()),
                     occurrence_calculations=task.get('calculations',()),
-                    occurrence_strokes=occurrence_strokes(task.get('readings',())))
+                    occurrence_strokes=occurrence_strokes(task.get('readings',())),**extra)
+                if tab_kana is not None and isinstance(result,dict):
+                    # which tab state made this row: the app redoes it when the tab gains or loses its kana
+                    result=dict(result,_tab_has_kana=tab_kana)
                 ime_evidence=tuple(sorted(self._ime_queries.items()))
             finally:
                 self._ime_queries=None
@@ -549,6 +556,21 @@ class Runtime:
                     ime_evidence=ime_evidence,
                     navigation=navigation,
                     corrected_units=corrected_units,original_units=original_units)
+
+
+_TAKES_TAB_KANA={}
+
+
+def _takes_tab_has_kana(function):
+    """Whether correct_line has the tab_has_kana parameter (it comes with tab_context, 2026-10-26)."""
+    key=function            # the function itself (an id could be reused by another function later)
+    if key not in _TAKES_TAB_KANA:
+        try:
+            import inspect
+            _TAKES_TAB_KANA[key]='tab_has_kana' in inspect.signature(function).parameters
+        except (TypeError,ValueError):
+            _TAKES_TAB_KANA[key]=False
+    return _TAKES_TAB_KANA[key]
 
 
 def occurrence_strokes(readings):

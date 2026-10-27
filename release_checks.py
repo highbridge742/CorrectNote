@@ -5,9 +5,14 @@
 Correction quality remains a separate, explicitly non-gating report. A successful
 run of this script does not mean that ci_smoke_test.py passed.
 """
+import os
 import sys
 import unittest
 from pathlib import Path
+
+# 試験の中では外の窓へキーもクリップボードの貼り付けも送らない（文変換・quick_return の門・2026-10-27）。
+# 子のプロセスの試験にも引き継がれる
+os.environ['CORRECTNOTE_NO_EXTERNAL_PASTE'] = '1'
 
 
 def main():

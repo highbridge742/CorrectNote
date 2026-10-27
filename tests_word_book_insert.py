@@ -197,7 +197,9 @@ class WordBookInsertTest(unittest.TestCase):
             return fill
         for focus_class, expected in (('Chrome_WidgetWin_1', True), ('MozillaWindowClass', True),
                                       ('CabinetWClass', False), ('DirectUIHWND', False)):
+            # user32 は偽物なので、外へ送る門（CORRECTNOTE_NO_EXTERNAL_PASTE）はここだけ開ける
             with patch('quick_ime._api') as api, patch('quick_return._user') as user, \
+                    patch('quick_return.external_input_blocked', return_value=False), \
                     patch('quick_return.class_name', return_value=focus_class):
                 api.return_value.GetGUIThreadInfo.side_effect = thread_info(focus_class)
                 self.assertEqual(native.paste(0x1234), expected, focus_class)

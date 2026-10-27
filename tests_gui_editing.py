@@ -741,7 +741,9 @@ class CrossTabQuoteTests(unittest.TestCase):
         a._on_editor_ctrl_c();self._type_quote_expression(w,'1-2')
         self._enter_quote_expression(w)
         self.assertEqual(self._calculated_text(),'前😀-1置換対象後')
-        for suffix,answer in (('+3*1','2'),('*4','11'),('/2','5')):
+        # Each formula carried on from the answer as shown (2026-10-26 うにさん「答えを使った計算式を組んだ場合、
+        # 再計算する」): -1+3*1=2, 2*4=8, 8/2=4 — no longer the whole text 1-2+3*1*4/2.
+        for suffix,answer in (('+3*1','2'),('*4','8'),('/2','4')):
             a._on_editor_ctrl_c();self._type_quote_expression(w,suffix)
             self._enter_quote_expression(w)
             self.assertIsNone(a._pick_mode)

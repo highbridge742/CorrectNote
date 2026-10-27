@@ -589,7 +589,9 @@ class Paper:
     SCROLL_REST_MS = 150
     SLICE_H = 32              # 切れ端の高さの刻み（_tall）
     PREWARM_SLICE_S = 0.008   # 先に作る切れ端: 1回に使う時間
-    PREWARM_GAP_MS = 15       # 先に作る切れ端: 回の間（その間に操作が回る）
+    PREWARM_GAP_MS = 45       # 先に作る切れ端: 回の間（その間に操作が回る。15 では手の 1/3 を使っていた）
+    # 窓の大きさ・位置が動いている間は先に作らない。動かなくなって SETTLE_MS 経ってから続ける
+    # （2026-10-27 うにさん「動作が重い」。最大化・移動の最中に切れ端を作り続けていた）
     # 欄の下に出たり消えたりする行（解析の進み具合など）のぶんを、app が reserve_below で
     # 知らせる（Text の `_correctnote_art_below`、画素）。絵の右下は「欄の高さ＋その値」の所に
     # 合わせるので、行が出て欄が縮んでも絵は動かない（下の端が隠れるだけ。うにさん 2026-10-16）。
@@ -621,6 +623,8 @@ class Paper:
         self._prewarm_args = None
         self._prewarm_job = None
         self._prewarm_count = 0
+        self._prewarm_geom = None     # 前の回に見た窓の外形（動いていたら待つ）
+        self._prewarm_quiet = 0.0     # 外形が最後に変わった時刻
         self._below = None
         self._below_key = None
         self._edges = {}           # 余白の帯の Canvas（right・bottom・left・top）
@@ -1198,6 +1202,8 @@ class Paper:
             self._prewarm_todo = []
             return
         decor, ox, W = args
+        if self._prewarm_wait():
+            return
         bits = _art('art', decor)
         keeper = _keeper(self.t)
         end = time.perf_counter() + self.PREWARM_SLICE_S
@@ -1220,6 +1226,26 @@ class Paper:
                 self._prewarm_job = self.t.after(self.PREWARM_GAP_MS, self._prewarm_step)
             except Exception:
                 self._prewarm_job = None
+
+    def _prewarm_wait(self):
+        """窓の外形が動いている（または動いてから SETTLE_MS 経っていない）なら、先に作るのを
+        後へ回して True。"""
+        now = time.monotonic()
+        try:
+            geom = self.t.winfo_toplevel().wm_geometry()
+        except Exception:
+            geom = None
+        if geom != self._prewarm_geom:
+            self._prewarm_geom = geom
+            self._prewarm_quiet = now
+        wait = self.SETTLE_MS / 1000.0 - (now - self._prewarm_quiet)
+        if wait <= 0:
+            return False
+        try:
+            self._prewarm_job = self.t.after(max(self.PREWARM_GAP_MS, int(wait * 1000) + 10), self._prewarm_step)
+        except Exception:
+            self._prewarm_job = None
+        return True
 
     def _wait_settle(self):
         if self._settle is not None:

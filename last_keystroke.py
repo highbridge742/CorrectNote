@@ -5793,7 +5793,9 @@ def _standalone_mark_repair(result, line, retry, options, decisions):
     if base != line and not (result.get('odd_spans') or result.get('unsure_spans')) \
             and not any(ch in _MARKS for ch in base):
         # 補正がもう印を別の形にした（次の字に付けた: 遅れ゛て→遅れで）ときは、それも候補に並べる
-        best = (morphology.path_cost(base), base)
+        _bc = morphology.path_cost(base)
+        if _bc is not None:            # janome 無し（None＝意見なし）は並べない（3.9 の tests_mock で None 同士の比較に落ちた・2026-10-26）
+            best = (_bc, base)
     for text in _standalone_mark_variants(line, i):
         got = retry(text)
         if not isinstance(got, dict):
@@ -5802,6 +5804,8 @@ def _standalone_mark_repair(result, line, retry, options, decisions):
         if got.get('odd_spans') or got.get('unsure_spans') or any(ch in _MARKS for ch in corrected):
             continue
         cost = morphology.path_cost(corrected)
+        if cost is None:
+            continue                   # 測れないときは比べない（紫のまま）
         if best is None or cost < best[0]:
             best = (cost, corrected)
     if best is not None:

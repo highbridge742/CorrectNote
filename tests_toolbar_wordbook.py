@@ -8,6 +8,10 @@ import tempfile
 import time
 import traceback
 import unittest
+import os
+
+# 試験の中では外の窓へキーを送らない（quick_return・文変換の門。子のプロセスにも引き継がれる・2026-10-27）
+os.environ['CORRECTNOTE_NO_EXTERNAL_PASTE'] = '1'
 
 
 def normal_window_width(win, requested):

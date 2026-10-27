@@ -140,6 +140,9 @@ DEBUG_TIMINGS_OLD_DEFAULTS = {'ime_quiet': 100, 'key_quiet': 300, 'quick_quiet':
 
 
 DEFAULTS = {
+    # 画面の表示言語（ui_lang.LANGUAGES・Language メニュー）
+    # （空＝まだ選んでいない。起動のたびに Windows の表示言語で決める。選ぶと 'ja'/'en'）
+    'language': '',
     # 高は先読みと解析子を保持。低は完了後の待機中に解放する。
     'memory_usage': MEMORY_MID,
     # Ctrl＋左右で止まる場所の印。Ctrl を押している間だけ出る（既定オン）。
@@ -194,7 +197,7 @@ DEFAULTS = {
         '形容詞': 1.1, '形容動詞': 1.0,
         '副詞': 1.1, '連体詞': 1.0, '接続詞': 1.0, '感動詞': 1.0,
         '助詞': 1.0, '助動詞': 1.1, '接頭詞': 1.0, '記号': 1.0,
-        'フィラー': 1.0, 'その他': 1.0,
+        'フィラー': 1.4, 'その他': 1.0, '冠詞': 1.0, '代名詞': 1.2,
     },
     # 品詞ごとの文字色（ダークモード）。空文字は色を変えない。書かれて
     # いない品詞は pos_font.POS_COLOR_DEFAULTS（名詞・数詞は緑、英字・
@@ -375,7 +378,8 @@ class Settings:
                    'theme_light': LIGHT_THEMES,
                    'theme_dark': DARK_THEMES,
                    'decor': DECOR_CHOICES,
-                   'decor_strength': DECOR_STRENGTH_CHOICES}
+                   'decor_strength': DECOR_STRENGTH_CHOICES,
+                   'language': ('', 'ja', 'en')}
 
         for key, default in DEFAULTS.items():
             if key not in data:
@@ -472,6 +476,10 @@ def _move_to_new_pos_defaults(values, data):
     colors = normalize_colors(saved)
     light = normalize_colors(None, False)
     for key in POS_CATEGORIES:
+        if key == '冠詞' and key not in saved:
+            # 冠詞 had no row of its own: it keeps what 連体詞 had, in both modes (2026-10-26)
+            colors[key], light[key] = colors['連体詞'], light['連体詞']
+            continue
         if key not in saved or colors[key] == old_colors[key]:
             colors[key] = POS_COLOR_DEFAULTS[key]
         elif colors[key] == POS_COLOR_DEFAULTS[key]:

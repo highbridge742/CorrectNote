@@ -35,8 +35,9 @@ def child():
             # A CI desktop may cap geometry below the requested toolbar width.
             # Allocate the fixture's real width before asserting full labels.
             maximum=root.maxsize();root.maxsize(max(maximum[0],2000),max(maximum[1],1600))
-            root.attributes('-alpha',0);root.geometry('1400x720+10000+10000');root.deiconify();root.update()
-            until(lambda:root.winfo_width()>=1400 and a._toolbar_fit_job is None)
+            # 1500: the 文変換 button (2026-10-26) needs about 1450 for full labels (stage 0); 1400 now shortens them
+            root.attributes('-alpha',0);root.geometry('1500x720+10000+10000');root.deiconify();root.update()
+            until(lambda:root.winfo_width()>=1500 and a._toolbar_fit_job is None)
             assert a._toolbar_label_stage==0,(root.geometry(),a._toolbar_label_stage)
             original_text=a.editor_source_text()
             toolbar=a.first_line_btn.master

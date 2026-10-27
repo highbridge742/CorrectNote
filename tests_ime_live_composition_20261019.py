@@ -17,6 +17,9 @@ from unittest.mock import patch
 
 import ime_watch
 
+# 試験の中では外の窓へキーを送らない（quick_return・文変換の門。子のプロセスにも引き継がれる・2026-10-27）
+os.environ['CORRECTNOTE_NO_EXTERNAL_PASTE'] = '1'
+
 
 class LiveCompositionRuleTests(unittest.TestCase):
     def test_left_conversion_does_not_count_while_another_app_is_in_front(self):

@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import tkinter as tk
 from tkinter import font as tkfont
+import ui_lang
 
 # After giving the window back, wait this long before typing into it.
 INSERT_DELAY_MS = 80
@@ -384,9 +385,8 @@ class _WordBookNative:
                 return False
         except (OSError, ImportError):
             return False
-        for vk, flags in ((0x11, 0), (0x56, 0), (0x56, 2), (0x11, 2)):
-            u.keybd_event(vk, 0, flags, 0)
-        return True
+        # 外の窓へ送る道は quick_return の門を通す（試験の中では送らない・2026-10-27）
+        return quick_return.send_ctrl_v(u)
 
     def detach(self):
         self._remove_foreground_hook()
@@ -743,7 +743,8 @@ class WordBook:
         line_height = tkfont.Font(root=self.window, font=font).metrics('linespace')
         for index, text in enumerate(self.words):
             row = tk.Frame(self.rows, bg=bg)
-            button = tk.Button(row, text=text.replace('\r', '').replace('\n', ' '),
+            # 本人の語なので、英語表示でも訳さない（ui_lang.raw）
+            button = tk.Button(row, text=ui_lang.raw(text.replace('\r', '').replace('\n', ' ')),
                 command=lambda value=text: self.copy(value), bg=bg, fg=ink,
                 relief='flat', anchor='w', font=font, padx=8, pady=3,
                 cursor='hand2', takefocus=True)

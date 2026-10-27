@@ -8,6 +8,9 @@ BUTTONS = (
     ('bookmark_next', '▼ 次のブックマーク', 'bookmark_next_btn'),
     # 2026-10-23 うにさん: 押すと F5 と同じ候補一覧（引用の左・狭いと「再」）
     ('reconvert', '再変換', 'reconvert_btn'),
+    # 2026-10-26 うにさん: 押すと別ウィンドウに選んだ文の倒置と「英語の文法・名詞は日本語」の並び
+    # （名前は文変換・狭いと「文」。再変換の次）
+    ('convert', '文変換', 'convert_btn'),
     ('quote', 'クリックして引用', 'pick_mode_btn'),
     ('list', '箇条書き', 'list_mode_btn'),
     ('quick', '簡易入力', 'quick_input_btn'),
@@ -33,6 +36,9 @@ LABELS = {key: label for key, label, _ in BUTTONS}
 BRACKET_KINDS = {key: attr for key, _, attr in BUTTONS if type(attr) is int}
 LAYOUT_KEYS = ('layout_split','layout_unified')
 RIGHT_KEYS = ('manual',)     # on the right with the layout buttons when they follow it
+# A newly added button that belongs right after another one, wherever the user put that one
+# (2026-10-26 うにさん「再変換の再の次に」).
+FOLLOWS = {'convert': 'reconvert'}
 # Shown only after the user turns them on from the button menu.
 DEFAULT_HIDDEN = ('format_italic', 'format_underline', 'format_overstrike')
 
@@ -54,6 +60,9 @@ def normalized(order=None, hidden=None):
     # it by default, and starts with its default visibility.
     added = [key for key in IDS if key not in result]
     for key in added:
+        if FOLLOWS.get(key) in result:
+            result.insert(result.index(FOLLOWS[key]) + 1, key)
+            continue
         position = max((result.index(earlier) for earlier in IDS[:IDS.index(key)]
                         if earlier in result), default=-1) + 1
         result.insert(position, key)
@@ -198,7 +207,12 @@ class ToolbarPreferences:
     def refresh_list(self, select=None):
         selected = select or self.selected()
         self._listed=configuration_order(self.order)
-        labels=[('☑ ' if key not in self.hidden else '☐ ')+label_for(key) for key in self._listed]
+        try:
+            from ui_lang import tr
+        except ImportError:
+            tr=lambda text:text
+        # 並びの一覧の名前も表示の言語で（2026-10-26 うにさん「翻訳漏れです」）
+        labels=[('☑ ' if key not in self.hidden else '☐ ')+tr(label_for(key)) for key in self._listed]
         # Update only changed rows; retaining the list avoids a full selection
         # and geometry rebuild on every click or one-position move.
         for index,label in enumerate(labels):

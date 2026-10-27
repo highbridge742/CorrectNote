@@ -1,6 +1,6 @@
 <h1>CorrectNote 説明書</h1>
-<p class="muted">バージョン 1.16.1</p>
-<p class="store-badge"><a href="https://apps.microsoft.com/detail/9NJZGX71LHTZ?referrer=appbadge&amp;mode=direct"><img src="https://get.microsoft.com/images/ja-jp%20dark.svg" width="200" alt="Microsoft Store から入手"></a></p>
+<p class="muted">バージョン 1.17.0</p>
+<p class="store-badge"><a href="https://apps.microsoft.com/detail/9NJZGX71LHTZ?referrer=appbadge&amp;mode=direct"><img src="https://get.microsoft.com/images/ja%20dark.svg" width="200" alt="Microsoft Store から入手"></a></p>
 
 
 <a name="intro"></a>
@@ -1086,13 +1086,17 @@ CorrectNote起動時に登録を試みます。
 <p>CorrectNote は GNU General Public License v3.0 で公開しています。改変したり組み込んだりして配布する場合は、その配布物のソースコードも同じライセンスで公開する必要があります。<br>Copyright (C) 2026 Takahashi Yuu</p>
 <p>補正や品詞の判定には、次の公開データとソフトウェアを使っています。</p>
 <ul>
-<li><b>語の意味の分類</b>：国立国語研究所(2004)『分類語彙表増補改訂版データベース』(ver.1.0.1)。<a href="https://creativecommons.org/licenses/by-nc-sa/3.0/">CC BY-NC-SA 3.0</a></li>
+<li><b>語の意味の分類と類語</b>：国立国語研究所(2004)『分類語彙表増補改訂版データベース』(ver.1.0.1)（体・用・相・その他の全ての類）。<a href="https://creativecommons.org/licenses/by-nc-sa/3.0/">CC BY-NC-SA 3.0</a></li>
 <li><b>日本語の辞書</b>：IPA辞書 mecab-ipadic-2.7.0-20070801（奈良先端科学技術大学院大学・情報処理推進機構）。<a href="https://github.com/taku910/mecab/blob/master/mecab-ipadic/COPYING">IPADIC License</a></li>
 <li><b>日本語の形態素解析</b>：Janome（Tomoko Uchida）。<a href="https://www.apache.org/licenses/LICENSE-2.0">Apache License 2.0</a></li>
-<li><b>英単語の組の多さ</b>：Google Books Ngram をもとにした SymSpell 英語バイグラム辞書（Wolf Garbe）。<a href="https://creativecommons.org/licenses/by/3.0/">CC BY 3.0</a></li>
+<li><b>英単語の組の多さ</b>（英文の補正と、文変換の前置詞などのつながり）：Google Books Ngram をもとにした SymSpell 英語バイグラム辞書（Wolf Garbe）。<a href="https://creativecommons.org/licenses/by/3.0/">CC BY 3.0</a>（SymSpell は <a href="https://github.com/wolfgarbe/SymSpell/blob/master/LICENSE">MIT License</a>）</li>
 <li><b>英単語の使われやすさ</b>：wordfreq（Robyn Speer）。<a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a></li>
 <li><b>英単語の発音（同じ音の語）</b>：CMU Pronouncing Dictionary（Carnegie Mellon University）。<a href="https://github.com/cmusphinx/cmudict/blob/master/LICENSE">BSD License</a></li>
 <li><b>英単語の品詞</b>：WordNet 3.0（Princeton University）。<a href="https://wordnet.princeton.edu/license-and-commercial-use">WordNet License</a></li>
+<li><b>日本語と英語の対訳</b>（文変換の英語の語・名詞の種類・述語の訳）：JMdict（Electronic Dictionary Research and Development Group）。<a href="https://www.edrdg.org/edrdg/licence.html">CC BY-SA 4.0</a></li>
+<li><b>英単語の活用形</b>：lemminflect（Brad Jascob）。<a href="https://github.com/bjascob/LemmInflect/blob/master/LICENSE">MIT License</a></li>
+<li><b>常用漢字の表</b>：KANJIDIC2（Electronic Dictionary Research and Development Group）。<a href="https://www.edrdg.org/edrdg/licence.html">CC BY-SA 4.0</a></li>
+<li><b>常用漢字の表</b>：kanji-data（David Gouveia）。<a href="https://github.com/davidluzgouveia/kanji-data/blob/master/LICENSE">MIT License</a></li>
 </ul>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p>
 </section>

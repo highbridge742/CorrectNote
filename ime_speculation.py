@@ -20,8 +20,9 @@ import keyboard_layout
 import analysis_context
 import analysis_work_app as input_work
 from analysis_worker import state_key, only_ime_moved, result_compatible
+from analysis_work import tab_has_kana as _tab_has_kana
 
-_ROW_FIELDS = ('line', 'input_method', 'keyboard', 'recent', 'readings', 'calculations')
+_ROW_FIELDS = ('line', 'input_method', 'keyboard', 'recent', 'readings', 'calculations', 'tab_has_kana')
 
 
 def _source_and_cursor(app):
@@ -69,7 +70,7 @@ def speculate(app, comp, reading):
                 keyboard=keyboard_layout.spec(app.settings), nearby=None, lines=lines, row=row,
                 recent=app.recent_words.words() if getattr(app, 'recent_words', None) is not None else (),
                 readings=after.row_readings(row, lines[row]), calculations=after.row_calculations(row, lines[row]),
-                attested=())
+                attested=(), tab_has_kana=_tab_has_kana(text))
     state = state_key(app)
     scope = ('speculate', text, row, state)
     import analysis_async

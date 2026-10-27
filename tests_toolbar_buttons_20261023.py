@@ -14,13 +14,15 @@ import app
 from toolbar_preferences import normalized, IDS
 
 
-OLD_SAVED = [key for key in IDS if key not in ('reconvert', 'manual')]
+# saved before 再変換・説明書 existed (and so before 文変換 too, 2026-10-26)
+OLD_SAVED = [key for key in IDS if key not in ('reconvert', 'manual', 'convert')]
 
 
 class ToolbarButtonTests(unittest.TestCase):
     def test_saved_settings_from_before_get_both_buttons_shown(self):
         order, hidden = normalized(OLD_SAVED, [])
-        self.assertEqual(order[order.index('reconvert') + 1], 'quote')
+        # 文変換 goes right after 再変換 (2026-10-26), then 引用 as before
+        self.assertEqual(order[order.index('reconvert') + 1:order.index('reconvert') + 3], ['convert', 'quote'])
         self.assertEqual(order[order.index('manual') + 1], 'layout_split')
         self.assertEqual(order[-3:], ['manual', 'layout_split', 'layout_unified'])
         self.assertFalse({'reconvert', 'manual'} & hidden)
@@ -61,6 +63,7 @@ class ShortNamesTests(unittest.TestCase):
         a._toolbar = tk.Frame(self.root); a._toolbar.pack(fill='x')
         names = {'bookmark_prev_btn': '▲ 前のブックマーク', 'bookmark_next_btn': '▼ 次のブックマーク',
                  'layout_split_btn': '左右に並べる', 'layout_unified_btn': '1つにまとめる', 'reconvert_btn': '再変換',
+                 'convert_btn': '文変換',
                  'pick_mode_btn': 'クリックして引用', 'bulk_insert_btn': '一括挿入', 'list_mode_btn': '箇条書き',
                  'quick_input_btn': '簡易入力', 'word_book_btn': '単語帳'}
         for name, label in names.items():
@@ -91,6 +94,7 @@ class ShortNamesTests(unittest.TestCase):
         self.assertEqual(self.fit(300), ['箇条', '簡易', '単語'])
         self.assertEqual(a._toolbar_label_stage, 4)
         self.assertEqual(a.pick_mode_btn.cget('text'), '引用')          # the earlier stages are shortened too
+        self.assertEqual((a.reconvert_btn.cget('text'), a.convert_btn.cget('text')), ('再', '文'))   # 2026-10-26
         self.assertEqual(self.dropped[-1], 4)                          # hiding is decided after the names
         self.assertEqual(self.fit(2000), ['箇条書き', '簡易入力', '単語帳'])
         self.assertEqual(a.pick_mode_btn.cget('text'), 'クリックして引用')

@@ -27,7 +27,9 @@ def child(mode):
   return (getattr(a,'_initial_setup',None) is None and a._warmup is None and not getattr(a,'_async_context_scope',None)
    and a._analyze_text==a.editor_source_text() and a._analyze_pos>=len(a._analyze_todo)
    and a._analyze_work==work.token(a) and a._analyze_dependencies==analysis_worker.state_key(a))
- with patch.object(app,'GlobalHotkeys',return_value=Mock()),patch.object(app.CorrectNoteApp,'_learn_now',new=lambda *args:None):
+ # The collection path runs when no base layer is bundled (base_vocab.json.gz skips it; 2026-10-26).
+ import vocabulary
+ with patch.object(app,'GlobalHotkeys',return_value=Mock()),patch.object(app.CorrectNoteApp,'_learn_now',new=lambda *args:None),   patch.object(vocabulary,'BASE_VOCAB_FILE',str(Path.cwd()/'no_base_vocab.json.gz')):
   try:
    a=app.CorrectNoteApp(root);initial=[dict(e) for e in a.store.to_list()]
    prewarmed=a._correction_worker;assert prewarmed is not None

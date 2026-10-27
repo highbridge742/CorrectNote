@@ -54,6 +54,7 @@
 """
 
 import json
+import threading
 import os
 import zlib
 
@@ -485,9 +486,37 @@ def reusable_result(result):
             and result.get('analysis_status') != 'incomplete')
 
 
-def save(path, fingerprint, tabs):
+def _tab_kana(text):
+    """そのタブにかな（平仮名・片仮名）が1字以上あるか（analysis_work.tab_has_kana）。分からなければ None。"""
+    try:
+        from analysis_work import tab_has_kana
+        return tab_has_kana(text)
+    except Exception:
+        return None
+
+
+_SAVE_LOCK = threading.Lock()
+_SAVED_GENERATION = [0]
+_GENERATION_COUNTER = [0]
+
+
+def next_generation():
+    """save の generation に渡す番号（呼んだ順に大きくなる）。"""
+    with _SAVE_LOCK:
+        _GENERATION_COUNTER[0] += 1
+        return _GENERATION_COUNTER[0]
+
+
+def save(path, fingerprint, tabs, partial=None, generation=None):
     """
     控えを書き出す。
+
+    partial: {タブの本文: [1行ぶんの結果 or None, ...]}——**途中まで解析したタブの、済んだ行だけ**
+        （2026-10-27 うにさん「動作が重い」。最後の行まで終わったタブしか残さなかったので、
+        大きなタブは閉じるたびに最初からやり直していた）。鍵は tabs と同じ（本文全体＋指紋）。
+        None の行は次の起動で解析し直す。
+    generation: 裏で書くとき（app の見回り）の番号（next_generation）。もっと新しい番号が
+        既に書いていたら書かない。
 
     tabs: {タブの本文（文字列）: [1行ぶんの結果, ...]}
         本文そのものを鍵にするので、タブの並べ替えにも耐える。
@@ -517,8 +546,24 @@ def save(path, fingerprint, tabs):
         if total + len(lines) > MAX_CACHED_LINES:
             continue
         total += len(lines)
-        entries.append({'text': text,
+        entries.append({'text': text, 'tab_has_kana': _tab_kana(text),
                         'results': [_pack(r) for r in results]})
+    done_texts = {e['text'] for e in entries}
+    for text, results in (partial or {}).items():
+        if not text or results is None or text in done_texts:
+            continue
+        lines = text.split('\n')
+        if len(lines) != len(results):
+            continue
+        kept = [r if reusable_result(r) and r.get('original') == line else None
+                for r, line in zip(results, lines)]
+        if not any(r is not None for r in kept):
+            continue
+        if total + len(lines) > MAX_CACHED_LINES:
+            continue
+        total += len(lines)
+        entries.append({'text': text, 'tab_has_kana': _tab_kana(text), 'partial': True,
+                        'results': [None if r is None else _pack(r) for r in kept]})
     if not entries:
         try:
             if os.path.exists(path):
@@ -527,35 +572,60 @@ def save(path, fingerprint, tabs):
             pass
         return False
     data = {'fingerprint': fingerprint, 'tabs': entries}
-    try:
-        tmp = path + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False)
-        os.replace(tmp, path)
-        return True
-    except Exception:
-        return False
+    with _SAVE_LOCK:
+        if generation is not None:
+            if generation < _SAVED_GENERATION[0]:
+                return False        # もっと新しい中身が、もう書かれている
+            _SAVED_GENERATION[0] = generation
+        try:
+            tmp = path + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False)
+            os.replace(tmp, path)
+            return True
+        except Exception:
+            return False
 
 
 def load(path, fingerprint):
     """
     控えを読む。状況が少しでも違えば {} を返す（使わない）。
 
-    戻り値: {タブの本文: [1行ぶんの結果, ...]}
+    戻り値: {タブの本文: [1行ぶんの結果, ...]}（最後の行まで済んだタブだけ）
     """
+    return load_all(path, fingerprint)[0]
+
+
+def load_all(path, fingerprint):
+    """load と同じ。2つ目に、途中まで済んだタブ {タブの本文: [1行ぶんの結果 or None, ...]} も返す。"""
     if not path or fingerprint is None or not os.path.exists(path):
-        return {}
+        return {}, {}
     try:
         with open(path, encoding='utf-8') as f:
             data = json.load(f)
     except Exception:
-        return {}
+        return {}, {}
     if not isinstance(data, dict):
-        return {}
+        return {}, {}
     if data.get('fingerprint') != fingerprint:
-        return {}       # 状況が違う。まるごと捨てる
+        return {}, {}   # 状況が違う。まるごと捨てる
     out = {}
+    partial = {}
     for entry in data.get('tabs') or ():
+        if entry.get('partial'):
+            try:
+                text = entry['text']
+                results = [None if x is None else _unpack(x) for x in entry['results']]
+            except Exception:
+                continue
+            lines = text.split('\n')
+            if len(lines) != len(results) or entry.get('tab_has_kana') != _tab_kana(text):
+                continue
+            if any(r is not None and (not reusable_result(r) or r['original'] != l)
+                   for r, l in zip(results, lines)):
+                continue
+            partial[text] = results
+            continue
         try:
             text = entry['text']
             results = [_unpack(x) for x in entry['results']]
@@ -567,8 +637,11 @@ def load(path, fingerprint):
             continue
         # 控えの中身と本文が食い違っていないかも見る
         # （ここが崩れていたら、その控えは信用できない）。
+        # 半角→全角はタブにかなが在るときだけ（2026-10-26）。作ったときと違えば使わない
+        if entry.get('tab_has_kana') != _tab_kana(text):
+            continue
         if any(r['original'] != l
                for r, l in zip(results, text.split('\n'))):
             continue
         out[text] = results
-    return out
+    return out, partial

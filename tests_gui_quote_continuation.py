@@ -39,9 +39,11 @@ def child():
                 deliver_key(w,'<KeyPress>',keysym,0,char=char)
                 deliver_key(w,'<KeyRelease>',keysym,0,event_type=3,char=char)
         deliver_key(w,'<KeyPress>','Return',13,char='\r')
-    sequence=(('1/2','0.5'),('*4','2'),('+0.5','2.5')) if '--replace' in sys.argv else (('1-2','-1'),('+3*1','2'),('*4','11'))
+    # 答えが出た直後に続けて式を組んだら、答えを使って計算し直す（2026-10-26 うにさん・tests_calc_followup）:
+    # 1-2 → -1、+3*1 → -1+3*1 = 2、*4 → 2*4 = 8（元の式を伸ばした 1-2+3*1*4 = 11 ではない）
+    sequence=(('1/2','0.5'),('*4','2'),('+0.5','2.5')) if '--replace' in sys.argv else (('1-2','-1'),('+3*1','2'),('*4','8'))
     if '--spaced' in sys.argv:
-        sequence=(('1-2','-1'),(' +3*1','2'),('　×4' if '--paste' in sys.argv else ' *4','11'))
+        sequence=(('1-2','-1'),(' +3*1','2'),('　×4' if '--paste' in sys.argv else ' *4','8'))
     with patch.object(app.CorrectNoteApp,'_learn_now',new=lambda *args:None),patch.object(app,'GlobalHotkeys',return_value=Mock()):
         try:
             a=app.CorrectNoteApp(root);until(done)
@@ -51,7 +53,8 @@ def child():
                 labels=('甲','乙','丙','丁');prefix='注1-2｜'
                 identity='--identity' in sys.argv
                 def operand(i):return ('-2*1','-2') if identity and i==1 else ('1-2','-1')
-                def value(i,extended=False):return ('10' if extended else '1') if identity and i==1 else ('11' if extended else '2')
+                # *4 は各式の答え（2、乙は 1）に掛ける（tests_calc_followup の決まり）
+                def value(i,extended=False):return ('4' if extended else '1') if identity and i==1 else ('8' if extended else '2')
                 a._replace_editor_text(prefix+'｜'.join(labels));until(done)
                 w=a.editor;expressions=['']*4;values=['']*4
                 def move(w,index):

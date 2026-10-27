@@ -109,10 +109,43 @@ ITEMS = (
          '別の正しい語になった英語の打ち違い（come form・next weak・their is）'
          'が直らなくなる',
          False),
-    # 名詞の意味の類（2026-10-24・semantic_class.py。国立国語研究所『分類語彙表増補改訂版データベース』の
-    # 「体」の類）。
-    Item('wlsp_nouns.json.gz', 'semantic_class',
-         '名詞の意味の類が分からず、意味の合わない語の組を見分ける補正が効かなくなる',
+    # 程度の副詞（2026-10-26・degree_adverb.py。国立国語研究所『分類語彙表増補改訂版データベース』3.1920「程度」）。
+    Item('degree_adverbs.json', 'degree_adverb:degree_words',
+         '程度の副詞が名詞にかかった所（とても思い → とても重い）が分からず、直しも紫も出なくなる',
+         False),
+    # 常用漢字表（2026-10-26・kanji_doubt.py。2136字）。表の外の字を含む語を一度疑い、より自然な表記へ直す段。
+    Item('joyo_kanji.json', 'kanji_doubt:joyo',
+         '常用漢字表の外の字を含む語を疑う段が働かず、その語の直しも紫も出なくなる',
+         False),
+    # 文変換の窓（2026-10-26・convert_window.py／context_skeleton.py。補正には使わない）。
+    # JMdict（EDRDG・CC BY-SA 4.0）・WordNet 3.0・lemminflect（MIT）から作った表と、英語の2語の数。
+    Item('jm_pred.json.gz', None,
+         '文変換の窓の「英語の文法・名詞は日本語」で、動詞・形容詞が英語にならない',
+         False),
+    Item('jm_noun_kind.json.gz', None,
+         '文変換の窓で、分類語彙表に無い名詞の種類（人・場所・時）が分からない',
+         False),
+    Item('en_infl.json.gz', None,
+         '文変換の窓で、英語の動詞が活用しない（過去形・三単現が出ない）',
+         False),
+    Item('en_follow.json.gz', None,
+         '文変換の窓で、動詞のすぐ後ろに目的語を置くか（meet 友達・talk to 友達）と、形容詞の後ろの前置詞（absent from）が決められない',
+         False),
+    # 分類語彙表の全部の類（2026-10-26・synonyms.py。作り方は tools_local/synonyms_20261026/build_synonyms.py）。
+    # 分類語彙表の唯一の表: 候補欄の「― 類語 ―」の段・補正の semantic_class（名詞と述語の意味の類）・
+    # 文変換の context_skeleton が引く（前の wlsp_nouns.json.gz・wlsp_verbs.json.gz はこれに置き換えた）。
+    Item('wlsp_synonyms.json.gz', 'synonyms',
+         '候補欄に類語の段が出ず、名詞と述語の意味の類で見分ける補正も効かなくなる',
+         False),
+    # 2層の語彙の下の層（2026-10-26・vocabulary.open_vocabulary。作り方は
+    # tools_local/vocab_split_20261026/build_base_vocab.py）。初期状態の語彙（load_seed → 初回の準備の行）。
+    Item('base_vocab.json.gz', 'vocabulary',
+         '語彙が1層（vocabulary.json）に戻り、初回の準備で辞書の取り込みが走る',
+         False),
+    # 文変換の英文（2026-10-26・en_convert.py。作り方は tools_local/convert_v9_20261026/build_en_rev.py）。
+    # JMdict 逆引き（CC BY-SA 4.0）・WordNet 3.0 の名詞の種類・lemminflect（MIT）の英語の原形。
+    Item('en_rev.json.gz', None,
+         '文変換の窓で、英文の「日本語の文法・名詞は英語」の並びが作れない（英文の倒置は出る）',
          False),
     Item('NOTICE_sudachi.txt', None,
          'SudachiDict（Apache-2.0）の表示が配布物から落ちる',

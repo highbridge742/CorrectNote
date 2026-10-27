@@ -1498,6 +1498,11 @@ def project(text,store,index,decisions=None,partial=False):
                         proposed=current[:start]+face+after
                         if not M.native_spelling_only(current,proposed):continue
                         emitted=M.tokenize(face)
+                        # 2026-10-26: かなの述語（動詞・助動詞を含む：しない・みると）を、述語を持たない名詞の表記に
+                        # 替えない（全体にしないという→市内）。表記替えは同じ語の字を替えるだけで、品詞を替えない。
+                        if (len(known)>=2 and known[0].pos=='動詞' and known[-1].pos=='助動詞'
+                                and all(t.pos in ('動詞','助動詞') for t in known)
+                                and not any(t.pos in ('動詞','形容詞','助動詞') for t in emitted)):continue
                         usual=''.join(t.reading for t in emitted if t.has_reading)
                         if (face!=remembered and all(t.has_reading for t in emitted)
                                 and not E._adj_ok_one_char(rd,usual,'kana')):continue

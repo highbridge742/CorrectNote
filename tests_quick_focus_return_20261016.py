@@ -131,7 +131,9 @@ class GoBackTests(unittest.TestCase):
     def restore(self, user, paste=True):
         root = Mock()
         root.after.side_effect = lambda ms, fn: fn()
+        # FakeUser の keybd_event に届くかを見るので、外へ送る門（CORRECTNOTE_NO_EXTERNAL_PASTE）はここだけ開ける
         with patch.object(quick_return, '_user', return_value=user), \
+                patch.object(quick_return, 'external_input_blocked', return_value=False), \
                 patch.object(quick_return, '_ours_in_front', return_value=True), \
                 patch.object(quick_return.sys, 'platform', 'win32'):
             return quick_return.restore(self.target, root, paste=paste), root

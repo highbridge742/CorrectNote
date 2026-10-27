@@ -12,7 +12,7 @@ class NativeActionRoleTests(unittest.TestCase):
         S.native_verb_roles.cache_clear()
         S._native_verb_reading_lexemes.cache_clear()
         S._native_lexeme_forms.cache_clear()
-        S.predicate_roles.cache_clear()
+        getattr(S.predicate_roles, 'cache_clear', lambda: None)()   # predicate_roles は控え無し（2026-10-26）
 
     def test_kana_role_bridge_keeps_original_inflection_and_reading(self):
         forms={'つづけ':(('動詞,自立,*,*','連用形','つづける','つづけ'),),

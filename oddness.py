@@ -2198,6 +2198,35 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
                     reading_reasons_out[start,end]='IME候補に原文があり、復元した読みの接続が異様です'
         except (ImportError,OSError,AttributeError):
             pass
+    # 2026-10-26: 辞書に無い漢字の熟語（2字以上の漢字の連なり）が、する・できる の形に続くときは
+    # サ変の名詞と見る。解析が 自＋走（動詞）のように割っても、その割れ目と後ろの する・できる の境は
+    # 印にしない（正しい 自走できる を 自署できる にしない）。
+    protected=_unknown_sahen_runs(text,source_tokens)
+    if protected and with_spans:
+        out=[row for row in out if not any(lo<=row[2] and row[3]<=hi for lo,hi in protected)]
+    return out
+
+
+_SAHEN_TAIL=('する','し','さ','せ','され','させ','でき','できる','できれ')
+
+
+def _unknown_sahen_runs(text,tokens):
+    """漢字だけの連なり（2字以上・解析が1字の動詞の語幹を含めて割ったもの）と、続く する・できる の範囲。"""
+    out=[]
+    toks=list(tokens or ())
+    i=0
+    while i<len(toks):
+        j=i
+        while (j<len(toks) and toks[j][0] and all('一'<=c<='鿿' for c in toks[j][0])
+               and (j==i or toks[j][3]==toks[j-1][4])):
+            j+=1
+        run=toks[i:j]
+        if (len(run)>=2 and sum(len(t[0]) for t in run)>=2
+                and any((t[1] or '').startswith('動詞') and len(t[0])==1 for t in run)
+                and j<len(toks) and toks[j][3]==run[-1][4]
+                and (toks[j][1] or '').startswith('動詞') and toks[j][0] in _SAHEN_TAIL):
+            out.append((run[0][3],toks[j][4]))
+        i=max(j,i+1)
     return out
 
 

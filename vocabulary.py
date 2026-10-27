@@ -96,6 +96,12 @@ def _entry_for_save(entry):
     for k in _SAVE_KEYS:
         if k == 'solid':
             out['solid'] = bool(entry.get('solid'))
+        elif k == 'category' and entry.get('_untagged'):
+            # 札の無い語（2026-10-26 から足した語）はファイルに札を書かない（メモリの上の札は結果に運ぶだけ）
+            continue
+        elif k == 'category' and '_saved_category' in entry:
+            # ファイルにあった札はそのまま書き戻す（メモリの上で変わっても、英語以外はファイルを変えない）
+            out['category'] = entry['_saved_category']
         elif k == 'world':
             # **0 は書かない。** 「`world` を持たない」＝
             # **この人が覚えた語**、という見分けに使うので
@@ -437,6 +443,11 @@ class VocabularyStore:
         """
         if not reading or not surface:
             return False
+        # ファイルに書く札は「英語」か「なし」だけ（2026-10-26 うにさん。札は補正の判定に使われず、判定に要るのは
+        # 英語の札だけ・corrector の category == '英語'）。補正の結果（候補・details）に運ぶ札はメモリの上で
+        # 今までどおり持つ（渡された札・既定 'その他'）。英語でない札はファイルに書かない（_untagged）。
+        # ファイルに既にある札は書き換えない（_saved_category・英語にするときだけ書き換える）
+        tag = '英語' if category == '英語' or str(reading).startswith('en:') else ''
         entry = self._by_reading[reading].get(surface)
         if entry:
             _was = bool(entry.get('solid'))
@@ -448,6 +459,9 @@ class VocabularyStore:
                 _changed = not _was
             if category != 'その他' and entry.get('category') != category:
                 entry['category'] = category
+                if tag:
+                    entry['_saved_category'] = tag
+                    entry.pop('_untagged', None)
                 _changed = True
                 # 分類は**顔ぶれ**の側（項目48-BV）。文脈語彙は
                 # 分類を持って回るので、変わったら作り直させる。
@@ -474,8 +488,10 @@ class VocabularyStore:
             entry = {
                 'reading': reading,
                 'surface': surface,
-                'category': category,
+                'category': tag or category or 'その他',
             }
+            if not tag:
+                entry['_untagged'] = True
             # **印を書くのは `_set_solid` 1本**（項目48-QG・48-QS）。
             # ここに `count` の写しを書き下すと、巡4 で写しを
             # 片付ける日に**ここだけ取り残される**（48-GN）。
@@ -807,10 +823,224 @@ class VocabularyStore:
                 _set_solid(e, int(e.get('count') or 0) >= 2)
             else:
                 _set_solid(e, bool(e.get('solid')))
+            if 'category' not in e:
+                # 札の無い語（_entry_for_save が札を書かなかった語）。結果に運ぶ札は今までどおり 'その他'
+                e['category'] = 'その他'
+                e['_untagged'] = True
+            else:
+                e['_saved_category'] = e['category']
             self._by_reading[e['reading']][e['surface']] = e
         self.legacy_on_disk = legacy
         self._en_readings = None        # 入れ物ごと作り直した（項目48-VC）
         self._invalidate_cache()
+
+
+# ============================================================
+# 2層の語彙（2026-10-26・うにさんの指定「語彙表と適切に棲み分ける」）
+# ============================================================
+#
+#   下の層 base_vocab.json.gz        初期状態の語彙（同梱・読むだけ）。
+#                                    load_seed → 初回の準備の行を store.add と同じ順で
+#                                    作ったもの（tools_local/vocab_split_20261026/build_base_vocab.py）
+#   上の層 vocabulary_personal.json  本人の語と、表の語で表と違う所（solid・world・札）だけ
+#
+# 読み込むと、1層の VocabularyStore と同じ中身（読み → 表記 → 項目・入った順）をメモリに作る
+# ので、補正の答えは変わらない（compare_layers・readcheck・fpcheck・memodiff で旧と突き合わせ済み）。
+# 古い vocabulary.json しか無ければ、そこから上の層を作る。**vocabulary.json は書き換えない・消さない。**
+#
+# 上の層の形:
+#     {'version': 1,
+#      'entries': [ _entry_for_save の形 ],   表に無い語、または表の語で表と違う所がある項目
+#      'removed': [[読み, 表記], ...],        表にあるが本人の語彙から消えている語
+#      'order':   {読み: [表記, ...]}}        重ねた順が元の入った順と違う読みだけ（_rank_key の同点の並び）
+
+BASE_VOCAB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'base_vocab.json.gz')
+_BASE_LABEL = {'': 'その他', 'v': '日常会話', 'k': 'IT・PC操作', 'e': '英語'}
+_BASE_ROWS_CACHE = {}
+
+
+def load_base_rows(path=None):
+    """下の層の行（[読み, 表記, world, 札の符号, solid]）。無ければ []。"""
+    path = BASE_VOCAB_FILE if path is None else path
+    if not path or not os.path.exists(path):
+        return []
+    key = (path, os.path.getmtime(path))
+    rows = _BASE_ROWS_CACHE.get(key)
+    if rows is None:
+        import gzip
+        with gzip.open(path, 'rt', encoding='utf-8') as f:
+            rows = json.load(f)['rows']
+        _BASE_ROWS_CACHE.clear()
+        _BASE_ROWS_CACHE[key] = rows
+    return rows
+
+
+def _base_row(row):
+    """下の層の1行 → (読み, 表記, world, 札, solid)。"""
+    r, s, w, c = row[:4]
+    return r, s, int(w or 0), _BASE_LABEL.get(c, c), bool(row[4]) if len(row) > 4 else False
+
+
+def personal_from_entries(entries, base_rows):
+    """1層の項目の並び（入った順）→ 上の層（entries・removed・order）。"""
+    base = {}
+    for row in base_rows:
+        r, s, w, label, solid = _base_row(row)
+        base[(r, s)] = (w, label, solid)
+    present = set()
+    out = []
+    for e in entries:
+        key = (e['reading'], e['surface'])
+        present.add(key)
+        saved = _entry_for_save(e)
+        if key in base:
+            world, label, base_solid = base[key]
+            old_world = int(saved.get('world') or 0)
+            old_label = saved.get('category', 'その他')
+            if (bool(saved.get('solid')) == base_solid and old_world == world
+                    and old_label == label):
+                continue
+            # 表と違う所ははっきり書く（world が無い＝本人が先に覚えた語・札が無い）。
+            # 書かないと、重ねたときに表の値が残って _is_own_word の見分けが変わる
+            if old_world != world:
+                saved['world'] = old_world
+            if old_label != label:
+                saved['category'] = saved.get('category', '')
+        out.append(saved)
+    removed = [[r, s] for (r, s) in base if (r, s) not in present]
+    # 同じ読みの表記の並び（＝入った順。_rank_key の同点はこの順）が、重ねたときの順
+    # （表の順 → 上の層の順）と違う読みだけ、元の順を控える
+    old_order = {}
+    for e in entries:
+        old_order.setdefault(e['reading'], []).append(e['surface'])
+    merged = {}
+    for row in base_rows:
+        r, s = row[0], row[1]
+        if (r, s) in present:
+            seq = merged.setdefault(r, [])
+            if s not in seq:
+                seq.append(s)
+    for e in out:
+        seq = merged.setdefault(e['reading'], [])
+        if e['surface'] not in seq:
+            seq.append(e['surface'])
+    order = {r: seq for r, seq in old_order.items() if merged.get(r) != seq}
+    return {'version': 1, 'entries': out, 'removed': removed, 'order': order}
+
+
+class LayeredVocabularyStore(VocabularyStore):
+    """下の層（同梱）＋上の層（本人）の語彙。メモリの上では VocabularyStore と同じ形。
+
+    保存（save・save_in_background）は上の層だけを書く。
+    """
+
+    def __init__(self, personal_path=None, old_path=None, base_path=None):
+        VocabularyStore.__init__(self, None)
+        self.path = personal_path
+        self.old_path = old_path
+        self.base_path = BASE_VOCAB_FILE if base_path is None else base_path
+        self.base_rows = 0
+        self.load()
+
+    def load(self, path=None):
+        rows = load_base_rows(self.base_path)
+        target = path or self.path
+        personal = None
+        from_old = False
+        if target and os.path.exists(target):
+            with open(target, encoding='utf-8') as f:
+                personal = json.load(f)
+        elif self.old_path and os.path.exists(self.old_path):
+            old = VocabularyStore(self.old_path)     # 旧形式（count 付き）もここで潰れる
+            personal = personal_from_entries(old.to_list(), rows)
+            from_old = True
+        self._by_reading.clear()
+        for row in rows:
+            r, s, w, label, solid = _base_row(row)
+            if s not in self._by_reading[r]:
+                entry = {'reading': r, 'surface': s, 'category': label}
+                _set_solid(entry, solid)
+                if w:
+                    entry['world'] = w
+                self._by_reading[r][s] = entry
+        if personal:
+            for r, s in personal.get('removed', ()):
+                self._by_reading.get(r, {}).pop(s, None)
+            for e in personal.get('entries', ()):
+                r, s = e['reading'], e['surface']
+                cur = self._by_reading[r].get(s)
+                if cur is None:
+                    cur = {'reading': r, 'surface': s}
+                    self._by_reading[r][s] = cur
+                if e.get('category'):
+                    cur['category'] = e['category']
+                    cur['_saved_category'] = e['category']
+                    cur.pop('_untagged', None)
+                elif 'category' in e or 'category' not in cur:
+                    # 札なし: メモリの上では 'その他'（VocabularyStore.load と同じ）
+                    cur['category'] = 'その他'
+                    cur['_untagged'] = True
+                    cur.pop('_saved_category', None)
+                if 'world' in e:
+                    if e['world']:
+                        cur['world'] = int(e['world'])
+                    else:
+                        cur.pop('world', None)       # 本人が先に覚えた語（表の帯を持たない）
+                _set_solid(cur, entry_is_solid(e))
+            for r, seq in (personal.get('order') or {}).items():
+                cur = self._by_reading.get(r)
+                if not cur:
+                    continue
+                ordered = {s: cur[s] for s in seq if s in cur}
+                ordered.update((s, e) for s, e in cur.items() if s not in ordered)
+                self._by_reading[r] = ordered
+        for r in [r for r, v in self._by_reading.items() if not v]:
+            del self._by_reading[r]
+        self.base_rows = len(rows)
+        # 古い vocabulary.json から作ったときは、起動処理（項目48-QN の save）に上の層を一度書かせる
+        self.legacy_on_disk = from_old
+        self._en_readings = None
+        self._invalidate_cache()
+
+    def personal_data(self):
+        return personal_from_entries(self.to_list(), load_base_rows(self.base_path))
+
+    def save(self, path=None):
+        target = path or self.path
+        if not target:
+            return
+        self._write_saved(target, self.personal_data(), self._next_save_generation())
+
+    def save_in_background(self, path=None):
+        target = path or self.path
+        if not target:
+            return None
+        data = self.personal_data()
+        generation = self._next_save_generation()
+
+        def write():
+            try:
+                self._write_saved(target, data, generation)
+            except Exception as error:
+                self.background_save_error = error
+        thread = threading.Thread(target=write, name='vocabulary-save', daemon=False)
+        thread.start()
+        return thread
+
+
+def personal_vocabulary_path(old_path):
+    """vocabulary.json → 同じフォルダの vocabulary_personal.json。"""
+    return os.path.join(os.path.dirname(old_path), 'vocabulary_personal.json')
+
+
+def open_vocabulary(old_path, base_path=None):
+    """アプリの語彙を開く。下の層が同梱されていれば2層、無ければ今までどおり vocabulary.json。"""
+    base_path = BASE_VOCAB_FILE if base_path is None else base_path
+    if base_path and os.path.exists(base_path):
+        return LayeredVocabularyStore(personal_vocabulary_path(old_path), old_path=old_path,
+                                      base_path=base_path)
+    return VocabularyStore(old_path)
 
 
 # ============================================================
@@ -952,8 +1182,13 @@ def _find_known_readings_flex_uncached(typed, store, max_dist=1.6,
             # --- 通常の1文字対応（一致 or 置換） ---
             if pos < n:
                 ch = typed[pos]
+                # **かな入力では音の取り違え（同じ行・同じ段の五十音）を置き換えに数えない**
+                # （うにさん 2026-10-25 21:57Z「れ と ら、か と く は隣接判定ではないはず」:
+                #   かれー→からー・くれー は音の取り違えの道から出ていた。かな入力の打ち違いは
+                #   キーの隣（同じ段の左右・同じ指の上下）だけ。ローマ字入力は従来どおり）
                 for cand_char, d in nearby_candidates(
                         ch, max_dist=max_dist,
+                        include_phonetic=(input_method != 'kana'),
                         input_method=input_method):
                     nxt = kids.get(cand_char)
                     if nxt is None:

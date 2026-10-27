@@ -28,7 +28,8 @@ def child(phase,layout,automatic):
   try:
    a=app.CorrectNoteApp(root);until(done);w=a.editor
    if phase=='write':
-    for suffix,expected,full in (('1-2','-1','1-2'),('+3*1','2','1-2+3*1')):
+    # +3*1 is carried on from the answer -1 (2026-10-26): saved with where that answer ends (splits)
+    for suffix,expected,full,splits in (('1-2','-1','1-2',None),('+3*1','2','1-2+3*1',[3])):
      w.mark_set('insert','1.end');deliver_key(w,'<Control-c>','c',67,state=4)
      for ch in suffix:
       deliver_key(w,'<KeyPress>',ch,0,char=ch)
@@ -39,7 +40,8 @@ def child(phase,layout,automatic):
      assert a.line_results[0]['corrected']==expected,a.line_results
      saved=json.loads(Path('session.json').read_text(encoding='utf-8'))
      assert saved['tabs'][0]['text']==full,saved
-     assert saved['tabs'][0].get('calculations')==[dict(start=0,end=len(full),surface=full)],saved
+     assert saved['tabs'][0].get('calculations')==[dict(start=0,end=len(full),surface=full,
+                                                        **({'splits':splits} if splits else {}))],saved
     # Closing cannot repair a missing autosave in this test.
     with patch.object(a,'_save_session'),patch.object(a,'_save_analysis_cache'):
      a._on_close();a=None

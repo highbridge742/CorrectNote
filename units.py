@@ -521,7 +521,17 @@ def _merge_functional_runs(units):
     n = len(units)
     while i < n:
         if not _is_plain_kana_unit(units[i]):
-            out.append(units[i])
+            u = units[i]
+            t = u.get('text') or ''
+            # **自動補正で置かれた機能語（をつくりのす→ます）にも同じ印**（うにさん 2026-10-25
+            # 16:23Z「変わりません」: 直された側の ます は kind='fixed' なのでここを素通りし、
+            # 打ち間違いの候補 増さ・くす が残っていた）。まとめはしない（詳細を保つ）。
+            if (t and u.get('kind') == 'fixed' and not u.get('functional')
+                    and all('\u3041' <= c <= '\u3096' for c in t)
+                    and (len(t) == 1 or _is_all_functional(t))):
+                u = dict(u)
+                u['functional'] = True
+            out.append(u)
             i += 1
             continue
         # **助詞は1文字で切る**（項目48-GL・うにさんの指定）
@@ -550,8 +560,10 @@ def _merge_functional_runs(units):
                     break
             if best is None:
                 u = dict(units[i])
-                # **1文字の助詞にも候補は出さない**（同じ理由）
-                if len(u.get('text') or '') == 1:
+                # **1文字の助詞にも候補は出さない**（同じ理由）。**それだけで機能語の並びになる単位**
+                # （ます・ました・まで）も同じ（うにさん 2026-10-25「カレーをつくり増さ」: 助動詞 ます に
+                # 打ち間違いの候補 増さ・くす が並んでいた。1字の助詞と同じ門を2字以上の助動詞にも）
+                if len(u.get('text') or '') == 1 or _is_all_functional(u.get('text') or ''):
                     u['functional'] = True
                 out.append(u)
                 i += 1

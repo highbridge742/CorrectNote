@@ -43,13 +43,14 @@ def session_calculations(app,text):
     """Save current explicit formula ranges alongside their tab, not shared caches."""
     doc=getattr(app,'_input_document',None)
     if doc is None or doc.owner!=owner(app):return []
-    return [dict(start=x.start,end=x.end,surface=x.surface) for x in doc.calculations
+    return [dict(start=x.start,end=x.end,surface=x.surface,**({'splits':list(x.splits)} if x.splits else {}))
+            for x in doc.calculations
             if 0<=x.start<x.end<=len(text) and text[x.start:x.end]==x.surface]
 
 
 def restore_session_calculations(app):
     """Restore every tab before prefetch can analyze its plain source text."""
-    from quote_calculator import clean_calculations,calculate
+    from quote_calculator import clean_calculations,evaluate
     registry={}
     for tab in app.session.tabs:
         text=tab.get('text','')
@@ -57,8 +58,9 @@ def restore_session_calculations(app):
         if not records:continue
         doc=Document(owner_for_tab(app,tab),text)
         for record in records:
+            splits=tuple(record.get('splits') or ())
             doc.remember_calculation(record['start'],record['end'],record['surface'],
-                                     calculate(record['surface']))
+                                     evaluate(record['surface'],splits),splits)
         registry[doc.owner]=doc
     app._input_documents=registry
 
@@ -270,14 +272,21 @@ def _calculation_document(app,quick=False):
 
 
 def calculation_expression(app,start,end,quick=False):
+    """(start, expression, splits): the typed formula, carried on from an answer it touches."""
     doc=_calculation_document(app,quick)
-    from quote_calculator import continued_expression
-    return continued_expression(doc.text,doc.calculations,start,end)
+    from quote_calculator import continued_calculation
+    return continued_calculation(doc.text,doc.calculations,start,end)
 
 
-def remember_calculation(app,start,end,surface,result,quick=False):
+def calculation_at(app,end,quick=False):
+    """The remembered calculation ending at `end` (source offset), or None."""
     doc=_calculation_document(app,quick)
-    if not doc.remember_calculation(start,end,surface,result):return False
+    return next((x for x in doc.calculations if x.end==end and doc.text[x.start:x.end]==x.surface),None)
+
+
+def remember_calculation(app,start,end,surface,result,quick=False,splits=None):
+    doc=_calculation_document(app,quick)
+    if not doc.remember_calculation(start,end,surface,result,splits):return False
     if not quick:app._work_epoch=getattr(app,'_work_epoch',0)+1
     return True
 

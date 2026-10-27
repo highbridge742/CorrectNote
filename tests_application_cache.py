@@ -44,11 +44,27 @@ class ApplicationCacheTests(unittest.TestCase):
  def test_current_live_ime_values_are_not_written_as_text_only_cache(self):
   a=self.make_app();a._input_document.remember(0,2,'資料','しりょう');a._save_analysis_cache()
   self.assertFalse(Path(self.path).exists())
+ def assert_row_not_restored(self,row):
+  # A tab saved part-way keeps only its finished rows (analysis_cache partial, 2026-10-27): the row is analysed again
+  b=self.make_app();b._load_analysis_cache()
+  self.assertNotIn(self.source,b._analysis_cache)
+  partial=b._analysis_partial.get(self.source)
+  if partial is not None:
+   self.assertIsNone(partial[row])
+   self.assertTrue(all(r is None or r['original']==line for r,line in zip(partial,self.source.split('\n'))))
  def test_pending_and_failed_rows_do_not_survive_restart(self):
   for flag in ('pending','analysis_error'):
    with self.subTest(flag=flag):
     a=self.make_app();a.line_results[0][flag]=True;a._save_analysis_cache()
-    self.assertFalse(Path(self.path).exists())
+    self.assert_row_not_restored(0)
+ def test_finished_rows_of_a_tab_saved_part_way_resume(self):
+  a=self.make_app();a.line_results[1]['pending']=True;a._save_analysis_cache()
+  b=self.make_app();b._load_analysis_cache()
+  self.assertNotIn(self.source,b._analysis_cache)
+  partial=b._analysis_partial[self.source]
+  self.assertEqual(partial[0]['original'],self.source.split('\n')[0]);self.assertIsNone(partial[1])
+  core,unfinished=b._partial_analysis_core(self.source,self.source.split('\n'))
+  self.assertEqual(unfinished,{1});self.assertEqual(core[0]['original'],partial[0]['original'])
  def test_old_work_generation_does_not_survive_restart(self):
   a=self.make_app();a._work_epoch+=1;a._save_analysis_cache()
   self.assertFalse(Path(self.path).exists())
@@ -65,7 +81,7 @@ class ApplicationCacheTests(unittest.TestCase):
 
  def test_incomplete_row_is_not_written_even_when_all_jobs_returned(self):
   a=self.make_app();a.line_results[0]['analysis_status']='incomplete';a._save_analysis_cache()
-  self.assertFalse(Path(self.path).exists())
+  self.assert_row_not_restored(0)
 
 
  def test_text_cache_reuses_its_owners_partial_display(self):

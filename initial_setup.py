@@ -8,8 +8,10 @@ import analysis_async
 def start(app):
     if getattr(app,'_closing',False) or getattr(app,'_initial_setup',None) is not None:return
     from janome_import import DEFAULT_MAX_WORDS
-    rows=[] if len(app.store.to_list())>=DEFAULT_MAX_WORDS else None
-    state=dict(rows=rows,pos=0,worker=None,request=None,job=None,failed=False)
+    # The bundled base layer (base_vocab.json.gz) already holds the same rows: skip the import.
+    from_base=bool(getattr(app.store,'base_rows',0))
+    rows=[] if from_base or len(app.store.to_list())>=DEFAULT_MAX_WORDS else None
+    state=dict(rows=rows,pos=0,worker=None,request=None,job=None,failed=False,from_base=from_base)
     app._initial_setup=state
     app._cancel_analysis_job()
     job=getattr(app,'_after_id',None)
@@ -68,7 +70,7 @@ def _finish(app,state):
         except Exception:state['failed']=True
         app._invalidate_analysis_cache(keep_current=False)
     ready=bool(getattr(getattr(app,'dict_index',None),'ready',False))
-    app._mark_setup_done(dictionary=changed and not state['failed'],index=ready)
+    app._mark_setup_done(dictionary=(changed or state.get('from_base',False)) and not state['failed'],index=ready)
     app._update_status()
     app.status.config(text=('初回の辞書準備に失敗しました。現在の辞書で続けます。'
         if state['failed'] else '初回の準備が終わりました。そのまま書き始められます。'))

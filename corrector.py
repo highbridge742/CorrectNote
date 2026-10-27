@@ -14657,11 +14657,27 @@ def _ime_one_key_respell(chunk, readings, store, tokenize_fn, dict_index=None,
             if row.operation == 'same_reading' or row.reading in found:
                 continue
             try:
+                # **戻した読みの末尾が助詞1字で、その手前が世の中の語**（へんじょ→へんじを・へんじょを→へんじを:
+                # を を打つつもりで隣の ょ を押した／巻き込んだ。IME は 変所 と助詞ごと変換した。2026-10-25 未解決
+                # 相手の意図を察して変所）なら、語の表記に助詞を付けた形（返事を）を直し先にする
+                _pt = ''
+                _lookup_r = row.reading
                 if not dict_index.is_world_reading(row.reading):
-                    continue
+                    # 塊の直後にかなが続く（察して｜へんじほ）なら、IME が助詞を呑んだ形ではないので見ない
+                    _kana_follows = (line is not None and end is not None and end < len(line)
+                                     and is_hiragana(line[end]))
+                    if (len(row.reading) >= 3 and row.reading[-1] in 'はがをにでともへの'
+                            and not _kana_follows
+                            and row.reading[:-1] not in found
+                            and dict_index.is_world_reading(row.reading[:-1])):
+                        _pt = row.reading[-1]
+                        _lookup_r = row.reading[:-1]
+                    else:
+                        continue
                 # 直し先は、本人の語彙で確かな語（2回以上・同梱の語）だけ。1回見ただけの語（製する・大同）へは
                 # 戻さない（2026-10-24・うにさん 誤判定「即補正する」「タブ移動」。学習で補正を悪くしない）
-                ents = [e for e in store.lookup(row.reading)
+                ents = [(dict(e, surface=e['surface'] + _pt, _pt=_pt) if _pt else e)
+                        for e in store.lookup(_lookup_r)
                         if e['surface'] != chunk
                         and any(is_kanji(c) for c in e['surface'])
                         and e.get('solid', True)]
@@ -14714,7 +14730,12 @@ def _ime_one_key_respell(chunk, readings, store, tokenize_fn, dict_index=None,
                 _chunk_pos = _last_pos(chunk) if faithful else ''
 
                 def _need(e):
-                    if worldly or (faithful and (_particle_cut or _last_pos(e['surface']) != _chunk_pos)):
+                    # 助詞を付けた直し先（返事を）は、語の部分（返事）の品詞で比べる
+                    _sf_pos = e['surface'][:-1] if e.get('_pt') else e['surface']
+                    _ck_pos = _chunk_pos
+                    if e.get('_pt') and faithful and chunk.endswith(e['_pt']) and len(chunk) > 1:
+                        _ck_pos = _last_pos(chunk[:-1])     # 塊も助詞を外した語の品詞で（変所を→返事を）
+                    if worldly or (faithful and (_particle_cut or _last_pos(_sf_pos) != _ck_pos)):
                         return _naturalness.MIN_GAIN_READABLE
                     return 1000
                 # 後ろに語を要する語（連体詞・接頭詞: 我が）へは、後ろに語が無い（行末・記号の前）なら戻さない
@@ -14747,6 +14768,28 @@ def _ime_one_key_respell(chunk, readings, store, tokenize_fn, dict_index=None,
                 found[row.reading] = (rd, row, ents)
     if len(reached | set(found)) > 1:
         found = dict(found, **{r: None for r in reached if r not in found})
+    if len(found) > 1 and all(v is not None for v in found.values()):
+        # **並んだ読みは、身近さの表で決める**（うにさん 2026-10-18「文脈優先、読み取れなければ最も身近な語に」・
+        # 2026-10-25 未解決 変場を: へんじ（返事）と ほんば（本場）が並んで触らず紫だけだった。行の自然さは
+        # 5536 対 5114 で決め手にならず、文脈の表にも無い）。1打を戻した読みのうち、身近さの表（everyday_faces）に
+        # 在って届く表記がその表の先頭のものが**1つだけ**なら、それに決める。どの読みも表に無い／2つ以上あるなら
+        # 今までどおり触らない（紫）。
+        try:
+            import everyday_faces as _ef
+            _faced = {}
+            for _r, (_rd0, _row0, _ents0) in found.items():
+                # 助詞付きの読み（へんじを）は助詞を外して表を引き、表記も助詞付きで比べる
+                _sfx = _r[-1] if (len(_r) >= 3 and _r[-1] in 'はがをにでともへの'
+                                  and all(x['surface'].endswith(_r[-1]) for x in _ents0)) else ''
+                _faces, _dom = _ef.order(_r[:-1] if _sfx else _r)
+                if _faces and any(x['surface'] == _faces[0] + _sfx for x in _ents0):
+                    _faced[_r] = (_rd0, _row0, [x for x in _ents0 if x['surface'] == _faces[0] + _sfx])
+            if len(_faced) == 1:
+                _trace('打った読み', f'{chunk!r} → 1打を戻した読みが {sorted(found)} と並ぶが、'
+                                     f'身近さの表に在るのは {next(iter(_faced))!r} だけなので決める')
+                found = _faced
+        except Exception:
+            pass
     if len(found) != 1:
         if found:
             _trace('打った読み', f'{chunk!r} → 1打を戻した読みが '
@@ -16216,6 +16259,18 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
                 and sum(1 for _c in _repl if _kana(_c))
                 > sum(1 for _c in chunk if _kana(_c))):
             return False
+        # 2026-10-26: 見たことのない並びだけの印では、読みの立つ語の読みを2字以上
+        # 消す置き換えをしない（打ち間違いで消えるのは1打まで。行間幅→共感 のように
+        # 名詞を1つ丸ごと落とさない）。
+        try:
+            _rd0 = [t for t in tokenize_fn(chunk)]
+            _rd1 = [t for t in tokenize_fn(_repl)]
+            if (_rd0 and _rd1 and all(t[5] for t in _rd0) and all(t[5] for t in _rd1)
+                    and len(''.join(t[2] for t in _rd1)) <= len(''.join(t[2] for t in _rd0)) - 2):
+                _trace('異様', f'{chunk!r} → {_repl!r} は読みを2字以上落とすため採らない')
+                return False
+        except Exception:
+            pass
         _n1 = _sm_content_count(_repl, tokenize_fn)
         return _n1 <= 1 or _n1 < _sm_n0
     if _sm_unseen_only:
@@ -24847,7 +24902,10 @@ def correct_line(line, store, tokenize_fn, find_readings, max_dist=1.6,
         except Exception:
             return []
 
-    for start, end, chunk in find_halfwidth_runs(line):
+    # ファイルタブに平仮名・片仮名が1字も無ければ（完全に英語の環境）半角のまま打った部分の補正は掛けない
+    # （うに 2026-10-26: 字で見る・バイトでは見ない。tab_context・値は correction_entry.correct_line(tab_has_kana=) が置く）
+    from tab_context import halfwidth_correction_allowed as _hw_allowed
+    for start, end, chunk in (find_halfwidth_runs(line) if _hw_allowed() else ()):
         from halfwidth import original_ascii_expression
         if original_ascii_expression(line,start,end):continue
         # 全角で入ってしまった場合は、まず半角に戻して解釈する

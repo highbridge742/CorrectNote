@@ -50,6 +50,10 @@ class WindowsClipboard:
         return any(self.down(k) for k in (0x10,0x11,0x12,0x5b,0x5c,0x2d,0xbd,0x43))
     def sequence(self):return self.user.GetClipboardSequenceNumber()
     def copy(self):
+        # 外の窓へ Ctrl+C を送る道。試験・確かめの中（CORRECTNOTE_NO_EXTERNAL_PASTE=1）では送らない（2026-10-27）
+        import quick_return
+        if quick_return.external_input_blocked():
+            quick_return.SENT.append('ctrl+c');return False
         if self.blocked_keys():return False
         keys=keyboard_inputs()
         sent=self.user.SendInput(len(keys),keys,C.sizeof(Input))

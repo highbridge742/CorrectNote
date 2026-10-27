@@ -85,7 +85,9 @@ def propose(text, dict_index):
         a, b = toks[i], toks[i + 1]
         if not (a.has_reading and b.has_reading and a.end == b.start and a.pos == '名詞'):
             continue
-        if (a.pos_sub or '').startswith(('数', '副詞可能')) or (b.pos_sub or '').startswith('数'):
+        # 接尾（助数詞を含む）は前の語に付く語なので、後ろの語とつないだ読みは語の組にならない
+        # （3行後・5行分・4点間 を 口語・構文・転換 にしない・2026-10-26）。
+        if (a.pos_sub or '').startswith(('数', '副詞可能', '接尾')) or (b.pos_sub or '').startswith('数'):
             continue
         if not _kanji_any(a.surface):
             continue

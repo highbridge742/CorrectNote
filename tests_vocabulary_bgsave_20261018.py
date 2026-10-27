@@ -38,7 +38,9 @@ class BackgroundSaveTests(unittest.TestCase):
         self.assertFalse(os.path.exists(self.path + '.tmp'))
         loaded = VocabularyStore(self.path)
         loaded.load()
-        self.assertEqual(loaded.to_list(), VocabularyStore.to_list(s))
+        # compared in the saved form: a label other than 英語 is not written to the file (2026-10-26)
+        self.assertEqual([vocabulary._entry_for_save(e) for e in loaded.to_list()],
+                         [vocabulary._entry_for_save(e) for e in VocabularyStore.to_list(s)])
 
     def test_written_from_the_contents_at_the_call(self):
         s = store()

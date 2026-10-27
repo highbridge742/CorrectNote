@@ -24,19 +24,30 @@ POS_LABELS = (
     ('記号', '記号'),
     ('フィラー', 'フィラー'),
     ('その他', 'その他'),
+    # English articles (a / an / the) have their own row (2026-10-26 うにさん「冠詞を独立した項目にする」).
+    # Last here so the existing rows keep their tag numbers; the dialog shows it after 連体詞.
+    ('冠詞', '冠詞'),
+    # Pronouns — Japanese (名詞:代名詞) and English (en_pos O) — have their own row too
+    # (2026-10-26 うにさん「フォントサイズカラーの代名詞も独立する。1.2倍、緑明るい」).
+    # Last for the same reason; the dialog shows it right after 名詞.
+    ('代名詞', '代名詞'),
 )
+ARTICLE = '冠詞'
+PRONOUN = '代名詞'
 POS_CATEGORIES = tuple(key for key, _label in POS_LABELS)
 # Rows of the per-POS dialog: the headings also name the English parts of
 # speech each row takes (en_pos), and 英字 — now only the English words the
 # dictionary does not know — is shown last as その他英字 (2026-10-14 うにさん
 # 「英字を、その他英字として下へ移す。見出しに、代名詞や前置詞、冠詞も書き加える」).
 # Keys, tags and saved settings keep the order and names above.
-POS_DIALOG_LABELS = {'名詞': '名詞・代名詞', '助詞': '助詞・前置詞',
-                     '連体詞': '連体詞・冠詞', '英字': 'その他英字'}
+POS_DIALOG_LABELS = {'助詞': '助詞・前置詞',
+                     '連体詞': '連体詞・限定詞', '英字': 'その他英字'}
+_DIALOG_ORDER = [item for item in POS_LABELS if item[0] not in ('英字', ARTICLE, PRONOUN)]
+_DIALOG_ORDER.insert([k for k, _l in _DIALOG_ORDER].index('連体詞') + 1, (ARTICLE, ARTICLE))
+_DIALOG_ORDER.insert([k for k, _l in _DIALOG_ORDER].index('名詞') + 1, (PRONOUN, PRONOUN))
 POS_DIALOG_ROWS = tuple(
     (key, POS_DIALOG_LABELS.get(key, label))
-    for key, label in [item for item in POS_LABELS if item[0] != '英字']
-    + [item for item in POS_LABELS if item[0] == '英字'])
+    for key, label in _DIALOG_ORDER + [item for item in POS_LABELS if item[0] == '英字'])
 POS_LABEL_BY_KEY = dict(POS_LABELS)
 POS_FONT_TAGS = {key: 'pos_font_' + str(index)
                  for index, key in enumerate(POS_CATEGORIES)}
@@ -47,7 +58,9 @@ POS_COLOR_TAGS = {key: 'pos_color_' + str(index)
                   for index, key in enumerate(POS_CATEGORIES)}
 POS_FONT_DEFAULTS = {key: 1.0 for key in POS_CATEGORIES}
 POS_FONT_DEFAULTS.update({'名詞': 1.1, '動詞': 1.1, '形容詞': 1.1, '副詞': 1.1,
-                          '助動詞': 1.1, '数詞': 1.2})
+                          '助動詞': 1.1, '数詞': 1.2, PRONOUN: 1.2,
+                          # 2026-10-26 うにさん「品詞サイズのフィラーを1.4倍、朱・明るいをデフォルトに」
+                          'フィラー': 1.4})
 MULTIPLIER_MIN = 0.5
 MULTIPLIER_MAX = 2.0
 _COLOR = re.compile(r'#[0-9a-fA-F]{6}')
@@ -101,11 +114,17 @@ def palette_color(hue_name, shade_name):
 POS_COLOR_DEFAULTS = {key: '' for key in POS_CATEGORIES}
 POS_COLOR_DEFAULTS.update({'名詞': palette_color('緑', 'ごく明るい'),
                            '数詞': palette_color('緑', 'とても明るい'),
+                           PRONOUN: palette_color('緑', '明るい'),
+                           'フィラー': palette_color('朱', '明るい'),
                            '英字': palette_color('グレー', '明るい'),
                            '記号': palette_color('グレー', '明るい')})
 POS_COLOR_DEFAULTS_LIGHT = {key: '' for key in POS_CATEGORIES}
 POS_COLOR_DEFAULTS_LIGHT.update({'名詞': palette_color('青緑', '濃い'),
                                  '数詞': palette_color('緑', 'やや濃い'),
+                                 # 緑・明るい as it reads on white (display_color: 明るい ↔ 中間)
+                                 PRONOUN: palette_color('緑', '中間'),
+                                 # 朱・明るい as it reads on white (the same mirror as 代名詞)
+                                 'フィラー': palette_color('朱', '中間'),
                                  '英字': palette_color('グレー', 'やや濃い'),
                                  '記号': palette_color('グレー', 'やや濃い')})
 
@@ -163,6 +182,8 @@ def normalize_multipliers(value):
         if (math.isfinite(number)
                 and MULTIPLIER_MIN <= number <= MULTIPLIER_MAX):
             result[key] = number
+    if ARTICLE not in value:
+        result[ARTICLE] = result['連体詞']     # settings from before 冠詞 had its own row
     return result
 
 
@@ -180,6 +201,8 @@ def normalize_colors(value, dark=True):
             result[key] = ''
         elif isinstance(color, str) and _COLOR.fullmatch(color):
             result[key] = color.lower()
+    if ARTICLE not in value:
+        result[ARTICLE] = result['連体詞']     # settings from before 冠詞 had its own row
     return result
 
 
@@ -216,6 +239,8 @@ def major_pos(pos):
         return '名詞（サ変）'
     if major == '名詞' and separator and sub.split(':')[0] == '数':
         return '数詞'
+    if major == '名詞' and separator and sub.split(':')[0] == PRONOUN:
+        return PRONOUN
     return major if major in POS_LABEL_BY_KEY else 'その他'
 
 
@@ -255,7 +280,14 @@ def spans(text, tokens):
 
 # A decimal point or a thousands comma between digits belongs to the number
 # (``3.14``, ``1,000``, ``２．５``), whatever POS the tokenizer gave it.
-_NUMBER = re.compile(r'[0-9０-９]+(?:[.,．，][0-9０-９]+)+')
+# So does a minus sign right before the digits (``-5``, ``－５``, ``−3.2``,
+# ``-1,234.5``) when nothing number- or letter-like stands before it: ``7-3``,
+# ``2026-10-26`` and ``a-1`` keep their hyphen as a symbol
+# (2026-10-26 うにさん「数字の前のマイナスを、数詞のフォントカラーに含める」).
+_MINUS = '\\-－−﹣'
+_NUMBER = re.compile(
+    r'(?<![0-9０-９A-Za-zＡ-Ｚａ-ｚÀ-ÖØ-öø-ÿ.,．，_＿])[{0}][0-9０-９]+(?:[.,．，][0-9０-９]+)*'
+    r'|[0-9０-９]+(?:[.,．，][0-9０-９]+)+'.format(_MINUS))
 
 
 # Latin letters are shown by their English part of speech (en_pos), or as

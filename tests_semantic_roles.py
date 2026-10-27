@@ -395,7 +395,7 @@ class SemanticRoleTests(unittest.TestCase):
 
     def tearDown(self):
         S._action_head.cache_clear()
-        S.predicate_roles.cache_clear()
+        getattr(S.predicate_roles, 'cache_clear', lambda: None)()   # predicate_roles は控え無し（2026-10-26）
         S.native_verb_roles.cache_clear()
 
     @unittest.skipUnless(M.HAS_JANOME,'native argument boundaries')

@@ -29,7 +29,7 @@ import sys
 import unicodedata
 
 DICTIONARY = 'en_pos.json.gz'
-CATEGORY = {'N': '名詞', 'O': '名詞', 'V': '動詞', 'M': '助動詞', 'J': '形容詞',
+CATEGORY = {'N': '名詞', 'O': '代名詞', 'V': '動詞', 'M': '助動詞', 'J': '形容詞',
             'R': '副詞', 'P': '助詞', 'D': '連体詞', 'C': '接続詞', 'I': '感動詞',
             'U': '数詞'}
 UNKNOWN = '英字'
@@ -170,5 +170,9 @@ def judge(text, spans):
 
 def categories(text, spans):
     """Category (display row) for each (start, end) word span of ``text``."""
-    return [CATEGORY.get(code, UNKNOWN) if code else UNKNOWN
-            for _codes, code, _whole in judge(text, spans)]
+    spans = list(spans)
+    # A determiner (D) that is an article (a / an / the) has its own row 冠詞 (2026-10-26 うにさん):
+    # judged as a determiner first, then told apart by the word.
+    return ['冠詞' if code == 'D' and _key(text[a:z]) in ARTICLES
+            else CATEGORY.get(code, UNKNOWN) if code else UNKNOWN
+            for (a, z), (_codes, code, _whole) in zip(spans, judge(text, spans))]

@@ -17,8 +17,10 @@ class PosFontTests(unittest.TestCase):
         for key in enlarged:
             self.assertEqual(POS_FONT_DEFAULTS[key],1.1)
         self.assertEqual(POS_FONT_DEFAULTS['数詞'],1.2)
+        self.assertEqual(POS_FONT_DEFAULTS['代名詞'],1.2)   # 2026-10-26 うにさん「1.2倍」
+        self.assertEqual(POS_FONT_DEFAULTS['フィラー'],1.4)   # 2026-10-26 うにさん「1.4倍」
         self.assertTrue(all(POS_FONT_DEFAULTS[key]==1.0 for key in POS_CATEGORIES
-                            if key not in enlarged+('数詞',)))
+                            if key not in enlarged+('数詞','代名詞','フィラー')))
         self.assertEqual(Settings().get('editor_font_size'),10)
         self.assertLess(POS_CATEGORIES.index('名詞'),
                         POS_CATEGORIES.index('名詞（サ変）'))
@@ -83,25 +85,25 @@ class PosFontTests(unittest.TestCase):
             return [(k,text[a:z].strip()) for k,a,z in _join_latin(text,[('名詞',0,len(text))])
                     if text[a:z].strip()]
         self.assertEqual(kinds('I can run to the big park quickly and read a good book.'),
-            [('名詞','I'),('助動詞','can'),('動詞','run'),('助詞','to'),('連体詞','the'),
+            [('代名詞','I'),('助動詞','can'),('動詞','run'),('助詞','to'),('冠詞','the'),
              ('形容詞','big'),('名詞','park'),('副詞','quickly'),('接続詞','and'),
-             ('動詞','read'),('連体詞','a'),('形容詞','good'),('名詞','book.')])
+             ('動詞','read'),('冠詞','a'),('形容詞','good'),('名詞','book.')])
         # The same word by its neighbours: noun after an article, verb after a pronoun.
         self.assertEqual(kinds('The work is done. We work hard.')[:5],
-            [('連体詞','The'),('名詞','work'),('助動詞','is'),('動詞','done.'),('名詞','We')])
+            [('冠詞','The'),('名詞','work'),('助動詞','is'),('動詞','done.'),('代名詞','We')])
         self.assertEqual(kinds('We work hard.')[1],('動詞','work'))
         # Unknown words, and words with a period or underscore inside, stay 英字.
         self.assertEqual(kinds('Tokyo GitHub e.g. file_name.txt'),
             [('英字','Tokyo'),('英字','GitHub'),('英字','e.g.'),('英字','file_name.txt')])
         # Number words are numerals (数詞), as Japanese numbers are (2026-10-14b).
         self.assertEqual(kinds('I have two cats and twenty dogs.'),
-            [('名詞','I'),('動詞','have'),('数詞','two'),('名詞','cats'),('接続詞','and'),
+            [('代名詞','I'),('動詞','have'),('数詞','two'),('名詞','cats'),('接続詞','and'),
              ('数詞','twenty'),('名詞','dogs.')])
         # Everyday words added from the review (train/traffic as nouns).
         self.assertEqual(kinds('the train')[1],('名詞','train'))
         self.assertEqual(kinds('the traffic')[1],('名詞','traffic'))
         # Full-width letters are looked up as ASCII.
-        self.assertEqual(kinds('ｔｈｅ'),[('連体詞','ｔｈｅ')])
+        self.assertEqual(kinds('ｔｈｅ'),[('冠詞','ｔｈｅ')])
 
     def test_everyday_english_words_and_contractions(self):
         # 2026-10-15 うにさん「品詞ごとの判定は正しいですか」: ordinary words were
@@ -113,15 +115,15 @@ class PosFontTests(unittest.TestCase):
             return [(k,text[a:z].strip()) for k,a,z in _join_latin(text,[('記号',0,len(text))])
                     if text[a:z].strip()]
         self.assertEqual(kinds('In general the history of this state is a simple story.'),
-            [('助詞','In'),('名詞','general'),('連体詞','the'),('名詞','history'),('助詞','of'),
-             ('連体詞','this'),('名詞','state'),('動詞','is'),('連体詞','a'),
+            [('助詞','In'),('名詞','general'),('冠詞','the'),('名詞','history'),('助詞','of'),
+             ('連体詞','this'),('名詞','state'),('動詞','is'),('冠詞','a'),
              ('形容詞','simple'),('名詞','story.')])
         self.assertEqual(kinds("I don't think it's the state of the power."),
-            [('名詞','I'),('助動詞','don'),('記号',"'"),('助動詞','t'),('動詞','think'),
-             ('名詞','it'),('記号',"'"),('助動詞','s'),('連体詞','the'),('名詞','state'),
-             ('助詞','of'),('連体詞','the'),('名詞','power.')])
+            [('代名詞','I'),('助動詞','don'),('記号',"'"),('助動詞','t'),('動詞','think'),
+             ('代名詞','it'),('記号',"'"),('助動詞','s'),('冠詞','the'),('名詞','state'),
+             ('助詞','of'),('冠詞','the'),('名詞','power.')])
         self.assertEqual(kinds("We’re home at ten o'clock."),
-            [('名詞','We'),('記号','’'),('助動詞','re'),('名詞','home'),('助詞','at'),
+            [('代名詞','We'),('記号','’'),('助動詞','re'),('名詞','home'),('助詞','at'),
              ('数詞','ten'),('副詞','o'),('記号',"'"),('副詞','clock.')])
         # Names (capitalised only in WordNet) and Roman numerals stay 英字.
         self.assertEqual(kinds('London ii'),[('英字','London'),('英字','ii')])
@@ -137,9 +139,15 @@ class PosFontTests(unittest.TestCase):
         from pos_font import POS_DIALOG_ROWS
         labels=dict(POS_DIALOG_ROWS)
         self.assertEqual(POS_DIALOG_ROWS[-1],('英字','その他英字'))
-        self.assertEqual(labels['名詞'],'名詞・代名詞')
+        # 代名詞 has its own row right after 名詞, so 名詞 is just 名詞 (2026-10-26 うにさん)
+        self.assertEqual(labels['名詞'],'名詞')
+        self.assertEqual(labels['代名詞'],'代名詞')
         self.assertEqual(labels['助詞'],'助詞・前置詞')
-        self.assertEqual(labels['連体詞'],'連体詞・冠詞')
+        self.assertEqual(labels['連体詞'],'連体詞・限定詞')
+        # 冠詞 has its own row right after 連体詞 (2026-10-26 うにさん)
+        keys=[k for k,_l in POS_DIALOG_ROWS]
+        self.assertEqual(keys[keys.index('連体詞')+1],'冠詞')
+        self.assertEqual(keys[keys.index('名詞')+1],'代名詞')
         self.assertEqual(sorted(labels),sorted(POS_CATEGORIES))
         self.assertEqual(POS_CATEGORIES[3],'英字')
 
@@ -228,9 +236,11 @@ class PosColorTests(unittest.TestCase):
         light=normalize_colors(Settings().get('pos_font_colors_light'),False)
         names=lambda c:{k:PALETTE_NAMES[v] for k,v in c.items() if v}
         self.assertEqual(names(colors),{'名詞':'緑・ごく明るい','数詞':'緑・とても明るい',
-                                        '英字':'グレー・明るい','記号':'グレー・明るい'})
+                                        '英字':'グレー・明るい','記号':'グレー・明るい',
+                                        '代名詞':'緑・明るい','フィラー':'朱・明るい'})
         self.assertEqual(names(light),{'名詞':'青緑・濃い','数詞':'緑・やや濃い',
-                                       '英字':'グレー・やや濃い','記号':'グレー・やや濃い'})
+                                       '英字':'グレー・やや濃い','記号':'グレー・やや濃い',
+                                       '代名詞':'緑・中間','フィラー':'朱・中間'})
         self.assertEqual(colors,POS_COLOR_DEFAULTS)
         self.assertEqual(light,POS_COLOR_DEFAULTS_LIGHT)
         self.assertEqual(colors['名詞（サ変）'],'');self.assertEqual(light['名詞（サ変）'],'')

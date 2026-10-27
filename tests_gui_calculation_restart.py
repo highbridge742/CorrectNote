@@ -72,13 +72,14 @@ def child(phase,layout,automatic):
                 tab(0);assert result()==shown_prefix+'2｜1-2+3' and result(1)=='37',a.line_results
                 assert a.editor_source_text().rstrip('\n')==source
                 shown=a.editor.get('1.0','1.end')
+                # *4 is carried on from the answer 2 as shown (2026-10-26): 8, no longer 1-2+3*4=11
                 a.editor.mark_set('insert',f"1.0+{shown.index('｜')}c");formula('*4')
-                assert result()==shown_prefix+'11｜1-2+3',a.line_results
+                assert result()==shown_prefix+'8｜1-2+3',a.line_results
                 tab(2);assert result()=='0.5'
                 a.editor.insert('1.0','😀');a._analyze();until(done);assert result()=='😀0.5'
                 tab(1)
             elif phase=='verify':
-                tab(0);assert result()==shown_prefix+'11｜1-2+3' and result(1)=='37',a.line_results
+                tab(0);assert result()==shown_prefix+'8｜1-2+3' and result(1)=='37',a.line_results
                 tab(2);assert result()=='😀0.5'
                 a._replace_editor_text('9+1');until(done);assert not a._input_document.calculations
                 tab(1)

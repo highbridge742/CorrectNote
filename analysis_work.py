@@ -26,6 +26,17 @@ class Calculation:
     end:int
     surface:str
     result:str
+    splits:tuple=()     # where earlier answers end in surface (quote_calculator.evaluate・2026-10-26)
+
+
+def _earlier_answer(item):
+    """The calculation `item` was carried on from (its text up to its last split), or None."""
+    from quote_calculator import evaluate
+    cut=item.splits[-1]
+    surface=item.surface[:cut]
+    result=evaluate(surface,item.splits[:-1])
+    if result is None:return None
+    return replace(item,end=item.start+cut,surface=surface,result=result,splits=item.splits[:-1])
 
 
 @dataclass(frozen=True)
@@ -74,6 +85,13 @@ class Document:
             for attribute in ('occurrences','calculations'):
                 live=[]
                 for item in getattr(self,attribute):
+                    if (attribute=='calculations' and getattr(item,'splits',()) and item.end>lo
+                            and item.start+item.splits[-1]<=lo):
+                        # Only what was carried on from the earlier answer was edited (undo of *2):
+                        # the earlier answer stands again (12+3 → 15).
+                        item=_earlier_answer(item)
+                    if item is None:
+                        continue
                     if item.end<=lo:
                         live.append(item)
                     elif item.start>=old:
@@ -107,12 +125,13 @@ class Document:
         self.generation+=1
         return True
 
-    def remember_calculation(self,start,end,surface,result):
+    def remember_calculation(self,start,end,surface,result,splits=None):
         if not 0<=start<end<=len(self.text) or self.text[start:end]!=surface:
             return False
-        from quote_calculator import calculate
-        if calculate(surface)!=result:return False
-        entry=Calculation(start,end,surface,result)
+        from quote_calculator import evaluate,known_splits
+        splits=tuple(known_splits(surface,result) if splits is None else splits)
+        if evaluate(surface,splits)!=result:return False
+        entry=Calculation(start,end,surface,result,splits)
         live=tuple(x for x in self.calculations if x.end<=start or end<=x.start)+(entry,)
         live=tuple(sorted(live,key=lambda x:(x.start,x.end)))
         if live==self.calculations:return False
@@ -211,6 +230,26 @@ WHOLE_TEXT=('get','1.0','end-1c')
 # undo/redo do, and the rest are rare).
 READ_ONLY_COMMANDS=frozenset(('bbox','cget','compare','configure','count','debug','dlineinfo',
                               'dump','get','index','mark','scan','search','see','tag','xview','yview'))
+
+
+_TAB_KANA_LAST = [None, None]      # (text, answer): the last file tab asked, so a long tab is not read per row
+
+
+def tab_has_kana(text):
+    """Whether the file tab's text has at least one hiragana or katakana (tab_context.tab_has_kana): half-width
+    typing is corrected to full width only then (2026-10-26 うにさん). None when tab_context is not there (as
+    before: the correction decides alone)."""
+    if text is None:
+        return None
+    if _TAB_KANA_LAST[0] is text or _TAB_KANA_LAST[0] == text:
+        return _TAB_KANA_LAST[1]
+    try:
+        import tab_context
+        answer = bool(tab_context.tab_has_kana(text))
+    except Exception:
+        answer = None
+    _TAB_KANA_LAST[0], _TAB_KANA_LAST[1] = text, answer
+    return answer
 
 
 def next_step_seq(widget):

@@ -4830,7 +4830,9 @@ def run_tab_scroll_48vt():
         editor=object(), result_view=object(),
         _update_header_visibility=lambda *a: calls.append('header'),
         _on_view_moved=lambda: calls.append('moved'),
-        _sync_partner_to_line=lambda *a: calls.append('reverse'))
+        _sync_partner_to_line=lambda *a: calls.append('reverse'),
+        # _on_result_scroll first moves the copy emphasis with the pane (not counted here)
+        _copy_emphasis_scrolled=lambda *a: None)
     CorrectNoteApp._on_result_scroll(fake, '0.0', '1.0')
     ok = calls == ['result']
     print(('OK' if ok else 'NG'), '48-VT 補正欄の再描画は入力欄を動かさない', calls)
