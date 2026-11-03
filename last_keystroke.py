@@ -2584,14 +2584,28 @@ def _compound_faces(word, store, dict_index):
     語は名指ししない。"""
     if dict_index is None or len(word) < 4 or not _kana_str(word):
         return []
-    if word in _COMPOUND_CACHE:
-        return list(_COMPOUND_CACHE[word])
+    # 控えの鍵に本人の語彙の版を入れ、当たった時も作った時に引いた読みを語彙で引き直す（語を覚えた時のやり直しの
+    # 記録に読んだ鍵が残るように・2026-11-03 挙動関連担当 vocab_bloom: 2回目は読む鍵が減り、覚えても消えなかった）
+    # 版は store.revision() でなく属性で見る（revision() は読んだ記録で「全部をなめた」になり、行がいつもやり直しになる）
+    rev = getattr(store, '_revision', None)
+    key = (word, rev, id(store))
+    hit = _COMPOUND_CACHE.get(key)
+    if hit is not None:
+        for r in hit[1]:
+            try:
+                store.lookup(r)
+            except Exception:
+                pass
+        return list(hit[0])
     import morphology
     out = []
+    reads = []
     for k in range(2, len(word) - 1):
+        reads.append(word[:k])
         fa = _part_faces(word[:k], store, dict_index)
         if not fa:
             continue
+        reads.append(word[k:])
         fb = _part_faces(word[k:], store, dict_index)
         for x in fa:
             for y in fb:
@@ -2607,7 +2621,7 @@ def _compound_faces(word, store, dict_index):
                     out.append(face)
     if len(_COMPOUND_CACHE) >= 2048:
         _COMPOUND_CACHE.clear()
-    _COMPOUND_CACHE[word] = tuple(out)
+    _COMPOUND_CACHE[key] = (tuple(out), tuple(reads))
     return out
 
 

@@ -6,14 +6,6 @@ from types import SimpleNamespace
 import analysis_worker as W,analysis_async as A,morphology as M
 from tests_analysis_async import initial,wait
 
-def without_bloom(value):
-    """The answer without the sieve of the vocabulary keys it read: a row computed again in one process reads a few
-    keys less (a memo answers; 2026-11-04, 2 keys a row here). The answer itself must be the same."""
-    out = dict(value)
-    out['result'] = dict(out['result'])
-    out['result']['used_keys'] = {k: v for k, v in out['result']['used_keys'].items() if k != 'vocab_bloom'}
-    return out
-
 class WorkerReadingStateTests(unittest.TestCase):
  def snapshot(self,a):
   state=W.snapshot(a);state['_state_identity']=W.state_key(a);return state
@@ -93,6 +85,6 @@ class WorkerReadingStateTests(unittest.TestCase):
     task={'kind':'line','line':lines[0],'context':prepared['context'],'attested':prepared['attested'],'input_method':'kana'}
     actual=r.execute(task)
     fresh=W.Runtime();fresh.set_state(W.snapshot(a));expected=fresh.execute(task)
-    self.assertEqual(without_bloom(actual),without_bloom(expected))
+    self.assertEqual(actual,expected)
 
 if __name__=='__main__':unittest.main()

@@ -1484,6 +1484,34 @@ def _ime_phonetic(text):
     return list(_ime_phonetic_cached(text))
 
 
+def _choice_overlaps(line, fixed):
+    """直した所に掛かる元の行のかなの並びのどこかが、本人の選び直しの元の表記として覚えてあるか。"""
+    try:
+        import last_choice
+        ch = last_choice.active()
+    except Exception:
+        return False
+    if ch is None or not getattr(ch, '_units', None):
+        return False
+    kana = lambda c: 'ぁ' <= c <= 'ゖ' or c == 'ー'
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, line, fixed, autojunk=False).get_opcodes():
+        if tag == 'equal':
+            continue
+        rs, re_ = i1, max(i2, i1 + 1)
+        while rs > 0 and kana(line[rs - 1]) and i1 - rs < 8:
+            rs -= 1
+        while re_ < len(line) and kana(line[re_]) and re_ - i2 < 8:
+            re_ += 1
+        for x in range(rs, i1 + 1):
+            for y in range(max(i2, x + 2), re_ + 1):
+                try:
+                    if ch.has(line[x:y]):
+                        return True
+                except Exception:
+                    return False
+    return False
+
+
 def _resegment_suffix(done, a, b, rds, run, other_odd=()):
     """紫の所 [a, b) の読みを、すぐ前の漢字の名詞の読みとつないで区切り直し、「前の名詞を伸ばした名詞＋接尾の名詞1字」
     （おきゃく｜さまよう → お客様｜用）に置いた行が、元の行より GAIN 以上軽く、紫が残らず、そう置ける形が1つだけなら
@@ -1971,6 +1999,10 @@ def _repair_line(line, result, run, store, dict_index, context_vec=None, decided
             fixed = _kk.wago_kana_respell(line, fixed)
         except Exception:
             pass
+        if os.environ.get('CN_RESPELL_CHOICE') != '0' and _choice_overlaps(line, fixed):
+            # 本人が選び直した元の表記（くたせさい→下さい と選んだ）に掛かる読み直しは採らない。選び直しは表示で効く
+            # （2026-11-03 tests_mixed_choice_scope）
+            continue
         if os.environ.get('CN_RESPELL_MIXED_KATA') != '1':
             # 混ぜ書きの片仮名の名詞（スくりーん）は書いたままの語（tests_mixed_nominal_argument の決まり）。
             # その中を書き換える読み直しは採らない（2026-11-03）

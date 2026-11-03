@@ -15,14 +15,6 @@ from tests_analysis_async import initial, wait
 from tests_memory_usage import Timers
 
 
-def without_bloom(value):
-    """The answer without the sieve of the vocabulary keys it read: a row computed again in one process reads a few
-    keys less (a memo answers; 2026-11-04, 2 keys a row here). The answer itself must be the same."""
-    out = dict(value)
-    out['result'] = dict(out['result'])
-    out['result']['used_keys'] = {k: v for k, v in out['result']['used_keys'].items() if k != 'vocab_bloom'}
-    return out
-
 class MemoryRuntimeTests(unittest.TestCase):
     def test_foreground_and_quick_all_values_match_with_optional_prewarm_or_cold_restart(self):
         app = initial()
@@ -74,7 +66,7 @@ class MemoryRuntimeTests(unittest.TestCase):
                         self.assertIsNone(getattr(app, '_prefetch_worker', None))
                         shared = wait(worker, identifier)
                         app._async_background_request = None
-                        self.assertEqual(without_bloom(shared), without_bloom(rows[-1]))
+                        self.assertEqual(shared, rows[-1])
                 values[mode] = (prepared, rows)
             finally:
                 A.close(app)
