@@ -12295,10 +12295,12 @@ class CorrectNoteApp:
         return text.count('\n')+2 if last and text else 1
 
     def _edge_stamp(self, last):
-        """Nothing has happened since the edge was reached: the same press, the same tab, no edit, no move."""
+        """Nothing has happened since the edge was reached: the same press, the same tab, no edit, no move.
+        The text itself, not _last_editor_change_at: that one moves with every key's release, the Ctrl+Home of the first
+        press too (2026-11-04: the button came back, the key never did)."""
         session = getattr(self, 'session', None)
         return (last, session.current() if session is not None else None,
-                getattr(self, '_last_editor_change_at', None), self.editor.index('insert'),
+                hash(self.editor.get('1.0', 'end-1c')), self.editor.index('insert'),
                 self.editor.index('@0,0').split('.')[0])
 
     def _goto_document_edge(self, last=False):

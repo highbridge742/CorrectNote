@@ -149,9 +149,19 @@ class Twice(Base):
         a = self.make(400)
         self.at(a, '200.3', '190.0')
         a._goto_document_edge(False)
-        a._last_editor_change_at = 5.0
+        a.editor.insert('300.0', '字')
         a._goto_document_edge(False)
         self.assertEqual(a.editor.index('insert'), '1.0')
+
+    def test_the_release_of_the_key_is_not_an_edit(self):
+        # _on_change runs at every key's release and notes the time
+        a = self.make(400)
+        self.at(a, '200.3', '190.0')
+        a._goto_document_edge(False)
+        a._last_editor_change_at = 5.0
+        self.root.update()
+        a._goto_document_edge(False)
+        self.assertEqual(a.editor.index('insert'), '200.3')
 
     def test_the_other_edge_is_a_new_press(self):
         a = self.make(400)
