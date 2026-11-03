@@ -111,7 +111,13 @@ from appearance import (THEME_ORDER as THEME_CHOICES, DARK_THEMES, LIGHT_THEMES,
                         STRENGTH_ORDER as DECOR_STRENGTH_CHOICES,
                         DEFAULT_DECOR, DEFAULT_STRENGTH)
 
-DEFAULT_EDITOR_FONT = ('Yu Mincho', 10)
+# 本文の字の初期設定（2026-10-31 うにさん「デフォルトをNoto Serifに変更する」。前は Yu Mincho）
+# 2026-11-01 うにさん「フォントサイズのデフォルトを11に変更」（前は 10。古い設定の 10 は版4で 11 へ移す）
+DEFAULT_EDITOR_FONT = ('Noto Serif', 11)
+OLD_EDITOR_FONT_SIZE = 10
+# 2026-11-01 うにさん（2度目）「フォントのデフォルトサイズを12」（版6で 11 → 12 へ移す）
+DEFAULT_EDITOR_FONT = ('Noto Serif', 12)
+V5_EDITOR_FONT_SIZE = 11
 FONT_SIZE_MIN = 6
 FONT_SIZE_MAX = 96
 
@@ -128,7 +134,17 @@ def editor_font(family, size):
 # 2: 数詞を1.2倍・緑（とても明るい）、記号を黄（とても明るい）にした。
 # 3: 名詞を1.1倍・緑（ごく明るい）、英字と記号をグレー（明るい）にし、
 #    ライトモードの色を別に持つようにした（2026-10-13 うにさん）。
-POS_FONT_DEFAULTS_VERSION = '3'
+# 4: 助詞と前置詞を別の項目にし、助詞を0.9倍・前置詞を1.0倍・その他英字を1.1倍で藍（とても明るい）・冠詞を
+#    0.9倍にした。本文の字の大きさの初期値も 10 → 11（2026-11-01 うにさん）。
+# 5: 複合の助詞（によって・について・として・における: janome の 連語）を別の項目「助詞（複合）」にし、
+#    1.0倍・助詞と同じ色にした（2026-11-01 うにさん）。
+# 6: 品詞の倍率を、本文の字12に対して内容語1.0・機能語や記号0.8〜0.9 の形にした（画像のとおり・2026-11-01 うにさん）。
+POS_FONT_DEFAULTS_VERSION = '6'
+# 版5の倍率の初期値（版6で、これのままだった品詞だけ新しい初期値へ移す）
+POS_FONT_DEFAULTS_V5 = {'名詞': 1.1, '名詞（サ変）': 1.0, '数詞': 1.2, '英字': 1.1, '動詞': 1.1, '形容詞': 1.1,
+                        '形容動詞': 1.0, '副詞': 1.1, '連体詞': 1.0, '接続詞': 1.0, '感動詞': 1.0, '助詞': 0.9,
+                        '助動詞': 1.1, '接頭詞': 1.0, '記号': 1.0, 'フィラー': 1.4, 'その他': 1.0, '冠詞': 0.9,
+                        '代名詞': 1.2, '前置詞': 1.0, '助詞（複合）': 1.0}
 # 2: 印を一度オフにした（重かった）。3: Ctrl を押している間だけ出る下線に
 # なったので、一度オンに戻した（2026-10-12 うにさん）。
 CTRL_BOUNDARIES_DEFAULTS_VERSION = '3'
@@ -179,6 +195,10 @@ DEFAULTS = {
     'word_book_clipboard': True,
     'capslock_backspace_enabled': True,
     'insert_quote_enabled': True,
+    # 字を選んで F3 を押したら、既定のブラウザで Google 検索（選んでいなければ今までどおり Enter）と、
+    # その前に確かめるか（2026-10-31 うにさん。どちらも既定オン・f3_search.py）
+    'f3_search': True,
+    'f3_search_confirm': True,
     # ダークモード。既定はオフ（既存の見た目を変えないため）
     'dark_mode': False,
     # 外見（配色・装飾・装飾の濃さ）。配色の既定は今までと同じ（標準のライト）。
@@ -190,14 +210,18 @@ DEFAULTS = {
     'decor_strength': DEFAULT_STRENGTH,
     'editor_font_family': DEFAULT_EDITOR_FONT[0],
     'editor_font_size': DEFAULT_EDITOR_FONT[1],
+    # フォントのお気に入り（ピン・2026-10-30 うにさん）。フォントの一覧の上に並べる名前。初めから付けておくのは
+    # うにさんの選んだ11（2026-10-31・画像のとおり。並びは一覧の順）。その PC に無いフォントは一覧に出ない
+    'font_favorites': ['メイリオ', 'UD デジタル 教科書体 NP', 'HGP明朝E', 'HG創英角ﾎﾟｯﾌﾟ体', '游ゴシック Medium',
+                       'Noto Serif', 'Meiryo UI', '游明朝', 'Noto Sans JP', 'HGPｺﾞｼｯｸE', 'HGS創英ﾌﾟﾚｾﾞﾝｽEB'],
     # 品詞ごとの表示倍率。本文と補正欄の文字サイズだけに使い、
     # 入力文字・補正結果・解析内容は変えない。
     'pos_font_multipliers': {
-        '名詞': 1.1, '名詞（サ変）': 1.0, '数詞': 1.2, '英字': 1.0, '動詞': 1.1,
-        '形容詞': 1.1, '形容動詞': 1.0,
-        '副詞': 1.1, '連体詞': 1.0, '接続詞': 1.0, '感動詞': 1.0,
-        '助詞': 1.0, '助動詞': 1.1, '接頭詞': 1.0, '記号': 1.0,
-        'フィラー': 1.4, 'その他': 1.0, '冠詞': 1.0, '代名詞': 1.2,
+        '名詞': 1.0, '名詞（サ変）': 0.9, '数詞': 1.1, '英字': 1.0, '動詞': 1.0,
+        '形容詞': 1.0, '形容動詞': 0.9,
+        '副詞': 1.0, '連体詞': 0.9, '接続詞': 0.9, '感動詞': 0.9,
+        '助詞': 0.8, '助動詞': 1.0, '接頭詞': 0.9, '記号': 0.9,
+        'フィラー': 1.3, 'その他': 0.9, '冠詞': 0.8, '代名詞': 1.1, '前置詞': 0.9, '助詞（複合）': 0.9,
     },
     # 品詞ごとの文字色（ダークモード）。空文字は色を変えない。書かれて
     # いない品詞は pos_font.POS_COLOR_DEFAULTS（名詞・数詞は緑、英字・
@@ -390,7 +414,7 @@ class Settings:
             if isinstance(default, bool):
                 if isinstance(value, bool):
                     self.values[key] = value
-            elif key in ('toolbar_order', 'toolbar_hidden'):
+            elif key in ('toolbar_order', 'toolbar_hidden', 'font_favorites'):
                 if isinstance(value, list):
                     self.values[key] = [item for item in value if isinstance(item, str)][:100]
             elif key == 'recent_files':
@@ -460,6 +484,21 @@ def _move_to_new_pos_defaults(values, data):
                           POS_COLOR_DEFAULTS_LIGHT, POS_CATEGORIES,
                           normalize_colors, palette_color, display_color)
     version = data.get('pos_font_defaults')
+    if version == '5':
+        _move_to_pos_defaults_6(values, data)
+        values['pos_font_defaults'] = POS_FONT_DEFAULTS_VERSION
+        return
+    if version == '4':
+        _move_to_pos_defaults_5(values, data)
+        _move_to_pos_defaults_6(values, data)
+        values['pos_font_defaults'] = POS_FONT_DEFAULTS_VERSION
+        return
+    if version == '3':
+        _move_to_pos_defaults_4(values, data)
+        _move_to_pos_defaults_5(values, data)
+        _move_to_pos_defaults_6(values, data)
+        values['pos_font_defaults'] = POS_FONT_DEFAULTS_VERSION
+        return
     multipliers = dict(values.get('pos_font_multipliers') or {})
     old_colors = {key: '' for key in POS_CATEGORIES}
     if version == '2':
@@ -494,7 +533,80 @@ def _move_to_new_pos_defaults(values, data):
     values['pos_font_colors'] = colors
     if not isinstance(data.get('pos_font_colors_light'), dict):
         values['pos_font_colors_light'] = light
+    _move_to_pos_defaults_4(values, data)
+    _move_to_pos_defaults_5(values, data)
+    _move_to_pos_defaults_6(values, data)
     values['pos_font_defaults'] = POS_FONT_DEFAULTS_VERSION
+
+
+def _move_to_pos_defaults_6(values, data):
+    """版5の初期値のままだった倍率と本文の字の大きさ（11）だけ、版6の初期値にする（2026-11-01 うにさん・画像のとおり）。
+    選び直した値は残す。色は変えない。"""
+    from pos_font import POS_FONT_DEFAULTS
+    multipliers = dict(values.get('pos_font_multipliers') or {})
+    for key, old in POS_FONT_DEFAULTS_V5.items():
+        if multipliers.get(key, old) == old:
+            multipliers[key] = POS_FONT_DEFAULTS[key]
+    values['pos_font_multipliers'] = multipliers
+    if values.get('editor_font_size', V5_EDITOR_FONT_SIZE) == V5_EDITOR_FONT_SIZE:
+        values['editor_font_size'] = DEFAULT_EDITOR_FONT[1]
+
+
+def _move_to_pos_defaults_5(values, data):
+    """版4までの設定に「助詞（複合）」を足す。今までは助詞の行で塗っていたので、助詞の色を選び直してあった
+    ならそれを引き継ぐ。大きさは既定の 1.0倍（小さくしないための項目・2026-11-01 うにさん）。"""
+    from pos_font import POS_FONT_DEFAULTS, COMPOUND_PARTICLE
+    saved = data.get('pos_font_multipliers')
+    saved = saved if isinstance(saved, dict) else {}
+    multipliers = dict(values.get('pos_font_multipliers') or {})
+    if COMPOUND_PARTICLE not in saved:
+        multipliers[COMPOUND_PARTICLE] = POS_FONT_DEFAULTS[COMPOUND_PARTICLE]
+    values['pos_font_multipliers'] = multipliers
+    for name in ('pos_font_colors', 'pos_font_colors_light'):
+        colors = values.get(name)
+        kept = data.get(name)
+        kept = kept if isinstance(kept, dict) else {}
+        if isinstance(colors, dict) and COMPOUND_PARTICLE not in kept and kept.get('助詞'):
+            colors = dict(colors)
+            colors[COMPOUND_PARTICLE] = kept['助詞']
+            values[name] = colors
+
+
+def _move_to_pos_defaults_4(values, data):
+    """版3までの初期値のままだった所だけ、版4の初期値にする（2026-11-01 うにさん）。
+
+    助詞 1.0 → 0.9・その他英字 1.0 → 1.1・冠詞 1.0 → 0.9、その他英字の色 グレー・明るい（ライト: やや濃い）→
+    藍・とても明るい（ライト: やや濃い）、本文の字の大きさ 10 → 11。前置詞は今まで助詞の行で塗っていたので、
+    助詞を選び直してあった（大きさ・色）ならそれを引き継ぎ、そうでなければ前置詞の初期値。選び直した値は残す。"""
+    from pos_font import (POS_FONT_DEFAULTS, POS_COLOR_DEFAULTS, POS_COLOR_DEFAULTS_LIGHT, PREPOSITION,
+                          palette_color)
+    saved = data.get('pos_font_multipliers')
+    saved = saved if isinstance(saved, dict) else {}
+    multipliers = dict(values.get('pos_font_multipliers') or {})
+    particle = multipliers.get('助詞', 1.0)
+    if PREPOSITION not in saved:
+        multipliers[PREPOSITION] = particle if particle != 1.0 else POS_FONT_DEFAULTS[PREPOSITION]
+    article = multipliers.get('冠詞', multipliers.get('連体詞', 1.0))
+    for key, old in (('助詞', particle), ('英字', multipliers.get('英字', 1.0)), ('冠詞', article)):
+        if old == 1.0:
+            multipliers[key] = POS_FONT_DEFAULTS[key]
+    values['pos_font_multipliers'] = multipliers
+    for name, defaults, old in (('pos_font_colors', POS_COLOR_DEFAULTS, palette_color('グレー', '明るい')),
+                                ('pos_font_colors_light', POS_COLOR_DEFAULTS_LIGHT,
+                                 palette_color('グレー', 'やや濃い'))):
+        colors = values.get(name)
+        if not isinstance(colors, dict):
+            continue
+        colors = dict(colors)
+        if colors.get('英字', old) == old:
+            colors['英字'] = defaults['英字']
+        kept = data.get(name)
+        kept = kept if isinstance(kept, dict) else {}
+        if PREPOSITION not in kept and kept.get('助詞'):
+            colors[PREPOSITION] = kept['助詞']
+        values[name] = colors
+    if data.get('editor_font_size', OLD_EDITOR_FONT_SIZE) == OLD_EDITOR_FONT_SIZE:
+        values['editor_font_size'] = DEFAULT_EDITOR_FONT[1]
 
 
 def active_hotkeys(settings):

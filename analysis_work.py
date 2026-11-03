@@ -226,6 +226,27 @@ def occurrence_readings(source,start,end):
 
 
 WHOLE_TEXT=('get','1.0','end-1c')
+# Queries that every layer below only passes on to Tk (no callback, no undo record, no emoji
+# adjustment): forward() sends them straight to the native widget (2026-11-01, speed: a tab switch
+# made 160,000 widget calls through five Python layers, about 40us each). Not `index` with a key
+# step, not `mark`/`see`/views (callbacks), not an index with `display lineend` (text_edit).
+PURE_QUERIES=frozenset(('get','compare','count','dlineinfo','bbox','dump','cget'))
+PURE_TAG_QUERIES=frozenset(('nextrange','prevrange','ranges','names','cget'))
+
+
+REPLAY_BULK_AFTER=20
+
+
+def _pure_query(args,key_steps):
+    kind=args[0] if args else None
+    if kind=='index':
+        if len(args)!=2 or args[1] in key_steps:return False
+    elif kind=='tag':
+        if len(args)<2 or args[1] not in PURE_TAG_QUERIES:return False
+    elif kind not in PURE_QUERIES:return False
+    return not any(isinstance(a,str) and ' display lineend' in a for a in args)
+
+
 # Text commands that never change the characters ('edit' is not here:
 # undo/redo do, and the rest are rare).
 READ_ONLY_COMMANDS=frozenset(('bbox','cget','compare','configure','count','debug','dlineinfo',
@@ -272,6 +293,29 @@ def _hooks_in_turn(hooks,kind):
     return [hook for _key,hook in sorted(ranked,key=lambda item:item[0])]
 
 
+@contextmanager
+def bulk_edits(widget):
+    """Many edits as one for the presentation (Replace All, 2026-11-02: each match repainted the view and went
+    through every observer; 1,000 matches froze the window 8.1 s, 5,000 for 62 s). Each edit still reaches the
+    document and undo; the observers of the text's look hear once at the end, as for a full rebuild."""
+    widget._correctnote_bulk_edits=True
+    try:yield
+    finally:
+        widget._correctnote_bulk_edits=False;widget._correctnote_bulk_hint=None
+        callbacks=getattr(widget,'_correctnote_observers',None) or {}
+        whole=getattr(widget,'_correctnote_whole_text',None)
+        if whole is not None and whole.get('text') is not None:
+            # The offsets were the caller's: the kept text must be what Tk holds, or the document hears the real one
+            real=str(widget.tk.call(widget._w+'_correctnote_work','get','1.0','end-1c'))
+            if real!=whole['text']:
+                whole['text']=real
+                if callbacks.get('edit') is not None:callbacks['edit'](real,False,None)
+        widget._correctnote_last_edit=None
+        if callbacks.get('cursor') is not None:callbacks['cursor']()
+        for moved in tuple(callbacks.get('moved',())):moved()
+        for changed in tuple(callbacks.get('changed',())):changed(('replace','1.0','end-1c',chr(10)))
+
+
 def observe_text(widget,on_edit=None,on_cursor=None,on_before_edit=None,track_change=None):
     """Share one Tcl observer for edits, Unicode undo and cursor notifications."""
     callbacks=getattr(widget,'_correctnote_observers',None)
@@ -311,6 +355,9 @@ def observe_text(widget,on_edit=None,on_cursor=None,on_before_edit=None,track_ch
     def command(*args):
         if args==WHOLE_TEXT:
             if not whole['busy'] and whole['text'] is not None:return whole['text']
+            # The edit's own callbacks read what edit_command has just read (one whole read an edit less)
+            after=whole['after']
+            if after is not None and after[0]==whole['changes']:return after[1]
             result=edit_command(*args)
             if not whole['busy']:whole['text']=str(result)
             return result
@@ -348,7 +395,10 @@ def observe_text(widget,on_edit=None,on_cursor=None,on_before_edit=None,track_ch
         else:before=widget.tk.call(original,'get','1.0','end-1c')
         edit=None
         discard=args[:2] in (('edit','undo'),('edit','redo'))
-        if mutation and args[0] in ('insert','delete','replace'):
+        hint=getattr(widget,'_correctnote_bulk_hint',None) if before is not None and known is not None else None
+        if mutation and hint is not None and args[0]=='replace':
+            edit=hint[:2]       # bulk_edits: the caller knows the offsets; asking Tk copies the text up to them
+        elif mutation and args[0] in ('insert','delete','replace'):
             lo=len(str(widget.tk.call(original,'get','1.0',args[1])))
             if args[0]=='insert':end=lo
             elif len(args)>2:end=len(str(widget.tk.call(original,'get','1.0',args[2])))
@@ -362,8 +412,15 @@ def observe_text(widget,on_edit=None,on_cursor=None,on_before_edit=None,track_ch
                 and not (args[0]=='delete' and len(args)>3)):
             # Where the edit starts and how many rows it adds or removes, so
             # row-keyed presentation can follow the text instead of resetting.
-            try:span=(int(str(widget.tk.call(original,'index',args[1])).split('.')[0]),
-                      int(str(widget.tk.call(original,'index','end')).split('.')[0]))
+            # The last row the edit took text from (a delete/replace range): every row from the first to it is
+            # laid anew, also when the number of rows stays (2026-11-01 うにさん: a result pane replace across
+            # rows 37-41 left rows between them without their POS sizes, still remembered as painted).
+            try:
+                first_row=int(str(widget.tk.call(original,'index',args[1])).split('.')[0])
+                last_row=first_row
+                if args[0] in ('delete','replace') and len(args)>2:
+                    last_row=max(first_row,int(str(widget.tk.call(original,'index',args[2])).split('.')[0]))
+                span=(first_row,int(str(widget.tk.call(original,'index','end')).split('.')[0]),last_row)
             except Exception:span=None
         if len(args)>2 and args[0]=='insert' and callbacks.get('inserted'):
             inserted=(widget.tk.call(original,'index',args[1]),''.join(str(chunk) for chunk in args[2::2]))
@@ -372,7 +429,9 @@ def observe_text(widget,on_edit=None,on_cursor=None,on_before_edit=None,track_ch
             if inserted is not None:
                 for callback in tuple(callbacks.get('inserted',())):callback(*inserted)
             if mutation:
-                after=widget.tk.call(original,'get','1.0','end-1c')
+                # bulk_edits: the text after this edit, from its offsets (the end of the batch checks it against Tk)
+                after=(before[:hint[0]]+hint[2]+before[hint[1]:] if hint is not None and args[0]=='replace'
+                       else widget.tk.call(original,'get','1.0','end-1c'))
                 whole['after']=(whole['changes'],str(after))
                 if after!=before or args[:2] in (('edit','undo'),('edit','redo')):
                     if after!=before and commit is not None:commit()
@@ -385,6 +444,15 @@ def observe_text(widget,on_edit=None,on_cursor=None,on_before_edit=None,track_ch
                         on_edit(str(after),discard,edit)
                         for state in replays:
                             state.update(handled=True,after=after)
+        if args[:2] in (('edit','undo'),('edit','redo')):
+            # The replay is over; the code below tells the observers once, for the whole of it
+            widget._correctnote_bulk_edits=False;whole['replayed']=0
+        elif getattr(widget,'_correctnote_replay_depth',0) and args and args[0] in ('insert','delete','replace'):
+            # Undoing a Replace All replays each of its edits through here (500 matches: 14 s). A short undo
+            # keeps its row-by-row presentation; a long one goes on as bulk_edits
+            whole['replayed']=whole.get('replayed',0)+1
+            if whole['replayed']>REPLAY_BULK_AFTER:widget._correctnote_bulk_edits=True
+        if getattr(widget,'_correctnote_bulk_edits',False):return result     # bulk_edits tells them once, at its end
         if callbacks['cursor'] is not None and args and (
                 args[:3]==('mark','set','insert')
                 or args[0] in ('insert','delete','replace')
@@ -397,7 +465,7 @@ def observe_text(widget,on_edit=None,on_cursor=None,on_before_edit=None,track_ch
         if args and (args[0] in ('insert','delete','replace')
                 or args[:2] in (('edit','undo'),('edit','redo'))):
             if span is not None:
-                try:span=(span[0],int(str(widget.tk.call(original,'index','end')).split('.')[0])-span[1])
+                try:span=(span[0],int(str(widget.tk.call(original,'index','end')).split('.')[0])-span[1],span[2])
                 except Exception:span=None
             widget._correctnote_last_edit=span
             for changed in tuple(callbacks.get('changed',())):changed(args)
@@ -418,6 +486,7 @@ def observe_text(widget,on_edit=None,on_cursor=None,on_before_edit=None,track_ch
     from tkinter import TclError
     def forward(*args):
         try:
+            if args!=WHOLE_TEXT and _pure_query(args,invoke._KEY_STEPS):return (0,widget.tk.call(original,*args),())
             # BackSpace/Delete next to an emoji must not remove only half of
             # it (text_edit.pair_safe_delete); widened before the edit span
             # is measured, so analysis sees the real edit.

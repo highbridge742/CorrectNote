@@ -17,66 +17,86 @@ from tkinter import font as tkfont
 PREFIX = 'emph_'          # every tag of this module; callers add their own word (emph_copy, emph_find)
 
 
-def _font_of(widget, index, prefix):
-    """The font the character at index is drawn with (highest tag with a font, else the pane's)."""
-    for tag in reversed(widget.tag_names(index)):
+def _font_tags(widget):
+    """The tags that set a font, with their fonts ({tag: spec})."""
+    fonts = {}
+    for tag in widget.tag_names():
         if tag.startswith(PREFIX) or tag == 'sel':
             continue
         spec = widget.tag_cget(tag, 'font')
+        if spec:
+            fonts[tag] = spec
+    return fonts
+
+
+def _font_of(widget, index, fonts):
+    """The font the character at index is drawn with (highest tag with a font, else the pane's)."""
+    for tag in reversed(widget.tag_names(index)):
+        spec = fonts.get(str(tag))
         if spec:
             return spec
     return widget.cget('font')
 
 
-def _cuts(widget, start, end, prefix):
+def _position(index):
+    return tuple(int(p) for p in str(index).split('.'))
+
+
+def _cuts(widget, start, end, fonts):
     """Indexes where the font-bearing tags begin or end inside [start, end]."""
-    start, end = widget.index(start), widget.index(end)
+    start, end = str(widget.index(start)), str(widget.index(end))
     points = {start, end}
-    for tag in widget.tag_names():
-        if tag.startswith(PREFIX) or tag == 'sel' or not widget.tag_cget(tag, 'font'):
+    low, high = _position(start), _position(end)
+    # One question for the range: its tag changes. Asking each tag cost about 340 Tk calls a hit
+    # (2026-11-02: Find Next on a frequent character held the window 2.4 s for its 500 marks).
+    for kind, tag, index in widget.dump(start, end, tag=True):
+        if kind in ('tagon', 'tagoff') and tag in fonts and low < _position(index) < high:
+            points.add(str(index))
+    return sorted(points, key=_position)
+
+
+def apply_many(widget, ranges, factor, prefix):
+    """Show each [start, end) at `factor` times its own font, in one batch. Returns the number of pieces."""
+    if factor == 1:
+        return 0
+    cache = widget.__dict__.setdefault('_correctnote_emphasis_fonts', {})
+    fonts = _font_tags(widget)
+    actuals = {}
+    spans = {}
+    pieces = 0
+    for start, end in ranges:
+        if widget.compare(start, '>=', end):
             continue
-        # Only the ranges touching [start, end): one that began before, then those inside
-        before = widget.tag_prevrange(tag, start)
-        if before and widget.compare(before[1], '>', start) and widget.compare(before[1], '<', end):
-            points.add(widget.index(before[1]))
-        index = start
-        while True:
-            found = widget.tag_nextrange(tag, index, end)
-            if not found:
-                break
-            for edge in found:
-                if widget.compare(edge, '>', start) and widget.compare(edge, '<', end):
-                    points.add(widget.index(edge))
-            if widget.compare(found[1], '<=', index):
-                break
-            index = found[1]
-    return sorted(points, key=lambda i: tuple(int(p) for p in i.split('.')))
+        points = _cuts(widget, start, end, fonts)
+        for a, z in zip(points, points[1:]):
+            if not widget.compare(a, '<', z):
+                continue
+            spec = str(_font_of(widget, a, fonts))
+            actual = actuals.get(spec)
+            if actual is None:
+                actual = actuals[spec] = tkfont.Font(root=widget, font=spec).actual()
+            size = int(actual.get('size') or 10)
+            scaled = int(round(size * factor)) or (1 if size > 0 else -1)
+            style = tuple(s for s in (actual.get('weight'), actual.get('slant'))
+                          if s in ('bold', 'italic'))
+            key = (prefix, actual.get('family'), scaled) + style
+            tag = cache.get(key)
+            if tag is None:
+                tag = cache[key] = '%s%d' % (prefix, len([k for k in cache if k[0] == prefix]))
+            if tag not in spans:
+                widget.tag_configure(tag, font=(actual.get('family'), scaled) + style)
+                spans[tag] = []
+            spans[tag].extend((a, z))
+            pieces += 1
+    for tag, indexes in spans.items():
+        widget.tag_add(tag, *indexes)
+        widget.tag_raise(tag)
+    return pieces
 
 
 def apply(widget, start, end, factor, prefix):
     """Show [start, end) at `factor` times its own font. Returns the number of pieces."""
-    if factor == 1 or widget.compare(start, '>=', end):
-        return 0
-    cache = widget.__dict__.setdefault('_correctnote_emphasis_fonts', {})
-    points = _cuts(widget, start, end, prefix)
-    pieces = 0
-    for a, z in zip(points, points[1:]):
-        if not widget.compare(a, '<', z):
-            continue
-        actual = tkfont.Font(root=widget, font=_font_of(widget, a, prefix)).actual()
-        size = int(actual.get('size') or 10)
-        scaled = int(round(size * factor)) or (1 if size > 0 else -1)
-        style = tuple(s for s in (actual.get('weight'), actual.get('slant'))
-                      if s in ('bold', 'italic'))
-        key = (prefix, actual.get('family'), scaled) + style
-        tag = cache.get(key)
-        if tag is None:
-            tag = cache[key] = '%s%d' % (prefix, len([k for k in cache if k[0] == prefix]))
-        widget.tag_configure(tag, font=(actual.get('family'), scaled) + style)
-        widget.tag_add(tag, a, z)
-        widget.tag_raise(tag)
-        pieces += 1
-    return pieces
+    return apply_many(widget, ((start, end),), factor, prefix)
 
 
 def clear(widget, prefix):

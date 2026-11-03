@@ -325,6 +325,26 @@ def _surface_established(surface, reading, store, dict_index=None):
     return False
 
 
+def _inflected_homophones(surface, store, dict_index=None, attested=None):
+    """活用した語の、同じ読みの書き分け（synonyms.same_reading_forms）。表記の順は同音の段と同じ。"""
+    def spellings(reading):
+        got = [e['surface'] for e in store.lookup(reading)]
+        got.extend(_attested_surfaces(attested, reading))
+        if dict_index is not None:
+            got.extend(dict_index.surfaces_for_reading(reading))
+        try:
+            from corrector import table_surfaces_for_reading
+            got.extend(table_surfaces_for_reading(reading))
+        except Exception:
+            pass
+        return list(dict.fromkeys(got))
+    try:
+        import synonyms
+        return synonyms.same_reading_forms(surface, spellings)
+    except Exception:
+        return []
+
+
 def build_candidates(surface, reading, store, find_readings,
                      max_dist=1.6, max_edits=2,
                      max_homophones=8, max_typos=8, dict_index=None,
@@ -410,6 +430,12 @@ def build_candidates(surface, reading, store, find_readings,
         # 辞書にも語彙にも活用済みの複合形は載っていないため、
         # 通常の同音探索・辞書索引のどちらでも見つからない。
         for cand in verb_stem_candidates(reading):
+            push(cand, reading, 'homophone')
+
+        # 活用した語の同音（話している／離している）。語彙も辞書も基本形で持つので、活用した形の読み全体では
+        # 引けない。基本形の読みで書き分けを引いて元の形に合わせ、全体の読みが同じものだけ（2026-11-02 うにさん
+        # 「送り仮名を合わせる」）
+        for cand in _inflected_homophones(surface, store, dict_index, attested):
             push(cand, reading, 'homophone')
 
         # --- 1.5 平仮名の語を漢字にした形（kind='kanji'・項目48-KC）---

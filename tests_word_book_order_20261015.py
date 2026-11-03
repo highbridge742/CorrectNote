@@ -30,7 +30,7 @@ class WordBookOrderTests(unittest.TestCase):
                               _start_word_book_add=lambda: None, _pick_mode=None,
                               _set_window_icons_win32=lambda win: None)
         self.app = app
-        placing = patch.object(WordBook, '_place', lambda book: None)   # 本体の窓の横に置く所は見ない
+        placing = patch.object(WordBook, '_place', lambda book, near_pointer=False: None)   # 本体の窓の横に置く所は見ない
         placing.start()
         self.addCleanup(placing.stop)
         self.book = WordBook(app, self.path, lambda: ('#ffffff', '#000000', '#3366cc'), lambda: 220)

@@ -36,6 +36,7 @@ import tkinter as tk
 from text_edit import undo_group
 from analysis_work_app import display_update
 import analysis_async
+import reinput
 import tab_analysis
 import ui_projection
 from tkinter import ttk, filedialog, messagebox
@@ -188,6 +189,54 @@ def monitor_work_area(x, y):
         return None
 
 
+def frame_size_for_dpi(dpi):
+    """その拡大率のモニターで、ふつうの窓のタイトルバーと枠の幅・高さ。分からなければ None。"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        rect = wintypes.RECT(0, 0, 0, 0)
+        WS_OVERLAPPEDWINDOW = 0x00CF0000
+        if not ctypes.windll.user32.AdjustWindowRectExForDpi(ctypes.byref(rect), WS_OVERLAPPEDWINDOW, False, 0, dpi):
+            return None
+        return rect.right - rect.left, rect.bottom - rect.top
+    except (AttributeError, OSError):
+        return None
+
+
+# 枠の大きさが取れない時（古い Windows など）に使う、100% の時の大きさ
+FALLBACK_FRAME_SIZE = (16, 39)
+
+
+def window_frame_size(root):
+    """root のあるモニターの拡大率での枠の大きさ。まだ出していない小窓の枠は測れないので、Windows に計算させる。"""
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        hwnd = root.winfo_id()
+        dpi = user32.GetDpiForWindow(user32.GetParent(hwnd) or hwnd)
+        return (frame_size_for_dpi(dpi) if dpi else None) or FALLBACK_FRAME_SIZE
+    except (AttributeError, OSError, tk.TclError):
+        return FALLBACK_FRAME_SIZE
+
+
+def right_double_slop(base):
+    """右の二度押しと見なす位置の幅。Windows の二度押しの幅（拡大率に従う）の倍が広ければそちら。"""
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        return max(base, 2 * user32.GetSystemMetrics(36), 2 * user32.GetSystemMetrics(37))
+    except (AttributeError, OSError):
+        return base
+
+
+def fit_in_area(x, y, w, h, area):
+    """(x, y) に置く w×h の窓を、作業領域に収めた位置。領域が分からなければそのまま。"""
+    if not area:
+        return x, y
+    left, top, right, bottom = area
+    return max(left, min(x, right - w)), max(top, min(y, bottom - h))
+
+
 def has_fullwidth(text):
     """
     全角文字（East Asian Width が F または W）を含むか。
@@ -335,7 +384,7 @@ APP_TITLE = 'CorrectNote'
 # 「判断に迷った箇所」から**「不自然な文字列」**へ入れ替え（既定オン・
 # 補正が入った範囲には付けない）、**かな書きのアルファベット読みを
 # 英字に直す**（`エフ2 → F2`）、スクロール後の反映（項目48-IZ〜）。
-APP_VERSION = '1.17.0'
+APP_VERSION = '1.18.0'
 
 # 控え（session.json・ime_readings）と語彙の自動保存の間合い（2026-10-20 うにさんの決定で5分）。
 # 以前は打つ手が止まって1.5秒ごとに丸ごと書き直していた。最初の変更から5分後にまとめて1回
@@ -491,6 +540,25 @@ def design33_classify(applied, spans, now):
             # 消しながら戻った（その語ごと後ろが消えている）
             out.append((before, corrected, True))
     return out
+
+
+DROPDOWN_LINE_GAP = 24      # 上へ置くとき、元の行の分だけ空ける
+
+
+def fit_dropdown(count, anchor, top, bottom, padding, row_height, above=False, gap=DROPDOWN_LINE_GAP):
+    """候補一覧の行数と、元の行の上に置くか。(行数, 上か)。anchor は元の行のすぐ下（2026-11-03 うにさん「あとから
+    候補が入って伸びると元の行が隠れる」）。下に入らなければ上へ。一度上へ移したら、開いている間は下へ戻さない
+    （行き来でちらつかない）。どちらにも入らなければ、広いほうに入るだけの行数にして元の行を隠さない。"""
+    below_room = bottom - anchor
+    above_room = anchor - gap - top
+    need = padding + count * row_height
+    if not above and need <= below_room:
+        return count, False
+    if need <= above_room:
+        return count, True
+    above = above or above_room > below_room
+    room = above_room if above else below_room
+    return min(count, max(1, (room - padding) // row_height)), above
 
 
 def remap_pending_lines(pending, head, tail, prev_len, new_len):
@@ -946,6 +1014,10 @@ OVERVIEW_FONT_SIZE = 5
 # 元の値は**その場で読んで控える**（同じ数を2か所に書かない・48-GN）。
 OVERVIEW_TIGHT = {'spacing1': 0, 'spacing2': 0, 'spacing3': 0, 'pady': 2}
 
+# 本文と補正欄の行の上・下の余白（spacing1・spacing3）。2026-11-01 うにさん「行と行の間をもっと詰めたい」: 2＋4＝6px
+# だったのを 0＋1＝1px にした（Noto Serif 11 の行の高さは字だけで 20px、1.2倍の字の行は 26px ＋ 余白）。
+ROW_SPACING = (0, 1)
+
 # 俯瞰の間、**離したときに映る範囲**（いまの上端から、ふだんの字で
 # 1画面ぶん）を四角で囲って示す（項目48-LH・2026-08-29 うにさんの指定
 # 「右ダブルクリックの間、元に戻した時に移る範囲を四角で囲って示します」。
@@ -1153,6 +1225,43 @@ class AnalysisStatusLabel(tk.Label):
     config=configure
 
 
+def _row_indexer(text):
+    """文字数の位置を、行の頭から数える Tk の位置に直す関数（文書の頭から数えると Tk が1回ごとに全文の字を数える）。"""
+    import bisect
+    starts = [0]
+    at = text.find(chr(10))
+    while at >= 0:
+        starts.append(at + 1)
+        at = text.find(chr(10), at + 1)
+    def where(offset):
+        row = bisect.bisect_right(starts, offset) - 1
+        return f'{row + 1}.0+{offset - starts[row]}c'
+    return where
+
+
+def _hide_end_rule_while_scrolling(w):
+    """スクロール中は終端の二重罫線を隠す（2026-11-02 うにさん「最終行の二重罫線がスクロール時に文字に被る。
+    ルーラーと同じように一時的に消す」）。罫線は欄に置いた枠なので、本文が動いても元の高さに残り、
+    字の上に重なっていた。止まると _after_view_moved → _paint_whitespace → _paint_end_rule が置き直す。
+    打っているあいだの通知（字が増えて割合だけ変わる）では隠さない: 見えている頭の行と位置が動いたときだけ。"""
+    try:
+        top = w.index('@0,0')
+        info = w.dlineinfo(top)
+        view = (top, info[1] if info else None)
+    except Exception:
+        return
+    if getattr(w, '_end_rule_view', None) == view:
+        return
+    w._end_rule_view = view
+    for name in ('_end_rule_line', '_end_rule_second_line'):
+        line = getattr(w, name, None)
+        if line is not None:
+            try:
+                line.place_forget()
+            except Exception:
+                pass
+
+
 class LineNumberGutter(tk.Canvas):
     """
     テキスト欄の左に表示する行番号。
@@ -1265,6 +1374,13 @@ class LineNumberGutter(tk.Canvas):
 
     def redraw(self):
         """ペア先の今の描画内容に合わせて、見えている行番号を引き直す。"""
+        job = getattr(self, '_sync_job', None)
+        if job is not None:
+            self._sync_job = None
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
         # 装飾の模様（cn_backdrop）だけは残す。消すと Tk が絵のファイルを
         # 読み直す（行番号は打鍵・スクロールのたびに引き直すので重い）。
         self.delete('!cn_backdrop')
@@ -1363,8 +1479,20 @@ class LineNumberGutter(tk.Canvas):
         return self._number_fonts[key]
 
     def sync_yview(self, first, last):
-        """互換のために残す（以前の Text ガターの API に合わせてある）。"""
-        self.redraw()
+        """画面が動いた。描く前に1回だけ引き直す（ホイールの1コマで4回引き直していた・2026-11-03）。"""
+        if getattr(self, '_sync_job', None) is not None:
+            return
+        try:
+            self._sync_job = self.after_idle(self._redraw_synced)
+        except Exception:
+            self._sync_job = None
+
+    def _redraw_synced(self):
+        self._sync_job = None
+        try:
+            self.redraw()
+        except tk.TclError:
+            pass    # 窓を閉じた後
 
     # ------------------------------------------------------------
     # クリック・ドラッグでの行選択、ダブルクリックでのブックマーク
@@ -2769,8 +2897,10 @@ class CorrectNoteApp:
     # 「保存」（ファイルへの書き出し）とは別に、書いた内容を
     # 裏で控えておき、保存せずに閉じても次回に続きが出るようにする。
 
-    # 起動直後にクリックで書き始められるよう、末尾に足しておく空行の数
-    TRAILING_BLANK_LINES = 24
+    # 起動直後にクリックで書き始められるよう、末尾に足しておく空行の数。40 行（2026-11-01 うにさん「最終行ボタンを
+    # 押したあと、下に行がある程度ないと、入力後にスクロールが動いてしまう。最終行の下には、空白行を40行ほど確保して
+    # おく」。最終行を窓の中央に置くので、窓の半分より空行が少ないと、打った途端に下が詰まって動いていた）
+    TRAILING_BLANK_LINES = 40
 
     def _pad_blank_lines(self):
         """
@@ -2803,9 +2933,63 @@ class CorrectNoteApp:
         # A spawned process does not inherit the parent thread's table caches.
         # Load public tables there while the parent prepares its own UI stores.
         analysis_async.prewarm(self)
+        # 開いているタブの行を、別の子2つで先に解析する（高・2026-11-01・最初の準備の janome 2.9秒を、英単語の
+        # 覚え直しを待つ間に済ませる。答えは同じ）
+        try:
+            analysis_async.start_startup_parse(self)
+        except Exception:
+            self._startup_parse = None
+        # 解析の控えの指紋（原型の .py を全部読む）も裏で作っておく。控えを読む最初の解析で待たない（2026-11-01）
+        import analysis_cache
+        analysis_cache.prewarm_engine_sources(app_dir())
         self._warmup_switch_interval = sys.getswitchinterval()
         sys.setswitchinterval(min(self._warmup_switch_interval, 0.0005))
         self._warmup = {'done': False, 'context_vec': None}
+        # 英単語の覚え直し（_learn_english_from_tabs）の重い判断は子で、語彙の写しで済ませる（2026-10-31・
+        # 起動直後に主スレッドが 6〜9 秒止まっていた）。本文と語彙はここ（主スレッド）で写す（項目48-TT）
+        # 子がいれば（中・高）子で計算する。裏のスレッドでは、Python のスレッドが本体の窓と同時に走らないので、窓は
+        # かえって長く引っかかった（低で実測 7.1 → 9.3 秒）。子がいない低は、今までどおり主スレッドで覚え直す
+        english = None
+        temporary = None
+        worker = getattr(self, '_correction_worker', None)
+        try:
+            import memory_usage
+            if worker is not None and memory_usage.prefetch_worker(self):
+                # 高: 裏のタブ用の子（あとで開いているタブも手伝う）を先に立てて、そちらで覚え直す。開いているタブの子は
+                # 表の先読みを同時に進められる（最初の行の答えが遅れない）
+                if getattr(self, '_prefetch_worker', None) is None:
+                    self._prefetch_worker = analysis_async.Worker()
+                    self._prefetch_worker_state = None
+                worker = self._prefetch_worker
+            elif worker is not None:
+                # 中: 子は1つなので、覚え直しの間だけもう1つ立てて、答えが届いたら閉じる（数秒・語の表だけ読む）
+                worker = analysis_async.Worker()
+                temporary = worker
+            elif analysis_async.spare_memory_for(self.ENGLISH_RELEARN_CHILD_MB):
+                # 低: 空きメモリに余裕があるときだけ、同じく短命の子で（主スレッドで覚え直すと窓が約3.4秒止まっていた・
+                # 2026-11-02 うにさん「メモリに余裕があるなら使うとよい…メモリ高以外でも」）。足りなければ今までどおり
+                worker = analysis_async.Worker()
+                temporary = worker
+        except Exception:
+            worker = getattr(self, '_correction_worker', None)
+        try:
+            if worker is not None:
+                english = dict(texts=[tab.get('text', '') or '' for tab in (self.session.tabs or [])],
+                               revision=self.store.revision(), record=None, job=None)
+                choices = getattr(self, 'choices', None)
+                english['job'] = worker.submit(dict(
+                    kind='english_relearn', texts=english['texts'], entries=[dict(e) for e in self.store.to_list()],
+                    revision=english['revision'],
+                    choices={name: dict(getattr(choices, name, {})) for name in ('_readings', '_units', '_contexts')},
+                    choice_revision=choices.revision() if choices is not None else 0))
+                english['worker'] = worker
+                english['temporary'] = temporary is worker
+                english['since'] = time.monotonic()
+        except Exception:
+            english = None
+        if temporary is not None and (english is None or not english.get('temporary')):
+            temporary.close()
+        self._warmup['english'] = english
 
         def _work(state=self._warmup):
             try:
@@ -2860,6 +3044,41 @@ class CorrectNoteApp:
         threading.Thread(target=_work, daemon=True).start()
         self._poll_warmup()
 
+    ENGLISH_RELEARN_WAIT_S = 60
+    # 低で覚え直しのためだけに立てる子が使う分（語彙の写しと語の表・数秒で閉じる）
+    ENGLISH_RELEARN_CHILD_MB = 300
+
+    def _english_relearn_waiting(self, plan):
+        """子に頼んだ英単語の覚え直しの答えを待っているか。届けば plan['record'] に置く。子が落ちた・待ちすぎた
+        ときは待つのをやめる（record は None のまま＝本体で覚え直す）。"""
+        if not plan or plan.get('job') is None or plan.get('record') is not None or plan.get('given_up'):
+            return False
+        worker = plan.get('worker')
+        try:
+            value = worker.poll(plan['job'])
+        except Exception:
+            plan['given_up'] = True
+            self._close_english_worker(plan)
+            return False
+        if value is not None:
+            plan['record'] = value.get('record')
+            self._close_english_worker(plan)
+            return False
+        if getattr(self, '_closing', False) or time.monotonic() - plan.get('since', 0) > self.ENGLISH_RELEARN_WAIT_S:
+            plan['given_up'] = True
+            self._close_english_worker(plan)
+            return False
+        return True
+
+    def _close_english_worker(self, plan):
+        """中で覚え直しのためだけに立てた子を閉じる。"""
+        if plan.get('temporary') and plan.get('worker') is not None:
+            try:
+                plan['worker'].close()
+            except Exception:
+                pass
+            plan['worker'] = None
+
     def _restore_warmup_scheduler(self):
         interval = getattr(self, '_warmup_switch_interval', None)
         if interval is not None:
@@ -2870,7 +3089,7 @@ class CorrectNoteApp:
         state = getattr(self, '_warmup', None)
         if state is None:
             return
-        if not state['done']:
+        if not state['done'] or (state.get('english') and self._english_relearn_waiting(state['english'])):
             try:
                 self.status.config(text='準備中…（読み書きはできます）')
             except Exception:
@@ -2892,7 +3111,19 @@ class CorrectNoteApp:
         # あとから覚えても、本文が変わっていない行は解析し直されない
         # ので、その回は直らないまま残る（実機で Planetarium が
         # 直らなかった原因のひとつ・2026-08-10）。
-        self._learn_english_from_tabs()
+        # 子で写しに済ませた覚え直しがあり、写してから語彙も本文も変わっていなければ、それを当てるだけ（同じ答え）。
+        # 変わっていたら、今までどおりここで覚え直す
+        plan = state.get('english')
+        if (plan is not None and plan.get('record') is not None and self.store.revision() == plan['revision']
+                and plan['texts'] == [tab.get('text', '') or '' for tab in (self.session.tabs or [])]):
+            from loanword import apply_english_relearn
+            if apply_english_relearn(self.store, plan['record']):
+                try:
+                    self.store.save_in_background()     # 起動の途中で本体を止めない（0.6秒・2026-11-03）
+                except Exception:
+                    pass
+        else:
+            self._learn_english_from_tabs()
         # 前回の解析結果の控えを読む（項目48-L）。**英単語の
         # 覚え直しより後**に読むこと: 覚え直しで語彙が変われば
         # vocabulary.json の見分けも変わり、控えは自動で捨てられる。
@@ -3432,6 +3663,9 @@ class CorrectNoteApp:
         ir.keep_only_in(texts)
 
     def _on_close(self):
+        if getattr(self, '_reinput', None) is not None:self._reinput.leave()
+        import reinput
+        reinput.restore_cursor(self)
         preferences=getattr(self,'_toolbar_preferences',None)
         if preferences is not None:preferences.close()
         bulk=getattr(self,'_bulk_insert',None)
@@ -3575,6 +3809,21 @@ class CorrectNoteApp:
         tabs = {key: values for key, values in getattr(self, '_analysis_cache', {}).items()
                 if key not in stale and dependencies.get(key) == state}
         partial = {}
+        # 語彙や記憶が動いたあとのタブも捨てない（2026-10-31 うにさん「アプリ再起動でも解析をやり直している」。
+        # 打つたびに語彙が動くので、最後に動く前に済んだタブは控えから丸ごと落ちていた）。動いたものを使っていない
+        # 行は今の状態でも同じ答え（result_compatible・used_keys）なので、その行だけ残し、ほかは次の起動で解析し直す
+        from analysis_worker import same_model_state, result_compatible
+        for key, values in getattr(self, '_analysis_cache', {}).items():
+            previous = dependencies.get(key)
+            if (not key or not values or key in tabs or key in stale or previous is None
+                    or not same_model_state(previous, state)):
+                continue
+            try:
+                rows = [r if r is not None and result_compatible(self, r, previous, state) else None for r in values]
+            except Exception:
+                continue
+            if any(r is not None for r in rows):
+                partial[key] = rows
         text = self._analysis_key(getattr(self, '_analyze_text', ''))
         if (text and not input_work.has_local_evidence(self)
                 and getattr(self, '_auto_learning_deferred_owner', None) != input_work.owner(self)
@@ -3593,13 +3842,22 @@ class CorrectNoteApp:
             states.append(self._bg)
         for st in states:
             try:
-                if st.get('readings') or st.get('calculations') or st.get('dependencies') != state:
+                previous = st.get('dependencies')
+                if st.get('readings') or st.get('calculations') or previous is None:
+                    continue
+                if previous != state and not same_model_state(previous, state):
                     continue
                 key = self._analysis_key(st['text'])
                 if not key or key in tabs or key in stale:
                     continue
                 rows = list(st['results'])[:len(key.split('\n'))]
-                partial[key] = [r if tab_analysis.reusable_result(r) else None for r in rows]
+                rows = [r if tab_analysis.reusable_result(r)
+                        and (previous == state or result_compatible(self, r, previous, state)) else None
+                        for r in rows]
+                if key in partial:
+                    # 同じ本文の控えと合わせる（どちらかで済んでいる行を残す）
+                    rows = [r if r is not None else old for r, old in zip(rows, partial[key])]
+                partial[key] = rows
             except Exception:
                 continue
         tabs = {k: v for k, v in tabs.items() if k and v}
@@ -3638,6 +3896,12 @@ class CorrectNoteApp:
         try:
             quiet = time.monotonic() - getattr(self, '_last_interaction', 0.0) >= 2.0
             if not quiet or self._view_changing():
+                self._schedule_analysis_cache_autosave()
+                return
+            # 語彙をファイルに書き出した後だけ（2026-10-29 うにさん）。控えの指紋は今の語彙で取るので、まだ書いて
+            # いない語がある間に書くと、次の起動で読む語彙（ファイルの中身）と合わず、控えが丸ごと捨てられていた
+            store = self.store
+            if getattr(store, 'saved_revision', None) != store.revision():
                 self._schedule_analysis_cache_autosave()
                 return
             payload = self._analysis_cache_payload()
@@ -3687,6 +3951,12 @@ class CorrectNoteApp:
                 0, (self.root.winfo_width() - w) // 2)
             y = self.root.winfo_rooty() + max(
                 0, int((self.root.winfo_height() - h) * y_ratio))
+            # 本体のあるモニターの作業領域に収める（下の端で見切れない・2026-11-03）
+            area = monitor_work_area(self.root.winfo_rootx() + self.root.winfo_width() // 2,
+                                     self.root.winfo_rooty() + self.root.winfo_height() // 2)
+            # geometry の位置は枠の外側、w と h は中身の大きさなので、タイトルバーと枠のぶんを足して収める
+            frame_w, frame_h = window_frame_size(self.root)
+            x, y = fit_in_area(x, y, w + frame_w, h + frame_h, area)
             dlg.geometry(f'{w}x{h}+{x}+{y}')
         except Exception:
             dlg.geometry(f'{w}x{h}')
@@ -4273,10 +4543,11 @@ class CorrectNoteApp:
         spans = searchlib.find_all(text, pattern)
         import emphasis_font
         factor = self.FIND_EMPHASIS_PERCENT / 100.0
-        for start, end in spans[:500]:      # 多すぎるときは打ち切る
-            first, last = self._offset_to_index(start), self._offset_to_index(end)
-            self.editor.tag_add('found', first, last)
-            try:emphasis_font.apply(self.editor, first, last, factor, self._FIND_EMPHASIS)
+        where = _row_indexer(text)
+        ranges = [(where(start), where(end)) for start, end in spans[:500]]      # 多すぎるときは打ち切る
+        if ranges:
+            self.editor.tag_add('found', *[index for span in ranges for index in span])
+            try:emphasis_font.apply_many(self.editor, ranges, factor, self._FIND_EMPHASIS)
             except tk.TclError:pass
         return spans
 
@@ -4661,12 +4932,24 @@ class CorrectNoteApp:
                 # Right-to-left preserves each original match's coordinates,
                 # including repeated lines and expanded regex captures.
                 # Other rows keep their marks, IME readings and projections.
-                for start,end,replacement in reversed(edits):
-                    first,last=self._offset_to_index(start),self._offset_to_index(end)
-                    if self.editor.get(first,last)==replacement:continue
-                    self.editor.replace(first,last,replacement)
-                    self.editor.tag_remove(self.TYPED_TAG,first,
-                                           self._offset_to_index(start+len(replacement)))
+                before = self.editor_source_text()
+                with input_work.bulk_edits(self.editor):
+                    # 位置は行の頭から数える（文書の頭からだと Tk が1回ごとに全文の字を数える。後ろから直すので前の行は動かない）
+                    where = _row_indexer(self._editor_text())
+                    for start,end,replacement in reversed(edits):
+                        first,last=where(start),where(end)
+                        if self.editor.get(first,last)==replacement:continue
+                        self.editor._correctnote_bulk_hint = (start, end, replacement)
+                        self.editor.replace(first,last,replacement)
+                        self.editor.tag_remove(self.TYPED_TAG,first,
+                                               self._offset_to_index(start+len(replacement)) if chr(10) in replacement
+                                               else f'{first}+{len(replacement)}c')
+                # 映している行は、置き換えのあいだをまとめて1回で動かす（1件ごとだと文書全体を毎回つないでいた）
+                try:
+                    if edits:
+                        ui_projection.rebase(self,before,self.editor_source_text(),(edits[0][0],edits[-1][1]))
+                except Exception:
+                    pass
                 self._sync_typed_shadow()
             self._pad_blank_lines()
         if cursor_offset is not None:
@@ -6352,7 +6635,11 @@ class CorrectNoteApp:
                                  ('<Insert>',self._on_insert_quote)):
             text.bind(sequence,handler)
         text.bind('<%s>' % self.BRACKET_KEY,self._on_f5_brackets)
+        import mouse_words
+        mouse_words.install(self, text)
         self._install_commit_run(text)
+        import reinput
+        self._quick_reinput = reinput.install(self, text, quick=True)
         self._install_paste_after_commit(text)
         self._install_copied_range(text)
         self._install_safe_cut(text)
@@ -6677,6 +6964,7 @@ class CorrectNoteApp:
         text_widget = getattr(self, '_quick_text', None)
         if win is None:
             return
+        if getattr(self, '_quick_reinput', None) is not None:self._quick_reinput.leave()
         if (getattr(self,'_pick_mode',None)
                 and getattr(self,'_pick_target','editor')=='quick'):
             self._end_pick_mode(keep_equals=True)
@@ -7158,6 +7446,7 @@ class CorrectNoteApp:
         calculation_rows=self._pick_calculation_rows(text_widget)
         applied = []
         for i, line in enumerate(lines):
+            if getattr(self, '_quick_reinput', None) is not None and self._quick_reinput.keeps_row(i + 1):continue     # 再入力変換の範囲の行
             # Keep the entered formula intact until confirmation or cancellation.
             if i+1 in calculation_rows:continue
             result = results[i] if i < len(results) else None
@@ -7633,6 +7922,21 @@ class CorrectNoteApp:
                     near.append(w)
         return near
 
+    # 再変換の候補づくりは、表を持っている解析の子で（analysis_async.ask_child）。子がいなければ今までどおりここで
+    @staticmethod
+    def _child_candidate_options(options):
+        return {key: value for key, value in options.items() if key not in ('dict_index', 'context_vec')}
+
+    def _candidates_in_child(self, surface, reading, store, find_readings, **options):
+        got = analysis_async.ask_child(self, dict(kind='candidates', surface=surface, reading=reading,
+                                                  options=self._child_candidate_options(options)))
+        return got if got is not None else build_candidates(surface, reading, store, find_readings, **options)
+
+    def _range_candidates_in_child(self, segments, store, find_readings, **options):
+        got = analysis_async.ask_child(self, dict(kind='candidates', segments=list(segments),
+                                                  options=self._child_candidate_options(options)))
+        return got if got is not None else build_range_candidates(segments, store, find_readings, **options)
+
     def _functional_kanji_cands(self, unit, near):
         """
         機能語の単位に出してよい候補（項目48-KC・2026-08-27）。
@@ -7654,7 +7958,7 @@ class CorrectNoteApp:
                                     for ch in text):
             return []
         try:
-            cands = build_candidates(
+            cands = self._candidates_in_child(
                 unit['base'], unit['reading'], self.store,
                 find_known_readings_flex, dict_index=self.dict_index,
                 context_vec=self.context_vec, surrounding_words=near,
@@ -7730,7 +8034,9 @@ class CorrectNoteApp:
         if text[start:end] != unit['text']:
             return []
         out = []
-        for candidate in particle_intrusion_candidates(text, start, end, self.dict_index):
+        # 表を読むのは子で（本体は形態素の表を読まない・2026-11-03）
+        asked = analysis_async.ask_child(self, dict(kind='particle_choices', text=text, start=start, end=end))
+        for candidate in (asked if asked is not None else particle_intrusion_candidates(text, start, end, self.dict_index)):
             selected = make_range_unit(text, units_in_row or [], *candidate.pop('span'))
             if selected is not None:
                 candidate['selection_unit'] = selected
@@ -7781,14 +8087,14 @@ class CorrectNoteApp:
             # （項目48-KC。門は `_functional_kanji_cands` の1か所）。
             cands = self._functional_kanji_cands(unit, near)
         elif unit.get('kind') == 'range' and unit.get('segments'):
-            cands = build_range_candidates(
+            cands = self._range_candidates_in_child(
                 unit['segments'], self.store, find_known_readings_flex,
                 dict_index=self.dict_index,
                 context_vec=self.context_vec, surrounding_words=near,
                 attested=getattr(self, '_attested_surfaces', None),
                 input_method=self.settings.get('input_method'))
         else:
-            cands = build_candidates(
+            cands = self._candidates_in_child(
                 unit['base'], unit['reading'],
                 self.store, find_known_readings_flex,
                 dict_index=self.dict_index,
@@ -7913,7 +8219,7 @@ class CorrectNoteApp:
                             self._choice_reading(unit, cand),
                             unit['prev'], unit['next'])
         self.choices.save()
-        self._invalidate_analysis_cache()
+        self._choices_moved()     # 関係する行だけやり直す（2026-11-01・全部は捨てない）
         self._remember_recent(cand['surface'])
         self._push_change(self._quick_changes, {
             'row': row, 'start': unit['start'],
@@ -8197,20 +8503,87 @@ class CorrectNoteApp:
 
     def _on_tab_press(self, event, index):
         """タブの上でボタンが押された。並べ替えの起点を控える。"""
-        self._tab_drag = {'from': index, 'x': event.x_root,
-                          'time': getattr(event, 'time', 0), 'moved': False}
+        from reinput import _key_ms
+        self._tab_drag = {'from': index, 'x': event.x_root, 'last_x': event.x_root,
+                          'time': _key_ms(event), 'moved': False,
+                          'seen': time.monotonic()}
+
+    TAB_DRAG_STALE_S = 15.0
+    TAB_DROP_QUIET_S = 0.5
+    # 帯の端に近づいた時だけ、見切れたタブの方へ少しずつ送る
+    TAB_DRAG_EDGE_PX = 36
+    TAB_DRAG_EDGE_STEP_PX = 14
+    TAB_DRAG_EDGE_MS = 40
 
     def _on_tab_drag_motion(self, event):
         drag = getattr(self, '_tab_drag', None)
         if drag is None:
             return
+        drag['seen'] = time.monotonic()
+        drag['last_x'] = event.x_root
         if not drag['moved']:
             if abs(event.x_root - drag['x']) < self.TAB_DRAG_THRESHOLD:
                 return
-            pressed, now = drag.get('time') or 0, getattr(event, 'time', 0) or 0
-            if pressed and now and 0 <= now - pressed < self.TAB_DRAG_HOLD_MS:
+            # 押した時からの長さは、マウスが動いた時の時刻で測る。Tk の event.time は処理した時刻なので、タブの
+            # 切り替えが重いと、素早いクリックの途中の動きが長押しに見えて入れ替わった（2026-11-03 うにさん）
+            from reinput import _key_ms
+            pressed, now = drag.get('time') or 0, _key_ms(event)
+            if pressed and getattr(event, 'time', 0) and 0 <= now - pressed < self.TAB_DRAG_HOLD_MS:
                 return              # a quick click, not a drag (yet)
+            if self._left_button_is_up(event):
+                return              # 溜まっていた動き: もう離している
             drag['moved'] = True
+        self._tab_drag_place(drag)
+        if getattr(self, '_tab_drag_edge_job', None) is None and self._tab_drag_edge_step(drag):
+            self._tab_drag_edge_job = self.root.after(self.TAB_DRAG_EDGE_MS, self._tab_drag_edge_tick)
+
+    @staticmethod
+    def _left_button_is_up(event):
+        """本物のマウスの報せのとき、左ボタンをいま押していないか（読むだけ）。"""
+        if not isinstance(event, tk.Event):
+            return False
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            button = 0x02 if user32.GetSystemMetrics(23) else 0x01     # 左右を入れ替えた設定
+            return not user32.GetAsyncKeyState(button) & 0x8000
+        except (AttributeError, OSError):
+            return False
+
+    def _tab_drag_edge_step(self, drag):
+        """マウスが帯の端の近くなら、その向きへ少し送る。送れたら True。"""
+        canvas = getattr(self, '_tab_viewport', None)
+        if canvas is None:
+            return False
+        try:
+            at = drag['last_x'] - canvas.winfo_rootx()
+            width = max(1, canvas.winfo_width())
+            total = max(1, self.tab_bar.winfo_reqwidth())
+            step = (-self.TAB_DRAG_EDGE_STEP_PX if at < self.TAB_DRAG_EDGE_PX
+                    else self.TAB_DRAG_EDGE_STEP_PX if at > width-self.TAB_DRAG_EDGE_PX else 0)
+            if not step:
+                return False
+            now = canvas.canvasx(0)
+            left = min(max(0, now+step), max(0, total-width))
+            if left == now:
+                return False
+            canvas.xview_moveto(left/total)
+            return True
+        except tk.TclError:
+            return False
+
+    def _tab_drag_edge_tick(self):
+        self._tab_drag_edge_job = None
+        drag = getattr(self, '_tab_drag', None)
+        if drag is None or not drag.get('moved') or not self._tab_drag_active():
+            return
+        if self._tab_drag_edge_step(drag):
+            self.root.update_idletasks()    # 送った位置で真下の札を見る
+            self._tab_drag_place(drag)
+            self._tab_drag_edge_job = self.root.after(self.TAB_DRAG_EDGE_MS, self._tab_drag_edge_tick)
+
+    def _tab_drag_place(self, drag):
+        x_root = drag['last_x']
         sess = self.session
         cur = drag['from']
         if not (0 <= cur < len(sess.tabs)):
@@ -8223,8 +8596,10 @@ class CorrectNoteApp:
                 width = w['frame'].winfo_width()
             except Exception:
                 continue
-            if left <= event.x_root < left + width:
-                target = j
+            if left <= x_root < left + width:
+                # 隣の席の端に入っただけでは替えない（札の端を押して少しぶれただけで入れ替わった）。中央を越えたら
+                if j == cur or (j > cur and x_root >= left + width/2) or (j < cur and x_root < left + width/2):
+                    target = j
                 break
         if target is None or target == cur:
             return
@@ -8239,8 +8614,27 @@ class CorrectNoteApp:
     def _on_tab_drag_end(self, event=None):
         drag = getattr(self, '_tab_drag', None)
         self._tab_drag = None
+        job = getattr(self, '_tab_drag_edge_job', None)
+        if job is not None:
+            self._tab_drag_edge_job = None
+            try:
+                self.root.after_cancel(job)
+            except Exception:
+                pass
         if drag and drag.get('moved'):
             self._schedule_session_save()
+            self._tab_dropped_until = time.monotonic() + self.TAB_DROP_QUIET_S
+            job = getattr(self, '_tab_reveal_job', None)
+            if job is not None:
+                self._tab_reveal_job = None
+                try:
+                    self.root.after_cancel(job)
+                except Exception:
+                    pass
+            self._tab_reveal_tries = 0
+            self._reveal_active_tab(nearest=True)
+        elif drag:
+            self._queue_tab_reveal()    # 押しただけ: 選んだタブを今までどおり中央へ
 
     # 別のウィンドウで表示しているタブ（doc_window・2026-10-23 うにさん）。本体がそのタブを出している間は
     # メモ欄の peer（文字・取り消し・解析の色が1つ）、ほかのタブへ移ったら写しで続け、戻ったら peer に戻す
@@ -8312,6 +8706,9 @@ class CorrectNoteApp:
         return bands
 
     def _load_active_tab_core(self, initial=False):
+        tab_undo = getattr(self, '_tab_undo', None)
+        if tab_undo is not None:
+            tab_undo.leave()
         self._clear_copy_emphasis()
         try:
             if self.status.cget('text').startswith(('解析中…', '表示準備中…')):
@@ -8332,13 +8729,19 @@ class CorrectNoteApp:
             self._tab_analysis_job = None
         self._autofix_reset()
         self._clear_f2_target()
-        with display_update(self):
-            self.editor.delete('1.0', 'end')
-            self.editor.insert('1.0', tab.get('text', ''))
-            self._reset_typed_marks()
-            self._pad_blank_lines()
-            formatter=getattr(self.editor,'_correctnote_text_format',None)
-            if formatter is not None:formatter.restore(tab.get('text_styles'))
+        # タブの本文の入れ替えは編集ではない: Undo の履歴に積まない。下の edit_reset は、
+        # いま Text に残っている前のタブの分を空にするためのもの（前のタブの分は tab_undo が預かった）
+        self.editor.configure(undo=False)
+        try:
+            with display_update(self):
+                self.editor.delete('1.0', 'end')
+                self.editor.insert('1.0', tab.get('text', ''))
+                self._reset_typed_marks()
+                self._pad_blank_lines()
+                formatter=getattr(self.editor,'_correctnote_text_format',None)
+                if formatter is not None:formatter.restore(tab.get('text_styles'))
+        finally:
+            self.editor.configure(undo=True)
         import analysis_work_app as input_work
         input_work.select_document(self,self.editor_source_text())
         if getattr(self,'_auto_learning_deferred_owner',None)!=input_work.owner(self):
@@ -8385,6 +8788,8 @@ class CorrectNoteApp:
             except Exception:
                 pass
         self.editor.edit_reset()
+        if tab_undo is not None:
+            tab_undo.enter(tab)
         self.editor.edit_modified(False)
         self._cancel_analysis_job()
         if self._after_id:
@@ -8600,6 +9005,9 @@ class CorrectNoteApp:
 
 
     def _switch_tab(self, index):
+        if getattr(self, '_reinput', None) is not None:self._reinput.leave()     # 範囲から抜けるのと同じ
+        import reinput
+        reinput.restore_cursor(self)
         sess = self.session
         if not (0 <= index < len(sess.tabs)):
             return
@@ -8794,8 +9202,13 @@ class CorrectNoteApp:
                            command=self._copy_focused_selection)
         m_edit.add_command(label='ペースト', accelerator='F4 / Ctrl+V / Win+V',
                            command=self._paste_from_menu)
-        m_edit.add_command(label='改行', accelerator='F3 / Enter',
+        m_edit.add_command(label='改行', accelerator='無選択でF3 / Enter',
                            command=self._insert_newline_from_menu)
+        # 字を選んでいなければ字だけ灰色（押せる。押すと検索の入口を開く・2026-11-03 うにさん）
+        m_edit.add_command(label='ブラウザを開いて検索', accelerator='選択してF3',
+                           command=self._search_from_menu)
+        self._edit_search_index = m_edit.index('end')
+        m_edit.configure(postcommand=self._refresh_edit_search_item)
         self._edit_delete_index = m_edit.index('end') + 1
         m_edit.add_command(label='後ろ1文字を削除',
                            accelerator=('CapsLock / BackSpace' if self.settings.get('capslock_backspace_enabled')
@@ -8930,6 +9343,16 @@ class CorrectNoteApp:
             command=lambda: self._on_toggle_edit_shortcut(
                 'insert_quote_enabled',self.insert_quote_var),
             selectcolor=ACCENT)
+        # 字を選んで F3 で Google 検索・その前に確かめる（2026-10-31 うにさん。f3_search.py）
+        self.f3_search_var = tk.BooleanVar(value=self.settings.get('f3_search'))
+        self.f3_search_confirm_var = tk.BooleanVar(value=self.settings.get('f3_search_confirm'))
+        for label, key, var in (('選択してF3で検索', 'f3_search', self.f3_search_var),
+                                ('選択してF3で検索する前に確認する', 'f3_search_confirm',
+                                 self.f3_search_confirm_var)):
+            m_edit.add_checkbutton(label=label, variable=var,
+                command=lambda key=key, var=var: (self.settings.set(key, bool(var.get())),
+                                                  self.settings.save()),
+                selectcolor=ACCENT)
 
         _btn_m_view, m_view = _make_menubutton('表示')
         # --- 画面レイアウト ---
@@ -9125,7 +9548,7 @@ class CorrectNoteApp:
                 selectcolor=ACCENT)
         m_font.add_cascade(label='サイズ', menu=m_font_size)
         m_font.add_separator()
-        m_font.add_command(label='初期設定に戻す（Yu Mincho・10）',
+        m_font.add_command(label=f'初期設定に戻す（{EDITOR_FONT[0]}・{EDITOR_FONT[1]}）',   # 既定の字から（2026-11-01: 10 のままだった）
                            command=lambda: self._choose_editor_font(*EDITOR_FONT))
 
         # --- Language（「このアプリについて」の左・うにさんの指定 2026-10-26）---
@@ -9217,7 +9640,7 @@ class CorrectNoteApp:
                             command=self.rebuild_dict_index)
         m_learn.add_cascade(label='辞書と語彙の管理', menu=m_maint)
 
-        self._menus = [m_file, m_encoding, self._recent_files_menu, m_edit, m_word_sets, m_view, m_keyboard, self._buttons_menu, m_font, m_font_size,
+        self._menus = [m_file, m_encoding, self._recent_files_menu, m_edit, m_word_sets, m_view, m_keyboard, self._buttons_menu, m_font, m_font_size, m_lang,
                        m_about, m_memory, m_look, m_theme, m_decor, m_strength,
                        m_learn, m_maint]
         for button in self._menu_buttons:       # also for menus opened from the keyboard
@@ -9456,8 +9879,24 @@ class CorrectNoteApp:
         settings = getattr(self, 'settings', None)
         if settings is None:
             return EDITOR_FONT
-        return editor_font(settings.get('editor_font_family'),
-                           settings.get('editor_font_size'))
+        family, size = editor_font(settings.get('editor_font_family'),
+                                   settings.get('editor_font_size'))
+        if family == EDITOR_FONT[0]:
+            family = self._default_font_family()
+        return family, size
+
+    def _default_font_family(self):
+        """初期設定の字（Noto Serif）。この PC に無ければ メイリオ → 游明朝 → Windows の判断（2026-10-31 うにさん）。
+        起動中は変わらないので一度だけ調べる。"""
+        known = getattr(self, '_default_font_found', None)
+        if known is None:
+            try:
+                from font_picker import default_family
+                known = default_family(self.root)
+            except Exception:
+                known = EDITOR_FONT[0]
+            self._default_font_found = known
+        return known
 
     def _choose_editor_font(self, family=None, size=None):
         old_family, old_size = self._editor_font()
@@ -9481,9 +9920,9 @@ class CorrectNoteApp:
         self._refresh_pos_font_tags()
         self._schedule_whitespace_paint(0)
 
-    def _refresh_pos_font_tags(self):
+    def _refresh_pos_font_tags(self, skip_result=False):
         for widget in (getattr(self,'editor',None),
-                       getattr(self,'result_view',None),
+                       None if skip_result else getattr(self,'result_view',None),
                        getattr(self,'_quick_text',None)):
             colors=getattr(widget,'_correctnote_boundary_colors',None)
             if colors is not None:colors.refresh_option()
@@ -9789,10 +10228,12 @@ class CorrectNoteApp:
                 status.config(text='品詞ごとのフォントを開いた時の状態に戻しました')
             dlg.destroy()
 
-        resets=tk.Frame(dlg,bg=BG)
-        resets.pack(fill='x',padx=16,pady=(10,0))
+        # ボタンの2段は下から先に置く（品詞の行が増えても、窓が低くても、ボタンは見切れない・2026-11-01 うにさん
+        # 「ボタンが見切れている」: 前置詞・助詞（複合）の2行で 645px を超え、OK・キャンセルが窓の外に出ていた）
         buttons=tk.Frame(dlg,bg=BG)
-        buttons.pack(fill='x',padx=16,pady=(6,12))
+        buttons.pack(side='bottom',fill='x',padx=16,pady=(6,12),before=form)
+        resets=tk.Frame(dlg,bg=BG)
+        resets.pack(side='bottom',fill='x',padx=16,pady=(10,0),before=form)
         def reset():
             for key,var in variables.items():
                 var.set(f'{POS_FONT_DEFAULTS[key]:.1f}')
@@ -9839,6 +10280,14 @@ class CorrectNoteApp:
         # Esc と閉じるボタン（×）は、反映したまま閉じる（戻すのはキャンセル）。
         dlg.bind('<Escape>',lambda _event:close())
         dlg.protocol('WM_DELETE_WINDOW',close)
+        # 窓の大きさは中身から（行の数で変わる）。画面より高くはしない
+        try:
+            dlg.update_idletasks()
+            width=max(440,dlg.winfo_reqwidth())
+            height=min(dlg.winfo_reqheight(),max(320,dlg.winfo_screenheight()-80))
+            self._place_dialog(dlg,width,height)
+        except tk.TclError:
+            pass
         dlg.focus_set()
 
     def open_font_dialog(self):
@@ -9851,7 +10300,7 @@ class CorrectNoteApp:
         dlg.title('フォント')
         dlg.configure(bg=BG)
         dlg.transient(self.root)
-        self._place_dialog(dlg, 470, 290)
+        self._place_dialog(dlg, 330, 635)
         family, size = self._editor_font()
         families = sorted({f for f in tkfont.families(self.root)
                            if not f.startswith('@')}, key=str.casefold)
@@ -9859,18 +10308,44 @@ class CorrectNoteApp:
         # Windows may enumerate a localized name for the accepted English alias.
         for known in (family, EDITOR_FONT[0]):
             family_names.setdefault(known.casefold(), known)
+        # 設定の名前が英語（Yu Mincho）でも、一覧の名前（游明朝）で選んで見せる（2026-10-31）
+        from font_picker import english_aliases, listed_name
+        saved_family = family
+        # キャンセルで戻す（開いた時点の設定。初期設定の名前なら名前のまま・代わりの字の名前にしない）
+        def saved_font():
+            return editor_font(self.settings.get('editor_font_family'), self.settings.get('editor_font_size'))
+        opened_font = saved_font()
+        family = listed_name(dlg, family, families)
         family_var = tk.StringVar(master=dlg, value=family)
         size_var = tk.StringVar(master=dlg, value=str(size))
         form = tk.Frame(dlg, bg=BG)
         form.pack(fill='x', padx=16, pady=(16, 8))
         form.columnconfigure(1, weight=1)
-        tk.Label(form, text='種類', bg=BG, fg=INK).grid(row=0, column=0, padx=(0, 10))
-        chooser = ttk.Combobox(form, textvariable=family_var, values=families)
+        tk.Label(form, text='種類', bg=BG, fg=INK).grid(row=0, column=0, padx=(0, 10), sticky='n')
+        # お気に入りのピンつきの一覧（2026-10-30 うにさん。前は ttk.Combobox のプルダウン）。上の欄は選んだ名前で、
+        # 打つとその字を含むフォントだけに絞る
+        chooser = tk.Entry(form, textvariable=family_var, bg=PANEL, fg=INK, insertbackground=INK)
         chooser.grid(row=0, column=1, sticky='ew')
-        tk.Label(form, text='サイズ', bg=BG, fg=INK).grid(row=1, column=0, padx=(0, 10), pady=10)
+        from font_picker import FontList
+        def favorites_changed(names):
+            self.settings.set('font_favorites', names)
+            try:
+                self.settings.save()
+            except Exception:
+                pass
+        picker = FontList(form, families, list(self.settings.get('font_favorites') or []),
+                          family_names.get(family.casefold(), family),
+                          on_select=lambda name: (family_var.set(name), apply()), on_favorites=favorites_changed,
+                          bg=PANEL, fg=INK, muted=MUTED, accent=ACCENT, select_bg=EDITOR_SEL_BG,
+                          font=('Yu Gothic UI', 10), height=345, aliases=english_aliases(dlg, families))
+        picker.grid(row=1, column=1, sticky='nsew', pady=(4, 0))
+        chooser.bind('<KeyRelease>', lambda e: picker.set_filter(family_var.get())
+                     if family_var.get().strip().casefold() not in family_names else None, add=True)
+        tk.Label(form, text='サイズ', bg=BG, fg=INK).grid(row=2, column=0, padx=(0, 10), pady=10)
+        # サイズの上下のボタンはその場で適用（2026-10-31 うにさん「サイズのボタンを押したら即時反映する」）
         tk.Spinbox(form, from_=FONT_SIZE_MIN, to=FONT_SIZE_MAX,
                    textvariable=size_var, width=7, bg=PANEL, fg=INK,
-                   insertbackground=INK).grid(row=1, column=1, sticky='w')
+                   insertbackground=INK, command=lambda: apply()).grid(row=2, column=1, sticky='w')
         preview = tk.Label(dlg, text='あいうえお　漢字 ABC 123', font=(family, size),
                            bg=PANEL, fg=INK, anchor='center')
         preview.pack(fill='both', expand=True, padx=16)
@@ -9891,12 +10366,17 @@ class CorrectNoteApp:
                 notice.set(ui_lang.tr(f'サイズは{FONT_SIZE_MIN}〜{FONT_SIZE_MAX}を指定してください。'))
                 return None
             notice.set(ui_lang.tr('本文・補正欄・簡易入力に適用します。'))
+            if family == listed_name(dlg, saved_family, families):
+                family = saved_family      # フォントを替えていなければ、設定の名前（英語の名前）のまま
             return family, size
 
         def update_preview(*_args):
             font = selected()
             if font:
                 preview.configure(font=font)
+                shown = listed_name(dlg, font[0], families)
+                if picker.selected != shown:
+                    picker.select(shown)
 
         def apply(close=False):
             font = selected()
@@ -9908,13 +10388,19 @@ class CorrectNoteApp:
         buttons = tk.Frame(dlg, bg=BG)
         buttons.pack(fill='x', padx=16, pady=12)
         def reset():
-            family_var.set(EDITOR_FONT[0])
+            # 欄には一覧の表記（游明朝）。初期設定の字がこの PC に無ければ、代わりの字（_default_font_family）
+            # 設定には初期設定の名前（Noto Serif）を残す: 後で入れれば、その字になる
+            self._choose_editor_font(*EDITOR_FONT)
+            family_var.set(listed_name(dlg, self._default_font_family(), families))
             size_var.set(str(EDITOR_FONT[1]))
-            apply()
+        def cancel():
+            # 開いた時点のフォントに戻して閉じる（2026-10-31 うにさん。一覧のクリックはその場で適用するので）
+            if saved_font() != opened_font:
+                self._choose_editor_font(*opened_font)
+            dlg.destroy()
         tk.Button(buttons, text='初期設定', command=reset).pack(side='left')
-        tk.Button(buttons, text='閉じる', command=dlg.destroy).pack(side='right')
+        tk.Button(buttons, text='キャンセル', command=cancel).pack(side='right')
         tk.Button(buttons, text='OK', command=lambda: apply(True)).pack(side='right', padx=6)
-        tk.Button(buttons, text='適用', command=apply).pack(side='right')
         traces = [(var, var.trace_add('write', update_preview))
                   for var in (family_var, size_var)]
         def cleanup(event):
@@ -9929,10 +10415,21 @@ class CorrectNoteApp:
         chooser.focus_set()
 
     def _queue_tab_reveal(self, event=None):
+        self._tab_reveal_tries = 0
         if getattr(self, '_tab_reveal_job', None) is None:
             self._tab_reveal_job = self.root.after_idle(self._reveal_active_tab)
 
-    def _reveal_active_tab(self):
+    # 帯が新しいタブの幅をまだ持っていない間は寄せ直す（タブを足した直後は、札の幅も帯の幅も前のまま・2026-11-03）
+    TAB_REVEAL_RETRY_MS = 15
+    TAB_REVEAL_TRIES = 12
+    TAB_REVEAL_EDGE_SHARE = 0.2
+
+    def _tab_drag_active(self):
+        """タブを押している間。離しを受け取れなかった（窓を移った等）ときに帯が動かなくならないよう、時間で切る。"""
+        drag = getattr(self, '_tab_drag', None)
+        return drag is not None and time.monotonic() - drag.get('seen', 0.0) < self.TAB_DRAG_STALE_S
+
+    def _reveal_active_tab(self, nearest=False):
         self._tab_reveal_job = None
         canvas = getattr(self, '_tab_viewport', None)
         widgets = getattr(self, '_tab_widgets', ())
@@ -9946,11 +10443,35 @@ class CorrectNoteApp:
             tab = widgets[index]['frame']
             start, end = tab.winfo_x(), tab.winfo_x()+tab.winfo_width()
             width = max(1, canvas.winfo_width())
-            left = canvas.canvasx(0)
-            if start < left or end-start >= width:
+            # 押している間は帯を動かさない。寄せると押した札がマウスの下から逃げ、入れ替えのたびに
+            # 次の札が真下に来て、並べ替えが暴れた（2026-11-03 うにさん「やりにくい」）。離した時に決める
+            if self._tab_drag_active():
+                return
+            if ((tab.winfo_width() <= 1 or self.tab_bar.winfo_width() != total)
+                    and getattr(self, '_tab_reveal_tries', 0) < self.TAB_REVEAL_TRIES):
+                self._tab_reveal_tries = getattr(self, '_tab_reveal_tries', 0) + 1
+                self._tab_reveal_job = self.root.after(self.TAB_REVEAL_RETRY_MS, self._reveal_active_tab)
+                return
+            if nearest or time.monotonic() < getattr(self, '_tab_dropped_until', 0.0):
+                # 運んだタブが見切れている時だけ、見える所まで最小限送る（幅の変わった報せが後から来ても寄せない）
+                now = canvas.canvasx(0)
+                left = start if start < now else end-width if end > now+width else now
+                left = min(max(0, left), max(0, total-width))
+                if left != now:
+                    canvas.xview_moveto(left/total)
+                return
+            # 全部見えていて、帯の左右の端の2割より内側なら動かさない（隣のタブを押すたびに寄せると点滅して
+            # 見え、タブを見失う・2026-11-03 うにさん）。寄せる時は下の1回で描き直す
+            now = canvas.canvasx(0)
+            margin = width*self.TAB_REVEAL_EDGE_SHARE
+            if start-now >= margin and end-now <= width-margin:
+                return
+            # 見切れるときは選んだタブを横幅の中央に置く（端のタブを選んでも、その先の見切れたタブが見える。
+            # 2026-10-31 うにさん。窓の横幅を変えたときも <Configure> からここへ来る）
+            if end-start >= width:
                 left = start
-            elif end > left+width:
-                left = end-width
+            else:
+                left = (start+end-width)/2
             left = min(max(0, left), max(0, total-width))
             canvas.xview_moveto(left/total)
         except tk.TclError:
@@ -10646,7 +11167,7 @@ class CorrectNoteApp:
             left_inner, wrap='word', undo=True,
             bg=PANEL, fg=INK, insertbackground=INK,
             font=self._editor_font(), relief='flat',
-            padx=14, pady=12, spacing1=2, spacing3=4,
+            padx=14, pady=12, spacing1=ROW_SPACING[0], spacing3=ROW_SPACING[1],
             width=1,   # grid の重みで幅が決まるよう、最小値にしておく
         )
         self.editor_gutter = LineNumberGutter(
@@ -10701,7 +11222,7 @@ class CorrectNoteApp:
             right_inner, wrap='word',
             bg=RESULT_BG, fg=INK, relief='flat',
             font=self._editor_font(),
-            padx=14, pady=12, spacing1=2, spacing3=4,
+            padx=14, pady=12, spacing1=ROW_SPACING[0], spacing3=ROW_SPACING[1],
             state='disabled', cursor='arrow',
             width=1,
         )
@@ -10737,6 +11258,12 @@ class CorrectNoteApp:
         self.result_view.bind('<Control-C>', self._copy_selection)
         self.result_view.bind('<Control-Insert>', self._copy_selection)
         self._bind_result_undo()
+        # 補正欄の選び直しも Ctrl+Z / Ctrl+Y の履歴に入れる（2026-11-01 うにさん・choice_undo.py）
+        try:
+            import choice_undo
+            choice_undo.install(self)
+        except Exception:
+            pass
         self.result_view.bind('<Button-3>', self._on_result_press)
         # 俯瞰は**補正欄からも入れる**（学び22——片方だけに置くと、
         # そちらを迂回する。分割レイアウトでは補正欄を見ている
@@ -10912,6 +11439,9 @@ class CorrectNoteApp:
         # 立っていて、かつ候補一覧が開いていないときだけ働く。
         self.editor.bind('<KeyPress>', self._on_f2_range_keypress,
                          add=True)
+        # Ctrl の2回押しで語を読みに開いて変換し直す（再入力変換・2026-11-02）
+        import reinput
+        self._reinput = reinput.install(self, self.editor)
         # **キー名を指定した束縛は、`<KeyPress>` の束縛を全部黙らせる**
         # （項目48-IN・2026-08-22）。Tk は同じ欄に `<KeyPress>` と
         # `<Delete>` の両方があると、keysym=Delete の打鍵では
@@ -11062,6 +11592,10 @@ class CorrectNoteApp:
         from boundary_colors import install
         install(self, self.editor)
         install(self, self.result_view)
+        # 右を押しながら左でコピー／貼り付け・ダブルクリックで語を選ぶ（2026-10-30・mouse_words）
+        import mouse_words
+        mouse_words.install(self, self.editor)
+        mouse_words.install(self, self.result_view, editable=False)
         # 絵文字は Tk では黒一色になるので、色つきで重ねる（emoji_color.py。
         # うにさん 2026-10-13「Windowsのメモ帳と同じ見た目にする」）。
         from emoji_color import install as install_emoji_color
@@ -11083,7 +11617,9 @@ class CorrectNoteApp:
         text_format.install(self, self.result_view, editable=False)
         formatter.listeners.append(self._queue_text_format_mirror)
         from undo_feedback import install as install_undo_feedback
-        install_undo_feedback(self.editor,lambda:HISTORY_HINT_BG,lambda:HISTORY_HINT_LINE)
+        feedback=install_undo_feedback(self.editor,lambda:HISTORY_HINT_BG,lambda:HISTORY_HINT_LINE)
+        from tab_undo import TabUndo
+        self._tab_undo=TabUndo(self,feedback)
         # 本文より下の余白を1本指（マウス）でドラッグしたら
         # スクロールする（タッチモニター向け・実機からの要望・
         # 2026-08-09）。本文の上は通常どおり選択ドラッグ。
@@ -11224,6 +11760,9 @@ class CorrectNoteApp:
                 for key in ('Home','End'):
                     pane.bind(f'<{prefix}{key}>',self._ime_first(
                         self._release_native_navigation),add=True)
+            # Shift+Home / Shift+End once more at the line's edge copies the selection (2026-10-30)
+            for key in ('Home','End'):
+                pane.bind(f'<Shift-{key}>',self._ime_first(self._on_shift_edge_copy),add=True)
         for sequence in ('<Break>','<Pause>','<Cancel>'):
             try:
                 self.root.bind_all(sequence,self._on_break_bookmark)
@@ -11545,6 +12084,28 @@ class CorrectNoteApp:
         self.status.config(text=f'{row} 行目を選びました（改行は含みません。もう一度でコピー）')
         return 'break'
 
+    def _on_shift_edge_copy(self, event=None):
+        """**Shift+Home / Shift+End をもう一度押したら、選択範囲をコピーする**（2026-10-30 うにさん
+        「Shift+Homeを2回連続、またはShift+Endを2回連続押したら、選択範囲をコピーする」）。
+
+        押した数や間合いでは見ない（Shift+スペースの「2回続けたら」は、解析が挟まると崩れた）。
+        選択が在って、カーソルがもうその行の端（Home なら表示行の頭・End なら表示行の末）に居る
+        ——つまりこのキーでは選択が変わらないときだけコピーする。そうでなければ普段どおり選択を伸ばす。"""
+        w = getattr(event, 'widget', None)
+        if w is None:
+            return None
+        try:
+            if not w.tag_ranges('sel'):
+                return None
+            edge = 'insert display linestart' if event.keysym in ('Home', 'KP_Home') else 'insert display lineend'
+            if w.compare('insert', '!=', edge):
+                return None
+        except Exception:
+            return None
+        from types import SimpleNamespace
+        self._copy_focused_selection(SimpleNamespace(widget=w))
+        return 'break'
+
     def _on_toggle_bookmark_key(self, event=None):
         """
         **Ctrl+スペース——選んでいる行のブックマークを付け外しする**
@@ -11610,6 +12171,24 @@ class CorrectNoteApp:
     def _release_native_navigation(self,event):
         if getattr(event,'widget',None) in (self.editor,self.result_view):
             self._release_navigation_padding()
+        # PageUp/PageDown の送りのあと、補正欄をメモ欄の行へ必ず合わせる（ホイール・スクロールバーと同じく
+        # 自分から合わせる。yscrollcommand の追従だけでは付いてこないことがあった・2026-10-31 うにさん）
+        if (getattr(event,'widget',None) is self.editor
+                and getattr(event,'keysym',None) in ('Prior','Next')):
+            try:self.root.after_idle(self._sync_result_after_page_key)
+            except Exception:pass
+
+    def _sync_result_after_page_key(self):
+        try:
+            if self._layout_is_unified():return
+            was_syncing=self._syncing;self._syncing=True
+            try:
+                self._sync_partner_to_line(self.editor,self.result_view)
+                first,last=self.editor.yview()
+                self.result_gutter.sync_yview(first,last)
+            finally:self._syncing=was_syncing
+        except Exception:
+            pass
 
     def _bind_block_navigation(self, widget):
         for key, direction, handler in (
@@ -11621,9 +12200,24 @@ class CorrectNoteApp:
                 widget.bind(f'<{prefix}-{key}>', self._ime_first(
                     lambda event, d=direction, move=handler: move(event, d)))
 
-    def _move_text_edge(self, event, direction):
+    def _text_edge_column(self, widget, row, text, column, direction):
+        """Ctrl+左右の止まる位置（行の中の字の位置）。再入力変換の範囲も同じ規則（reinput）。"""
         from text_navigation import text_edge
         from literal_lines import unwrapped_only
+        from boundary_colors import plan_for
+        plan=plan_for(self,widget,row,text)
+        store = getattr(self, 'store', None)
+        tokens = ()
+        if plan is None and store is not None and not unwrapped_only(text):
+            fn = getattr(store, '_tokenize_fn', None)
+            if fn is None:
+                fn = store._tokenize_fn = corrector.make_tokenizer(store)
+            tokens = fn(text)
+        if plan is None:return text_edge(text,column,direction,tokens)
+        if direction>0:return next((n for n in plan[0] if n>column),len(text))
+        return next((n for n in reversed(plan[0]) if n<column),0)
+
+    def _move_text_edge(self, event, direction):
         widget = event.widget
         row, column = _python_text_position(widget, 'insert')
         text = widget.get(f'{row}.0', f'{row}.end')
@@ -11632,18 +12226,7 @@ class CorrectNoteApp:
         elif direction < 0 and column == 0:
             index = f'{max(1, row - 1)}.end' if row > 1 else '1.0'
         else:
-            from boundary_colors import plan_for
-            plan=plan_for(self,widget,row,text)
-            store = getattr(self, 'store', None)
-            tokens = ()
-            if plan is None and store is not None and not unwrapped_only(text):
-                fn = getattr(store, '_tokenize_fn', None)
-                if fn is None:
-                    fn = store._tokenize_fn = corrector.make_tokenizer(store)
-                tokens = fn(text)
-            if plan is None:target=text_edge(text,column,direction,tokens)
-            elif direction>0:target=next((n for n in plan[0] if n>column),len(text))
-            else:target=next((n for n in reversed(plan[0]) if n<column),0)
+            target = self._text_edge_column(widget, row, text, column, direction)
             index = f'{row}.0+{target}c'
         if widget.compare(index, '>', 'end-1c'):
             index = 'end-1c'
@@ -11700,7 +12283,18 @@ class CorrectNoteApp:
         self._close_dropdown()
         text = self.editor_source_text().rstrip('\n')
         line = text.count('\n')+2 if last and text else 1
-        self._goto_line(line, centered=last)
+        self._goto_line(line, centered=last, stay_at_top=last and self._line_above_middle(line))
+
+    def _line_above_middle(self, line):
+        """先頭から並べて、その行が窓の中央より上に来るか（短い文書の最終行）。中央に置くには上の余白を
+        足すしかなく、打つと余白が消えて本文が動く（2026-11-03 うにさん）。そのときは動かさない。"""
+        try:
+            w = self.editor
+            height = w.count('1.0', f'{line}.0', 'update', 'ypixels')
+            height = height[0] if isinstance(height, tuple) else (height or 0)
+            return height < w.winfo_height()/2
+        except (tk.TclError, TypeError, IndexError):
+            return False
 
     def _clear_navigation_padding(self):
         if not getattr(self,'_navigation_padding_active',False):return
@@ -11819,7 +12413,7 @@ class CorrectNoteApp:
         except Exception:pass
         return 'break'
 
-    def _goto_line(self, line, centered=True, move_cursor=True):
+    def _goto_line(self, line, centered=True, move_cursor=True, stay_at_top=False):
         """Move the cursor and place the destination at the window's middle.
 
         move_cursor=False only scrolls (the line-number menu, 2026-10-25): the cursor, the selection
@@ -11834,7 +12428,9 @@ class CorrectNoteApp:
                 self.editor.mark_set('insert',idx)
                 self.editor.tag_remove('sel','1.0','end')
                 self._forget_bracket_cycle()
-            if centered:
+            if stay_at_top:
+                for widget in (self.editor,self.result_view):widget.yview_moveto(0)
+            elif centered:
                 self._navigation_padding_active = True
                 for widget in (self.editor,self.result_view):
                     self._center_navigation_line(widget,idx)
@@ -11960,6 +12556,7 @@ class CorrectNoteApp:
 
     def _on_editor_scroll(self, first, last):
         self._copy_emphasis_scrolled(self.editor)
+        _hide_end_rule_while_scrolling(self.editor)
         guides=getattr(self,'_editor_guides',None)
         if guides is not None:guides.queue_draw()
         colors=getattr(self.editor,'_correctnote_boundary_colors',None)
@@ -11998,6 +12595,7 @@ class CorrectNoteApp:
 
     def _on_result_scroll(self, first, last):
         self._copy_emphasis_scrolled(self.result_view)
+        _hide_end_rule_while_scrolling(self.result_view)
         guides=getattr(self,'_editor_guides',None)
         if guides is not None:guides.queue_draw()
         colors=getattr(self.result_view,'_correctnote_boundary_colors',None)
@@ -12143,6 +12741,7 @@ class CorrectNoteApp:
         return self._on_wheel_units(ceil(delta))
 
     def _scroll_pixels(self, pixels):
+        self._drop_pending_scroll()     # ホイールの惰性・右ドラッグの惰性も、利用者が動かした位置
         before=self.editor.yview()
         was_syncing=self._syncing
         self._syncing=True
@@ -12890,13 +13489,33 @@ class CorrectNoteApp:
         if getattr(self,'_status_visibility_job',None) is None and not getattr(self,'_closing',False):
             self._status_visibility_job=self.root.after_idle(self._sync_status_visibility)
 
+    # 解析の進み具合だけで出すときの待ち（2026-11-01・半角で打つと1打ごとに短い解析が走り、下の行が出たり
+    # 消えたりしてちらついた）。これより短い解析では出さない。消すのは今までどおりすぐ。
+    # 知らせの文（解析中… 以外）と最大化のときは、今までどおりすぐ出す
+    STATUS_SHOW_MS = 350
+
     def _sync_status_visibility(self):
         self._status_visibility_job=None
         if getattr(self,'_closing',False):return
         active=self._foreground_analysis_pending()
         text=self.status.cget('text')
         progress=text.startswith(('解析中','表示準備中','解析の準備中'))
-        show=active or self.root.state()=='zoomed' or bool(text and not progress)
+        steady=self.root.state()=='zoomed' or bool(text and not progress)
+        show=active or steady
+        shown=bool(self.status.winfo_manager())
+        if show and not shown and not steady:
+            import time as _time
+            now=_time.monotonic()
+            wait=self.STATUS_SHOW_MS/1000.0
+            pending=getattr(self,'_status_flip',None)
+            if pending is None or pending[0]!=show:
+                self._status_flip=(show,now)
+                self.root.after(int(wait*1000)+5,self._queue_status_visibility)
+                return
+            if now-pending[1]<wait:
+                self.root.after(int((wait-(now-pending[1]))*1000)+5,self._queue_status_visibility)
+                return
+        self._status_flip=None
         if show:
             # 出すときは毎回測り直す（字の行数で高さが変わっても絵が動かない）
             self._reserve_art_below(True)
@@ -12917,16 +13536,50 @@ class CorrectNoteApp:
 
     def _line_analysis_state(self, row):
         # Old rows must not look complete while a new edit/tab awaits planning.
+        index=row-1
         if getattr(self,'_analyze_work',None) != input_work.token(self):
-            return 'pending'
+            index=self._unplanned_row_source(row)
+            if index is None:
+                return 'pending'
         results=getattr(self,'line_results',())
-        result=results[row-1] if 0<row<=len(results) else None
+        result=results[index] if 0<=index<len(results) else None
         if result and (result.get('analysis_error') or result.get('analysis_status')=='incomplete'):
             return 'incomplete'
+        if result and result.get('deferred_stages'):return 'done'      # 答えは出ている（手が止まったら確かめ直す）
         if not tab_analysis.reusable_result(result):return 'pending'
         # Ctrl区切り・品詞の大きさ/色の計算がまだの行も、未解析として縦線を出す。
         if self._row_navigation_missing(row):return 'pending'
         return 'done'
+
+    def _unplanned_row_source(self, row):
+        """新しい編集の解析の段取りがまだのとき、row 行（1から）が前の解析のどの行のままか（0から）。分からなければ
+        None（未解析の印）。2026-11-01 うにさん「改行を入れたらすべての行に未解析の印が付いた」: 段取りは子に
+        文脈を尋ねてから組む（analysis_async.context）ので、子が重い行を計算しているあいだ待つ（未解決のタブで
+        0.4秒あまり）。そのあいだ全部の行が未解析に見えていた。段取りと同じ形（_analyze: 前後の一致する行・
+        その境の近く nearby_reanalysis_lines）で、編集の外の行は前の行の状態のままにする。同じタブの中の編集だけ。"""
+        work=getattr(self,'_analyze_work',None);token=input_work.token(self)
+        prev=getattr(self,'_prev_lines',None)
+        if (not work or work[0]!=token[0] or not prev
+                or len(getattr(self,'line_results',()))!=len(prev)):
+            return None
+        cached=getattr(self,'_unplanned_rows',None)
+        if cached is None or cached[0]!=token or cached[1] is not prev:
+            try:lines=self.editor_source_text().split('\n')
+            except Exception:return None
+            head=0
+            while head<len(lines) and head<len(prev) and lines[head]==prev[head]:head+=1
+            tail=0
+            while (tail<len(lines)-head and tail<len(prev)-head
+                   and lines[len(lines)-1-tail]==prev[len(prev)-1-tail]):tail+=1
+            from context_vec import nearby_reanalysis_lines
+            near=set(nearby_reanalysis_lines(head,tail,len(prev),len(lines)))
+            cached=self._unplanned_rows=(token,prev,head,tail,len(lines),near)
+        head,tail,count,near=cached[2:]
+        index=row-1
+        if index in near or not 0<=index<count:return None
+        if index<head:return index
+        if index>=count-tail:return index-count+len(prev)
+        return None
 
     def _row_navigation_missing(self, row):
         from pos_font import has_adjustments,current_colors
@@ -13008,12 +13661,57 @@ class CorrectNoteApp:
             return '変換中の行の答えを待っています'
         if getattr(self, '_async_context_scope', None) is not None:
             return '解析の準備（文脈）の答えを待っています'
+        if getattr(self, '_startup_parse_poll', None) is not None:
+            return '起動時の先読み（行の解析）を待っています'
         if self._foreground_analysis_pending():
             return '解析の答えを待っています'
         if (getattr(self, '_after_id', None) is None and getattr(self, '_analyze_job', None) is None
                 and getattr(self, '_tab_analysis_job', None) is None):
-            return '解析の予約がありません（次の入力で再開します）'
+            return self.NO_ANALYSIS_SCHEDULED
         return None
+
+    NO_ANALYSIS_SCHEDULED = '解析の予約がありません（次の入力で再開します）'
+    STALL_RETRY_S = 10.0
+
+    def _restart_stalled_analysis(self):
+        """見えている行が未解析なのに、解析も表示の準備も予約されていない（2026-10-29 うにさん「未解析の行が
+        残っています 解析の予約がありません、と出て…進まない。別タブに行って戻ったら解析が始まった」）。
+
+        どの道で予約が落ちたかに依らず、ここから始め直す。済んでいない行（reusable でない結果）を
+        やり残しとして渡すので、_analyze の差分の道がその行だけを解析する（済んだ行はそのまま）。
+        同じ止まりに続けて何度も掛けないよう、STALL_RETRY_S あける。"""
+        now = time.monotonic()
+        if now - getattr(self, '_stall_restart_at', 0.0) < self.STALL_RETRY_S:
+            return
+        self._stall_restart_at = now
+        try:
+            results = getattr(self, 'line_results', None) or []
+            if getattr(self, '_prev_lines', None) and len(results) == len(self._prev_lines):
+                pending = [i for i, r in enumerate(results) if not tab_analysis.reusable_result(r)]
+                if pending:
+                    self._analyze_todo = pending
+                    self._analyze_pos = 0
+            # 解析は済んでいて、大きさ・色の計算だけが無い行は、解析をやり直しても届かない（2026-11-03）
+            from boundary_colors import plan_for
+            for name in ('editor', 'result_view'):
+                colors = getattr(getattr(self, name, None), '_correctnote_boundary_colors', None)
+                if colors is None:
+                    continue
+                widget = getattr(self, name)
+                lo, hi = colors._visible_range()
+                for row in range(lo, hi + 1):
+                    text = widget.get(f'{row}.0', f'{row}.end')
+                    if text and plan_for(self, widget, row, text) is None:
+                        colors._plans_failed.add(text)      # その場で作る（_plan_missing）
+                colors._paint_visible_now()
+            self._trace_analysis('予約が無いまま止まっていた', len(results), len(getattr(self, '_analyze_todo', ())),
+                                 '済んでいない行から始め直す')
+        except Exception:
+            pass
+        try:
+            self._analyze()
+        except Exception:
+            pass
 
     def _watch_pending_marks(self):
         self._pending_watch_job = None
@@ -13030,6 +13728,8 @@ class CorrectNoteApp:
                     reason = self._analysis_wait_reason()
                     if reason:
                         note = '未解析の行が残っています：' + reason
+                    if reason == self.NO_ANALYSIS_SCHEDULED:
+                        self._restart_stalled_analysis()
             else:
                 self._pending_marks_since = None
             shown = getattr(self, '_pending_note_shown', None)
@@ -13220,6 +13920,7 @@ class CorrectNoteApp:
         if not prev or len(prev_results) != len(prev):
             results = [None] * len(lines)
             todo = list(range(len(lines)))
+            if hasattr(self, '_defer_neighbor_rows'):self._deferred_neighbors = set()
             _lo_shape = '全行（前回の控えなし）' if not prev else f'全行（結果{len(prev_results)}件と行{len(prev)}行の食い違い）'
         else:
             head = 0
@@ -13228,13 +13929,21 @@ class CorrectNoteApp:
             tail = 0
             while tail < len(lines) - head and tail < len(prev) - head and (lines[len(lines) - 1 - tail] == prev[len(prev) - 1 - tail]):
                 tail += 1
+            from row_memo import for_app
+            memo = for_app(self)
+            for row in prev_results[head:len(prev) - tail]:
+                memo.put(row, getattr(self, '_analyze_ctx', None))
             results = prev_results[:head] + [None] * (len(lines) - tail - head) + (prev_results[len(prev) - tail:] if tail else [])
             todo = list(range(head, len(lines) - tail))
             from context_vec import nearby_reanalysis_lines
             affected = nearby_reanalysis_lines(head, tail, len(prev), len(lines))
+            defer = getattr(self, '_defer_neighbor_rows', None)
+            deferred = defer(affected, lines, prev, head, tail) if defer is not None else set()
             for index in affected:
-                results[index] = None
-            todo.extend(affected)
+                if index not in deferred:
+                    memo.put(results[index], getattr(self, '_analyze_ctx', None))
+                    results[index] = None
+            todo.extend(index for index in affected if index not in deferred)
             todo.extend(remap_pending_lines(leftover, head, tail, len(prev), len(lines)))
             todo.extend(tab_analysis.changed_reading_rows(self, prev, lines, head, tail))
             todo = sorted(set(todo))
@@ -13265,30 +13974,45 @@ class CorrectNoteApp:
                 has_proof=(result or {}).get('_context_evidence') is not None
                 if tab_kana is not None and (result or {}).get('_tab_has_kana',tab_kana)!=tab_kana:
                     results[i]=None;todo.append(i);continue
-                if (not result_compatible(self,result,previous_dependencies,dependencies)
-                        or ((changed_context or has_proof) and
-                            (not tab_analysis.reusable_result(result) or not compatible(
-                                result,previous_context,context_vocab,prepared['attested'])))):
+                if not result_compatible(self,result,previous_dependencies,dependencies):
                     results[i]=None;todo.append(i)
+                elif ((changed_context or has_proof) and
+                        ((not tab_analysis.reusable_result(result) and not (result or {}).get('deferred_stages')) or not compatible(
+                            result,previous_context,context_vocab,prepared['attested']))):
+                    if result and not result.get('pending') and getattr(self,'_neighbor_typing',False):
+                        # 打っている間に増えた語でこの行の文脈が変わった: 手が止まるまで今の答えのまま
+                        # （控えにも学習にも残さない・_flush_heavy_redo が解き直す。2026-11-02）
+                        results[i]=dict(result,deferred_stages=['context']);self._arm_heavy_redo()
+                    else:
+                        results[i]=None;todo.append(i)
             todo=sorted(set(todo))
         for (i, r) in enumerate(results):
             if r is None:
                 results[i] = self._blank_result(lines[i])
         if (same_model_state(previous_dependencies,dependencies) and todo
                 and getattr(self,'_auto_learning_deferred_owner',None)!=input_work.owner(self)):
-            from analysis_context import reuse_rows,signature
+            from analysis_context import previous_line_of,reuse_rows,signature
             from context_vec import build_nearby_words
             words=prepared['words']
-            signatures={i:signature(build_nearby_words(len(lines),i,lambda k:words.get(lines[k],[])),
-                            input_work.line_readings(self,i,lines),
-                            input_work.line_calculations(self,i,lines)) for i in todo}
             from analysis_work import tab_has_kana
             tab_kana=tab_has_kana(text)
             reusable_previous=[r for r in prev_results
                                if result_compatible(self,r,previous_dependencies,dependencies)
                                and (tab_kana is None or (r or {}).get('_tab_has_kana',tab_kana)==tab_kana)]
+            # A row can take only a finished row with its own text (reuse_rows matches the text and the
+            # signature): the others need no signature (2026-11-01, speed: a switch back to a long tab with
+            # most rows still to do built 3,600 signatures, 70 ms, to match none)
+            from row_memo import for_app
+            memo=for_app(self)
+            texts={(r or {}).get('original') for r in reusable_previous if (r or {}).get('_input_signature') is not None}
+            texts|=memo.texts()
+            signatures={i:(signature(build_nearby_words(len(lines),i,lambda k:words.get(lines[k],[])),
+                            input_work.line_readings(self,i,lines),
+                            input_work.line_calculations(self,i,lines),
+                            previous_line_of(lines,i)) if lines[i] in texts else None) for i in todo}
             todo=reuse_rows(results,todo,reusable_previous,signatures,
                             getattr(self,'_analyze_ctx',None),context_vocab,prepared['attested'])
+            todo=memo.take_back(results,todo,signatures,context_vocab,prepared['attested'],tab_kana)
         self.line_results = results
         self._prev_lines = lines[:]
         self._analyze_ctx = context_vocab
@@ -13327,6 +14051,84 @@ class CorrectNoteApp:
         if edited_first and self._analyze_pos < len(self._analyze_todo):
             self._analyze_slice(1)
         self._refresh_after_analysis(learn=False)
+        self._schedule_analysis_chunk()
+
+    # 打っている間、打った行の上下の行（文脈の近傍・nearby_reanalysis_lines）の解析し直しは、入力が止まるまで
+    # 待つ（2026-11-01・処理の負荷）。打つたびに打った行の語が変わり、上下4行の解析し直しが毎打鍵で走って、次の
+    # 打鍵で捨てられていた。待つ間は前の答えのまま出し（未解析の印も付けない）、止まったら解析し直す（答えは同じ）。
+    NEIGHBOR_DEFER = True
+    NEIGHBOR_DEFER_MS = 1200
+
+    def _defer_neighbor_rows(self, affected, lines, prev, head, tail):
+        """この打鍵の上下の行のうち、待たせる行（いまの行番号・0から）。前に待たせた行は、行がずれても付いていく
+        （中身が変わった行は打った範囲に入るので、ここでは落とす）。打鍵の編集でなければ、待たせていた行もここで出す。"""
+        carried = set()
+        delta = len(lines) - len(prev)
+        for index, text in getattr(self, '_deferred_neighbors', ()) or ():
+            moved = index if index < head else (index + delta if index >= len(prev) - tail else None)
+            if moved is not None and 0 <= moved < len(lines) and lines[moved] == text:
+                carried.add(moved)
+        force = getattr(self, '_neighbor_force', False)
+        self._neighbor_force = False
+        priority = getattr(self, '_priority_input_row', None)
+        typed = (self.NEIGHBOR_DEFER and not force and priority is not None
+                 and priority[0] == input_work.token(self))
+        self._neighbor_typing = typed
+        if not typed:
+            # 止まった（または打鍵でない編集）: 待たせていた行もこの段取りで解析し直す
+            self._deferred_neighbors = set()
+            if carried:
+                affected.extend(index for index in carried if index not in affected)
+            return set()
+        keep = set(affected) | carried
+        self._deferred_neighbors = {(index, lines[index]) for index in keep if 0 <= index < len(lines)}
+        job = getattr(self, '_neighbor_defer_job', None)
+        if job is not None:
+            try:
+                self.root.after_cancel(job)
+            except Exception:
+                pass
+        self._neighbor_defer_job = self.root.after(self.NEIGHBOR_DEFER_MS, self._flush_deferred_neighbors)
+        return keep
+
+    def _flush_deferred_neighbors(self):
+        self._neighbor_defer_job = None
+        if getattr(self, '_closing', False) or not getattr(self, '_deferred_neighbors', None):
+            return
+        if self._foreground_analysis_pending():
+            # 打った行の解析がまだ: 済んでから
+            self._neighbor_defer_job = self.root.after(self.NEIGHBOR_DEFER_MS, self._flush_deferred_neighbors)
+            return
+        self._neighbor_force = True
+        self._analyze()
+
+    def _arm_heavy_redo(self):
+        """打った行の答えから重い段を除いた行（deferred_stages）を、手が止まったら解析し直す
+        （correction_entry の defer_heavy・2026-11-02）。待つ間は今の答えのまま出す。"""
+        job = getattr(self, '_heavy_redo_job', None)
+        if job is not None:
+            try:
+                self.root.after_cancel(job)
+            except Exception:
+                pass
+        self._heavy_redo_job = self.root.after(self.NEIGHBOR_DEFER_MS, self._flush_heavy_redo)
+
+    def _flush_heavy_redo(self):
+        self._heavy_redo_job = None
+        if getattr(self, '_closing', False):
+            return
+        rows = [i for i, r in enumerate(getattr(self, 'line_results', ()) or ()) if r and r.get('deferred_stages')]
+        if not rows:
+            return
+        if (self._foreground_analysis_pending() or getattr(self, '_neighbor_defer_job', None) is not None
+                or time.monotonic() - getattr(self, '_last_edit_at', 0.0) < self.NEIGHBOR_DEFER_MS / 1000.0):
+            self._arm_heavy_redo()      # 打っている・ほかの解析が先
+            return
+        self._heavy_redo = set(rows)
+        self._analyze_todo = rows
+        self._analyze_pos = 0
+        self._analyze_painted_pos = 0
+        self._analyze_units_only = False
         self._schedule_analysis_chunk()
 
     def _typed_row_on_its_way(self, edited_first):
@@ -13681,6 +14483,7 @@ class CorrectNoteApp:
     # 塗り直しに50msかかった（測った・項目48-II）。打鍵のたびに
     # 引っかかるので 20 に減らした（画面1つぶんの余白は残る）。
     WS_PAINT_MARGIN = 20
+    WS_EDGE_BUDGET_S = 0.06
     WS_PAINT_DELAY_MS = 80
 
     # ------------------------------------------------------------
@@ -13725,6 +14528,11 @@ class CorrectNoteApp:
                 row = last + 1
                 w.tag_add(self.END_RULE_TAG, f'{row}.0', f'{row+1}.0')
                 info = w.dlineinfo(f'{row}.0')
+                try:
+                    top = w.index('@0,0'); top_info = w.dlineinfo(top)
+                    w._end_rule_view = (top, top_info[1] if top_info else None)   # 置いたときの画面
+                except Exception:
+                    pass
                 if info is not None:
                     line.place(x=2, y=info[1]+info[3]-1,
                                width=max(1, w.winfo_width()-4), height=1)
@@ -13765,7 +14573,7 @@ class CorrectNoteApp:
                             getattr(self, '_quick_text', None))
                 if w is not None] + backups
 
-    def _apply_tab_stops(self, font=None):
+    def _apply_tab_stops(self, font=None, targets=None):
         """
         **タブ1つの見た目の幅を全角ぶん確保する**（項目48-LG・
         2026-08-29 うにさんの指定「タブキーを1回打つと、半角スペース
@@ -13784,7 +14592,7 @@ class CorrectNoteApp:
         """
         import tkinter.font as tkfont
         # 俯瞰中も簡易入力の字は縮めない。それぞれの実フォントから測る。
-        for w in self._whitespace_targets():
+        for w in (self._whitespace_targets() if targets is None else targets):
             try:
                 f = tkfont.Font(font=w.cget('font'))
                 step = max(16, f.measure('　') * 4)
@@ -13794,12 +14602,58 @@ class CorrectNoteApp:
             except (tk.TclError, AttributeError):
                 pass
 
-    def _row_char_fonts(self, w, row, line):
+    def _font_tag_spans(self, w, lo, hi):
+        """The font-setting tags' ranges in rows lo..hi, once for all their rows
+        (_row_char_fonts with spans). Asking every row for every tag cost 10,257
+        Tk calls and 0.3 seconds on a tab-heavy page, before the edit's analysis
+        could start (2026-11-01). Tags without a font set nothing and are skipped."""
+        from pos_font import POS_FONT_TAGS
+        from text_format import FONT_TAGS
+        spans = []
+        first, last = f'{lo}.0', f'{hi}.end'
+        for tag in tuple(POS_FONT_TAGS.values()) + tuple(FONT_TAGS):
+            spec = str(w.tag_cget(tag, 'font') or '')
+            if not spec:
+                continue
+            ranges = []
+            index = first
+            while True:
+                found = w.tag_nextrange(tag, index, last)
+                if not found:
+                    break
+                ranges.append((int(str(found[0]).split('.')[0]), int(str(found[1]).split('.')[0]),
+                               found[0], found[1]))
+                index = found[1]
+            if ranges:
+                spans.append((spec, ranges))
+        return spans
+
+    def _row_char_fonts(self, w, row, line, spans=None):
         """Font spec of each character where a POS size or bold/italic tag
         sets one (None = the pane font). Format fonts win over POS sizes,
-        as they are raised above them."""
+        as they are raised above them. spans: _font_tag_spans of rows that
+        include this one (the same answer, without asking Tk per row)."""
         if row is None or w is None or '\t' not in line:
             return None
+        if spans is not None:
+            try:
+                fonts = [None] * len(line)
+                start = f'{row}.0'
+                used = False
+                for spec, ranges in spans:
+                    for first_row, last_row, a_index, z_index in ranges:
+                        if last_row < row or first_row > row:
+                            continue
+                        a = 0 if first_row < row else len(w.get(start, a_index))
+                        z = len(fonts) if last_row > row else len(w.get(start, z_index))
+                        if z <= a:
+                            continue
+                        for i in range(a, min(z, len(fonts))):
+                            fonts[i] = spec
+                        used = True
+                return tuple(fonts) if used else None
+            except Exception:
+                return None
         try:
             from pos_font import POS_FONT_TAGS
             from text_format import FONT_TAGS
@@ -13824,7 +14678,7 @@ class CorrectNoteApp:
         except Exception:
             return None
 
-    def _line_tab_stops(self, w, line, row=None):
+    def _line_tab_stops(self, w, line, row=None, spans=None):
         """
         **行の中身に合わせたタブの止まり**（項目48-LG・後半）。
 
@@ -13854,7 +14708,7 @@ class CorrectNoteApp:
         # 品詞の大きさ・太字で字が広がった行は、その字の幅で測る
         # （2026-10-12 うにさんの報告「タブが半角ぶんしか出ないことがある」。
         # 素のフォントで測ると、広がった字のぶん止まりの手前に来ていた）。
-        char_fonts = self._row_char_fonts(w, row, line)
+        char_fonts = self._row_char_fonts(w, row, line, spans)
         key = (fkey, line, char_fonts)
         got = cache.get(key)
         if got is not None:
@@ -13959,11 +14813,14 @@ class CorrectNoteApp:
         reg = regs.setdefault(str(w), set())
         try:
             want = {}
+            spans = None
             for li in range(lo, hi + 1):
                 line = w.get(f'{li}.0', f'{li}.end')
                 if '	' not in line:
                     continue
-                stops = self._line_tab_stops(w, line, li)
+                if spans is None:
+                    spans = self._font_tag_spans(w, lo, hi)
+                stops = self._line_tab_stops(w, line, li, spans)
                 if not stops:
                     continue
                 want[li] = ('ws_stops_' + '_'.join(map(str, stops)), stops)
@@ -14091,6 +14948,7 @@ class CorrectNoteApp:
         sigs = getattr(self, '_ws_paint_sig', None)
         if sigs is None:
             sigs = self._ws_paint_sig = {}
+        edges_pending = False
         for w in self._whitespace_targets():
             try:
                 top = int(str(w.index('@0,0')).split('.')[0])
@@ -14109,6 +14967,19 @@ class CorrectNoteApp:
             # 多い文書（画面の帯に2,600個の印）で **48ms → 21ms** の
             # 差が出た（測った・項目48-II）。
             batch = {}
+            # 折り返しの境目を初めて数える行が多いと（タブの多い長いタブの起動で1.4秒）本体が止まるので、
+            # 1回に数える分を区切り、残りは次の回に。見えている行から数える（控えが貯まれば次は数えない）
+            edge_until = time.monotonic() + self.WS_EDGE_BUDGET_S
+            edges_left = False
+            if on:
+                for li in range(top, bottom + 1):
+                    if time.monotonic() >= edge_until:
+                        break
+                    try:
+                        if '\t' in w.get(f'{li}.0', f'{li}.end'):
+                            self._wrap_edge_columns(w, li)
+                    except Exception:
+                        break
             for li in (range(lo, hi + 1) if on else ()):
                 try:
                     line = w.get(f'{li}.0', f'{li}.end')
@@ -14123,8 +14994,10 @@ class CorrectNoteApp:
                 # 折り返しの境目を数えるのは**タブのある行だけ**でよい
                 # （地色を持つのはタブだけになった・項目48-IJ）。
                 # 英文の多い文書で 20ms 使っていた仕事が、ここで消える。
-                edges = (self._wrap_edge_columns(w, li)
+                edges = (self._wrap_edge_columns(w, li, until=edge_until)
                          if '\t' in line else ())
+                if edges is None:
+                    edges, edges_left = (), True
                 # 四角消しは欄の地の色で塗るので、裏の絵（外見の装飾）を
                 # そこから右端まで消してしまう。装飾があるときは、境目の
                 # タブには帯を付けない（帯が伸びないので四角消しも要らない）。
@@ -14145,6 +15018,7 @@ class CorrectNoteApp:
                         # 伸びるので消す（項目48-II／48-IJ）
                         batch.setdefault(self.WS_NOBOX, []).extend(
                             (f'{li}.0+{ci}c', f'{li}.0+{ci + 1}c'))
+            edges_pending = edges_pending or edges_left
             # **前と同じなら、指1本触れない**（項目48-MB）。
             # 消してから組むと、組む途中の `display lineend`
             # （`_wrap_edge_columns`）が Tk に画面を作り直させるので、
@@ -14183,10 +15057,16 @@ class CorrectNoteApp:
         # 予約を2つに増やすと、片方だけ呼び忘れる（学び22）。
         self._align_pane_rows()
         self._paint_end_rule()
+        if edges_pending:
+            self._schedule_whitespace_paint(delay=30)
 
     def _align_pane_rows(self):
         from text_layout import align_rows
         if not hasattr(self, 'result_view'):
+            return
+        if getattr(self, '_ov_right_font', None) is not None:
+            # The right pane is still in the old font (_overview_fonts): measured against it, every row of the
+            # left pane got a gap as tall as the old row (2026-11-03). _overview_settle aligns them afterwards
             return
         was_syncing = self._syncing
         self._syncing = True
@@ -14239,7 +15119,7 @@ class CorrectNoteApp:
             return None
         return partner
 
-    def _wrap_edge_columns(self, w, li):
+    def _wrap_edge_columns(self, w, li, until=None):
         """
         **折り返しの境目に来る桁**を返す（項目48-II）。
 
@@ -14270,6 +15150,8 @@ class CorrectNoteApp:
                 return got
         except Exception:
             key = None
+        if until is not None and time.monotonic() >= until:
+            return None         # 今回は数えない（呼ぶ側が次の回に）
         edges = set()
         try:
             logical = w.index(f'{li}.end')
@@ -14433,6 +15315,20 @@ class CorrectNoteApp:
         except Exception:
             pass
 
+    # 映っている行の中は、短い行から解析する（2026-11-01・解析の改善）。1行に数十秒かかる行が上にあると、下の行が
+    # みな待っていた。未解決のタブ（映っている35行）で、半分の行が出るまで 87 → 47秒・4分の3 が 257 → 71秒（全部が
+    # 済む時刻と答えは同じ・順番を変えても答えは変わらない: 下の _visible_first の説明）。重い行の上位はみな長い行
+    VISIBLE_SHORT_FIRST = True
+
+    def _nearest_rows_first(self, rows, lo, hi):
+        """映っている範囲の外は、近い行から、下を先に（読み進めると次に見る行。2026-11-02: 済むと文書の頭へ戻っていて、
+        下へ送るたびに待っていた）。順番を変えても答えは変わらない。"""
+        return sorted(rows, key=lambda i: (i - hi) if i > hi else 2 * (lo - i))
+
+    def _short_rows_first(self, rows):
+        lines = getattr(self, '_prev_lines', None) or ()
+        return sorted(rows, key=lambda i: (len(lines[i]) if 0 <= i < len(lines) else 0, i))
+
     def _visible_first(self, todo):
         """
         **画面に見えている行から先に解析する**（項目48-BP・
@@ -14469,7 +15365,7 @@ class CorrectNoteApp:
         near = [i for i in todo if lo <= i <= hi]
         if not near or len(near) == n:
             return todo, n
-        far = [i for i in todo if not (lo <= i <= hi)]
+        far = self._nearest_rows_first([i for i in todo if not (lo <= i <= hi)], lo, hi)
         if bands[1:]:
             # The other window's rows in view next, then the rest (2026-10-23)
             second = []
@@ -14497,6 +15393,8 @@ class CorrectNoteApp:
             slo, shi = screen
             on = [i for i in near if slo <= i <= shi]
             rest = [i for i in near if not (slo <= i <= shi)]
+            if on and getattr(self, 'VISIBLE_SHORT_FIRST', False):
+                on = self._short_rows_first(on)
             if on:
                 near = on + rest
                 n_show = len(on)
@@ -14543,6 +15441,24 @@ class CorrectNoteApp:
             bottom = top + span
         return (top - margin, bottom + margin)
 
+    JUMP_CANCELS_ROW = True
+    # やめた分の計算は無駄になるので歯止めを置く（2026-11-02・2秒ごとに飛び続けると、歯止めなしは子の時間の58%を捨て、
+    # 同じ行を5回やめていた）。同じ行をやめるのは1回まで、計算を始めてこの秒数を過ぎた行は終わらせる
+    JUMP_CANCEL_MAX_S = 3.0
+
+    def _may_cancel_row(self, row):
+        started = getattr(self, '_async_request_at', None)
+        if started is not None and time.monotonic() - started >= self.JUMP_CANCEL_MAX_S:
+            return False
+        work = getattr(self, '_analyze_work', None)
+        kept = getattr(self, '_jump_cancelled', None)
+        if kept is None or kept[0] != work:
+            kept = self._jump_cancelled = (work, set())
+        if row in kept[1]:
+            return False
+        kept[1].add(row)
+        return True
+
     def _reprioritise_visible(self):
         """
         **解析の途中でスクロールしたら、そこから先に片付け直す**
@@ -14566,12 +15482,19 @@ class CorrectNoteApp:
 
         戻り値: 並べ替えたら True
         """
-        pending=getattr(self,'_async_request',None)
-        if pending and pending[0][0]=='line':return False
         todo = getattr(self, '_analyze_todo', None)
         pos = getattr(self, '_analyze_pos', 0)
         if not todo or getattr(self, '_analyze_units_only', False):
             return False
+        # 子が計算中の行はそのままにして、その次から並べ替える（答えはその行の順番で受け取る）。計算中なら並べ替えない
+        # としていた間は、答えが届いた区切りの中で次の行を送るので、いつ見ても計算中で、解析の途中で飛んだ先が
+        # 先に回らなかった（2026-11-02・3,609行のタブの真ん中へ飛んで、30秒たっても映っている行が0行）
+        first = pos
+        pending = getattr(self, '_async_request', None)
+        if pending and pending[0][0] == 'line' and pos < len(todo) and pending[0][4] == todo[pos]:
+            pos += 1
+            if pos >= len(todo):
+                return False
         left = len(todo) - pos
         # 残りがひと区切りぶんしかないなら、並べ替えても意味が無い
         if left <= self.ANALYZE_CHUNK:
@@ -14594,7 +15517,13 @@ class CorrectNoteApp:
         near = [i for i in rest if lo <= i <= hi]
         if not near:
             return False
-        far = [i for i in rest if not (lo <= i <= hi)]
+        # 計算中の行が画面の外なら、やめて後ろへ回す（重い行は10秒を超える。飛んだ先を待たせない・打った行はやめない）
+        if (pos > first and self.JUMP_CANCELS_ROW and not self._typed_row_pending()
+                and not lo <= todo[first] <= hi and self._may_cancel_row(todo[first])):
+            analysis_async.cancel_foreground_request(self)
+            rest = todo[first:]
+            pos = first
+        far = self._nearest_rows_first([i for i in rest if not (lo <= i <= hi)], lo, hi)
         # **描き直しの合図は「本当に映っている行」だけで出す**
         # （項目48-FH をこちらにも・項目48-IF・2026-08-21）。
         #
@@ -14613,6 +15542,8 @@ class CorrectNoteApp:
             slo, shi = screen
             on = [i for i in near if slo <= i <= shi]
             rest = [i for i in near if not (slo <= i <= shi)]
+            if on and getattr(self, 'VISIBLE_SHORT_FIRST', False):
+                on = self._short_rows_first(on)
             if on:
                 near = on + rest
                 n_show = len(on)
@@ -14622,7 +15553,7 @@ class CorrectNoteApp:
         self._analyze_visible_n = pos + n_show
         self._analyze_shown_visible = False
         # 飛んだ先はまだ1行も塗っていない（項目48-JA）。
-        self._analyze_painted_pos = pos
+        self._analyze_painted_pos = first
         self._analyze_last_paint_ms = 0.0
         return True
 
@@ -14780,7 +15711,9 @@ class CorrectNoteApp:
         # The floor is the one every repeating poll has (2026-10-18: it was 20,
         # which made the debug menu's two items below 20ms do nothing). The
         # defaults (20/30ms) are above it, so they behave as before.
-        gap = self.ANALYZE_TYPED_POLL_MS if self._typed_row_pending() else max(1,gap)
+        typed = self._typed_row_pending()
+        analysis_async.pause_background(self, typed)
+        gap = self.ANALYZE_TYPED_POLL_MS if typed else max(1,gap)
         work=input_work.token(self)
         self._analyze_job = self.root.after(gap,lambda: self._analyze_chunk()
             if input_work.token(self)==work else self._analyze())
@@ -14818,13 +15751,34 @@ class CorrectNoteApp:
         # activity must not delay receiving or dispatching the next row.
         # Keep the actual held-view guard: projection changes during overview
         # or right-button scrolling would disturb the view under the pointer.
+        inertia=getattr(self,'_scroll_inertia',None)
         held=(getattr(self,'_overview',None) is not None
-              or (getattr(self,'_drag',None) or {}).get('mode')=='scroll')
+              or (getattr(self,'_drag',None) or {}).get('mode')=='scroll'
+              or getattr(inertia,'job',None) is not None)
         if held:
             self._schedule_analysis_chunk()
             return
         self._analyze_slice(count)
+        # The other child takes the next rows of this tab (high・2026-10-30); a row it finished in view is shown
+        import analysis_async
+        try:
+            landed = analysis_async.helper_step(self)
+        except Exception:
+            landed = None
         done, total = self._analyze_pos, len(self._analyze_todo)
+        if landed is not None and done >= total:
+            pass
+        elif landed is not None:
+            _band = self._visible_band(margin=0)
+            if _band is not None and _band[0] <= landed <= _band[1] and landed not in self._analyze_todo[
+                    getattr(self, '_analyze_painted_pos', 0):done]:
+                _now = time.monotonic() * 1000.0
+                if _now - getattr(self, '_analyze_last_paint_ms', 0.0) >= self.ANALYZE_PAINT_GAP_MS:
+                    self._analyze_last_paint_ms = _now
+                    try:
+                        self._refresh_after_analysis(learn=False)
+                    except Exception:
+                        pass
         # **見えている行が片付いたら、そこで一度だけ描き直す**
         # （項目48-BP）。残りは裏で進めるので、その人から見た
         # 待ち時間は「見えているぶん」で終わる。
@@ -14900,11 +15854,20 @@ class CorrectNoteApp:
                 if not getattr(self, '_analyze_units_only', False):
                     shown_total = len(self._prev_lines)
                     shown_done = shown_total - total + done
-                self.status.config(text=f'{label}… {shown_done}/{shown_total} 行')
+                # 同じ字なら付け直さない（子の結果を待つ間も 30ms ごとにここを通り、付け直すたびに行の
+                # 出し入れの確かめが走っていた。2026-10-31: 解析中の本体の CPU のうち約1割）
+                text = f'{label}… {shown_done}/{shown_total} 行'
+                if self.status.cget('text') != text:
+                    self.status.config(text=text)
             except Exception:
                 pass
             self._schedule_analysis_chunk()
             return
+        if analysis_async.helper_busy(self):
+            # A row of this pass is still with the other child: the pass ends when it comes in
+            self._schedule_analysis_chunk()
+            return
+        analysis_async.pause_background(self, False)
         try:
             self.status.config(text='')
         except Exception:
@@ -15124,6 +16087,9 @@ class CorrectNoteApp:
         except Exception:
             return
         if not todo:
+            # Nothing for the other tabs: give their child back once it is not helping this tab (2026-10-30)
+            if not analysis_async.helper_busy(self):
+                memory_usage.release_prefetch(self)
             return
         self._bg_texts = todo
         self._bg = None
@@ -15142,11 +16108,25 @@ class CorrectNoteApp:
             return
         if self._bg_step_once():
             self._bg_job=self.root.after(max(25,self.ANALYZE_POLL_MS),self._bg_step)
+        elif self._bg is None and not getattr(self, '_bg_texts', None):
+            # Every other tab has been analysed: give the child for the other tabs back (2026-10-30)
+            import memory_usage
+            memory_usage.release_prefetch(self)
 
     def _bg_step_once(self):
         import analysis_work_app as input_work
         try:
             import memory_usage
+            import analysis_async
+            if analysis_async.helper_wanted(self):
+                # 高（2026-10-30）: 裏の子は開いているタブを手伝っている。ほかのタブはそのあと
+                return True
+            if (getattr(self, '_analyze_typed_pass', False) and memory_usage.foreground_busy(self)
+                    and not memory_usage.shares_worker(self)):
+                # 高でも、打った行の解析の間はほかのタブの求めを出さない（2026-11-01・優先順「今打った分 → 見えて
+                # いる範囲 → 下の先読み → 次のタブ」・CPU の少ない PC で打った行と取り合わない）。出ている求めは
+                # そのまま。打った解析が済めば続ける
+                return True
             if memory_usage.shares_worker(self) and memory_usage.foreground_busy(self):
                 # 中（2026-10-15）: 子は1つ。表のタブが使っている間は裏は待つ。
                 # 裏の求めが出ていても、表の新しい求めに追い越されていて答えは
@@ -15266,7 +16246,7 @@ class CorrectNoteApp:
             except Exception:
                 pass
         self._bg_job = None
-        analysis_async.cancel_background_request(self)
+        analysis_async.stop_background_request(self)
         st = getattr(self, '_bg', None)
         if st and (st.get('pos') or st.get('ctx') is not None):
             tab_analysis.park_background(self, st)
@@ -15383,6 +16363,62 @@ class CorrectNoteApp:
                     self._analysis_stale.discard(k)
                 except Exception:
                     pass
+        except Exception:
+            pass
+
+    def _choice_row_first(self, row):
+        """選び直した行（1から）を、補正欄へすぐ出し、解析し直しでも先にする（2026-11-01 うにさん「再変換を選んでも
+        補正欄への反映が遅れるので、解析で優先してください」）。
+
+        補正欄の単位（表示）は、解析の子が忙しいあいだ子の結果を待つ（_units_are_pending）ので、選んだ行が
+        しばらく前の表示のままだった。この行だけ本体で組み立てて控えに置き、描き直しで使う。行の解析し直しが
+        要るときは、打った行と同じ優先（_priority_input_row）で先頭にする。"""
+        if row is None:
+            return
+        try:
+            import analysis_work_app as _work
+            self._priority_input_row = (_work.token(self), row - 1)
+        except Exception:
+            pass
+        try:
+            result = self.line_results[row - 1]
+            if not result or result.get('pending') or result.get('_display_only'):
+                return
+            fn = getattr(self.store, '_tokenize_fn', None)
+            if fn is None:
+                fn = self.store._tokenize_fn = corrector.make_tokenizer(self.store)
+            cache = getattr(self, '_units_cache', None)
+            if cache is None:
+                cache = self._units_cache = {}
+            cache[(result['original'], result['corrected'])] = build_line_units(
+                result, fn, self.choices, self._known_kana_word)
+        except Exception:
+            pass
+
+    def _decisions_moved(self):
+        """補正の判断が変わった（足した・消した）。その語を含む行だけやり直す（2026-11-01）。
+        判断の版は状態の鍵の選び直しの欄に入っていて、変わった語は used_changes が記録する
+        （analysis_worker._keys_unchanged）。後片付けは選び直しと同じ。"""
+        self._choices_moved()
+
+    def _choices_moved(self):
+        """選び直しの記憶が変わった。**関係する行だけ**やり直す（2026-11-01 うにさん「無関係の行は再解析しない」）。
+
+        選び直しの版は解析の状態の鍵に入っていて、行ごとに使った選び直しのキーを持つ（used_keys）。変わったキーを
+        使った行だけが合わなくなる（analysis_worker._keys_unchanged）。_invalidate_analysis_cache は状態の版を
+        上げて全部の行を合わなくするので、選び直しでは通さない。描画の控え（別タブの単位）は選び直しで変わるので捨てる。"""
+        self._tab_units_cache = {}
+        self._async_contexts = {}
+        try:
+            self._stop_background_tabs()
+        except Exception:
+            pass
+        try:
+            self._queue_background_tabs()
+        except Exception:
+            pass
+        try:
+            self.root.after_idle(self._analyze)
         except Exception:
             pass
 
@@ -15540,7 +16576,7 @@ class CorrectNoteApp:
             self.status.config(text='解析でエラーが起きています（コンソール参照）')
         elif any(r.get('analysis_status') == 'incomplete' for r in self.line_results):
             self.status.config(text='一部の行は解析を完了できませんでした')
-        elif learn:
+        elif learn and not any(r.get('deferred_stages') for r in self.line_results):
             self._schedule_learning(self._analyze_text)
         self.editor_gutter.redraw()
         try:
@@ -15710,6 +16746,7 @@ class CorrectNoteApp:
                 or len(lines)!=len(results)
                 or any(not r or r.get('original')!=line or r.get('pending')
                        or r.get('analysis_error') or r.get('analysis_status') in ('incomplete','limited')
+                       or r.get('deferred_stages')
                        for line,r in zip(lines,results))):
             return
         self._analyze_dependencies=analysis_async.state_key(self)
@@ -15782,8 +16819,15 @@ class CorrectNoteApp:
                 if _l.strip() and _r and not _r.get('pending'):
                     _res_by_line.setdefault(_l, _r)
             _masked = []
+            # 自動反映した行を書き換えたあとに残った、自動で直した字（_autofix_keep_written）も消す
+            try:
+                _written = self._autofix_written_masks()
+            except Exception:
+                _written = {}
             for _l in new_lines:
                 _r = _res_by_line.get(_l)
+                for _t in _written.get(_l, ()):
+                    _l = _l.replace(_t, ' ' * len(_t))
                 if _r:
                     _sp = (list(_r.get('original_spans') or [])
                            + list(_r.get('odd_spans') or [])
@@ -16139,6 +17183,7 @@ class CorrectNoteApp:
                 self._autofix_drop(rec)
                 continue
             if now != rec['applied']:
+                self._autofix_keep_written(rec, row, now)
                 self._autofix_drop(rec)
                 continue
             # 行が1つにくっついた等で重なったら、新しいほうを残す
@@ -16149,6 +17194,62 @@ class CorrectNoteApp:
             seen_rows[row] = (rec, row)
             live.append((rec, row))
         return live
+
+    AUTOFIX_WRITTEN_LIMIT = 200
+
+    def _autofix_keep_written(self, rec, row, now):
+        """自動反映した行を自分で書き換えた（控えを落とす）。その行に残っている、**自動で直した字**（fixed）を覚えて
+        おき、学習でその行から消す（_autofix_written_masks・2026-11-01 うにさん 10-22「学習で補正を悪くしない」）。
+        控えが生きている間は原文（editor_source_text）を学ぶので自動の字は入らないが、控えが落ちると直した字が
+        「打った文」になり、語彙に入って次の補正を寄せていた。自分で選び直した字（chosen）は今どおり学ぶ。"""
+        if rec.get('pane', 'editor') != 'editor':
+            return
+        applied = rec.get('applied') or ''
+        texts = []
+        for start, end, kind, _base in rec.get('spans') or ():
+            word = applied[start:end]
+            if kind == 'fixed' and word.strip() and word in now and word not in texts:
+                texts.append(word)
+        if not texts:
+            return
+        self._autofix_mark_seq = getattr(self, '_autofix_mark_seq', 0) + 1
+        name = f'autofix_written_{self._autofix_mark_seq}'
+        try:
+            self.editor.mark_set(name, f'{row}.0')
+            self.editor.mark_gravity(name, 'right')
+        except Exception:
+            return
+        kept = getattr(self, '_autofix_written', None)
+        if kept is None:
+            kept = self._autofix_written = []
+        kept.append({'mark': name, 'texts': tuple(texts)})
+        while len(kept) > self.AUTOFIX_WRITTEN_LIMIT:
+            old = kept.pop(0)
+            try:
+                self.editor.mark_unset(old['mark'])
+            except Exception:
+                pass
+
+    def _autofix_written_masks(self):
+        """{行の文字列: 学習で消す自動の字}。行の中身から字が消えた控えは捨てる。"""
+        masks = {}
+        kept = getattr(self, '_autofix_written', None) or []
+        for item in list(kept):
+            try:
+                row = int(str(self.editor.index(item['mark'])).split('.')[0])
+                line = self.editor.get(f'{row}.0', f'{row}.end')
+            except Exception:
+                line = None
+            texts = [t for t in item['texts'] if line and t in line]
+            if not texts:
+                kept.remove(item)
+                try:
+                    self.editor.mark_unset(item['mark'])
+                except Exception:
+                    pass
+                continue
+            masks.setdefault(line, []).extend(texts)
+        return masks
 
     def _autofix_drop(self, rec):
         wid, key, _after = self._autofix_pane_of(rec)
@@ -16324,7 +17425,7 @@ class CorrectNoteApp:
             self.decisions.save()
         except Exception:
             pass
-        self._invalidate_analysis_cache()
+        self._decisions_moved()     # その語を含む行だけやり直す（2026-11-01）
         p = done[-1]
         extra = f'（ほか{len(done) - 1}件）' if len(done) > 1 else ''
         try:
@@ -16418,6 +17519,7 @@ class CorrectNoteApp:
         for (i, result) in enumerate(self.line_results):
             row = i + 1
             if row in calculation_rows:continue
+            if getattr(self,'_reinput',None) is not None and self._reinput.keeps_row(row):continue     # 再入力変換の範囲の行は、終わるまで書き換えない
             if result.get('pending'):
                 continue
             original = result.get('original') or ''
@@ -16624,7 +17726,7 @@ class CorrectNoteApp:
             else:
                 self.decisions.reject(before, current)
                 self.decisions.save()
-                self._invalidate_analysis_cache()
+                self._decisions_moved()     # その語を含む行だけやり直す（2026-11-01）
         self.status.config(text=f'「{current}」を「{before}」に戻しました')
         # 後始末は面ごと（メモ欄は `_on_change`・簡易入力は
         # `_analyze_quick`）。`_autofix_pane` が対応づけている。
@@ -16697,13 +17799,25 @@ class CorrectNoteApp:
         i = row - 1
         if not (0 <= i < len(self.line_results)):
             return []
+        projected = ui_projection.results(self)[i]
+        # 解析の子が作った単位があればそれを使う（同じ関数の答え。本体は表を読まない・2026-11-03）
+        kept = getattr(self, '_suspect_units_cache', {}).get(
+            (projected.get('original'), projected.get('corrected'), False))
+        if kept is not None:
+            return [dict(unit) for unit in kept[1]]
+        # 解析がまだの行: 同じ関数を子で（本体は形態素の表を読まない・2026-11-03）
+        asked = analysis_async.ask_child(self, dict(
+            kind='suspect_units', result=projected,
+            attested=tuple(getattr(self, '_attested_surfaces', None) or ())))
+        if asked is not None:
+            return asked
         fn = getattr(self.store, '_tokenize_fn', None)
         if fn is None:
             fn = corrector.make_tokenizer(self.store)
             self.store._tokenize_fn = fn
         try:
             _text, units = build_suspect_units(
-                ui_projection.results(self)[i], fn, self.choices,
+                projected, fn, self.choices,
                 self._known_kana_word)
         except Exception:
             return []
@@ -17579,6 +18693,12 @@ class CorrectNoteApp:
             self._paint_whitespace()
         except Exception:
             pass
+        # Undo の下線を補正欄に引き直す（描き直しでタグが消えるため・choice_undo.mirror・2026-11-01）
+        try:
+            import choice_undo
+            choice_undo.mirror(self)
+        except Exception:
+            pass
         # state の切り替えで焦点が動いてしまった場合は戻す。
         # メモ欄に焦点があった場合だけを対象にする
         # （元々どこにも焦点が無かった／別のダイアログにあった場合まで
@@ -17661,6 +18781,8 @@ class CorrectNoteApp:
         always_scroll=False の欄（本文）は、動きの向き（縦優位か）で
         「スクロールしたいのか」「選択したいのか」を後から判断する。
         """
+        if getattr(self, '_overview_exit_job', None) is not None:
+            self._overview_exit()       # 縮小の残りの間に押した: 先に戻す
         self._on_tab_wheel_press(event)
         inertia=getattr(self,'_scroll_inertia',None)
         if inertia is not None:
@@ -17678,6 +18800,7 @@ class CorrectNoteApp:
             'last_y': event.y, 'accum': 0.0,
             'always_scroll': always_scroll,
             'press_root': press_root, 'warped': False,
+            'view_count': getattr(self, '_view_moved_count', 0),
         }
 
     def _drag_motion(self, event, widget):
@@ -17706,11 +18829,16 @@ class CorrectNoteApp:
                     return None
                 d['mode'] = cls
             if d['mode'] == 'scroll':
-                # 判定が確定するまでの間に既定の選択が始まっていたら消す
-                try:
-                    widget.tag_remove('sel', '1.0', 'end')
-                except Exception:
-                    pass
+                # 自分で動かした。タブを開いた時の位置へ解析の終わりに戻さない（1行目まで上がると「まだ配置待ち」
+                # と見分けられず、離したあとに開いた時の行へ戻された・2026-11-03 うにさん）
+                self._drop_pending_scroll()
+                # 判定が確定するまでの間に既定の選択が始まっていたら消す（左のドラッグだけ。右ボタンの
+                # スクロールは既定の選択を始めないので、前からの選択を保つ。2026-10-31 うにさん）
+                if not d['always_scroll']:
+                    try:
+                        widget.tag_remove('sel', '1.0', 'end')
+                    except Exception:
+                        pass
                 # **掴んでいる間はカーソルを隠す**（項目48-JQ・下の
                 # `_edge_warp` の説明。隠れていれば戻すのが見えない）。
                 self._scroll_cursor_hide(widget)
@@ -17756,6 +18884,12 @@ class CorrectNoteApp:
             py = widget.winfo_pointery() - widget.winfo_rooty()
         except Exception:
             py = event.y
+        if d.get('still'):
+            # 縮小に入った直後の手の揺れは動かしたことにしない（字が小さいので、少しの揺れで大きく送ってしまう）
+            if abs(py - d['start_y']) < self.OVERVIEW_STILL_PX:
+                d['last_y'] = py
+                return 'break'
+            d['still'] = False
         dy_step = py - d['last_y']
         inertia=getattr(self,'_scroll_inertia',None)
         if inertia is not None:inertia.sample_drag(-dy_step)
@@ -17773,6 +18907,7 @@ class CorrectNoteApp:
             # 戻り先にできなかった**。余ったぶんは戻り先の枠を
             # 画面の中で下へ滑らせ、離したらその枠の上端に置き直す）
             fwd = -lines
+            self._view_moved_count = getattr(self, '_view_moved_count', 0) + 1
             if self._overview is not None:
                 fwd = self._ov_absorb(fwd)
             if fwd:
@@ -17942,6 +19077,12 @@ class CorrectNoteApp:
         """
         d = self._drag
         was_scroll = bool(d and d['widget'] is widget and d['mode'] == 'scroll')
+        # 表示が実際に動いた時だけ（少しの揺れでスクロールの型になっただけなら、次の押し下げは二度押しのまま）
+        if was_scroll and d.get('view_count') != getattr(self, '_view_moved_count', 0):
+            # スクロールの離しは二度押しの1回目ではない。離すとカーソルは押した場所へ戻るので、続けて右ドラッグで
+            # 送ると「同じ場所をすぐ押した」に見え、縮小に入って見ていた行へ戻された（2026-11-03 うにさん）
+            self._r3_last = None
+            self._r3_scrolled_at = time.monotonic()     # Tk 自身の <Double-Button-3> にも（_on_right_double）
         tab_wheel = (getattr(event, 'num', None) == 3
                      and getattr(self, '_tab_wheel_used', False))
         if tab_wheel:
@@ -17957,7 +19098,7 @@ class CorrectNoteApp:
         # 迂回して**字が小さいまま戻らなくなる**。
         had_overview=getattr(self,'_overview',None) is not None
         if had_overview:
-            self._overview_exit()
+            self._overview_exit_soon()
         inertia=getattr(self,'_scroll_inertia',None)
         if inertia is not None:
             if (was_scroll and getattr(event,'num',None)==3 and not tab_wheel
@@ -18147,8 +19288,16 @@ class CorrectNoteApp:
         was_syncing = self._syncing
         self._syncing = True
         self._font_swap = True      # 補正欄からの逆流を止める（下の門）
+        # 入る時は右の欄を後回しにする: 左が先に縮小して見える（押してから出るまでの大半は両方の組み直し・
+        # 2026-11-03 解析中の 3,650行で 0.4〜1.3秒）。右は _overview_settle で追いつく
+        later = bool(size) and not self._layout_is_unified()
+        self._ov_right_font = font if later else None
+        if later:
+            # The gaps were measured in the old font: they leave with it, not when the right pane has caught up
+            from text_layout import clear_padding
+            clear_padding(self.editor)
         try:
-            for name in ('editor', 'result_view'):
+            for name in (('editor',) if later else ('editor', 'result_view')):
                 w = getattr(self, name, None)
                 if w is None:
                     continue
@@ -18161,8 +19310,8 @@ class CorrectNoteApp:
                 self._overview_tighten(w, name, tight=bool(size))
             # タブの止まりは字の幅で決めている。字と一緒に置き直す
             # （項目48-LG）
-            self._apply_tab_stops(font)
-            self._refresh_pos_font_tags()
+            self._apply_tab_stops(font, targets=[w for w in self._whitespace_targets() if w is not self.result_view] if later else None)
+            self._refresh_pos_font_tags(skip_result=later)
             # 行の高さは字で変わる。**捨てて測り直させる**
             self._line_h = None
             # **見ていた行へ置き直す**（字を変えた副作用の打ち消し）。
@@ -18174,7 +19323,7 @@ class CorrectNoteApp:
                 try:
                     self.editor.update_idletasks()
                     self.editor.yview(f'{top}.0')
-                    if not self._layout_is_unified():
+                    if not later and not self._layout_is_unified():
                         self._sync_partner_to_line(self.editor,
                                                    self.result_view)
                 except Exception:
@@ -18186,10 +19335,11 @@ class CorrectNoteApp:
         # `update_idletasks` のあとにも1つ来る（probe_overview で実測
         # ——ここで解くと、その報せで 7行目 → 1行目に戻された）。
         # 落ち着いてから置き直して、そこで解く。
+        moved = getattr(self, '_view_moved_count', 0)
         try:
-            self.root.after_idle(self._overview_settle, top, was_syncing)
+            self.root.after_idle(self._overview_settle, top, was_syncing, moved)
         except Exception:
-            self._overview_settle(top, was_syncing)
+            self._overview_settle(top, was_syncing, moved)
         # 行番号は**置き直したあと**に引く（先に引くと前の位置のまま）
         for name in ('editor_gutter', 'result_gutter'):
             g = getattr(self, name, None)
@@ -18246,7 +19396,7 @@ class CorrectNoteApp:
             except Exception:
                 pass
 
-    def _overview_settle(self, top, was_syncing):
+    def _overview_settle(self, top, was_syncing, moved=None):
         """
         字を入れ替えたあと、**組み直しが落ち着いてから**行を置き直し、
         同期を解く（`_overview_fonts` の続き・2026-08-28）。
@@ -18258,8 +19408,29 @@ class CorrectNoteApp:
         いた。メモ欄が源（スクロールの決め）なので、ここまで
         `_syncing` を立てたままにして逆流を止める。
         """
+        font = getattr(self, '_ov_right_font', None)
+        self._ov_right_font = None
+        if font is not None and getattr(self, '_overview', None) is not None:
+            # 右の欄が追いつく（戻るほうの字に替わったあとなら何もしない）
+            try:
+                self.result_view.config(font=font)
+                self._overview_tighten(self.result_view, 'result_view', tight=True)
+                self._apply_tab_stops(font, targets=(self.result_view,))
+                colors = getattr(self.result_view, '_correctnote_boundary_colors', None)
+                if colors is not None:
+                    colors.refresh_option()
+                formatter = getattr(self.result_view, '_correctnote_text_format', None)
+                if formatter is not None:
+                    formatter.refresh_fonts()
+                self.result_view.update_idletasks()
+                self.result_gutter.font = font
+                self.result_gutter.redraw()     # 大きい字の間隔のまま残さない
+                self.root.after_idle(self._align_pane_rows)     # 右が先に見えてから
+            except Exception:
+                pass
         try:
-            if top is not None:
+            # この置き直しは報せが尽きた合間に走る。それまでに掴みで動かしていれば、字を替えた時の行へ戻さない
+            if top is not None and moved == getattr(self, '_view_moved_count', 0) or moved is None and top is not None:
                 self.editor.yview(f'{top}.0')
                 if not self._layout_is_unified():
                     self._sync_partner_to_line(self.editor, self.result_view)
@@ -18282,11 +19453,38 @@ class CorrectNoteApp:
         except Exception:
             self._font_swap = False
 
+    # 縮小に入る処理は 0.4〜1.6 秒かかる（3,600行のタブの解析中）。その間に離すと、出た瞬間に戻って「入らなかった」
+    # ように見えた（2026-11-03 うにさん）。動かさずに離した時は、出てからこの間は見せる
+    OVERVIEW_MIN_SHOW_S = 0.35
+
+    def _overview_exit_soon(self):
+        """離した。動かしていなければ、出てから OVERVIEW_MIN_SHOW_S までは縮小のままにする。"""
+        overview = getattr(self, '_overview', None)
+        overview = overview if isinstance(overview, dict) else {}
+        moved = overview.get('moved') != getattr(self, '_view_moved_count', 0)
+        rest = min(self.OVERVIEW_MIN_SHOW_S, overview.get('shown_at', 0.0) + self.OVERVIEW_MIN_SHOW_S - time.monotonic())
+        if moved or rest <= 0:
+            self._overview_exit()
+            return
+        self._overview_cancel_exit()
+        self._overview_exit_job = self.root.after(max(1, int(rest * 1000)), self._overview_exit)
+
+    def _overview_cancel_exit(self):
+        job = getattr(self, '_overview_exit_job', None)
+        self._overview_exit_job = None
+        if job is not None:
+            try:
+                self.root.after_cancel(job)
+            except Exception:
+                pass
+
     def _overview_enter(self, event, widget):
         """俯瞰に入る（右ダブルクリックを押した瞬間）。"""
         if self._overview is not None:
-            return
-        self._overview = {'widget': widget}
+            if getattr(self, '_overview_exit_job', None) is None:
+                return
+            self._overview_exit()       # 戻るのを待っている間に押した: 戻してから入り直す
+        self._overview = {'widget': widget, 'moved': getattr(self, '_view_moved_count', 0), 'shown_at': float('inf')}
         self._ov_aim_off = 0         # 下端で余った掴みのぶん（48-LH'）
         # **ふだんの字での実際の可視行数**を、字を替える前に数えて
         # 控える（項目48-LH。字の高さからの見積もりでは 23 と出るのに
@@ -18299,6 +19497,7 @@ class CorrectNoteApp:
         except Exception:
             self._ov_dest_n = 23
         self._overview_fonts(OVERVIEW_FONT_SIZE)
+        self._overview['shown_at'] = time.monotonic()
         self._ov_dest_start()        # 移る範囲の枠（項目48-LH）
         # 掴みを**最初から scroll の型で**置く（判定の8画素を待たない）
         try:
@@ -18311,6 +19510,8 @@ class CorrectNoteApp:
             'last_y': event.y, 'accum': 0.0,
             'always_scroll': True,
             'press_root': press_root, 'warped': False,
+            'view_count': getattr(self, '_view_moved_count', 0),
+            'still': True,
         }
         self._scroll_cursor_hide(widget)
         return 'break'
@@ -18323,6 +19524,7 @@ class CorrectNoteApp:
         ——俯瞰は行き先を決める道具なので、戻ったら元の場所では
         意味が無い。
         """
+        self._overview_cancel_exit()
         if self._overview is None:
             return
         self._overview = None
@@ -18454,7 +19656,11 @@ class CorrectNoteApp:
 
     # 右の二度押しと見なす間（ms）と、ずれ（px）。Tk の `<Double-Button-3>` と同じ値
     RIGHT_DOUBLE_MS = 500
-    RIGHT_DOUBLE_PX = 5
+    RIGHT_AFTER_SCROLL_S = 0.7      # 遅れて処理される分を見て、二度押しの間より少し長く
+    # 1回目と2回目の間に手が少し動いても二度押しにする（2026-11-03 うにさん「多少動かしたから入らない」。5px だった）
+    RIGHT_DOUBLE_PX = 16
+    # 縮小の2回目を押したあとの揺れでスクロールに移らない幅
+    OVERVIEW_STILL_PX = 10
 
     def _right_press_is_double(self, event, widget):
         """
@@ -18485,12 +19691,13 @@ class CorrectNoteApp:
         self._r3_last = now
         if prev is None or prev[0] is not widget:
             return False
+        slop = right_double_slop(self.RIGHT_DOUBLE_PX)
         by_tk = 0 <= now[1] - prev[1] <= self.RIGHT_DOUBLE_MS
         by_input = (now[4] is not None and prev[4] is not None
                     and ((now[4] - prev[4]) & 0xffffffff) <= self.RIGHT_DOUBLE_MS)
         if ((by_tk or by_input)
-                and abs(now[2] - prev[2]) <= self.RIGHT_DOUBLE_PX
-                and abs(now[3] - prev[3]) <= self.RIGHT_DOUBLE_PX):
+                and abs(now[2] - prev[2]) <= slop
+                and abs(now[3] - prev[3]) <= slop):
             self._r3_last = None        # 3回目は新しい1回目
             return True
         return False
@@ -18503,6 +19710,16 @@ class CorrectNoteApp:
         ある（統合レイアウトのメモ欄・補正欄）。
         """
         self._close_dropdown()
+        scrolled = getattr(self, '_r3_scrolled_at', None)
+        self._r3_scrolled_at = None
+        if scrolled is not None and time.monotonic() - scrolled < self.RIGHT_AFTER_SCROLL_S:
+            # 1回目はスクロールだった: ふつうの押し下げ（続けて掴む）
+            self._drag_press(event, widget, True)
+            try:
+                self._r3_press = (int(event.x_root), int(event.y_root))
+            except Exception:
+                self._r3_press = None
+            return 'break'
         return self._overview_enter(event, widget)
 
     def _on_editor_release(self, event):
@@ -18717,6 +19934,12 @@ class CorrectNoteApp:
         if self._commit_composition_first(event, self._on_f3_return):return 'break'
         widget=getattr(event,'widget',None)
         if widget is None:return None
+        # 字を選んでいたら、ブラウザで検索（オプション・f3_search.py・2026-10-31 うにさん）
+        try:
+            import f3_search
+            if f3_search.handle(self,widget):return 'break'
+        except Exception:
+            pass
         widget.event_generate('<Return>')
         return 'break'
 
@@ -19745,10 +20968,16 @@ class CorrectNoteApp:
         pair = ('(', ')') if text and not has_fullwidth(text) else ('（', '）')
         self._wrap_with_brackets(*pair, from_cycle=from_cycle,widget=editor)
 
+    SELECTION_TRANSFORMS = {'F6': 'hiragana', 'F7': 'katakana', 'F8': 'halfwidth', 'F9': 'keys'}
+
     def _on_selection_transform(self, event):
         if ime_confirmed_char_event(event) is not None:
             return self._function_key_character(event)
         widget = getattr(event, 'widget', None)
+        # 再変換で選んでいる範囲にも効く（2026-10-30 うにさん「再変換で選択中に、F6 F7 F8 F9を押したら、対応する
+        # 変換を実行する」）。候補一覧に焦点があるときも、その範囲
+        if self._reconversion_transform(widget, getattr(event, 'keysym', '')):
+            return 'break'
         if widget not in (self.editor, getattr(self, '_quick_text', None)) or widget is None:
             return None
         import ime_watch
@@ -19757,8 +20986,7 @@ class CorrectNoteApp:
         selected = widget.tag_ranges('sel')
         if not selected:
             return None
-        kinds = {'F6':'hiragana', 'F7':'katakana', 'F8':'halfwidth', 'F9':'keys'}
-        kind = kinds.get(getattr(event, 'keysym', ''))
+        kind = self.SELECTION_TRANSFORMS.get(getattr(event, 'keysym', ''))
         if kind is None:
             return None
         from editor_transforms import transform_selection
@@ -19774,6 +21002,77 @@ class CorrectNoteApp:
             widget.mark_set('insert', f'{start}+{len(converted)}c')
         self._after_ime_char_insert(widget)
         return 'break'
+
+    def _reconversion_transform(self, widget, keysym):
+        """F6〜F9 を、再変換で選んでいる範囲に（選択が無いとき）。変換は選択の F6〜F9 と同じ
+        （editor_transforms.transform_selection）で、元は**範囲の読み**（漢字の語なら候補を出した読み）。
+        変えたあとも範囲は選んだまま（続けて別の F キー・元の読みを使う）。範囲が無ければ False。"""
+        kind = self.SELECTION_TRANSFORMS.get(keysym)
+        tgt = getattr(self, '_f2_focus_target', None)
+        if kind is None or tgt is None or widget is None:
+            return False
+        dropdown = getattr(self, '_dropdown', None)
+        try:
+            in_list = dropdown is not None and widget.winfo_toplevel() is dropdown
+        except Exception:
+            in_list = False
+        if widget is not tgt.get('widget') and not in_list:
+            return False
+        got = self._f2_editable_target()
+        if got is None:
+            return False
+        target, row, start, end = got
+        try:
+            if target.tag_ranges('sel') and widget is target:
+                return False          # 選んでいる文字があれば、今までどおりその選択を変える
+            line_text = target.get(f'{row}.0', f'{row}.end')
+        except Exception:
+            return False
+        source = self._f2_range_reading(row, start, end, line_text)
+        from editor_transforms import transform_selection
+        converted = transform_selection(source, kind)
+        if not converted:
+            return True
+        self._close_dropdown()
+        self._forget_bracket_cycle()
+        try:
+            target.focus_set()
+            with undo_group(target):
+                target.replace(f'{row}.0+{start}c', f'{row}.0+{end}c', converted)
+                target.mark_set('insert', f'{row}.0+{start + len(converted)}c')
+        except Exception:
+            return True
+        tgt.update(start=start, end=start + len(converted), text=converted, reading=source)
+        self._f2_focus_target = tgt
+        try:
+            target.tag_remove('f2_focus', '1.0', 'end')
+            target.tag_add('f2_focus', f'{row}.0+{start}c', f'{row}.0+{start + len(converted)}c')
+            target.tag_raise('f2_focus')
+        except Exception:
+            pass
+        self._after_f2_edit(target)
+        return True
+
+    def _f2_range_reading(self, row, start, end, line_text):
+        """再変換の範囲の読み: 前の F6〜F9 で控えた読み → 候補を出した単位の読み → 範囲を繋いだ読み → 字面。"""
+        tgt = getattr(self, '_f2_focus_target', None) or {}
+        if tgt.get('reading') and tgt.get('start') == start and tgt.get('end') == end:
+            return tgt['reading']
+        cyc = getattr(self, '_f2_cycle', None) or {}
+        units = cyc.get('units') or []
+        if cyc.get('row') == row and units:
+            idx = cyc.get('idx')
+            if idx is not None and 0 <= idx < len(units):
+                unit = units[idx]
+                if unit.get('start') == start and unit.get('end') == end and unit.get('reading'):
+                    return unit['reading']
+            try:
+                unit = make_range_unit(line_text, units, start, end)
+            except Exception:
+                unit = None
+            if unit is not None and unit.get('reading'):
+                return unit['reading']
+        return line_text[start:end]
 
     def toggle_list_mode(self):
         if getattr(self, '_pick_mode', None) == 'list':
@@ -20550,6 +21849,11 @@ class CorrectNoteApp:
         return None
 
     def _on_quick_f2(self, event=None):
+        got = self._on_quick_f2_open(event)
+        reinput.hide_cursor_for_reconvert(self)
+        return got
+
+    def _on_quick_f2_open(self, event=None):
         """
         簡易入力欄で F2。カーソル位置（無ければ直前）の語の候補を
         出し、候補一覧が開いたまま押すたびに左の語へ遡る
@@ -21813,6 +23117,32 @@ class CorrectNoteApp:
                 return True if only_if_selected else 'break'
         return False if only_if_selected else 'break'
 
+    def _focused_selected_text(self):
+        """いま押している欄（無ければ本文・補正欄・簡易入力の順）で選んでいる字。"""
+        import f3_search
+        try:
+            focused = self.root.focus_get()
+        except tk.TclError:
+            focused = None
+        panes = [self.editor, self.result_view, getattr(self, '_quick_text', None)]
+        for pane in ([focused] if focused in panes else []) + panes:
+            if pane is not None:
+                text = f3_search.selected_text(pane)
+                if text:
+                    return text
+        return ''
+
+    def _refresh_edit_search_item(self):
+        self._edit_menu.entryconfigure(self._edit_search_index,
+                                       foreground='' if self._focused_selected_text() else MUTED)
+
+    def _search_from_menu(self):
+        """編集メニューの「ブラウザを開いて検索」。選んだ字を検索、無ければ検索の入口を開く。"""
+        import f3_search
+        text = self._focused_selected_text()
+        opened = f3_search.open_search(text) if text else f3_search.open_top()
+        self.status.config(text='ブラウザで検索しました' if opened and text else '' if opened else 'ブラウザーを開けませんでした')
+
     def _insert_newline_from_menu(self):
         try:self.editor.replace('sel.first','sel.last','\n')
         except tk.TclError:self.editor.insert('insert','\n')
@@ -21922,6 +23252,11 @@ class CorrectNoteApp:
         return 'break'
 
     def _on_f2_candidates(self, event=None):
+        got = self._on_f2_candidates_open(event)
+        reinput.hide_cursor_for_reconvert(self)
+        return got
+
+    def _on_f2_candidates_open(self, event=None):
         """
         F2 で候補一覧を出す（右クリックと同じ機能）。
 
@@ -22230,10 +23565,12 @@ class CorrectNoteApp:
         # 2026-08-27）。cyc['idx'] は元の単位を指したままなので、
         # そのまま進めると、調整した範囲と重なったり、間の文字を
         # 飛ばしたりする。
-        if delta > 0:
-            got = self._f2_resized_next()
-            if got is not None:
-                return got
+        # 左キーも同じく、調整した範囲の始まりを境目に、その手前から（2026-10-30 うにさん「Shift+左右で選択範囲を
+        # 増減した後に、Shiftなしの左右キーを押した場合は、その時の選択範囲を境目として、境目を越えたところから
+        # 選択する」）
+        got = self._f2_resized_next() if delta > 0 else self._f2_resized_prev()
+        if got is not None:
+            return got
         home = (cyc['row'], cyc['idx'], cyc.get('units'),
                 cyc.get('widget'), cyc.get('unified'))
         ended = False
@@ -22328,6 +23665,60 @@ class CorrectNoteApp:
                                    cyc.get('unified'), units)
         return 'break'
 
+    def _f2_resized_prev(self):
+        """Shift+左右で調整した範囲から、**左どなり**の範囲を作る（`_f2_resized_next` の左向き・2026-10-30）。
+
+        範囲の始まり s が単位の**途中**なら「その単位の始まりから s まで」を範囲にして出す。単位の**切れ目**に
+        揃っているなら、cyc['idx'] を s の直後の単位に合わせて、通常の渡り歩き（`_f2_next_stop`。助詞は
+        飛ばす）へ合流させる。戻り値: 'break'（ここで出した）か None（通常の道へ）。調整していないときは None。"""
+        cyc = getattr(self, '_f2_cycle', None)
+        tgt = getattr(self, '_f2_focus_target', None)
+        if not cyc or not tgt:
+            return None
+        units = cyc.get('units')
+        idx = cyc.get('idx')
+        if not units or idx is None or not (0 <= idx < len(units)):
+            return None
+        row = cyc.get('row')
+        if tgt.get('row') != row or tgt.get('widget') is not cyc.get('widget'):
+            return None
+        u = units[idx]
+        s, e = tgt.get('start'), tgt.get('end')
+        if s is None or e is None:
+            return None
+        if s == u.get('start') and e == u.get('end'):
+            return None             # 調整していない。通常の渡り歩きへ
+        k = self._f2_unit_before(units, s)
+        if k is None:
+            # s が行の頭。前の行へは通常の道で（行の頭から）
+            cyc['idx'] = 0
+            return None
+        if units[k].get('end', 0) <= s:
+            # 切れ目に揃っている。その単位から通常の渡り歩き
+            cyc['idx'] = k + 1
+            return None
+        widget = cyc.get('widget')
+        try:
+            line_text = widget.get(f'{row}.0', f'{row}.end')
+        except Exception:
+            return None
+        unit = make_range_unit(line_text, units, units[k]['start'], s)
+        if unit is None:
+            cyc['idx'] = k + 1
+            return None
+        cyc['idx'] = k
+        self._show_unit_candidates(row, unit, widget,
+                                   cyc.get('unified'), units)
+        return 'break'
+
+    @staticmethod
+    def _f2_unit_before(units, s):
+        """s より前で始まる最後の単位の番号（無ければ None）。"""
+        for j in range(len(units) - 1, -1, -1):
+            if units[j].get('start', 0) < s:
+                return j
+        return None
+
     def _f2_peek(self, delta):
         """
         左右キーで**次に選ばれる範囲**を先読みする（塗るだけ・動かさない。
@@ -22384,6 +23775,15 @@ class CorrectNoteApp:
                     return (row, e, units[k]['end'])
                 start_i = (len(units) - 1) if k is None else (k - 1)
                 return _scan(row, start_i, units)
+        if delta < 0 and tgt and tgt.get('row') == row:
+            u = units[idx]
+            s, e = tgt.get('start'), tgt.get('end')
+            if s is not None and e is not None                     and (s != u.get('start') or e != u.get('end')):
+                k = self._f2_unit_before(units, s)
+                if k is not None and units[k].get('end', 0) > s:
+                    # 単位の途中——実際の左キーもこの範囲を必ず見せる（`_f2_resized_prev`）
+                    return (row, units[k]['start'], s)
+                return _scan(row, 0 if k is None else k + 1, units)
         return _scan(row, idx, units)
 
     def _paint_f2_neighbors(self):
@@ -22557,6 +23957,8 @@ class CorrectNoteApp:
     def _clear_f2_target(self):
         """F2 で選んでいる語の記憶と色付けを捨てる。"""
         self._f2_focus_target = None
+        import reinput
+        reinput.check_cursor(self)
         for _w in (getattr(self, 'editor', None),
                    getattr(self, 'result_view', None),
                    getattr(self, '_quick_text', None)):
@@ -23011,6 +24413,11 @@ class CorrectNoteApp:
         # 候補一覧は出さない
         if self._drag_release(event, self.editor):
             return 'break'
+        # 右を押しながら左（コピー・貼り付け・mouse_words）の終わり: 候補一覧は出さない
+        import mouse_words
+        if mouse_words.take_chord(self):
+            self._r3_press = None
+            return 'break'
         # **右を押してから 8px 以上動いていたら、離しは「クリック」ではない**
         # （項目48-TA・2026-09-06・うにさんの報告「両方同時にクリックして、
         # 1行目の上までドラッグすると、そのあとホイールで下へスクロール
@@ -23454,18 +24861,23 @@ class CorrectNoteApp:
                     # （項目48-RG。品詞は言わない）
                     _pv, _nx = self._neighbour_texts(row, unit,
                                                      units_in_row)
-                    lines = explain.pos_lines(
-                        unit.get('text') or '', fn, store=self.store,
+                    _options = dict(
                         pos_hint=unit.get('pos') or '',
                         infl_hint=unit.get('infl') or '',
                         # 行の解析が手を加えずに1語と見たか（48-QC）
                         atomic_hint=bool(unit.get('atomic')),
                         known_hint=bool(unit.get('known')),
                         prev_text=_pv, next_text=_nx,
-                        # **固有名詞を信用してよいか**を①と同じ材料で
-                        # 見るために要る（項目48-RN）
-                        dict_index=self.dict_index,
                         source_context=unit.get('analysis_context'))
+                    # 表を持っている解析の子で（analysis_async.ask_child）。子がいなければここで
+                    lines = analysis_async.ask_child(self, dict(
+                        kind='explain_pos', text=unit.get('text') or '', options=_options))
+                    if lines is None:
+                        lines = explain.pos_lines(
+                            unit.get('text') or '', fn, store=self.store,
+                            # **固有名詞を信用してよいか**を①と同じ材料で
+                            # 見るために要る（項目48-RN）
+                            dict_index=self.dict_index, **_options)
                 except Exception:
                     lines = [explain.UNKNOWN_POS]
                 for ln in lines:
@@ -23505,13 +24917,17 @@ class CorrectNoteApp:
                 pass
         items.append((ANALYSIS_HEAD_WHY, None))
         try:
-            fn = self._analysis_tokenizer()
-            rows = explain.reason_lines(
-                typed, fixed, unit=unit, line=src_line or '',
-                input_method=self.settings.get('input_method'),
-                tokenize_fn=fn, store=self.store,
-                dict_index=self.dict_index, choices=self.choices,
-                recorded=recorded)
+            rows = analysis_async.ask_child(self, dict(
+                kind='explain_reason', typed=typed, fixed=fixed, unit=unit, line=src_line or '',
+                input_method=self.settings.get('input_method'), recorded=recorded))
+            if rows is None:
+                fn = self._analysis_tokenizer()
+                rows = explain.reason_lines(
+                    typed, fixed, unit=unit, line=src_line or '',
+                    input_method=self.settings.get('input_method'),
+                    tokenize_fn=fn, store=self.store,
+                    dict_index=self.dict_index, choices=self.choices,
+                    recorded=recorded)
         except Exception:
             rows = [explain.NO_ODD_REASON, explain.NO_HAND_REASON]
         for ln in rows:
@@ -23762,14 +25178,14 @@ class CorrectNoteApp:
                 # （項目48-KC。門は `_functional_kanji_cands` の1か所）。
                 cands = self._functional_kanji_cands(unit, near)
             elif unit.get('kind') == 'range' and unit.get('segments'):
-                cands = build_range_candidates(
+                cands = self._range_candidates_in_child(
                     unit['segments'], self.store, find_known_readings_flex,
                     dict_index=self.dict_index,
                     context_vec=self.context_vec, surrounding_words=near,
                     attested=getattr(self, '_attested_surfaces', None),
                     input_method=self.settings.get('input_method'))
             else:
-                cands = build_candidates(
+                cands = self._candidates_in_child(
                     unit['base'], unit['reading'],
                     self.store, find_known_readings_flex,
                     dict_index=self.dict_index,
@@ -23958,8 +25374,10 @@ class CorrectNoteApp:
         if unit.get('functional') or unit.get('kind') == 'range':
             return []
         try:
-            import synonyms
-            senses = synonyms.synonyms(unit.get('text') or '')
+            senses = analysis_async.ask_child(self, dict(kind='synonyms', text=unit.get('text') or ''))
+            if senses is None:
+                import synonyms
+                senses = synonyms.synonyms(unit.get('text') or '')
         except Exception:
             return []
         if not senses:
@@ -24197,7 +25615,7 @@ class CorrectNoteApp:
                 if still and still != base:
                     self.choices.forget_all(base)
             self.choices.save()
-            self._invalidate_analysis_cache()
+            self._choices_moved()     # 関係する行だけやり直す（2026-11-01・全部は捨てない）
         except Exception:
             pass
 
@@ -24229,13 +25647,16 @@ class CorrectNoteApp:
             run = text[sa:sb]
             if not run or not all(_hira(ch) for ch in run):
                 continue
-            fn = getattr(self.store, '_tokenize_fn', None)
-            if fn is None:
-                fn = corrector.make_tokenizer(self.store)
-                self.store._tokenize_fn = fn
-            got = corrector.lu_run_candidates(
-                run, self.store, self.dict_index, fn,
-                input_method=self.settings.get('input_method'))
+            got = analysis_async.ask_child(self, dict(kind='odd_run', run=run,
+                                                      input_method=self.settings.get('input_method')))
+            if got is None:
+                fn = getattr(self.store, '_tokenize_fn', None)
+                if fn is None:
+                    fn = corrector.make_tokenizer(self.store)
+                    self.store._tokenize_fn = fn
+                got = corrector.lu_run_candidates(
+                    run, self.store, self.dict_index, fn,
+                    input_method=self.settings.get('input_method'))
             return [{'surface': sf, 'reading': None, 'kind': 'typo',
                      'span': (sa, sb), 'base': run} for sf in got]
         return []
@@ -24282,13 +25703,17 @@ class CorrectNoteApp:
                                 self._choice_reading(unit, cand),
                                 unit['prev'], unit['next'])
             self.choices.save()
-            self._invalidate_analysis_cache()
+            self._choices_moved()     # 関係する行だけやり直す（2026-11-01・全部は捨てない）
             self._remember_recent(cand['surface'])
             self.status.config(
                 text=f'「{unit["base"]}」→「{cand["surface"]}」に直しました')
             self._analyze()
             return
         new_end = f"{row}.0+{unit['start'] + len(cand['surface'])}c"
+        try:
+            shown_before = ui_projection.results(self)[row - 1]
+        except Exception:
+            shown_before = None
         try:
             # One undo step (2026-10-23 うにさん「再変換で候補から選んだあと、1回アンドゥすると再変換した範囲が
             # 空欄になる。再度アンドゥすると元に戻るが、これは1回で元に戻す」): Tk puts a separator between a
@@ -24322,7 +25747,7 @@ class CorrectNoteApp:
                             self._choice_reading(unit, cand),
                             unit['prev'], unit['next'])
         self.choices.save()
-        self._invalidate_analysis_cache()
+        self._choices_moved()     # 関係する行だけやり直す（2026-11-01・全部は捨てない）
         self._remember_recent(cand['surface'])
         self._push_change(self._editor_changes, {
             'row': row, 'start': unit['start'],
@@ -24331,7 +25756,68 @@ class CorrectNoteApp:
         self.status.config(
             text=f'「{unit["base"]}」→「{cand["surface"]}」に直しました')
         self._retain_contextual_selection(row,cand,self.editor)
+        self._project_editor_choice(row, shown_before, unit['start'], unit['end'], cand['surface'])
         self._on_change()
+
+    def _project_editor_choice(self, row, before, start, end, surface):
+        """入力欄の再変換で選んだ字を、解析を待たずに補正欄のその行へ映す（2026-11-01 うにさん「再変換を選んでも
+        補正欄への反映が遅れるので、解析で優先してください」）。
+
+        本文を書き換えると、補正欄のその行は解析の答えが届くまで前の姿のままだった（重い材料の解析途中で 0.6〜
+        0.8秒・届いた答えは 1〜2.7秒）。前の答えの、選んだ範囲だけを選んだ字に置き換えた姿を、表示だけの行
+        （ui_projection.results の _display_only）として置き、描き直す。ほかの直しの範囲は字の数だけずらして残す。
+        選んだ範囲が直しに掛かるときは、新しい行をそのまま出す。解析の答えが届いたら今どおり差し替わる。
+        行の解析は、本文の編集が打った行と同じ優先（_priority_input_row）で先頭にしている。"""
+        state = getattr(self, '_display_state', None)
+        if (before is None or not state or state['document'] is not getattr(self, '_input_document', None)
+                or self._layout_is_unified()):
+            return
+        try:
+            line = self.editor.get(f'{row}.0', f'{row}.end')
+            painted = state['results']
+            if not 0 < row <= len(painted) or painted[row - 1].get('original') != line:
+                return
+            original, shown = before['original'], before['corrected']
+            if original[:start] + surface + original[end:] != line:
+                return
+            projected = None
+            details = list(before.get('details') or ())
+            sources, spans = list(before.get('original_spans') or ()), list(before.get('spans') or ())
+            if not details or (len(sources) == len(details) == len(spans)):
+                delta = len(surface) - (end - start)
+                shift = 0
+                kept = ([], [], [])
+                for detail, (lo, hi), (a, b) in zip(details, sources, spans):
+                    if hi <= start:
+                        shift += (b - a) - (hi - lo)
+                        moved = (lo, hi), (a, b)
+                    elif lo >= end:
+                        moved = (lo + delta, hi + delta), (a + delta, b + delta)
+                    else:
+                        break
+                    kept[0].append(detail)
+                    kept[1].append(moved[0])
+                    kept[2].append(moved[1])
+                else:
+                    at = start + shift
+                    if shown[at:at + end - start] == original[start:end]:
+                        projected = dict(original=line, corrected=shown[:at] + surface + shown[at + end - start:],
+                                         details=kept[0], original_spans=kept[1], spans=kept[2])
+            if projected is None:
+                projected = dict(original=line, corrected=line)
+            key = (projected['original'], projected['corrected'])
+            if key not in state['units']:
+                fn = getattr(self.store, '_tokenize_fn', None)
+                if fn is None:
+                    fn = self.store._tokenize_fn = corrector.make_tokenizer(self.store)
+                try:
+                    state['units'][key] = build_line_units(projected, fn, self.choices, self._known_kana_word)
+                except Exception:
+                    pass
+            painted[row - 1] = dict(projected, pending=True, _display_only=True)
+            self._render_corrected()
+        except Exception:
+            return
 
     def _on_result_press(self, event):
         if getattr(event, 'num', 1) == 3 and self._right_press_is_double(event, self.result_view):
@@ -24377,6 +25863,10 @@ class CorrectNoteApp:
           ユーザーが自分で正しい範囲を指定できるようにするため。
         - 選択が無ければ、クリック位置の語で候補を出す。
         """
+        import mouse_words
+        if mouse_words.take_chord(self):
+            self._drag_release(event, self.result_view)
+            return 'break'
         if self._drag_release(event, self.result_view):
             self.result_view.tag_remove('sel', '1.0', 'end')
             return
@@ -24481,14 +25971,14 @@ class CorrectNoteApp:
                 cands = self._functional_kanji_cands(unit, near)
             elif unit.get('kind') == 'range' and unit.get('segments'):
                 # ドラッグ範囲: 漢字の別読み（時=とき/じ）も組み合わせて探す
-                cands = build_range_candidates(
+                cands = self._range_candidates_in_child(
                     unit['segments'], self.store, find_known_readings_flex,
                     dict_index=self.dict_index,
                     context_vec=self.context_vec, surrounding_words=near,
                     attested=getattr(self, '_attested_surfaces', None),
                     input_method=self.settings.get('input_method'))
             else:
-                cands = build_candidates(
+                cands = self._candidates_in_child(
                     unit['base'], unit['reading'],
                     self.store, find_known_readings_flex,
                     dict_index=self.dict_index,
@@ -24510,7 +26000,7 @@ class CorrectNoteApp:
         head(f'「{unit["text"]}」')
         if unit['kind'] == 'chosen' and unit['base'] != unit['text']:
             items.append((f'  元に戻す（{unit["base"]}）',
-                          lambda u=unit: self._reset_choice(u)))
+                          lambda u=unit, r=row: self._reset_choice(u, r)))
 
         # 自動補正が掛かっている範囲なら、まず「元の入力に戻す」を出す。
         # 半角のメールアドレスがかなに変換された場合など、
@@ -24643,6 +26133,8 @@ class CorrectNoteApp:
                         width=width, height=rows,
                         exportselection=False)
         lb.pack(side='left', padx=1, pady=1)
+        import reinput
+        reinput.install_on_list(self, lb)
         for label, cb in items:
             # 説明の行（押せない行）だけ訳す。候補は本人の語なのでそのまま。
             # 候補（本人の語）は ui_lang.raw で包んであり訳さない。押せる項目（エクスプローラで選択・
@@ -24670,6 +26162,24 @@ class CorrectNoteApp:
             pick()
             return 'break'
         lb.bind('<space>', pick_by_space)
+        # F3: 項目を選んでいれば Enter と同じく決定、選んでいなければ再変換している語をブラウザで検索
+        # （2026-11-01 うにさん。検索は f3_search のオプション・確かめのとおり）。
+        # IME が確定した `r` は F3 に化けるので、文字なら打った字として扱う（_ime_first）
+        def f3_in_list(_e=None):
+            sel = lb.curselection()
+            if sel and items[sel[0]][1] is not None:
+                return pick_by_space()
+            widget, word = self._dropdown_word()
+            self._close_dropdown()
+            try:
+                import f3_search
+                if widget is not None:
+                    widget.focus_set()
+                    f3_search.handle_text(self, widget, word)
+            except Exception:
+                pass
+            return 'break'
+        lb.bind('<F3>', self._ime_first(f3_in_list))
         self._dropdown_pick = pick_by_space
         # 左右キーで、候補を出している語そのものを前後に移す
         # （うにさんの指定・2026-08-09）。
@@ -24692,6 +26202,9 @@ class CorrectNoteApp:
                 self._ime_first(lambda e: self._on_dropdown_resize(-1)))
         lb.bind('<Shift-Right>',
                 self._ime_first(lambda e: self._on_dropdown_resize(1)))
+        # F6〜F9 で、候補を出している範囲を変換する（選択の F6〜F9 と同じ変換・2026-10-30）
+        for key in ('F6', 'F7', 'F8', 'F9'):
+            lb.bind('<%s>' % key, self._on_selection_transform)
 
         # Delete で選んでいる範囲を消す（うにさんの指定・C-2）。
         lb.bind('<Delete>', self._ime_first(self._on_dropdown_delete))
@@ -24783,7 +26296,8 @@ class CorrectNoteApp:
         lb.configure(height=2);dd.update_idletasks()
         row_height = max(1, dd.winfo_reqheight() - one_row)
         padding = max(0, one_row - row_height)
-        rows = min(len(items), max(1, (a_b - a_t - padding) // row_height))
+        anchor_y = y
+        rows, list_above = fit_dropdown(len(items), anchor_y, a_t, a_b, padding, row_height)
         lb.configure(height=rows)
         if rows < len(items):
             scrollbar = tk.Scrollbar(dd, orient='vertical', command=lb.yview)
@@ -24792,9 +26306,7 @@ class CorrectNoteApp:
         dd.update_idletasks()
         w, h = dd.winfo_reqwidth(), dd.winfo_reqheight()
         x = max(a_l, min(x, a_r - w))
-        if y + h > a_b:
-            above = y - h - 24
-            y = above if above >= a_t else max(a_t, a_b - h)
+        y = anchor_y - h - DROPDOWN_LINE_GAP if list_above else anchor_y
         y = max(a_t, min(y, a_b - h))
         dd.geometry(f'+{int(x)}+{int(y)}')
         dd.deiconify()
@@ -24805,10 +26317,23 @@ class CorrectNoteApp:
         self._dropdown = dd
         # 打ち間違いの候補は、開いてから確かめて足す（_typo_rows_later）
         self._dropdown_parts = dict(dd=dd, lb=lb, items=items, top=a_t, bottom=a_b,
-                                    padding=padding, row_height=row_height, width=_disp_width)
+                                    padding=padding, row_height=row_height, width=_disp_width,
+                                    anchor=anchor_y, above=list_above)
         later, self._typo_later = getattr(self, '_typo_later', None), None
         if later is not None and later['items'] is items:
             self._start_typo_check(later)
+
+    def _dropdown_word(self):
+        """(欄, 語)。候補一覧を出している語（candidate_focus の印の範囲）。無ければ控えの語と本文の欄。"""
+        for widget in (getattr(self, 'editor', None), getattr(self, 'result_view', None),
+                       getattr(self, '_quick_text', None)):
+            try:
+                ranges = widget.tag_ranges('candidate_focus') if widget is not None else ()
+            except Exception:
+                ranges = ()
+            if ranges:
+                return widget, widget.get(ranges[0], ranges[-1])
+        return getattr(self, 'editor', None), getattr(self, '_dropdown_text', '') or ''
 
     def _close_dropdown(self, keep_target=False):
         """
@@ -24822,6 +26347,8 @@ class CorrectNoteApp:
         記憶は、本文が変わるかカーソルを動かした時点で
         _clear_f2_target が捨てる。
         """
+        import reinput
+        reinput.check_cursor(self)
         self._candidate_result=None
         for widget in (getattr(self, 'editor', None), getattr(self, 'result_view', None),
                        getattr(self, '_quick_text', None)):
@@ -24928,8 +26455,9 @@ class CorrectNoteApp:
         parts = self._dropdown_parts
         dd, lb, items = parts['dd'], parts['lb'], parts['items']
         try:
-            limit = max(1, (parts['bottom'] - parts['top'] - parts['padding']) // parts['row_height'])
-            lb.configure(height=min(len(items), limit),
+            limit, parts['above'] = fit_dropdown(len(items), parts['anchor'], parts['top'], parts['bottom'],
+                                                 parts['padding'], parts['row_height'], above=parts['above'])
+            lb.configure(height=limit,
                          width=max(int(lb.cget('width')),
                                    min(80 if ui_lang.is_japanese() else 110,
                                        max(parts['width'](self._dropdown_label(t)) for t, _ in items) + 3)))
@@ -24939,9 +26467,11 @@ class CorrectNoteApp:
                 lb.configure(yscrollcommand=bar.set)
                 parts['scrollbar'] = bar
             dd.update_idletasks()
-            y, h = dd.winfo_y(), dd.winfo_reqheight()
-            if y + h > parts['bottom']:
-                dd.geometry(f'+{dd.winfo_x()}+{max(parts["top"], parts["bottom"] - h)}')
+            h = dd.winfo_reqheight()
+            y = parts['anchor'] - h - DROPDOWN_LINE_GAP if parts['above'] else parts['anchor']
+            y = max(parts['top'], min(y, parts['bottom'] - h))
+            if y != dd.winfo_y():
+                dd.geometry(f'+{dd.winfo_x()}+{y}')
         except tk.TclError:
             pass
 
@@ -25028,7 +26558,7 @@ class CorrectNoteApp:
                                 self._choice_reading(unit, cand, before),
                                 unit.get('prev', ''), unit.get('next', ''))
             self.choices.save()
-            self._invalidate_analysis_cache()
+            self._choices_moved()     # 関係する行だけやり直す（2026-11-01・全部は捨てない）
         except Exception:
             pass
         if not keep_history:
@@ -25053,6 +26583,8 @@ class CorrectNoteApp:
         unit = self._candidate_selection_unit(row, unit, cand, self.result_view)
         if unit is None:
             return
+        undo = getattr(self, '_choice_undo', None)
+        undo_before = undo.before() if undo is not None else None
         self._invalidate_units_cache()
         # 直前にメモ欄で選び直した語をさらに選び直した場合は、
         # 前の記録を捨てて元の語からの記録に置き換える（項目48-C）。
@@ -25063,7 +26595,7 @@ class CorrectNoteApp:
                             self._choice_reading(unit, cand),
                             unit['prev'], unit['next'])
         self.choices.save()
-        self._invalidate_analysis_cache()
+        self._choices_moved()     # 関係する行だけやり直す（2026-11-01・全部は捨てない）
         # **選び直しは「最後の選択」の枠に入れる**（項目48-QH・
         # 2026-09-05）。かつてここは `demote_homophones` で
         # 「選ばれなかった表記の実績を 0.2 倍」にしていたが、
@@ -25075,6 +26607,10 @@ class CorrectNoteApp:
         # **書き込みは上の `self.choices.record(...)` 1本**
         # （枠は `LastChoiceStore` そのもの。ここで二重に書かない）。
         self._remember_recent(cand['surface'])
+        if undo is not None:
+            # Ctrl+Z で戻せる一手（choice_undo）。場所は戻したときの下線のため
+            undo.after(undo_before, (row, unit['start'], unit['base'], cand['surface']) if row is not None else None)
+        self._choice_row_first(row)
         self._render_corrected()
         self._update_status()
         # F2（キーボード）で確定したときは選択を残さない
@@ -25127,7 +26663,7 @@ class CorrectNoteApp:
         except Exception:
             pass
 
-    def _reset_choice(self, unit):
+    def _reset_choice(self, unit, row=None):
         """
         選び直しを取り消して、元の表記に戻す。
 
@@ -25145,8 +26681,22 @@ class CorrectNoteApp:
         その語の記録をすべて消す。
         """
         base = unit['base']
+        undo = getattr(self, '_choice_undo', None)
+        undo_before = undo.before() if undo is not None else None
         self._forget_choice(base, unit)
+        if undo is not None:
+            # 取り消しも Ctrl+Z で戻せる一手（choice_undo）。戻すと選んだ語、やり直すと元の語が補正欄に出る
+            where = (row, unit['start'], base, unit.get('text') or base, base) if row is not None else None
+            undo.after(undo_before, where)
+        self._choice_row_first(row)
         self._render_corrected()
+        # 元に戻したことを示す下線（本文の Undo と同じ・2026-11-01 うにさん）
+        if row is not None:
+            try:
+                import choice_undo
+                choice_undo.mark(self, row, unit['start'], base, base)
+            except Exception:
+                pass
         self.status.config(
             text=f'「{base}」の選び直しを取り消しました')
 
@@ -25177,11 +26727,10 @@ class CorrectNoteApp:
         """「この補正は不要」と言われた。この置換だけをやめる。"""
         self.decisions.reject(original, corrected)
         self.decisions.save()
-        # 控えを捨てるのは `_reanalyze_all` の仕事（項目48-CO）。
-        # ここで既定の `_invalidate_analysis_cache()` を書いても、
-        # **いま見ているタブのぶんが残る＝これから引かれる1件が残る**
-        # ので、何もしていないのと同じだった。
-        self._reanalyze_all()
+        # 判断の版は解析の状態の鍵に入り、変わった語（original・corrected）を含む行だけが合わなくなる
+        # （2026-11-01・関係する行だけやり直す）。いま見ているタブの控えも、その行は合わないので使われない
+        # （48-CO の「控えに残った1件を拾う」は起きない: 控えは行ごとに確かめられる）
+        self._decisions_moved()
         self.status.config(
             text=f'「{original}」を「{corrected}」に直すのをやめました')
 
@@ -25232,7 +26781,7 @@ class CorrectNoteApp:
         """
         self.decisions.save()
         if answer_changed:
-            self._reanalyze_all()   # 控えを捨てるのはあちらの仕事（48-CO）
+            self._decisions_moved()   # その語を含む行だけやり直す（2026-11-01）
         else:
             self._refresh_after_analysis(learn=False)   # 印だけ塗り直す
         self.status.config(text=message)
@@ -25294,7 +26843,7 @@ class CorrectNoteApp:
                  bg=BG, fg=INK, font=('Yu Gothic UI', 10, 'bold'),
                  anchor='w').pack(fill='x', padx=16, pady=(16, 2))
         tk.Label(dlg, text='直さない・紫を付けない・選び直した語などを覚えています。'
-                           '選んで「取り消す」で元に戻せます。',
+                           '選んで「取り消す」で元に戻せます（Shift・Ctrl＋クリックでまとめて選べます）。',
                  bg=BG, fg=MUTED, font=('Yu Gothic UI', 8),
                  anchor='w', justify='left').pack(fill='x', padx=16, pady=(0, 8))
 
@@ -25303,7 +26852,8 @@ class CorrectNoteApp:
         listbox = tk.Listbox(list_wrap, bg=PANEL, fg=INK, relief='flat',
                              font=('Yu Gothic UI', 10),
                              selectbackground=EDITOR_SEL_BG,
-                             selectforeground=INK, activestyle='none')
+                             selectforeground=INK, activestyle='none',
+                             selectmode='extended')     # Shift＋クリックで範囲・Ctrl＋クリックで1つずつ（2026-11-01）
         listbox.pack(fill='both', expand=True, padx=1, pady=1)
 
         rows = []      # (種別, 引数...) を listbox の並びと対応させる
@@ -25341,42 +26891,38 @@ class CorrectNoteApp:
                 listbox.insert('end', ui_lang.tr('  （まだ登録された判断はありません）'))
 
         def remove_selected():
-            sel = listbox.curselection()
+            sel = [i for i in listbox.curselection() if i < len(rows)]
             if not sel or not rows:
                 return
-            i = sel[0]
-            if i >= len(rows):
-                return
-            kind, a, b = rows[i]
-            # **答えが変わるか**（項目48-QY）。分岐の前に置く——
-            # 分岐の中で束縛すると、種別が増えた日に落ちる
-            heavy = True
-            if kind == 'protect':
-                self.decisions.unprotect(a)
-                self.decisions.save()
-                self._invalidate_analysis_cache()
-            elif kind == 'odd_only':
-                # **紫を下げるだけの台帳**（48-QU）を取り消す。
-                # `unprotect` は**両方の台帳**を pop するので、
-                # **その語が `protect` にも在るなら答えが変わる**
-                # ——そのときだけ重い道へ落とす。
-                heavy = self.decisions.is_protected(a)
-                self.decisions.unprotect(a)
-                self.decisions.save()
-                if heavy:
-                    self._invalidate_analysis_cache()
-            elif kind == 'reject':
-                self.decisions.unreject(a, b)
-                self.decisions.save()
-                self._invalidate_analysis_cache()
-            else:
-                self._invalidate_units_cache()
-                self.choices.forget_record(a)
-                self.choices.save()
-                self._invalidate_analysis_cache()
+            # **答えが変わるか**（項目48-QY）。選んだものをまとめて取り消し、最後に1回だけ解析する
+            heavy = False
+            for i in sel:
+                kind, a, b = rows[i]
+                if kind == 'protect':
+                    self.decisions.unprotect(a)
+                    heavy = True
+                elif kind == 'odd_only':
+                    # **紫を下げるだけの台帳**（48-QU）を取り消す。`unprotect` は**両方の台帳**を pop するので、
+                    # **その語が `protect` にも在るなら答えが変わる**
+                    heavy = self.decisions.is_protected(a) or heavy
+                    self.decisions.unprotect(a)
+                elif kind == 'reject':
+                    self.decisions.unreject(a, b)
+                    heavy = True
+                else:
+                    self.choices.forget_record(a)
+                    heavy = True
+            self.decisions.save()
+            self.choices.save()
             refresh()
             if heavy:
-                self._reanalyze_all()
+                # 関係する行だけやり直す（2026-11-01 うにさん「ひとつ消すと、すべての解析がやり直しになって困る。
+                # 無関係の行は再解析しない」）。判断・選び直しの版は解析の状態の鍵に入っていて、変わった語を
+                # 含む行・使った行だけが合わなくなる（analysis_worker._keys_unchanged）。全部を捨てる
+                # _invalidate_analysis_cache・_reanalyze_all は通さない
+                self._invalidate_units_cache()
+                self._analyze_cause = '判断を取り消した（関係する行だけ）'
+                self._analyze()
             else:
                 self._refresh_after_analysis(learn=False)   # 印だけ
 
@@ -25856,6 +27402,12 @@ class CorrectNoteApp:
             # **ファイルを開く道だけ通っていなかった**（学び22）。
             # 同じ入口に通す。控えが温かければ、その場で解析へ進む。
             self._analyze_cause = 'ファイルを開く'
+            # 大きいファイルの行は、空きがあれば短命の子でも解析しておく（起動と同じ・2026-11-02・5,000行で準備まで6.9秒）
+            try:
+                analysis_async.start_startup_parse(self, own_share=True,
+                                                   min_lines=analysis_async.STARTUP_PARSE_OPEN_MIN_LINES)
+            except Exception:
+                self._startup_parse = None
             self._warm_then_analyze()
             self._save_session()
         elif moved is not None:

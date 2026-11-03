@@ -612,66 +612,160 @@ def iter_janome_entries(min_len=2, max_len=12, pos_prefix=None):
         return
 
     from analysis_context import check_current_request
-    for part in range(10):
-        check_current_request()
-        names = (f'janome.sysdic.entries_compact{part}',
-                 f'janome.sysdic.entries_extra{part}')
-        # 読み終えたら手放す（2026-10-14・メモリ使用量）。辞書の本体は
-        # janome が mmap で引くので、この20個の Python モジュール（計 約190MB）
-        # は全体を見渡すときにしか使わない。見渡しの結果は呼ぶ側が表に
-        # しているので、残しておくと補正の子にも本体にも丸ごと居座っていた。
-        # ほかの誰かが先に読んでいたモジュールは手放さない。
-        ours = [name for name in names if name not in sys.modules]
+    for entries in _entry_parts(check_current_request):
+        for offset, (surface, pos_full, reading, cost) in enumerate(entries):
+            # A newer document must not wait for a whole dictionary scan.
+            # Cancellation propagates before any partial index can be cached.
+            if offset and offset % 512 == 0:check_current_request()
+            if not (min_len <= len(surface) <= max_len):
+                continue
+            if pos_prefix is not None and not pos_full.startswith(pos_prefix):
+                continue
+            yield _entry_row(surface, pos_full, reading, cost)
+
+
+# janome の内蔵辞書の語の控え（2026-11-01）。辞書を見渡すたびに janome の20個の Python モジュール（計 約190MB）を
+# 読み込んでいた。手放しても解析の子の専有メモリは戻らず（重い材料で、行の途中の見渡し1回で +210MB）、2秒かかった。
+# 1回目に読んだ語を（表記, 品詞, 読み, 生起コスト）の並びで控えに書き、2回目からはそれだけを読む（10組ずつ流して読む）。
+# 並びと中身はモジュールから読んだときと同じ（表記・読みが空の語は、どの呼び手にも渡らないので書かない）。
+ENTRIES_CACHE_NAME = 'janome_entries.pickle.gz'
+ENTRIES_CACHE_VERSION = 1
+
+
+def _entries_cache_path():
+    try:
+        import reading_lattice
+        return os.path.join(os.path.dirname(reading_lattice.default_cache_path()), ENTRIES_CACHE_NAME)
+    except Exception:
+        return None
+
+
+def _entries_stamp():
+    try:
+        import janome
+        version = getattr(janome, '__version__', '') or ''
+    except Exception:
+        version = ''
+    return ('janome_entries', ENTRIES_CACHE_VERSION, version)
+
+
+def _entry_parts(check_current_request):
+    """janome の内蔵辞書の語を、10組ごとに [(表記, 品詞, 読み, 生起コスト)] で返す。控えがあればそれから、
+    無ければモジュールから読み、全部読めたら控えに書く（途中で止まったら書かない）。"""
+    import gzip
+    import pickle
+    path = _entries_cache_path()
+    done = 0
+    if path and os.path.exists(path):
         try:
-            yield from _iter_part(names, min_len, max_len, pos_prefix,
-                                  check_current_request)
-        finally:
-            for name in ours:
-                sys.modules.pop(name, None)
-                package = sys.modules.get('janome.sysdic')
-                if package is not None:
-                    package.__dict__.pop(name.rsplit('.', 1)[1], None)
+            with gzip.open(path, 'rb') as handle:
+                if pickle.load(handle) == _entries_stamp():
+                    while done < 10:
+                        check_current_request()
+                        part = pickle.load(handle)
+                        done += 1
+                        yield part
+                    return
+        except Exception:
+            pass          # 壊れた控え: 読めた組のあとからモジュールで続ける
+    writer = tmp = None
+    if path and done == 0:
+        try:
+            tmp = '%s.%d.tmp' % (path, os.getpid())
+            writer = gzip.open(tmp, 'wb', compresslevel=6)
+            pickle.dump(_entries_stamp(), writer, protocol=4)
+        except Exception:
+            writer = None
+    # ここから先はモジュールから読む。読み終えて手放したモジュールは循環を持つので、全部読めたらまとめて掃除する
+    # （解析の子は長生きの物が多く、世代2の掃除がなかなか来ない。来るまで +170MB 居座った）
+    import gc
+    complete = False
+    try:
+        for part in range(done, 10):
+            check_current_request()
+            entries = _read_part(part, check_current_request)
+            if entries is None:
+                if writer is not None:
+                    writer.close(); writer = None      # 読めない組がある: 控えにしない
+                continue
+            if writer is not None:
+                pickle.dump(entries, writer, protocol=4)
+            yield entries
+        complete = True
+        gc.collect()
+    finally:
+        if writer is not None:
+            try:
+                writer.close()
+                if complete:
+                    os.replace(tmp, path)
+            except Exception:
+                pass
+        if tmp and os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
 
 
-def _iter_part(names, min_len, max_len, pos_prefix, check_current_request):
-    """One compact/extra pair of janome's dictionary modules."""
+def _read_part(part, check_current_request):
+    """One compact/extra pair of janome's dictionary modules, as [(surface, pos, reading, cost)]."""
+    names = (f'janome.sysdic.entries_compact{part}',
+             f'janome.sysdic.entries_extra{part}')
+    # 読み終えたら手放す（2026-10-14・メモリ使用量）。辞書の本体は
+    # janome が mmap で引くので、この20個の Python モジュール（計 約190MB）
+    # は全体を見渡すときにしか使わない。見渡しの結果は呼ぶ側が表に
+    # しているので、残しておくと補正の子にも本体にも丸ごと居座っていた。
+    # ほかの誰かが先に読んでいたモジュールは手放さない。
+    ours = [name for name in names if name not in sys.modules]
+    try:
+        return _parse_part(names, check_current_request)
+    finally:
+        for name in ours:
+            sys.modules.pop(name, None)
+            package = sys.modules.get('janome.sysdic')
+            if package is not None:
+                package.__dict__.pop(name.rsplit('.', 1)[1], None)
+
+
+def _parse_part(names, check_current_request):
     try:
         compact = importlib.import_module(names[0])
         extra = importlib.import_module(names[1])
     except Exception:
-        return
+        return None
 
     compact_data = _find_data(compact)
     extra_data = _find_data(extra)
     if compact_data is None:
-        return
+        return None
 
+    entries = []
+    shared = {}
     for offset,(key,comp) in enumerate(_iter_items(compact_data)):
-        # A newer document must not wait for a whole dictionary scan.
-        # Cancellation propagates before any partial index can be cached.
         if offset and offset % 512 == 0:check_current_request()
         surface, pos_full, cost = _parse_compact(comp)
-        if not surface or not (min_len <= len(surface) <= max_len):
+        if not surface:
             continue
-
         extra_item = _get_item(extra_data, key) if extra_data is not None else None
         # **品詞は extra 側から取る**（_parse_extra_pos の説明）。
         if not pos_full:
             pos_full = _parse_extra_pos(extra_item)
-        # Narrow class indices need no reading extraction for other words.
-        if pos_prefix is not None and not pos_full.startswith(pos_prefix):
-            continue
         reading = _parse_extra(extra_item) if extra_item is not None else ''
         if not reading:
             continue
-        parts = pos_full.split(',') if pos_full else []
-        pos = parts[0] if parts else ''
-        sub_pos = parts[1] if len(parts) > 1 else ''
-        sub_sub_pos = parts[2] if len(parts) > 2 else ''
+        entries.append((surface, shared.setdefault(pos_full, pos_full), reading, cost))
+    return entries
 
-        yield (surface, katakana_to_hiragana(reading),
-               pos, sub_pos, sub_sub_pos,
-               cost if cost is not None else 99999)
+
+def _entry_row(surface, pos_full, reading, cost):
+    parts = pos_full.split(',') if pos_full else []
+    pos = parts[0] if parts else ''
+    sub_pos = parts[1] if len(parts) > 1 else ''
+    sub_sub_pos = parts[2] if len(parts) > 2 else ''
+    return (surface, katakana_to_hiragana(reading),
+            pos, sub_pos, sub_sub_pos,
+            cost if cost is not None else 99999)
 
 
 def collect_import_entries(limit=DEFAULT_MAX_WORDS, min_len=2, max_len=12, progress=None):

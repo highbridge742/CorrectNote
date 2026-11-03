@@ -75,7 +75,7 @@ class EnglishPosMenuTest(unittest.TestCase):
         self.assertEqual(got['think'][0][1], ['動詞（英語）'])
         self.assertEqual(got['the'][0][1], ['冠詞（英語）'])
         self.assertTrue(got['state'][0][1][0].startswith('名詞（英語'))
-        self.assertEqual(got['of'][0][1], ['前置詞（英語。色は助詞の行）'])
+        self.assertEqual(got['of'][0][1], ['前置詞（英語）'])
         self.assertEqual(got['power'][0][1], ['名詞（英語）'])
         # 短縮形は、つないで引いた形を添える
         self.assertEqual(got['don'][0][1], ["助動詞（英語。don't の一部）"])

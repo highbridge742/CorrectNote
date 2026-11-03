@@ -1743,6 +1743,8 @@ def run_design33_cases():
             self.invalidated = 0
             self._invalidate_analysis_cache = \
                 lambda **kw: setattr(self, 'invalidated', self.invalidated + 1)
+            # 2026-11-01: 判断を足したら、その語を含む行だけやり直す（_decisions_moved）。控えの捨て直しとして数える
+            self._decisions_moved = lambda: setattr(self, 'invalidated', self.invalidated + 1)
             self.status = types.SimpleNamespace(config=lambda **kw: None)
 
     s = _FakeApp({2: '今日はだ', 3: 'ほかの行'})
@@ -1865,7 +1867,7 @@ def run_scroll_cache_cases():
     from session import SessionStore,new_tab
     ns2 = dict(ns,analysis_async=analysis_async,tab_analysis=tab_analysis,input_work=input_work)
     for _n in ('_remember_tab_results', '_use_analysis_cache',
-               '_blank_result'):
+               '_blank_result', '_partial_analysis_core'):
         take(_n, ns2)
 
     class _FakeSettings:
@@ -1878,6 +1880,8 @@ def run_scroll_cache_cases():
         _blank_result = ns2['_blank_result']
         _remember_tab_results = ns2['_remember_tab_results']
         _use_analysis_cache = ns2['_use_analysis_cache']
+        # 途中まで済んだタブの控え（2026-10-27）。_use_analysis_cache が先に見る
+        _partial_analysis_core = ns2['_partial_analysis_core']
 
         def __init__(self):
             self._analysis_cache = {}
@@ -1988,10 +1992,14 @@ def run_scroll_cache_cases():
         return any(isinstance(n, ast.Attribute) and n.attr == '_analysis_key'
                    for n in ast.walk(fn))
 
+    # 保存の鍵は、2026-10-27 から _save_analysis_cache が呼ぶ _analysis_cache_payload が作る
     for _m in ('_remember_tab_results', '_use_analysis_cache',
-               '_invalidate_analysis_cache', '_save_analysis_cache',
+               '_invalidate_analysis_cache', '_analysis_cache_payload',
                '_start_background_tabs'):
         check(f'{_m} は鍵を _analysis_key で作る', uses_key(_m), True)
+    check('_save_analysis_cache は _analysis_cache_payload を通す',
+          any(isinstance(n, ast.Attribute) and n.attr == '_analysis_cache_payload'
+              for n in ast.walk(methods['_save_analysis_cache'])), True)
 
     # --- 画面が動いたら、並べ替えの有無に関わらず塗る ---
     view = methods['_after_view_moved']
@@ -2255,6 +2263,12 @@ def run_scroll_cache_cases():
           and any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
                   and n.func.id == 'make_range_unit'
                   for n in ast.walk(methods['_f2_resized_next'])), True)
+    # ⑥' 左キーも調整した範囲の始まりを境目に（2026-10-30 うにさん）
+    check('左キーは調整済みの範囲から作る',
+          calls_in('_f2_move', '_f2_resized_prev')
+          and any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                  and n.func.id == 'make_range_unit'
+                  for n in ast.walk(methods['_f2_resized_prev'])), True)
     # ⑦ 最大化はタスクバーを隠さない（▢ と OS の両方の道・学び22）
     check('▢ の最大化で作業領域へ収める',
           calls_in('_toggle_maximized', '_clamp_zoom_to_workarea'), True)
@@ -5039,6 +5053,8 @@ def run_window_drag_48vx():
     class Harness(A):
         def __init__(self):
             self.root=Root();self.pressed=True;self.paints=0
+            # _move_root（2026-10-27）が見る設定。タイトルバーを出している形（Tk の geometry で動かす道）
+            self.settings={'hide_titlebar':False}
             self.editor_gutter=self.result_gutter=SimpleNamespace(redraw=self._redraw_window_now)
         def _window_drag_button_down(self):return self.pressed
         def _redraw_window_now(self):self.paints+=1

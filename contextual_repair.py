@@ -5608,7 +5608,8 @@ def needs_source_argument_proof(reading):
                 and all(segment[3] in native for segment in segments)):return False
     return any(source in ('ime_reverse','ime_context_roundtrip','ime_source_candidate','character_guess',
                            'kanji_guess','token_sequence','contextual_token_sequence')
-               or any(segment[3] in ('character_guess','unrecognized_ime_sequence','compound_voicing','source_nominal_voicing')
+               or any(segment[3] in ('character_guess','alternate_character_guess','unrecognized_ime_sequence',
+                                     'compound_voicing','source_nominal_voicing')
                       for segment in segments)
                for source,rank,segments in evidence)
 
@@ -6018,7 +6019,9 @@ def reading_evidence(target, tokenize, dictionary, limit=32):
             # 終止した丁寧節の異様な末尾も、名詞だけでなく同じ読み根拠で扱う。
             # 多字の既知語や送り仮名を持つ活用形は一字読みへ分解しない。
             existing = {r for r, _, _ in options}
-            options.extend((r['reading'], r['rank']+4, 'character_guess') for r in
+            # 解析が読めた一字の別の音訓は「同じ読みで別の字」の根拠にだけ使う（打ち違いの戻しとは重ねない:
+            # を目→僕 は を を抜く戻しに 目＝ぼく の読みを重ねた2段の飛び。cached_key_repairs で止める）
+            options.extend((r['reading'], r['rank']+4, 'alternate_character_guess') for r in
                            _bounded(kanji_guess.reading_combos_with_evidence(t[0], dictionary, max_combos=9),8,'single_character_readings')
                            if r['reading'] not in existing)
         # A malformed source noun run may have hidden a verb's written
@@ -6858,6 +6861,13 @@ def validate(target, surface, engine, tokenize, store, dictionary, decisions=Non
     _tail=next((t for t in _SURU_POLITE_TAILS if target.text.endswith(t)),None)
     if _tail and not target.following and not surface.endswith(_tail[1:]):
         return False, 'changed_intact_polite_tail'
+    # 2026-10-30: 直す先で、補助の いる・おく・しまう を漢字（て居る・て置く・て仕舞う）で新しく書かない。
+    # いまの文の補助動詞はかなで書く（お願すいたします → すいて居ます を採っていた）
+    if surface and any(c in surface for c in '居置仕'):
+        _src=getattr(target,'source','') or ''
+        _new=_src[max(0,target.start-1):target.start]+surface
+        if any(p in _new and p not in _src for p in ('て居','で居','て置','で置','て仕舞','で仕舞')):
+            return False, 'kanji_auxiliary_verb'
     # 48-DB: 直す先で、て形に です が直に付く形（いてですか）を新しく作らない。
     if surface and 'です' in surface:
         from morphology import tokenize as _tok
@@ -7989,6 +7999,8 @@ def _native_mai_connection(surface, reading, part_of_speech=None):
 _PHASE_VERB_BASES=frozenset(('始める','はじめる','続ける','つづける',
                             '終える','おえる','終わる','おわる','直す','なおす',
                             '掛ける','かける'))
+# 局面の動詞の活用形はどれも原形の頭の字で始まる（始め・はじめ・終わ・終え…）。尾の頭がこれ以外なら解析しない
+_PHASE_VERB_HEADS=frozenset(base[0] for base in _PHASE_VERB_BASES)
 
 
 def _native_continuative_attachment(previous, following):
@@ -8124,7 +8136,9 @@ def _allows_grammatical_tail(forms, tail, head_reading=None, head_surface=None):
             # modern te/ta connection. Share the same paradigm check used
             # by candidate validation; unclassified/classical forms stay
             # unclassified rather than becoming negative source evidence.
-            if head_surface and tail:
+            # 速さ（2026-10-30・答えは同じ）: 現代の音便のつながり（て・で・た・だ・たら・たり・てる）は、尾の頭の字が
+            # て・で・た・だ でなければ起こらない。そのときは尾を解析しない（2か所の打ち違いの探索で数万回呼ばれる）
+            if head_surface and tail and tail[0] in 'てでただ':
                 from morphology import tokenize
                 first=tokenize(tail)
                 if first:
@@ -8135,7 +8149,7 @@ def _allows_grammatical_tail(forms, tail, head_reading=None, head_surface=None):
                         continue
             if tail.startswith('まい') and _native_mai_connection(head_surface,rd,pos.split(',')[0]) is not True:
                 continue
-            if form=='連用形' and tail:
+            if form=='連用形' and tail and tail[0] in _PHASE_VERB_HEADS:
                 from morphology import tokenize
                 phase=tokenize(tail)
                 if (phase and phase[0].start==0 and phase[0].has_reading
@@ -8146,7 +8160,7 @@ def _allows_grammatical_tail(forms, tail, head_reading=None, head_surface=None):
                     return True
             # A recognized bound phase verb cannot borrow a segmentation
             # into unrelated functional syllables (読む + な + お + します).
-            if tail and form!='連用形':
+            if tail and form!='連用形' and tail[0] in _PHASE_VERB_HEADS:
                 from morphology import tokenize
                 phase=tokenize(tail)
                 if (phase and phase[0].start==0 and phase[0].has_reading
@@ -8192,6 +8206,51 @@ def _allows_grammatical_tail(forms, tail, head_reading=None, head_surface=None):
               and classified_nominal_action(head_surface,rd)):
             if _sahen_grammatical_tail(tail):return True
     return False
+
+
+# 速さ（2026-10-30）: 2か所の打ち違いの探索は、同じ読みの尾を何万回も確かめる（40行で 10.8 万回・うち 3 割は
+# 同じ引数）。どちらも同梱の辞書と文法だけを読むので、同じ引数なら同じ答え。数を限って覚え、子が新しい語彙を
+# 受け取ったら忘れる（clear_grammar_memo・analysis_worker.Runtime.set_state）
+_GRAMMAR_MEMO_LIMIT = 12500  # 50000→12500（子のメモリ・答え同じ・2026-11-02）
+_GRAMMAR_MEMO = {}
+
+
+def clear_grammar_memo():
+    _GRAMMAR_MEMO.clear()
+
+
+def _remember(key, compute):
+    try:
+        hash(key)
+    except TypeError:
+        return compute()
+    try:
+        return _GRAMMAR_MEMO[key]
+    except KeyError:
+        pass
+    value = compute()
+    if len(_GRAMMAR_MEMO) >= _GRAMMAR_MEMO_LIMIT:
+        _GRAMMAR_MEMO.clear()
+    _GRAMMAR_MEMO[key] = value
+    return value
+
+
+_grammatical_suffix_uncached = _grammatical_suffix
+_allows_grammatical_tail_uncached = _allows_grammatical_tail
+
+
+def _grammatical_suffix(suffix, state):
+    return _remember(('suffix', suffix, state), lambda: _grammatical_suffix_uncached(suffix, state))
+
+
+def _allows_grammatical_tail(forms, tail, head_reading=None, head_surface=None):
+    """辞書の活用形と既存の文法による接続。生成と順位で共有する（同じ引数の答えは覚える）。"""
+    try:
+        rows = tuple(tuple(row) for row in forms)
+    except TypeError:
+        rows = None
+    return _remember(('tail', rows, tail, head_reading, head_surface),
+                     lambda: _allows_grammatical_tail_uncached(forms, tail, head_reading, head_surface))
 
 
 def _modern_euphonic_link(surface, pos, form=''):
@@ -9231,6 +9290,47 @@ def _faithful_word_outside_oddness(target,diagnostic):
     except (ImportError,OSError,AttributeError):
         return False
 
+def _colloquial_suru_after(target, surface, tokenize):
+    """直した語の中か直後に、する の未然ウ接続の しょ（しょう＝しよう の崩れ）と解析されるか。"""
+    try:
+        text = target.substitute(surface)
+        from morphology import tokenize as _tok
+        lo = target.start - target.context_start
+        end = lo + len(surface)
+        return any(lo < t.start <= end and t.surface == 'しょ' and t.base_form == 'する'
+                   and t.infl_form == '未然ウ接続' for t in _tok(text))
+    except Exception:
+        return False
+
+
+def _common_katakana_word(text):
+    """片仮名だけ（長音の ー を含む）の2字以上の語で、世の中でよく使う語（ime_reconvert の段で COMMON 以内）か。"""
+    if len(text) < 2 or not all('ァ' <= c <= 'ヶ' or c == 'ー' for c in text):
+        return False
+    try:
+        import ime_reconvert
+        return ime_reconvert._rank(text) <= ime_reconvert.COMMON
+    except Exception:
+        return False
+
+
+ONE_KEY_COST = 1.0   # 1打の戻し（隣のキー・巻き込み・抜け・入れ替わり）
+TWO_KEY_COST = 2.0
+
+
+import contextvars as _defer_cv
+DEFER_PAIRS=_defer_cv.ContextVar('contextual_repair_defer_pairs',default=None)  # None: run now / list: mark deferred
+
+
+# 読み→IME の1つ目の変換（context_surface）の控えを resolve の呼び出しをまたいで持つ。長い行で同じ読みを
+# 何度も IME に聞いていた（195字の行で 1,258回・1回約87ms、挙動関連担当の測り 2026-11-03）。答えは変えない
+_NATIVE_SURFACE={}
+_NATIVE_SURFACE_LIMIT=8192
+def _native_cache_on():
+    import os
+    return os.environ.get('CN_NATIVE_SURFACE_CACHE')!='0'
+
+
 @_with_search_report
 def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_surface=None, companions=()):
     """同じ文脈で成立した全候補を比較し、最優先の一つと診断を返す。"""
@@ -9251,6 +9351,11 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
             and engine._chunk_is_intact(
             target.text, tokenize, repair_context=target)):
         diagnostic['status'] = 'intact'
+        return None, diagnostic
+    if _common_katakana_word(target.text):
+        # 片仮名だけの、世の中でよく使う語（テレビ）は、打ったとおりの語。周りの読みの異様さを理由に1打を戻した
+        # 別の語（輝れば）に替えない（2026-10-30・うにさんの誤判定）
+        diagnostic['status'] = 'common_katakana_word'
         return None, diagnostic
     readings = reading_evidence(target, tokenize, dictionary)
     if target.require_ime_first_roundtrip:
@@ -9274,6 +9379,7 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
             source_end=row['source_end']+target.context_start)
             for row in evidence(target.context, list(tokenize(target.context)),
                                 dictionary_alternatives=False)]
+    near_one_key = []   # 意味の裏付けが無いだけで外れた、1打の戻しの読み
     candidates = []
     ime_evidence = {}
     homophone_positive = {}
@@ -9334,16 +9440,26 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
             if source_yoon_spans(reading):
                 context_surface_cache[reading]=None
                 return None
+            if _native_cache_on() and reading in _NATIVE_SURFACE:
+                context_surface_cache[reading]=_NATIVE_SURFACE[reading]
+                return context_surface_cache[reading]
             from ime_language import JapaneseIME
             with JapaneseIME() as ime:
-                native=ime.convert_words(reading) if ime.available else None
+                avail=ime.available
+                native=ime.convert_words(reading) if avail else None
             context_surface_cache[reading]=native[0] if native else None
+            if avail and _native_cache_on():
+                if len(_NATIVE_SURFACE)>=_NATIVE_SURFACE_LIMIT:
+                    _NATIVE_SURFACE.clear()
+                _NATIVE_SURFACE[reading]=context_surface_cache[reading]
         return context_surface_cache[reading]
     key_repair_cache={}
     def cached_key_repairs(reading):
         if reading.text not in key_repair_cache:
             key_repair_cache[reading.text]=tuple(key_repairs(
                 reading.text,*surrounding_readings))
+        if any(segment[3]=='alternate_character_guess' for segment in reading.segments):
+            return tuple(r for r in key_repair_cache[reading.text] if r.operation=='same_reading')
         return key_repair_cache[reading.text]
     def ime_project_repairs():
         # Search candidates explain a possible source reading; they are not
@@ -9638,7 +9754,13 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
                 any(candidate.get('rank_evidence',{}).get(key,0)<0
                     for key in ('meaning','native_predicate','source_relation'))
                 for candidate in candidates)):
-            for reading in readings:
+            deferred=DEFER_PAIRS.get()
+            if deferred is not None:
+                # Typing in progress (defer_heavy): the two-key search is the
+                # heavy part of a long line. Mark it; the caller solves the
+                # line again with defer_heavy=False when typing stops.
+                deferred.append('contextual_key_pairs')
+            for reading in (readings if deferred is None else ()):
                 if needs_source_argument_proof(reading):continue
                 for repair in nonadjacent_key_repairs(reading.text):
                     yield reading,repair,False
@@ -9873,8 +9995,17 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
                 diagnostic['rejected'][reason]=diagnostic['rejected'].get(reason,0)+1
                 continue
             valid, reason = validate(target, surface, engine, tokenize, store, dictionary, decisions, repair.reading,companions,source_reading=reading)
+            if valid and _colloquial_suru_after(target, surface, tokenize):
+                # 直した語の直後の しょう を する の意志形（しよう の崩れ）と読んで成り立たせた形（遺伝しょう）は採らない。
+                # 書き言葉では しよう と書くので、しょう の前で語が切れているのは打ち違いの跡（2026-10-30）
+                valid, reason = False, 'colloquial_suru_tail'
             if not valid:
                 diagnostic['rejected'][reason] = diagnostic['rejected'].get(reason, 0)+1
+                # 1打の戻しで辞書の語になったが、意味の裏付けが無いだけで外れた形（かわっさた → 変わった）。
+                # 2打以上の戻しを選ぶときの比べに使う（2026-11-01 B）
+                if (reason.startswith('unproven') and repair.operation!='same_reading'
+                        and repair.reading!=reading.text and repair.cost<=ONE_KEY_COST):
+                    near_one_key.append(repair.reading)
                 # Unknown lexical meaning is not negative evidence against
                 # another attested reading of the same damaged predicate.
                 if (reason=='unproven_original_object_predicate'
@@ -10088,7 +10219,8 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
                 proper=int(engine._is_whole_proper_noun(surface,tokenize)),
                 terminal=int(_terminal_auxiliary_fragment(surface,target.following,tokenize))
                          if grammar_rank else 0,
-                guesses=sum(segment[3] in ('character_guess','unrecognized_ime_sequence','compound_voicing','source_nominal_voicing')
+                guesses=sum(segment[3] in ('character_guess','alternate_character_guess','unrecognized_ime_sequence',
+                                           'compound_voicing','source_nominal_voicing')
                             for segment in reading.segments),
                 usage=_candidate_usage_tier(surface,score_head,target.following,
                     target.context[:target.start-target.context_start],reading=repair.reading),
@@ -10169,6 +10301,12 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
     ordered = rank_candidates(candidates)
     diagnostic['candidates'] = ordered
     diagnostic['status'] = 'selected' if ordered else 'no_candidate'
+    # 1打の誤字は1打の戻しで読める。1打の戻しで辞書の語になる形が在る（意味の裏付けが無いだけで外れた）のに、
+    # 2打以上離れた語（かわっさた → 分かった・因幸 → 再生）を選ぶ所は、決めずに紫に残す（2026-11-01 B）
+    if (ordered and near_one_key and ordered[0]['repair'].get('cost',0)>=TWO_KEY_COST
+            and not any(row['repair'].get('cost',0)<=ONE_KEY_COST for row in ordered)):
+        diagnostic['status']='unresolved_nearer_key'
+        return None,diagnostic
     if ordered and unresolved_predicates and proved_objects:
         best=ordered[0]
         from semantic_roles import candidate_evidence
@@ -10275,7 +10413,7 @@ def _retain_independent_changes(old_changes, selected, targets, diagnostics=()):
     # competing source interpretation. Drop its whole original operation,
     # while retaining independent edits outside the abstained source span.
     held=[(target.start,target.end) for target,diagnostic in zip(targets,diagnostics)
-          if diagnostic.get('status')=='unresolved_semantic_competitor']
+          if diagnostic.get('status') in ('unresolved_semantic_competitor','unresolved_nearer_key')]
     old_changes=[change for change in old_changes if not any(
         _overlaps(change[0],change[1],a,b) for a,b in held)]
     coverages=[_repair_coverage(t) for t in targets
@@ -10303,6 +10441,37 @@ def _retain_independent_changes(old_changes, selected, targets, diagnostics=()):
                 tail=(b,y,'')
                 if tail not in retained:retained.append(tail)
     return retained
+
+
+def _keep_written_edges(written, surface):
+    """かなだけの直し先が、元の範囲の頭と尾の漢字の語を読みのまま含むなら、その語は元の書き方に戻す。
+
+    打ち違いを含む述語を読みで直すと、触っていない頭の語まで読みになる（簡単にまとる → かんたんにまとめ）。
+    直したのは読みの途中なので、読みが元と同じ語は元の表記のままにする（2026-10-30）。"""
+    if not surface or not all('ぁ' <= c <= 'ゖ' or c == 'ー' for c in surface):
+        return surface
+    if not any('一' <= c <= '鿿' or c in '々〆ヶ' for c in written):
+        return surface
+    try:
+        from morphology import tokenize
+        toks = [t for t in tokenize(written) if t.surface]
+    except Exception:
+        return surface
+
+    def hira(text):
+        return ''.join(chr(ord(c) - 0x60) if 'ァ' <= c <= 'ヶ' else c for c in text or '')
+    head = ''; rest = surface; i = 0
+    while i < len(toks) and toks[i].has_reading and rest.startswith(hira(toks[i].reading)) and hira(toks[i].reading):
+        head += toks[i].surface; rest = rest[len(hira(toks[i].reading)):]; i += 1
+    tail = ''; j = len(toks)
+    while j > i and toks[j - 1].has_reading and hira(toks[j - 1].reading) and rest.endswith(hira(toks[j - 1].reading)):
+        rd = hira(toks[j - 1].reading)
+        if len(rest) == len(rd):
+            break
+        tail = toks[j - 1].surface + tail; rest = rest[:-len(rd)]; j -= 1
+    if (not head and not tail) or not rest:
+        return surface          # 読みが元と全部同じ（表記だけを替える直し）はそのまま
+    return head + rest + tail
 
 
 def _apply(source, changes):
@@ -10382,8 +10551,14 @@ def _choose_joint_candidates(targets,diagnostics,old_changes,engine,
         spans.update(_anomaly_spans(target))
     atoms={span for span in spans if not any(span!=other and span[0]<=other[0]
                                            and other[1]<=span[1] for other in spans)}
+    # 1打の戻しが在るのに2打以上の語を選ばずにおいた所（unresolved_nearer_key）と重なる別の対象（同じ語の短い切り方:
+    # かわっちた と かわっち）も、2打以上の候補では決めない（2026-11-01 B）
+    nearer=[(t.start,t.end) for t,d in zip(targets,diagnostics) if d.get('status')=='unresolved_nearer_key']
     for target,diagnostic in zip(targets,diagnostics):
-        if diagnostic.get('status')=='unresolved_semantic_competitor':continue
+        if diagnostic.get('status') in ('unresolved_semantic_competitor','unresolved_nearer_key'):continue
+        if nearer and any(_overlaps(target.start,target.end,a,b) for a,b in nearer):
+            diagnostic=dict(diagnostic,candidates=[row for row in diagnostic.get('candidates',())
+                if row['repair'].get('cost',0)<TWO_KEY_COST])
         # A completed field is one grammatical fact. A shorter word
         # cannot claim to resolve the rest of that source anomaly.
         if any(mark[0]=='完成節の接続' and not
@@ -11016,7 +11191,14 @@ def with_contextual_repair(fn):
                                         status='legacy_rejected', surface=surface, reason=reason))
         selected = _validate_joint_choices(selected, retained, targets, diagnostics, engine,
                                             tokenize, store, dictionary, decisions, provenance)
-        corrected = _apply(line, retained+selected)
+        corrected = _apply(line, retained+[(a,b,_keep_written_edges(line[a:b],surface)) for a,b,surface in selected])
+        # 合わせた行で、補助の いる・おく・しまう が漢字（て居・て置・て仕舞）で新しく書かれたら、その漢字を出した直しを外す
+        # （2026-10-30・お願すいたします → すいて居ます。て と 居 が別々の直しから来るので、合わせた行で見る）
+        _aux=('て居','で居','て置','で置','て仕舞','で仕舞','た居','し居','だ居')
+        if any(p in corrected and p not in line for p in _aux):
+            selected=[(a,b,surface) for a,b,surface in selected if not any(c in surface for c in '居置仕')
+                      or any(c in line[a:b] for c in '居置仕')]
+            corrected = _apply(line, retained+[(a,b,_keep_written_edges(line[a:b],surface)) for a,b,surface in selected])
         final_choices = {(a,b):surface for a,b,surface in selected}
         for diagnostic in diagnostics:
             bounds=(diagnostic['start'],diagnostic['end']);surface=final_choices.get(bounds)

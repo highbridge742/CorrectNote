@@ -116,7 +116,9 @@ class RowReuseTests(unittest.TestCase):
                                                           dict_index=a.dict_index))
 
     def test_4_a_recent_word(self):
-        self.check('recent', lambda a: a.recent_words.add('資料'))
+        # 最近使った語を読まない行は使い回す（読む行が無ければ、やり直す行が無くてよい・2026-11-02）
+        readers = [r for r in self.base if (r.get('used_keys') or {}).get('recent')]
+        self.check('recent', lambda a: a.recent_words.add('資料'), expect_some_redone=bool(readers))
 
     def test_5_an_ime_reading(self):
         self.check('ime', lambda a: a.ime_readings.remember('資料', 'しりょう'))

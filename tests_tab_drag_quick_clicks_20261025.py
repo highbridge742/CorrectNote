@@ -29,6 +29,7 @@ class QuickClickTests(unittest.TestCase):
         a.session = SimpleNamespace(tabs=['A', 'B', 'C'], active=0)
         a._tab_widgets = [{'frame': _Seat(0, 100)}, {'frame': _Seat(100, 100)}, {'frame': _Seat(200, 100)}]
         a._refresh_tab_bar = lambda: None
+        a._queue_tab_reveal = lambda: None
         self.saved = []
         a._schedule_session_save = lambda: self.saved.append(True)
 

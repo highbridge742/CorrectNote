@@ -119,5 +119,32 @@ class ApplicationCacheTests(unittest.TestCase):
   self.assertTrue(a._use_analysis_cache(text,text.split('\n')))
   self.assertEqual(a._analyze_todo,[0,1])
   self.assertEqual(a._analyze_ctx,{})
+ def test_autosave_waits_until_the_vocabulary_file_is_current(self):
+  # 2026-10-29: the cache's fingerprint is taken from the vocabulary in memory; written before the vocabulary file
+  # caught up, the next start (which reads the file) did not match and threw the whole cache away
+  import time
+  a=self.make_app();a.root=Mock();a.root.after=Mock(return_value='job');a._closing=False
+  a._last_interaction=0.0;a._view_changing=lambda:False
+  def wait_file(seconds=5.0):
+   end=time.monotonic()+seconds
+   while time.monotonic()<end and not Path(self.path).exists():time.sleep(.02)
+   return Path(self.path).exists()
+  a._analysis_cache_autosave()                      # never saved: not written
+  self.assertFalse(wait_file(.3))
+  a.store.saved_revision=a.store.revision()         # the file now holds this vocabulary
+  a._analysis_cache_autosave();self.assertTrue(wait_file())
+  Path(self.path).unlink();a._analysis_autosaved_rows=None
+  a.store.add('しりょう','資料','test')              # a word not yet written to the file
+  a._analysis_cache_autosave();self.assertFalse(wait_file(.3))
+  self.assertTrue(a.root.after.called)               # it looks again later
+ def test_stalled_analysis_restarts_from_the_rows_not_done(self):
+  # 2026-10-29: visible rows pending and nothing scheduled -> start again from the rows that are not done
+  a=self.make_app();a._analyze=Mock()
+  a.line_results[1]['pending']=True
+  a._restart_stalled_analysis()
+  a._analyze.assert_called_once()
+  self.assertEqual((a._analyze_todo,a._analyze_pos),([1],0))
+  a._restart_stalled_analysis()                     # not again within STALL_RETRY_S
+  a._analyze.assert_called_once()
 
 if __name__=='__main__':unittest.main()

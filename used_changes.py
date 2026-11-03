@@ -44,6 +44,20 @@ def _wrap(cls, name, keys_of):
     setattr(cls, name, g)
 
 
+def _record_keys(rec):
+    """一覧の1件（last_choice.all_records）を消すときに変わる鍵。前後の語ごとの記録（context）は、その語と
+    選んだ語だけ（前後の語そのものは変わらない。入れると、前後の語を引いた行まで巻き込んでいた・2026-11-01）。"""
+    rec = rec or {}
+    if rec.get('kind') == 'context':
+        key = tuple(rec.get('key') or ())
+        if len(key) == 3:
+            pv, og, nx = key
+            shown = rec.get('chosen') or ''
+            chosen = shown[len(pv):len(shown) - len(nx)] if shown.startswith(pv) and shown.endswith(nx) else shown
+            return (og, chosen)
+    return tuple(rec.get(name) for name in ('original', 'reading', 'chosen', 'surface'))
+
+
 def install():
     """Note the mutations of VocabularyStore and LastChoiceStore. Once; answers are not touched."""
     global _installed
@@ -59,15 +73,67 @@ def install():
     try:
         import last_choice
         S = last_choice.LastChoiceStore
-        _wrap(S, 'record', lambda original, chosen, reading=None, *a, **k: (original, chosen, reading))
+        _wrap_record(S)
         _wrap(S, 'remember', lambda original, chosen, reading=None, *a, **k: (original, chosen, reading))
         _wrap(S, 'forget_reading', lambda reading, *a, **k: (reading,))
         _wrap(S, 'forget_unit', lambda original, *a, **k: (original,))
-        _wrap(S, 'forget_record', lambda rec, *a, **k: tuple(
-            v for key in ('original', 'reading', 'chosen', 'surface') for v in [(rec or {}).get(key)])
-            + tuple((rec or {}).get('key') or ()))
+        # 前後の語ごとの記録も消す口（2026-11-01）。中で forget_unit を呼ぶので、外側の記録が中を覆う
+        _wrap(S, 'forget', lambda original, *a, **k: (original,))
+        _wrap(S, 'forget_all', lambda original, *a, **k: (original,))
+        _wrap(S, 'forget_record', lambda rec, *a, **k: _record_keys(rec))
     except Exception:
         pass
+    try:
+        # 補正の判断（2026-11-01 うにさん「判断をひとつ消すと、すべての解析がやり直しになる」）。
+        # 鍵は判断の語（直さない置換の両側・触らない語・紫を付けない語）。その語を含む行だけやり直す
+        import decisions
+        D = decisions.DecisionStore
+        _wrap(D, 'reject', lambda original, corrected, *a, **k: (original, corrected))
+        _wrap(D, 'unreject', lambda original, corrected, *a, **k: (original, corrected))
+        _wrap(D, 'protect', lambda word, *a, **k: (word,))
+        _wrap(D, 'unprotect', lambda word, *a, **k: (word,))
+        _wrap(D, 'leave_odd_alone', lambda word, *a, **k: (word,))
+    except Exception:
+        pass
+
+
+CONTEXT = '\0context\0'
+
+
+def context_key(prev, original, next_word):
+    return CONTEXT + '\0'.join((prev or '', original, next_word or ''))
+
+
+def split_context_keys(keys):
+    """(前後の語ごとの選び直しの並び [その行に現れる字], 残りのキー)。"""
+    found = [''.join(k[len(CONTEXT):].split('\0')) for k in keys if k.startswith(CONTEXT)]
+    return found, frozenset(k for k in keys if not k.startswith(CONTEXT))
+
+
+def _wrap_record(cls):
+    """同音の語の選び直し（買える→変える）は前後の語ごとに覚える（last_choice.record）ので、変わるのはその
+    前後の並びだけ。語や読みを鍵にすると、同じ語を含む行がみな解き直しになっていた（2026-11-03 うにさん「最終
+    行で再変換すると無関係の上の行が解析し直しになる」）。"""
+    f = getattr(cls, 'record', None)
+    if f is None or getattr(f, '_used_changes', False):
+        return
+
+    @functools.wraps(f)
+    def g(self, original, chosen, reading=None, prev=None, next=None):
+        before = getattr(self, '_revision', 0)
+        try:
+            return f(self, original, chosen, reading, prev, next)
+        finally:
+            try:
+                if self._is_homophone_swap(original, chosen, reading):
+                    keys = (context_key(prev, original, next),)
+                else:
+                    keys = (original, chosen, reading)
+                _note(self, before, getattr(self, '_revision', 0), keys)
+            except Exception:
+                _LOGS.pop(id(self), None)
+    g._used_changes = True
+    cls.record = g
 
 
 def changed(obj, rev_from, rev_to):

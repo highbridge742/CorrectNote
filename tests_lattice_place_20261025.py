@@ -32,6 +32,38 @@ class LatticePlaceTests(unittest.TestCase):
         places, _ = P.propose('たなのせいとん', self.st.store, self.st.dict_index)
         self.assertTrue(any(f == '整頓' for _a, _b, f in places) or places == [], places)
 
+    def test_common_noun_in_explained_kana_run_gets_kanji(self):
+        # かなの文法で説明の付く行でも、ふだん漢字で書く名詞は漢字に（2026-10-31）。副詞・いたします等はかなのまま
+        places, _ = P.propose('きのうはやさいをかった。', self.st.store, self.st.dict_index)
+        self.assertIn('野菜', [f for _a, _b, f in places])
+        places, _ = P.propose('よろしくおねがいいたします。', self.st.store, self.st.dict_index)
+        self.assertEqual([f for _a, _b, f in places], ['お願い'])
+        places, _ = P.propose('だいたいわかった。', self.st.store, self.st.dict_index)
+        self.assertEqual(places, [])
+
+    def test_kana_only_line_gets_kanji_for_usual_nouns(self):
+        # かなだけの行も、漢字で書くのが普通の名詞は漢字に（2026-10-31）。つないで辞書の1語になる名詞はその語に
+        st = self.st
+        for line, want in (('でんわばんごうをおしえて', '電話番号をおしえて'), ('またれんらくします。', 'また連絡します。')):
+            places, _ = P.propose(line, st.store, st.dict_index)
+            got = line
+            for s0, e0, f in sorted(places, reverse=True):
+                got = got[:s0] + f + got[e0:]
+            self.assertEqual(got, want)
+
+    def test_undecided_or_predicate_kana_is_left(self):
+        # 表記の決まらない語（はし → 橋・箸）、を の後ろの述語（いただき）、1字の読みのつなぎ（ご｜め）はかなのまま
+        for line in ['はしでたべる。', '貴重なお時間をいただき、', 'ごめな、ちょっと待って。']:
+            places, _ = P.propose(line, self.st.store, self.st.dict_index)
+            self.assertEqual(places, [], line)
+
+    def test_kana_after_fixed_mark_gets_kanji(self):
+        # 単独の印を前の字に付けて直した行も、かなのまま残る名詞は漢字に（2026-10-31）。印の戻しが隣のキーの
+        # 打ち違い（し＋へ）に取られない
+        for line, want in (('て゛んわばんごうを教える。', '電話番号を教える。'),
+                           ('し゛かんのやくそくを守る。', '時間の約束を守る。')):
+            self.assertEqual(self.run_line(line)['corrected'], want, line)
+
     def test_kana_runs(self):
         self.assertEqual(P.kana_runs('間違いのほせい'), [(2, 7)])
         self.assertEqual(P.kana_runs('漢字'), [])

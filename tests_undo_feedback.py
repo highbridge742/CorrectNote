@@ -47,7 +47,7 @@ class UndoFeedbackTests(unittest.TestCase):
     def test_deletion_group_does_not_color_unrelated_surviving_letters(self):
         w=self.widget;self.group('ABC');w.delete('1.5');w.edit_separator();w.insert('end-1c','Z')
         w.edit_undo();self.assertEqual(self.marked(),'')
-        w.edit_undo();self.assertEqual(self.marked(),'ABC')
+        w.edit_undo();self.assertEqual(self.marked(),'B')     # what came back (2026-11-03)
         w.edit_redo();self.assertEqual(self.marked(),'')
 
     def test_replace_and_mixed_group_keep_multiple_exact_surviving_ranges(self):

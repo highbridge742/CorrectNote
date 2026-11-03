@@ -27,22 +27,48 @@ TOTAL = 24
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
+def _compact(table):
+    """読み取り専用の dict（文字列 → 文字列）を compact_tables の小さな形に（2026-10-31・答えは同じ・
+    並びも元のまま。読みの索引も含めて生きている分 35MB → 11MB）。CN_PLAIN_TABLES=1 か、形にできないときは dict のまま。"""
+    try:
+        import compact_tables
+        if compact_tables.enabled():
+            return compact_tables.CompactStrings.of(table)
+    except (ImportError, ValueError):
+        pass
+    return table
+
+
 class Table:
-    """分類語彙表の表を、語ごと・組ごとに1つの文字列で持つ（リストの山にすると +90MB になるため）。"""
+    """分類語彙表の表を、語ごと・組ごとに1つの文字列で持つ（リストの山にすると +90MB になるため）。
+    受け取った dict は1つ詰めるごとに手放す（JSON の一時物を早く返す・load_table）。"""
 
     def __init__(self, words=None, groups=None, readings=None):
-        self._words = {w: '|'.join(','.join(e[:4]) for e in entries) for w, entries in (words or {}).items()}
-        self._groups = {k: '	'.join(v) for k, v in (groups or {}).items()}
-        self._readings = {w: '|'.join(v) for w, v in (readings or {}).items()}
+        self._fill(dict(words=words, groups=groups, readings=readings))
+
+    @classmethod
+    def from_data(cls, data):
+        """表のファイルを読んだ dict から作る。words・groups・readings は data から外しながら詰める。"""
+        table = cls.__new__(cls)
+        table._fill(data)
+        return table
+
+    def _fill(self, data):
+        # 1つずつ data から外して詰める（JSON の一時物は詰め終わった順に手放す）
+        self._words = _compact({w: '|'.join(','.join(e[:4]) for e in entries)
+                                for w, entries in (data.pop('words', None) or {}).items()})
+        self._groups = _compact({k: '	'.join(v) for k, v in (data.pop('groups', None) or {}).items()})
+        self._readings = _compact({w: '|'.join(v) for w, v in (data.pop('readings', None) or {}).items()})
         self._by_reading = None
 
     def __bool__(self):
         return bool(self._words)
 
     def words(self):
-        """全部の見出しを、(見出し, [[類, 分類番号, 段落, 小段落], …]) の順に返す（補正の semantic_class などが使う）。"""
-        for word in self._words:
-            yield word, self.entries(word)
+        """全部の見出しを、(見出し, [[類, 分類番号, 段落, 小段落], …]) の順に返す（補正の semantic_class などが使う）。
+        見出しと中身を並べて一度に読む（見出しごとに引き直すと、8万語で 0.5秒あまりかかった・2026-11-01）。"""
+        for word, got in self._words.items():
+            yield word, [e.split(',') for e in got.split('|')] if got else []
 
     def entries(self, word):
         """word の [[類, 分類番号, 段落, 小段落], …]。"""
@@ -63,7 +89,7 @@ class Table:
             for word, got in self._readings.items():
                 for r in got.split('|'):
                     index[r] = index[r] + '	' + word if r in index else word
-            self._by_reading = index
+            self._by_reading = _compact(index)
         got = self._by_reading.get(reading)
         return got.split('	') if got else []
 
@@ -72,13 +98,80 @@ class Table:
 def load_table():
     """分類語彙表の表（Table）。読めなければ空の表（類語は出ない）。初めて類語を引くときに1回だけ読む。
     表のファイルの形（build_synonyms.py）: words 見出し → [[類, 分類番号, 段落, 小段落], …]・
-    groups '分類番号,段落,小段落' → [見出し…]・readings 見出し → [読み…]・license・source。"""
+    groups '分類番号,段落,小段落' → [見出し…]・readings 見出し → [読み…]・license・source。
+    詰めた形は控え（COMPACT_CACHE）に書き、次からはそれを読む（_load_compact）。"""
+    path = os.path.join(_HERE, TABLE)
+    cached = _load_compact(path)
+    if cached is not None:
+        return cached
     try:
-        with gzip.open(os.path.join(_HERE, TABLE), 'rt', encoding='utf-8') as f:
+        with gzip.open(path, 'rt', encoding='utf-8') as f:
             data = json.load(f)
-        return Table(data['words'], data['groups'], data.get('readings'))
+        if 'words' not in data or 'groups' not in data:
+            raise KeyError('words')
+        table = Table.from_data(data)
     except Exception:
         return Table()
+    _save_compact(table, path)
+    return table
+
+
+# 詰めた形の表の控え（2026-11-01）。表の JSON を読んで詰め直すのに、解析の子の起動ごと（最初の1行）に 1.3秒
+# かかっていた。表のファイル（gzip の終わりの CRC・大きさ）と控えの版が同じなら、控えだけを読む。
+COMPACT_CACHE = 'wlsp_synonyms_compact.pickle.gz'
+COMPACT_CACHE_VERSION = 1
+
+
+def _compact_cache_path():
+    try:
+        import reading_lattice
+        return os.path.join(os.path.dirname(reading_lattice.default_cache_path()), COMPACT_CACHE)
+    except Exception:
+        return None
+
+
+def _table_stamp(path):
+    with open(path, 'rb') as f:
+        size = os.fstat(f.fileno()).st_size
+        f.seek(max(0, size - 8))
+        return ('wlsp_synonyms', COMPACT_CACHE_VERSION, size, f.read())
+
+
+def _load_compact(path):
+    try:
+        import compact_tables
+        import pickle
+        cache = _compact_cache_path()
+        if not compact_tables.enabled() or not cache or not os.path.exists(cache):
+            return None
+        with gzip.open(cache, 'rb') as f:
+            stamp, state = pickle.load(f)
+        if stamp != _table_stamp(path):
+            return None
+        table = Table.__new__(Table)
+        table._words, table._groups, table._readings = (compact_tables.CompactStrings.from_state(state[name])
+                                                        for name in ('words', 'groups', 'readings'))
+        table._by_reading = None
+        return table
+    except Exception:
+        return None
+
+
+def _save_compact(table, path):
+    try:
+        import compact_tables
+        import pickle
+        cache = _compact_cache_path()
+        parts = (table._words, table._groups, table._readings)
+        if not cache or not all(isinstance(part, compact_tables.CompactStrings) for part in parts):
+            return
+        state = dict(zip(('words', 'groups', 'readings'), (part.state() for part in parts)))
+        tmp = '%s.%d.tmp' % (cache, os.getpid())     # 解析の子が2つ同時に書くことがある
+        with gzip.open(tmp, 'wb', compresslevel=6) as f:
+            pickle.dump((_table_stamp(path), state), f, protocol=4)
+        os.replace(tmp, cache)
+    except Exception:
+        pass
 
 
 def _hiragana(text):
@@ -293,6 +386,59 @@ def _shape(candidate, original, head, tail):
     return head + candidate + tail
 
 
+def _whole_reading(text):
+    """text の全体の読み（ひらがな）。読めない語があれば空。"""
+    toks = _tokens(text)
+    if not toks or any(not t.reading or t.reading == '*' for t in toks):
+        return ''
+    return _hiragana(''.join(t.reading for t in toks))
+
+
+def _base_reading(token):
+    """活用した語の基本形の読み。基本形だけを解析し直すと別の読みになる語があるので、この語自身の読みから作る
+    （読みの終わりの送り仮名を、基本形の送り仮名に置き換える）。作れなければ空。"""
+    surface, base = token.surface, token.base_form
+    reading = _hiragana(token.reading or '')
+    if not reading or token.reading == '*':
+        return ''
+    same = 0
+    while same < min(len(surface), len(base)) and surface[same] == base[same]:
+        same += 1
+    tail = _hiragana(surface[same:])
+    if not same or not reading.endswith(tail):
+        return ''
+    return reading[:len(reading) - len(tail)] + _hiragana(base[same:])
+
+
+def same_reading_forms(text, spellings_of, limit=6):
+    """活用した語の、同じ読みの書き分け（2026-11-02 うにさん「送り仮名を合わせる」）。
+
+    語彙・辞書が持つのは基本形なので、活用した形の読み全体では同音の語を引けない。text の中の動詞・形容詞の
+    基本形の読みで書き分けを引き（spellings_of(読み) → 基本形の表記の並び）、元の活用の形に合わせる。
+    全体の読みが元と同じもの、つまり漢字だけが替わって送り仮名が同じものだけを返す（読みの違う語は類語の段）。"""
+    found = _head(text)
+    if found is None:
+        return []
+    head, token, tail = found
+    if _pos(token)[0] not in ('動詞', '形容詞'):
+        return []
+    whole = _whole_reading(text)
+    reading = _base_reading(token)
+    if not whole or not reading:
+        return []
+    out = []
+    for word in spellings_of(reading):
+        if word == token.base_form or not any('一' <= ch <= '鿿' for ch in word):
+            continue
+        shaped = _shape(word, token, head, tail)
+        if shaped is None or shaped == text or shaped in out or _whole_reading(shaped) != whole:
+            continue
+        out.append(shaped)
+        if len(out) >= limit:
+            break
+    return out
+
+
 _CACHE = {}
 
 
@@ -307,6 +453,48 @@ def synonyms(text, per_sense=PER_SENSE, total=TOTAL):
         while len(_CACHE) > 512:
             _CACHE.pop(next(iter(_CACHE)))
     return [list(words) for words in got]
+
+
+def _kana_tail(word):
+    """語の終わりの送り仮名（最後の漢字のあと）。"""
+    at = len(word)
+    while at and '\u3041' <= word[at - 1] <= '\u3096':
+        at -= 1
+    return word[at:]
+
+
+def _fit_verb(word, original, readings):
+    """類語の動詞 word を、元の語 original の活用の型へ（2026-11-03 うにさん「類語候補の送り仮名は揃って
+    いなかった」）。readings は元の語の基本形の読み。戻り値は (使う語, 後ろへ回すか)。使えなければ (None, False)。
+
+    元の語の送り仮名に付け替えた語が在れば、それが対（離れる→離す）。対が元の語と同じ読みなら同音の語の段に
+    あるので類語には出さない。対が無くて型が違うものは後ろへ。サ変（破壊する）は自他を送り仮名に持たない。"""
+    tail = _kana_tail(original.base_form)
+    if tail and word == _kana_tail(word):
+        # かなだけの語: 元の語の語幹の読みで始まれば同じ語の別の形（こわれる←壊す）
+        for reading in readings:
+            root = reading[:len(reading) - len(tail)] if reading.endswith(tail) else ''
+            if root and word.startswith(root) and word != reading:
+                return None, False
+    toks = _tokens(word)
+    if len(toks) != 1 or _pos(toks[0])[0] != '動詞':
+        return word, False
+    cand = toks[0]
+    if cand.infl_type == original.infl_type or cand.infl_type.startswith('サ変'):
+        return word, False
+    own = _kana_tail(word)
+    stem = word[:len(word) - len(own)]
+    if not tail or not own or not stem:
+        return word, True
+    paired = stem + tail
+    again = _tokens(paired)
+    if (len(again) != 1 or again[0].surface != paired or _pos(again[0])[0] != '動詞'
+            or again[0].infl_type != original.infl_type):
+        return word, True
+    known = set(load_table().readings(paired) or ()) | {_whole_reading(paired)}
+    if paired == original.base_form or known & set(readings):
+        return None, False
+    return paired, False
 
 
 def _synonyms(text, per_sense, total):
@@ -333,12 +521,24 @@ def _synonyms(text, per_sense, total):
         for group in _senses(name, wanted):
             if group not in groups:
                 groups.append(group)
+    verb = _pos(token)[0] == '動詞'
+    later = []
+    readings = (set(table.readings(base) or ()) | {reading, _base_reading(token)}) - {''}
     for group in groups:
         words = []
         for word in group:
             if word == base or word in names or same & set(table.readings(word) or (word,)):
                 continue
+            behind = False
+            if verb:
+                word, behind = _fit_verb(word, token, readings)
+                if word is None:
+                    continue
             shaped = _shape(word, token, head, tail)
+            if behind:
+                if shaped is not None and shaped not in used and shaped not in later:
+                    later.append(shaped)
+                continue
             if shaped is None or shaped in used:
                 continue
             used.add(shaped)
@@ -349,4 +549,7 @@ def _synonyms(text, per_sense, total):
             out.append(words)
         if len(used) - 1 >= total:
             break
+    room = total - (len(used) - 1)
+    if later and room > 0:
+        out.append(later[:room])
     return out

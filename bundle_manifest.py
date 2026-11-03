@@ -147,6 +147,16 @@ ITEMS = (
     Item('en_rev.json.gz', None,
          '文変換の窓で、英文の「日本語の文法・名詞は英語」の並びが作れない（英文の倒置は出る）',
          False),
+    # 日本語の語の使われやすさ（wordfreq の順位・2026-10-30）と、Tatoeba の文から採った語の組（CC BY 2.0 FR）。
+    # 補正の後段（ime_reconvert・pair_choice・predicate_slip・collocation）が引く。2026-11-01: 名簿に無く、
+    # 写し・公開先・exe に入っていなかった——無いと既定値に落ち、作業用のフォルダと答えが違った（未解決タブの
+    # 「ギ゜）鵜番号を」が写しでは「行番号を」に直らなかった）
+    Item('ja_wordfreq.json.gz', None,
+         '補正の後段（IME の読み直し・語の組の選び分け・述語の打ち違い）が語の使われやすさを引けず、既定値に落ちて答えが変わる',
+         False),
+    Item('tatoeba_pairs.json.gz', None,
+         '語の組の表（Tatoeba の文から採った語の組）が引けず、語の組で選び分ける補正が効かなくなる',
+         False),
     Item('NOTICE_sudachi.txt', None,
          'SudachiDict（Apache-2.0）の表示が配布物から落ちる',
          False),

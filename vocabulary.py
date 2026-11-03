@@ -746,7 +746,9 @@ class VocabularyStore:
         if not target:
             return
         data = [_entry_for_save(e) for e in self.to_list()]
-        self._write_saved(target, data, self._next_save_generation())
+        revision = self._revision
+        if self._write_saved(target, data, self._next_save_generation()):
+            self.saved_revision = revision
 
     def save_in_background(self, path=None):
         """
@@ -763,10 +765,12 @@ class VocabularyStore:
             return None
         data = [_entry_for_save(e) for e in self.to_list()]
         generation = self._next_save_generation()
+        revision = self._revision
 
         def write():
             try:
-                self._write_saved(target, data, generation)
+                if self._write_saved(target, data, generation):
+                    self.saved_revision = revision
             except Exception as error:
                 self.background_save_error = error
         # 閉じるときに途中で切られないよう、終わるまで待つスレッドにする
@@ -833,6 +837,7 @@ class VocabularyStore:
         self.legacy_on_disk = legacy
         self._en_readings = None        # 入れ物ごと作り直した（項目48-VC）
         self._invalidate_cache()
+        self.saved_revision = self._revision     # ファイルと同じ中身（解析の控えの途中保存が見る・2026-10-29）
 
 
 # ============================================================
@@ -907,6 +912,10 @@ def personal_from_entries(entries, base_rows):
                 saved['world'] = old_world
             if old_label != label:
                 saved['category'] = saved.get('category', '')
+            else:
+                # 表と同じ札は書かない（読むときは表の札が残る・2026-10-30 うにさん「category のパラメータは
+                # もう要らないのでは」）
+                saved.pop('category', None)
         out.append(saved)
     removed = [[r, s] for (r, s) in base if (r, s) not in present]
     # 同じ読みの表記の並び（＝入った順。_rank_key の同点はこの順）が、重ねたときの順
@@ -1002,6 +1011,7 @@ class LayeredVocabularyStore(VocabularyStore):
         self.legacy_on_disk = from_old
         self._en_readings = None
         self._invalidate_cache()
+        self.saved_revision = self._revision     # ファイルと同じ中身（解析の控えの途中保存が見る・2026-10-29）
 
     def personal_data(self):
         return personal_from_entries(self.to_list(), load_base_rows(self.base_path))
@@ -1010,7 +1020,9 @@ class LayeredVocabularyStore(VocabularyStore):
         target = path or self.path
         if not target:
             return
-        self._write_saved(target, self.personal_data(), self._next_save_generation())
+        revision = self._revision
+        if self._write_saved(target, self.personal_data(), self._next_save_generation()):
+            self.saved_revision = revision
 
     def save_in_background(self, path=None):
         target = path or self.path
@@ -1018,10 +1030,12 @@ class LayeredVocabularyStore(VocabularyStore):
             return None
         data = self.personal_data()
         generation = self._next_save_generation()
+        revision = self._revision
 
         def write():
             try:
-                self._write_saved(target, data, generation)
+                if self._write_saved(target, data, generation):
+                    self.saved_revision = revision
             except Exception as error:
                 self.background_save_error = error
         thread = threading.Thread(target=write, name='vocabulary-save', daemon=False)

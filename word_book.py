@@ -112,6 +112,13 @@ def no_maximize(window):
         pass
 
 
+SWITCHER_CLASSES = frozenset(('XamlExplorerHostIslandWindow', 'MultitaskingViewFrame', 'TaskSwitcherWnd', 'ForegroundStaging',
+                              'Shell_TrayWnd', 'Shell_SecondaryTrayWnd', 'Progman', 'WorkerW', 'Windows.UI.Core.CoreWindow'))
+
+
+NC_BUTTONS = (8, 9, 20, 21)      # HTMINBUTTON, HTMAXBUTTON, HTCLOSE, HTHELP
+
+
 class _WordBookNative:
     """Remember the preceding foreground window without polling or reading text."""
     def __init__(self, window, previous=None):
@@ -152,6 +159,15 @@ class _WordBookNative:
             # Tk child controls need not forward WM_MOUSEACTIVATE here;
             # WM_ACTIVATE can name a same-thread window instead of the app
             # that was in front. Prefer the ordered foreground event stream.
+            if msg == 0x0006 and (wp & 0xffff) == 0 and getattr(self, 'took', False):
+                self.took = False       # WM_ACTIVATE: left the front: never the active window again
+                self._set_noactivate(True)
+            if msg == 0x00A1:   # WM_NCLBUTTONDOWN: the title bar or the border (Tk sees no press there)
+                self._on_nc_press(wp)
+            if msg == 0x0216:   # WM_MOVING
+                self.moved = True
+            if msg == 0x0232:   # WM_EXITSIZEMOVE
+                self._after_move()
             if msg == 0x0021:  # WM_MOUSEACTIVATE precedes a click activation.
                 self._remember(u.GetForegroundWindow())
                 self._complete_own_composition()
@@ -230,18 +246,32 @@ class _WordBookNative:
             return
         top = self.user.GetAncestor(hwnd, 2)
         if top and top != self.hwnd:
-            self.focus = (top, hwnd)
+            if not self._is_switcher(top):
+                self.focus = (top, hwnd)
 
     def _remember(self, hwnd):
         if not hwnd or not self.user.IsWindow(hwnd):
             return
         hwnd = self.user.GetAncestor(hwnd, 2)
-        if hwnd == self.hwnd:
+        if hwnd == self.hwnd or self._is_switcher(hwnd):
             return
         from ctypes import wintypes as W
         pid = W.DWORD()
         self.user.GetWindowThreadProcessId(hwnd, self.c.byref(pid))
         self.previous = (hwnd, pid.value)
+
+    def _is_switcher(self, hwnd):
+        """Alt+Tab の一覧やタスクバーなど、入力先にならない窓（2026-11-03 うにさん: Alt+Tab で単語帳を前に
+        すると、その一覧を送り先と覚えて語が入らなかった）。"""
+        try:
+            name = self.c.create_unicode_buffer(128)
+            self.user.GetClassNameW(hwnd, name, 128)
+            if name.value in SWITCHER_CLASSES:
+                return True
+            # この PC の Alt+Tab の一覧の窓（題名なし）。題名のある XamlWindow はふつうのアプリ
+            return name.value == 'XamlWindow' and not self.user.GetWindowTextLengthW(hwnd)
+        except (OSError, AttributeError, ValueError, TypeError):
+            return False
 
     def start_move(self):
         if not self.hwnd or not self.user.IsWindow(self.hwnd):
@@ -292,6 +322,115 @@ class _WordBookNative:
             return True
         except (OSError, AttributeError, ValueError):
             return False
+
+    def no_ime(self, window):
+        """単語帳の窓には IME を掛けない（2026-11-03 うにさん「全角モードだとエンターが要る」: IME がオンだと
+        数字が未確定の字になって、キーが窓へ届かなかった）。本文の欄の IME には関わらない。窓の中の部品ごと。"""
+        try:
+            c = self.c
+            from ctypes import wintypes as W
+            imm = c.WinDLL('imm32')
+            imm.ImmAssociateContext.argtypes = [W.HWND, W.HANDLE]; imm.ImmAssociateContext.restype = W.HANDLE
+            def walk(widget):
+                yield widget.winfo_id()
+                for child in widget.winfo_children():
+                    yield from walk(child)
+            for hwnd in [self.hwnd] + list(walk(window)):
+                if hwnd:
+                    imm.ImmAssociateContext(hwnd, None)
+            return True
+        except (OSError, AttributeError, ValueError, tk.TclError):
+            return False
+
+    def own_app_in_front(self):
+        """いま前にある窓が、このアプリのものか。"""
+        c, u = self.c, self.user
+        from ctypes import wintypes as W
+        pid = W.DWORD()
+        u.GetWindowThreadProcessId(u.GetForegroundWindow(), c.byref(pid))
+        return pid.value == c.WinDLL('kernel32').GetCurrentProcessId()
+
+    def _set_noactivate(self, on):
+        """この窓の WS_EX_NOACTIVATE を付ける／外す。"""
+        try:
+            c, u = self.c, self.user
+            from ctypes import wintypes as W
+            u.GetWindowLongPtrW.argtypes = [W.HWND, c.c_int]; u.GetWindowLongPtrW.restype = c.c_ssize_t
+            u.SetWindowLongPtrW.argtypes = [W.HWND, c.c_int, c.c_ssize_t]; u.SetWindowLongPtrW.restype = c.c_ssize_t
+            style = u.GetWindowLongPtrW(self.hwnd, -20)
+            u.SetWindowLongPtrW(self.hwnd, -20, (style | 0x08000000) if on else (style & ~0x08000000))
+            return True
+        except (OSError, AttributeError, ValueError, TypeError):
+            return False
+
+    def take_keys(self):
+        """別のアプリが前にある時に単語帳の窓を押した: この窓を前にして、数字キーを受ける（2026-11-03 うにさん）。
+        ふだんは前に出ない窓なので、前に出す間だけ NOACTIVATE を外す。語を押して入れる時は通らない。"""
+        import focus_trace
+        if not self.hwnd or self.own_app_in_front():
+            focus_trace.log('word book take keys: own app in front')
+            return False
+        u = self.user
+        front = u.GetForegroundWindow()
+        self._remember(front)       # 数字のあと返す先
+        self._set_noactivate(False)
+        done = bool(u.SetForegroundWindow(self.hwnd))
+        how = 'plain'
+        if not done:
+            # 前面のロックで断られた時: 前の窓の入力の列につないで前に出す
+            how = 'attached'
+            kernel = self.c.WinDLL('kernel32')
+            mine, theirs = kernel.GetCurrentThreadId(), u.GetWindowThreadProcessId(front, None)
+            attached = bool(theirs and u.AttachThreadInput(mine, theirs, True))
+            try:
+                u.BringWindowToTop(self.hwnd)
+                done = bool(u.SetForegroundWindow(self.hwnd))
+            finally:
+                if attached:
+                    u.AttachThreadInput(mine, theirs, False)
+        self.took = done
+        if not done:
+            self._set_noactivate(True)
+        focus_trace.log('word book take keys: %s done=%s front=%s' % (how, done, focus_trace.foreground()))
+        return done
+
+    def _on_nc_press(self, hit):
+        """題名バー・枠を押した（2026-11-03 うにさん: 押している題名バーは Tk の押下にならず、NOACTIVATE のまま
+        前に出なかった）。閉じる・最小化・最大化のボタンは別。窓の手続きの中なので Tk には触らない。前に出れば
+        Windows が焦点を窓へ渡すので、数字はそのまま窓に届く。"""
+        self.moved = False
+        if hit not in NC_BUTTONS:
+            try:
+                self.take_keys()
+            except (OSError, AttributeError, ValueError, TypeError):
+                pass
+
+    def _after_move(self):
+        """題名バーを持って動かしただけなら、前面と焦点を元へ返す（動かすたびに入力欄から外れない）。"""
+        moved, self.moved = getattr(self, 'moved', False), False
+        if moved and getattr(self, 'took', False):
+            try:
+                if self.give_back():
+                    self.refocus_previous()
+            except (OSError, AttributeError, ValueError, TypeError):
+                pass
+
+    def give_back(self):
+        """数字で切り替えた: 押す前の窓へ前面を返す（焦点の部品も返す）。"""
+        import focus_trace
+        self.took = False
+        self._set_noactivate(True)
+        if not self.previous:
+            return False
+        hwnd = self.previous[0]
+        self.return_focus = self.focus if self.focus and self.focus[0] == hwnd else None
+        done = self.give_front(hwnd)
+        focus_trace.log('word book give back after a digit: done=%s front=%s' % (done, focus_trace.foreground()))
+        return done
+
+    def refocus_previous(self):
+        if self.previous and self.user.GetForegroundWindow() == self.previous[0]:
+            self._refocus(self.previous[0], self.user.GetWindowThreadProcessId(self.previous[0], None))
 
     def give_front(self, hwnd):
         """Give the front back to `hwnd` (another app's window) when nothing else has it."""
@@ -443,6 +582,40 @@ class WordBook:
         self.render()
         self.app.status.config(text='単語帳をセット%dに切り替えました' % (index + 1))
 
+    SET_KEYS = (('1', 'KP_1'), ('2', 'KP_2'), ('3', 'KP_3'), ('4', 'KP_4'))
+
+    def _bind_set_keys(self, win):
+        """数字キー 1〜4 とテンキーの 1〜4 で、単語帳のセットを切り替える（窓の中のどの部品でも効く）。"""
+        for index, keys in enumerate(self.SET_KEYS):
+            for key in keys:
+                try:
+                    win.bind('<KeyPress-%s>' % key, lambda e, i=index: self._set_key(i))
+                except tk.TclError:
+                    pass       # この Tk に無いキー名は飛ばす
+
+    def _press_on_window(self, event=None):
+        """窓を押した: 語や「－」のボタンでなければ数字キーを受けるようにする。"""
+        widget = getattr(event, 'widget', None)
+        if isinstance(widget, tk.Button) or self._native is None or self.window is None:
+            return None
+        try:
+            self._native.moved = False
+            if self._native.take_keys():
+                self.window.focus_force()
+        except (OSError, AttributeError, tk.TclError):
+            pass
+        return None
+
+    def _no_ime_here(self):
+        native = getattr(self, '_native', None)
+        if native is not None and self.window is not None:
+            native.no_ime(self.window)
+
+    def _set_key(self, index):
+        # 焦点は単語帳に残す（続けて切り替えられる・2026-11-03 うにさん）。語のボタンを押した時に元の入力欄へ返す
+        self.select_set(index)
+        return 'break'
+
     def reset_current(self):
         from tkinter import messagebox
         selected = self.active_set
@@ -568,6 +741,7 @@ class WordBook:
             # Never the active window (before it is first shown): opening it, or clicking a word,
             # leaves the front and the text being typed where they are (2026-10-19 うにさん)
             self._native.make_noactivate()
+        win.bind('<ButtonPress-1>', self._press_on_window, add=True)
         self.app._set_window_icons_win32(win)
         self.width = min(self.width or self.initial_width(), max(80, win.winfo_screenwidth() - 40))
         win.geometry('%dx1' % self.width)
@@ -591,6 +765,8 @@ class WordBook:
         self.canvas.bind('<Configure>', self._canvas_size)
         self.canvas.bind('<MouseWheel>', self._wheel)
         win.bind('<Configure>', self._resized, add=True)
+        # 単語帳の窓が前にあるとき、数字キー 1〜4（テンキーも）でセットを切り替える（2026-10-30 うにさん）
+        self._bind_set_keys(win)
         # 出るたびに（最小化から戻る・Tk が枠を作り直す・配色の切り替えのあとも）最大化させない
         win.bind('<Map>', lambda e: no_maximize(win) if e.widget is win else None, add=True)
         self.visible = True
@@ -673,6 +849,7 @@ class WordBook:
         self._drag_anchor = None
         if self.window is None:
             return 'break'
+        self._press_on_window(event)      # 見出しの下の余白も題名バーと同じ（動かしただけなら返す）
         if self._native is None or not self._native.start_move():
             self._drag_anchor = (event.x_root, event.y_root,
                                  self.window.winfo_x(), self.window.winfo_y())
@@ -772,7 +949,7 @@ class WordBook:
             button.bind('<B1-Motion>', self._order_motion, add='+')
             button.bind('<ButtonRelease-1>', self._order_release)
             self.buttons.append(button)
-        self.add_button = tk.Button(self.rows, text='追加', command=self.app._start_word_book_add,
+        self.add_button = tk.Button(self.rows, text='追加（セット%d）' % (self.active_set + 1), command=self.app._start_word_book_add,
             bg=bg, fg=accent, relief='flat', font=self.app._editor_font(), padx=8, pady=3,
             cursor='hand2')
         self.add_button.pack(fill='x')
@@ -790,6 +967,7 @@ class WordBook:
         self._keep_above_bottom()
         self.canvas.configure(scrollregion=self.canvas.bbox('all'))
         self.canvas.yview_moveto(1)
+        self._no_ime_here()       # 作り直した語のボタンにも
 
     def _keep_above_bottom(self):
         """A book grown by a new word moves up rather than past the bottom of its screen

@@ -196,13 +196,14 @@ def rebase_background(app,state):
     """Reuse a dirty tab's rows after preparing its current context off Tk."""
     base=state.pop('previous',None)
     if not base or not same_model_state(base.get('dependencies'),state['dependencies']):return
-    from analysis_context import reuse_rows,signature
+    from analysis_context import previous_line_of,reuse_rows,signature
     from analysis_async import _background_readings
     from context_vec import build_nearby_words
     lines=state['lines'];words=state['words']
     results=[dict(original=line,corrected=line,pending=True) for line in lines]
     signatures={i:signature(build_nearby_words(len(lines),i,lambda k:words.get(lines[k],[])),
-        _background_readings(state,i),_background_readings(state,i,'calculations')) for i in range(len(lines))}
+        _background_readings(state,i),_background_readings(state,i,'calculations'),
+        previous_line_of(lines,i)) for i in range(len(lines))}
     previous=[r for r in base['results'] if result_compatible(app,r,base['dependencies'],state['dependencies'])]
     reuse_rows(results,list(range(len(lines))),previous,signatures,base.get('ctx'),state['ctx'],state['attested'])
     state['results']=[r if reusable_result(r) else None for r in results]

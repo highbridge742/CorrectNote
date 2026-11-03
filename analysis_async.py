@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """Tk-side scheduling for the isolated engine. Only completed values cross back."""
 import keyboard_layout
+import os
+import pickle
+import time
 import traceback
 import analysis_context
 import memory_usage
@@ -31,14 +34,20 @@ def prewarm(app):
     """Start the existing foreground worker with public tables only, no snapshot.
 
     Main-thread stores can still be warming. The first real request supplies
-    their completed state normally; this never reads the editor or user files.
+    their completed state normally; this never reads user files. The editor's
+    lines go along only to be parsed with the public dictionaries
+    (Runtime.warm_lines).
     """
     if not memory_usage.prewarm(app) or getattr(app,'_closing',False) or getattr(app,'_correction_worker',None) is not None:
         return
     worker=None
     try:
         worker=Worker()
-        worker.submit(dict(kind='warmup'))
+        # The open tab's lines, to parse with the public dictionaries after the
+        # tables (Runtime.warm_lines, 2026-11-01): the first prepare reuses them.
+        try:lines=app.editor.get('1.0','end-1c').split('\n')
+        except Exception:lines=None
+        worker.submit(dict(kind='warmup',lines=lines) if lines else dict(kind='warmup'))
         app._correction_worker=worker
         app._worker_state=None
     except Exception:
@@ -73,9 +82,9 @@ def queue_idle_prewarm(app, delay=1200):
     app._idle_prewarm_job = app.root.after(delay, start)
 
 
-def _request(app, task, scope, background=False):
-    if not background:memory_usage.cancel_release(app, 'foreground')
-    worker_name,state_name,request_name=_worker_fields(background,app)
+def _request(app, task, scope, background=False, fields=None):
+    if not background and fields is None:memory_usage.cancel_release(app, 'foreground')
+    worker_name,state_name,request_name=fields or _worker_fields(background,app)
     if _shared(background,worker_name) and memory_usage.foreground_busy(app):
         # The open tab owns the one child (mid); a background request now
         # would supersede its work. The background step asks again when the
@@ -92,6 +101,8 @@ def _request(app, task, scope, background=False):
     identifier=worker.submit(task,data)
     setattr(app,state_name,state)
     setattr(app,request_name,(scope,identifier))
+    if request_name=='_async_request':app._async_request_at=time.monotonic()
+    elif request_name=='_async_background_request':app._async_background_request_at=time.monotonic()
     return identifier
 
 
@@ -116,6 +127,35 @@ def _cancel_request(app,background):
 
 def cancel_background_request(app):
     _cancel_request(app,True)
+
+
+# Each edit of the open tab stops the walk over the other tabs. A row that is well under way in their own child
+# is left to finish: stopped and asked again from the start each time, one long row in another tab was begun 7
+# times (65 s of work thrown away) and never ended. Its answer waits for the walk to come back to it (same scope).
+KEEP_BACKGROUND_ROW_S = 1.0
+KEEP_BACKGROUND_ROW_MAX_S = 180.0
+
+
+def _background_row_running(app):
+    pending=getattr(app,'_async_background_request',None)
+    if pending is None or pending[0][0]!='background' or _shared(True,_worker_fields(True,app)[0]):return False
+    return KEEP_BACKGROUND_ROW_S<=time.monotonic()-getattr(app,'_async_background_request_at',0.0)<KEEP_BACKGROUND_ROW_MAX_S
+
+
+def pause_background(app,on):
+    """打った行を解いている間、裏のタブの子を待たせる（今打った分が最優先・うにさんの決めた順）。"""
+    worker=getattr(app,'_prefetch_worker',None)
+    flag=getattr(worker,'pause_flag',None)
+    if flag is not None and bool(flag.value)!=bool(on):
+        flag.value=1 if on else 0
+
+
+def stop_background_request(app):
+    pending=getattr(app,'_async_background_request',None)
+    worker_name=_worker_fields(True,app)[0]
+    if (pending is None or _shared(True,worker_name) or getattr(app,'_closing',False)
+            or not _background_row_running(app)):
+        _cancel_request(app,True)
 
 
 def cancel_foreground_request(app):
@@ -185,11 +225,21 @@ def context(app,text,lines):
         if value is not None:_save_context(app,text,value)
     if value is not None:
         app._async_context_scope=None
+        _drop_packed(app,lines)
+        app._startup_parsed=None
+        app._startup_parse_tried=False
         app._attested_surfaces=value['attested']
         app._line_words_cache=dict(value['words'])
         return value
     scope=('prepare',input_work.token(app),state_key(app),text)
     if getattr(app,'_async_context_scope',None)==scope:return None
+    _parse_pasted_lines(app,lines)
+    if startup_parse_waiting(app):
+        # The startup children are parsing this tab (start_startup_parse): ask once they answer
+        _wait_for_startup_parse(app)
+        try:app.status.config(text='解析の準備中…（編集できます）')
+        except Exception:pass
+        return None
     if ime_speculation.waiting(app):
         # A prepare now would supersede the composed row's request, whose
         # prepare answers this text when the commit matches. Look again soon.
@@ -197,7 +247,13 @@ def context(app,text,lines):
         return None
     app._async_context_scope=scope
     try:
-        _request(app,dict(kind='prepare',lines=lines),scope)
+        task=dict(kind='prepare',lines=lines)
+        # Sent with each prepare until one answers: a superseded one may not have reached the child
+        parsed=getattr(app,'_startup_parsed',None)
+        if parsed:task['parsed']=parsed
+        packed=_packed_for(app,lines)
+        if packed is not None:task['packed']=packed
+        _request(app,task,scope)
         app.status.config(text='解析の準備中…（編集できます）')
     except Exception as error:
         app._async_context_scope=None
@@ -250,6 +306,7 @@ def _unit_values(app,result,value):
 
 
 def line_step(app,count):
+    if plans_waiting(app):return    # a moment: the rows on screen get their sizes first
     if input_work.token(app)!=getattr(app,'_analyze_work',None):return
     if state_key(app)!=getattr(app,'_analyze_dependencies',None):
         app._analyze();return
@@ -285,17 +342,14 @@ def line_step(app,count):
                 and key+(False,) in getattr(app,'_suspect_units_cache',{})):
             app._analyze_pos+=1;continue
         scope=('line',app._analyze_work,app._analyze_dependencies,app._analyze_text,i,units_only)
+        if not units_only and helper_done(app,i):
+            # The other child has this row (high・2026-10-30): finished, or still computing it; the pass waits
+            # for that one before it ends (helper_busy)
+            app._analyze_pos+=1;continue
         try:
             present,value=_poll(app,scope)
             if not present:
-                task=dict(kind='units' if units_only else 'line',line=lines[i],result=res,
-                    context=app._analyze_ctx,input_method=(app.settings.get('input_method') or 'kana'),
-                    keyboard=keyboard_layout.spec(app.settings),
-                    nearby=() if units_only else app._nearby_words_for(i),
-                    lines=lines if units_only else None,
-                    recent=app.recent_words.words() if getattr(app,'recent_words',None) is not None else (),
-                    readings=input_work.line_readings(app,i,lines),calculations=input_work.line_calculations(app,i,lines),attested=getattr(app,'_attested_surfaces',{}),
-                    tab_has_kana=None if units_only else _tab_has_kana(getattr(app,'_analyze_text',None)))
+                task=line_task(app,i,res,units_only)
                 import ime_speculation
                 value=None if units_only else ime_speculation.take(app,i,task)
                 if value is None:
@@ -312,6 +366,11 @@ def line_step(app,count):
                 app._line_words_cache=dict(prepared['words'])
             app.line_results[i]=analysis_context.completed(value)
             _unit_values(app,value['result'],value)
+            reinput=getattr(app,'_reinput',None)
+            if reinput is not None:reinput.on_answer(value['result'])
+            if value['result'].get('deferred_stages'):
+                arm=getattr(app,'_arm_heavy_redo',None)
+                if arm is not None:arm()
         except Exception as error:
             if _retry_foreground_exit(app,error):return
             _error(app)
@@ -322,6 +381,28 @@ def line_step(app,count):
         app._analyze_pos+=1
         # The worker runs off Tk. Queue the next row now, then return on the
         # pending response so painting/input still get the whole event loop.
+
+
+def defer_heavy(app,i):
+    """The row being typed gets its answer without the heavy step (correction_entry defer_heavy); it is
+    redone when the typing stops (app._flush_heavy_redo), and then this says no."""
+    return (getattr(app,'NEIGHBOR_DEFER',False) is True
+            and getattr(app,'_priority_input_row',None)==(input_work.token(app),i)
+            and i not in getattr(app,'_heavy_redo',()))
+
+
+def line_task(app,i,res,units_only):
+    lines=app._prev_lines
+    return dict(kind='units' if units_only else 'line',line=lines[i],result=res,
+        context=app._analyze_ctx,input_method=(app.settings.get('input_method') or 'kana'),
+        keyboard=keyboard_layout.spec(app.settings),
+        nearby=() if units_only else app._nearby_words_for(i),
+        lines=lines if units_only else None,
+        recent=app.recent_words.words() if getattr(app,'recent_words',None) is not None else (),
+        readings=input_work.line_readings(app,i,lines),calculations=input_work.line_calculations(app,i,lines),attested=getattr(app,'_attested_surfaces',{}),
+        tab_has_kana=None if units_only else _tab_has_kana(getattr(app,'_analyze_text',None)),
+        previous_line=None if units_only else analysis_context.previous_line_of(lines,i),
+        defer_heavy=not units_only and defer_heavy(app,i))
 
 
 def background_step(app,st):
@@ -349,7 +430,7 @@ def background_step(app,st):
                 break
         if st['pos']>=len(st['lines']):return
     units_only=st['ctx'] is not None and st['results'][st['pos']] is not None
-    scope=('background',st['owner'],st['work_epoch'],state_key(app),st['text'],st['pos'],st['ctx'] is None,units_only)
+    scope=('background',st['owner'],state_key(app),st['text'],st['pos'],st['ctx'] is None,units_only)
     present,value=_poll(app,scope,background=True)
     if not present:
         if st['ctx'] is None:
@@ -366,7 +447,8 @@ def background_step(app,st):
                 nearby=nearby,attested=st['attested'],
                 recent=app.recent_words.words() if getattr(app,'recent_words',None) is not None else (),
                 readings=_background_readings(st,i),calculations=_background_readings(st,i,'calculations'),
-                tab_has_kana=None if units_only else _tab_has_kana(st['text'])),scope,background=True)
+                tab_has_kana=None if units_only else _tab_has_kana(st['text']),
+                previous_line=None if units_only else analysis_context.previous_line_of(lines,i)),scope,background=True)
     if value is None:return
     if st['ctx'] is None:
         _save_context(app,st['text'],value)
@@ -386,6 +468,9 @@ def background_step(app,st):
 
 def close(app,keep_prewarmed=False):
     memory_usage.cancel_releases(app)
+    _close_startup_parse(app,now=True)
+    app._startup_parsed=None
+    app._packed_rows=[]
     keep_prewarmed = keep_prewarmed and memory_usage.retains(app, 'foreground')
     job = getattr(app, '_idle_prewarm_job', None)
     if job is not None:
@@ -394,6 +479,8 @@ def close(app,keep_prewarmed=False):
 
     import quick_analysis
     quick_analysis.close(app)
+    app._helper=None
+    app._async_helper_request=None
     for worker_name,state_name,request_name in (_worker_fields(False),_worker_fields(True),_worker_fields(True,app)):
         worker=getattr(app,worker_name,None)
         # Initial dictionary import changes stores in the parent. A worker
@@ -408,6 +495,460 @@ def close(app,keep_prewarmed=False):
         setattr(app,worker_name,None)
         setattr(app,state_name,None)
         setattr(app,request_name,None)
+
+
+# ------------------------------------------------------------
+# The reconversion list in the open tab's child (2026-11-02)
+# ------------------------------------------------------------
+# うにさん: the analysis's memory and the reconversion's must not be held at once. The child already holds
+# the tables the list reads; the main process read them again on the first F5 (about 157MB, about 2.2 s, kept
+# to the end of the run). The child's stores are the main process's (state_key), so the list is the same.
+# A row in the child gives way (it is asked again by the next analysis step). With no child, or one busy
+# with a prepare, the main process makes the list itself, as before.
+CHILD_CANDIDATES = True
+CHILD_CANDIDATES_WAIT_S = 8.0
+CHILD_CANDIDATES_SPAWN = True
+
+
+def child_alive(app):
+    worker=getattr(app,'_correction_worker',None)
+    try:
+        return (worker is not None and not getattr(worker,'closed',False)
+                and worker.process.is_alive())
+    except Exception:
+        return False
+
+
+# The parsed rows of the open tab, packed (about 0.5 MB for 3,600 rows), kept by the window while no child runs
+# (2026-11-03). Low gives its child back after 5 s idle, and the next key parsed the whole tab again: 6.8 s of 10.5 s
+# on 3,600 rows. They read only the public dictionaries (Runtime.line_tokens). In memory only.
+PACKED_ROWS_WAIT_S = 0.25
+PACKED_ROWS_TABS = 2
+
+
+def _same_tab(lines,kept):
+    return len(lines&kept)*2>=len(lines)
+
+
+def keep_rows(app,worker):
+    """Before an idle child is closed. A slow answer is not waited for: the next child parses as before."""
+    try:
+        if not worker.process.is_alive():return
+        identifier=worker.submit(dict(kind='packed_rows'))
+        end=time.monotonic()+PACKED_ROWS_WAIT_S
+        while time.monotonic()<end:
+            value=worker.poll(identifier)
+            if value is not None:
+                kept=list(getattr(app,'_packed_rows',()))
+                for lines,blob in value.get('tabs') or ():
+                    kept=[item for item in kept if not _same_tab(lines,item[0])]+[(lines,blob)]
+                app._packed_rows=kept[-PACKED_ROWS_TABS:]
+                return
+            time.sleep(.002)
+    except Exception:
+        traceback.print_exc()
+
+
+def _packed_for(app,lines):
+    current=frozenset(lines)
+    for kept,blob in getattr(app,'_packed_rows',()):
+        if _same_tab(current,kept):return blob
+    return None
+
+
+def _drop_packed(app,lines):
+    held=getattr(app,'_packed_rows',None)
+    if held:
+        current=frozenset(lines)
+        app._packed_rows=[item for item in held if not _same_tab(current,item[0])]
+
+
+def plans_ask(app,texts):
+    """Ask the open tab's child for the plans of rows on screen, without waiting (boundary_colors, 2026-11-03).
+
+    A row in the child gives way and is asked again after the answer. Returns the scope for plans_poll, or None."""
+    if not CHILD_CANDIDATES or not child_alive(app):return None
+    pending=getattr(app,'_async_request',None)
+    if pending is not None and pending[0][0]!='line':return None
+    try:
+        task=dict(kind='plans',texts=list(texts))
+        if pending is not None:cancel_foreground_request(app)
+        scope=('plans',time.monotonic())
+        return scope if _request(app,task,scope) is not None else None
+    except Exception:
+        traceback.print_exc()
+        return None
+
+
+def plans_poll(app,scope):
+    """(True, plans) answered; (True, None) still waiting; (False, None) nothing will come."""
+    try:
+        return _poll(app,scope)
+    except Exception:
+        traceback.print_exc()
+        plans_cancel(app,scope)
+        return False,None
+
+
+def plans_cancel(app,scope):
+    pending=getattr(app,'_async_request',None)
+    if pending is not None and pending[0]==scope:cancel_foreground_request(app)
+
+
+def plans_waiting(app):
+    pending=getattr(app,'_async_request',None)
+    return pending is not None and pending[0][0]=='plans'
+
+
+def ask_child(app,task):
+    """The answer of the open tab's child, or None: then the caller works it out itself."""
+    if not CHILD_CANDIDATES:return None
+    worker=getattr(app,'_correction_worker',None)
+    if worker is None or getattr(worker,'closed',False):
+        # The child was given back (mid, low: after a while idle). Without one the main process would read the
+        # tables itself and keep them to the end of the run (about 150MB): start the child, it is given back again
+        if not CHILD_CANDIDATES_SPAWN or getattr(app,'_closing',False):return None
+        worker=None
+    pending=getattr(app,'_async_request',None)
+    if pending is not None and pending[0][0] not in ('line','prepare','plans'):return None
+    preparing=pending is not None and pending[0][0]=='prepare'
+    try:
+        if worker is not None and not worker.process.is_alive():return None
+        # What cannot cross to the child fails here: the queue's own thread would only drop it, unseen
+        pickle.dumps(task,pickle.HIGHEST_PROTOCOL)
+        if pending is not None:cancel_foreground_request(app)
+        if preparing:
+            # Asked again after this: the preparation is short, and reading the tables here is not
+            app._async_context_scope=None
+            root=getattr(app,'root',None)
+            if root is not None:root.after(PREPARE_POLL_MS,app._analyze_if_changed)
+        scope=('asked',time.monotonic())
+        identifier=_request(app,task,scope)
+        if identifier is None:return None
+        worker=getattr(app,'_correction_worker',None)
+        end=time.monotonic()+CHILD_CANDIDATES_WAIT_S
+        while time.monotonic()<end:
+            value=worker.poll(identifier)
+            if value is not None:return value
+            time.sleep(.002)
+        cancel_foreground_request(app)
+    except Exception:
+        traceback.print_exc()
+    finally:
+        pending=getattr(app,'_async_request',None)
+        if pending is not None and pending[0][0]=='asked':app._async_request=None
+        memory_usage.queue_release(app,'foreground')
+    return None
+
+
+# ------------------------------------------------------------
+# The open tab parsed by short-lived children at startup (2026-11-01)
+# ------------------------------------------------------------
+# The first prepare of a 3,600-line tab spent 2.9 s in janome after the English relearning answered, and
+# the open tab's child is busy with its tables until then. Up to three more children, started with the
+# warmup, each parse a part of the tab's lines with the public dictionaries only (Runtime.warm_lines) and
+# close (about 3 s, about 140MB each). The first prepare takes their rows: the same rows it would make,
+# so the answers are the same. うにさん 2026-11-01: use spare memory when there is some, at any memory
+# setting, if the PC is not held up. So the number of children follows the free physical memory and the
+# processors at startup; CN_STARTUP_PARSE=0 turns it off.
+STARTUP_PARSE_ENABLED = os.environ.get('CN_STARTUP_PARSE') != '0'
+STARTUP_PARSE_MIN_LINES = 400
+# A file opened: the open tab's child is idle and warm, so the new children pay for their janome load
+# (about 1.3 s) only on a long text (2026-11-02, the first prepare: 1,000 lines 1.62 -> 1.80 s, worse;
+# 1,500 lines 2.31 -> 1.98 s; 2,000 lines 2.97 -> 2.23 s; 5,000 lines 6.9 -> 3.3 s). The same holds for a
+# tab switched to (1,600 lines: later than without them), so a switch does not use them.
+STARTUP_PARSE_OPEN_MIN_LINES = 2000
+STARTUP_PARSE_CHILDREN = 3
+# Each child: lines enough to pay for its janome load (about 1.3 s), memory, and two processors
+STARTUP_PARSE_LINES_PER_CHILD = 300
+STARTUP_PARSE_LINES_PER_PART = 1800   # about 1.3 + 3.6 s, inside the wait and STARTUP_PARSE_MAX_MS
+STARTUP_PARSE_CHILD_MB = 160
+STARTUP_PARSE_RESERVE_MB = 1500       # left free for Windows and the other applications
+STARTUP_PARSE_CPUS_PER_CHILD = 2
+STARTUP_PARSE_CPUS_KEPT = 4           # the app, its two children and the rest of the PC
+# How long the first prepare waits for them, and how often it looks
+STARTUP_PARSE_WAIT_S = 2.5
+STARTUP_PARSE_POLL_MS = 30
+# Closed by then whatever happens (a tab that never asks for a prepare, a slow PC)
+STARTUP_PARSE_MAX_MS = 8000
+# A finished child has ended by then, so its close does not wait
+STARTUP_PARSE_CLOSE_MS = 1500
+
+
+def _free_memory_mb():
+    """Free physical memory now (Windows), or None."""
+    try:
+        import ctypes
+        class Status(ctypes.Structure):
+            _fields_=[('length',ctypes.c_ulong),('load',ctypes.c_ulong),('total',ctypes.c_ulonglong),
+                      ('available',ctypes.c_ulonglong),('page_total',ctypes.c_ulonglong),
+                      ('page_available',ctypes.c_ulonglong),('virtual_total',ctypes.c_ulonglong),
+                      ('virtual_available',ctypes.c_ulonglong),('extended',ctypes.c_ulonglong)]
+        status=Status();status.length=ctypes.sizeof(Status)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):return None
+        return status.available//(1024*1024)
+    except Exception:
+        return None
+
+
+def spare_memory_for(mb,free_mb=None):
+    """Whether a short-lived child of `mb` leaves the reserve free (False when free memory is not known)."""
+    if free_mb is None:free_mb=_free_memory_mb()
+    return free_mb is not None and free_mb-STARTUP_PARSE_RESERVE_MB>=mb
+
+
+def startup_parse_children(lines,cpus=None,free_mb=None):
+    """How many startup children the PC has room for (0: none)."""
+    cpus=(os.cpu_count() or 1) if cpus is None else cpus
+    count=min(STARTUP_PARSE_CHILDREN,lines//STARTUP_PARSE_LINES_PER_CHILD,
+              max(0,(cpus-STARTUP_PARSE_CPUS_KEPT)//STARTUP_PARSE_CPUS_PER_CHILD))
+    if free_mb is None:free_mb=_free_memory_mb()
+    if free_mb is None:return 0
+    return max(0,min(count,(free_mb-STARTUP_PARSE_RESERVE_MB)//STARTUP_PARSE_CHILD_MB))
+
+
+def start_startup_parse(app,own_share=False,min_lines=None,known=()):
+    """At startup, and when a file is opened (2026-11-02: a 5,000-line file waited 6.9 s for its first
+    prepare): the editor's text is the one the next prepare reads. own_share: the open tab's child is idle
+    (a file was opened), so it parses a share too, while the new children load janome."""
+    if getattr(app,'_startup_parse',None) is not None:_close_startup_parse(app)
+    app._startup_parse=None;app._startup_parsed=None
+    if not STARTUP_PARSE_ENABLED:return
+    try:lines=app.editor.get('1.0','end-1c').split('\n')
+    except Exception:return
+    from literal_lines import literal_only
+    todo=[line for line in dict.fromkeys(lines) if line.strip() and not literal_only(line) and line not in known]
+    if len(todo)<(STARTUP_PARSE_MIN_LINES if min_lines is None else min_lines):return
+    count=startup_parse_children(len(todo))
+    if count<1:return
+    own=getattr(app,'_correction_worker',None) if own_share else None
+    if own is not None and (getattr(own,'closed',False) or getattr(app,'_async_request',None) is not None
+                            or not own.process.is_alive()):own=None
+    parts=count+(own is not None)
+    # Short-lived: each takes what it parses in a few seconds; the prepare parses the rest of a very long text
+    todo=todo[:STARTUP_PARSE_LINES_PER_PART*parts]
+    jobs=[]
+    try:
+        for part in range(count):
+            worker=Worker()
+            jobs.append((worker,worker.submit(dict(kind='parse_lines',lines=todo[part::parts]))))
+        # The open tab's child takes the last share (its warmup keeps the rows; the prepare interrupts it)
+        if own is not None:own.submit(dict(kind='warmup',lines=todo[count::parts]))
+    except Exception:
+        for worker,_job in jobs:worker.close()
+        traceback.print_exc();return
+    # The children load janome first (about 1.3 s), then about 2 ms a line
+    wait=max(STARTUP_PARSE_WAIT_S,1.5+0.0025*len(todo)/parts)
+    app._startup_parse=dict(jobs=jobs,results=[None]*len(jobs),since=None,wait=wait)
+    app._startup_parse_tried=True
+    state=app._startup_parse
+    def expire():
+        if getattr(app,'_startup_parse',None) is state:_close_startup_parse(app)
+    try:app.root.after(STARTUP_PARSE_MAX_MS,expire)
+    except Exception:pass
+
+
+def _parse_pasted_lines(app,lines):
+    """An edit added many lines to the open tab (a paste: 5,000 lines waited 7.2 s for the prepare): the same
+    children parse the new lines, once until that prepare answers. Not on a tab switch: see the limit above."""
+    prev=getattr(app,'_prev_lines',None)
+    if (not prev or len(lines)-len(prev)<STARTUP_PARSE_OPEN_MIN_LINES or getattr(app,'_startup_parse_tried',False)
+            or getattr(app,'_startup_parse',None) is not None):return
+    work=getattr(app,'_analyze_work',None)
+    if not work or work[0]!=input_work.token(app)[0]:return
+    try:start_startup_parse(app,own_share=True,min_lines=STARTUP_PARSE_OPEN_MIN_LINES,known=frozenset(prev))
+    except Exception:traceback.print_exc()
+
+
+def _close_startup_parse(app,now=False):
+    state=getattr(app,'_startup_parse',None)
+    app._startup_parse=None
+    job=getattr(app,'_startup_parse_poll',None)
+    app._startup_parse_poll=None
+    if job is not None:
+        try:app.root.after_cancel(job)
+        except Exception:pass
+    for worker,_job in (state or {}).get('jobs',()):
+        # Ask the child to end now and close it once it has: closing at once waited for each process on
+        # the window's thread (0.21 s for three, 2026-11-01)
+        try:worker.inbox.put_nowait(None)
+        except Exception:pass
+        try:
+            if now:raise RuntimeError('closing now')
+            app.root.after(STARTUP_PARSE_CLOSE_MS,worker.close)
+        except Exception:
+            try:worker.close()
+            except Exception:pass
+
+
+def startup_parse_waiting(app):
+    """Whether the first prepare waits for the startup parse (asked when it is about to be sent, after the
+    rows the saved analysis has are shown). When every part has come, its rows go to app._startup_parsed."""
+    state=getattr(app,'_startup_parse',None)
+    if state is None:return False
+    if state['since'] is None:state['since']=time.monotonic()
+    try:
+        for part,(worker,job) in enumerate(state['jobs']):
+            if state['results'][part] is None:state['results'][part]=worker.poll(job)
+    except Exception:
+        traceback.print_exc();_close_startup_parse(app);return False
+    if all(result is not None for result in state['results']):
+        _close_startup_parse(app)
+        app._startup_parsed=dict(blobs=[result['blob'] for result in state['results']])
+        return False
+    if getattr(app,'_closing',False) or time.monotonic()-state['since']>state.get('wait',STARTUP_PARSE_WAIT_S):
+        _close_startup_parse(app);return False
+    return True
+
+
+def _wait_for_startup_parse(app):
+    """Look again for the startup parse until it answers or is given up, then analyse (once)."""
+    if getattr(app,'_startup_parse_poll',None) is not None:return
+    def check():
+        app._startup_parse_poll=None
+        if getattr(app,'_closing',False):return
+        if startup_parse_waiting(app):
+            app._startup_parse_poll=app.root.after(STARTUP_PARSE_POLL_MS,check);return
+        app._analyze()
+    app._startup_parse_poll=app.root.after(STARTUP_PARSE_POLL_MS,check)
+
+
+# ------------------------------------------------------------
+# The second child helps the open tab (high・2026-10-30 うにさん「子2つで分けて」)
+# ------------------------------------------------------------
+# Order of importance (うにさん): the row just typed, then the rows in view, then the rows below in the same
+# tab, then the other tabs ("ある程度遅くなっても構わない"). The open tab's child takes its rows in that order;
+# the other tabs' child takes the next row after it in the same order, so the two leapfrog down the list and
+# the open tab's child skips the rows the helper has finished. The other tabs wait while the helper has work.
+# Not while typing, and not for a short pass (the load matters as much as the speed); results are the same as
+# one child's (each row is corrected from the same inputs).
+HELPER_MIN_ROWS = 8
+HELPER_SCAN = 200
+HELPER_FIELDS = ('_prefetch_worker', '_prefetch_worker_state', '_async_helper_request')
+
+
+def _helper_key(app):
+    return (getattr(app, '_analyze_work', None), getattr(app, '_analyze_dependencies', None),
+            getattr(app, '_analyze_text', None))
+
+
+def _helper_state(app):
+    key = _helper_key(app)
+    st = getattr(app, '_helper', None)
+    if st is None or st['key'] != key:
+        if st is not None and st.get('row') is not None:
+            _helper_cancel(app)
+        st = app._helper = dict(key=key, row=None, done=set())
+    return st
+
+
+def _helper_cancel(app):
+    pending = getattr(app, '_async_helper_request', None)
+    app._async_helper_request = None
+    worker = getattr(app, '_prefetch_worker', None)
+    if pending is None or worker is None or getattr(worker, 'closed', False) is True:
+        return
+    try:
+        if worker.process.is_alive():
+            worker.submit(dict(kind='cancel'))
+    except Exception:
+        traceback.print_exc()
+
+
+def helper_allowed(app):
+    """The helper may take a row of the open tab now."""
+    if _background_row_running(app):return False   # 同じ子で裏のタブの長い行を計算中: 済むまで待つ（打ち切ると最初からになる）
+    if not memory_usage.prefetch_worker(app) or getattr(app, '_closing', False):
+        return False
+    if getattr(app, '_analyze_units_only', False) or getattr(app, '_analyze_ctx', None) is None:
+        return False
+    if input_work.token(app) != getattr(app, '_analyze_work', None):
+        return False
+    if state_key(app) != getattr(app, '_analyze_dependencies', None):
+        return False
+    interacting = getattr(app, '_interacting', None)
+    if callable(interacting) and interacting():
+        return False
+    todo = getattr(app, '_analyze_todo', ()) or ()
+    return len(todo) - getattr(app, '_analyze_pos', 0) >= HELPER_MIN_ROWS
+
+
+def helper_busy(app):
+    """A row of the open tab is with the helper (the open tab's pass waits for it before it ends)."""
+    st = getattr(app, '_helper', None)
+    return st is not None and st.get('row') is not None and st['key'] == _helper_key(app)
+
+
+def helper_done(app, index):
+    """The helper has finished (or is computing) this row of the current pass."""
+    st = getattr(app, '_helper', None)
+    if st is None or st['key'] != _helper_key(app):
+        return False
+    if index == st.get('row'):
+        return True
+    # A row made pending again since (a new context with the same key) is not finished: passing over it ended
+    # the pass with the row unanalysed and nothing scheduled
+    if index not in st['done']:
+        return False
+    results = getattr(app, 'line_results', ())
+    from tab_analysis import reusable_result
+    return 0 <= index < len(results) and reusable_result(results[index])
+
+
+def helper_wanted(app):
+    """The other tabs wait: the open tab still has rows for the helper."""
+    return helper_busy(app) or helper_allowed(app)
+
+
+def helper_step(app):
+    """Collect the helper's row and give it the next one. Returns the row that came in, or None."""
+    st = _helper_state(app)
+    landed = None
+    if st['row'] is not None:
+        scope = ('helper',) + st['key'] + (st['row'],)
+        pending = getattr(app, '_async_helper_request', None)
+        worker = getattr(app, '_prefetch_worker', None)
+        if not pending or pending[0] != scope or worker is None:
+            st['row'] = None
+        else:
+            try:
+                value = worker.poll(pending[1])
+            except Exception:
+                traceback.print_exc()
+                app._async_helper_request = None
+                st['row'] = None
+                return None
+            if value is None:
+                return None
+            app._async_helper_request = None
+            i = st['row']
+            st['row'] = None
+            lines = getattr(app, '_prev_lines', [])
+            if (0 <= i < min(len(lines), len(app.line_results))
+                    and value['result'].get('original') == lines[i]):
+                app.line_results[i] = analysis_context.completed(value)
+                _unit_values(app, value['result'], value)
+                st['done'].add(i)
+                landed = i
+    if st['row'] is not None or not helper_allowed(app):
+        return landed
+    from literal_lines import literal_only
+    todo = app._analyze_todo
+    pos = app._analyze_pos
+    lines = app._prev_lines
+    for i in todo[pos + 1:pos + 1 + HELPER_SCAN]:
+        if i in st['done'] or not 0 <= i < min(len(lines), len(app.line_results)) or literal_only(lines[i]):
+            continue
+        task = line_task(app, i, app.line_results[i], False)
+        scope = ('helper',) + st['key'] + (i,)
+        try:
+            app._async_background_request = None       # the other tabs ask again when the helper is free
+            _request(app, task, scope, fields=HELPER_FIELDS)
+            st['row'] = i
+        except Exception:
+            traceback.print_exc()
+        break
+    return landed
 
 
 def _background_readings(state,index,attribute='readings'):

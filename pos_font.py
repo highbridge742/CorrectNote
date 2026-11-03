@@ -4,6 +4,7 @@
 from decimal import Decimal, InvalidOperation, ROUND_CEILING
 import math
 import re
+import unicodedata
 
 
 POS_LABELS = (
@@ -31,18 +32,29 @@ POS_LABELS = (
     # (2026-10-26 うにさん「フォントサイズカラーの代名詞も独立する。1.2倍、緑明るい」).
     # Last for the same reason; the dialog shows it right after 名詞.
     ('代名詞', '代名詞'),
+    # English prepositions have their own row, apart from 助詞 (2026-11-01 うにさん「助詞と前置詞を別々の項目に
+    # 分け、助詞を0.9倍に変更。前置詞は1.0倍」). Last for the same reason; the dialog shows it right after 助詞.
+    ('前置詞', '前置詞'),
+    # Compound particles (janome 助詞・…・連語: によって・について・として・における) have their own row, apart from
+    # the short particles (2026-11-01 うにさん「「によって」「として」…まで小さくなると読みにくくもなる」). Default 1.0
+    # and the 助詞 colour; the dialog shows it right after 助詞.
+    ('助詞（複合）', '助詞（複合）'),
 )
 ARTICLE = '冠詞'
 PRONOUN = '代名詞'
+PREPOSITION = '前置詞'
+COMPOUND_PARTICLE = '助詞（複合）'
 POS_CATEGORIES = tuple(key for key, _label in POS_LABELS)
 # Rows of the per-POS dialog: the headings also name the English parts of
 # speech each row takes (en_pos), and 英字 — now only the English words the
 # dictionary does not know — is shown last as その他英字 (2026-10-14 うにさん
 # 「英字を、その他英字として下へ移す。見出しに、代名詞や前置詞、冠詞も書き加える」).
 # Keys, tags and saved settings keep the order and names above.
-POS_DIALOG_LABELS = {'助詞': '助詞・前置詞',
-                     '連体詞': '連体詞・限定詞', '英字': 'その他英字'}
-_DIALOG_ORDER = [item for item in POS_LABELS if item[0] not in ('英字', ARTICLE, PRONOUN)]
+POS_DIALOG_LABELS = {'連体詞': '連体詞・限定詞', '英字': 'その他英字'}
+_DIALOG_ORDER = [item for item in POS_LABELS
+                 if item[0] not in ('英字', ARTICLE, PRONOUN, PREPOSITION, COMPOUND_PARTICLE)]
+_DIALOG_ORDER.insert([k for k, _l in _DIALOG_ORDER].index('助詞') + 1, (PREPOSITION, PREPOSITION))
+_DIALOG_ORDER.insert([k for k, _l in _DIALOG_ORDER].index('助詞') + 1, (COMPOUND_PARTICLE, COMPOUND_PARTICLE))
 _DIALOG_ORDER.insert([k for k, _l in _DIALOG_ORDER].index('連体詞') + 1, (ARTICLE, ARTICLE))
 _DIALOG_ORDER.insert([k for k, _l in _DIALOG_ORDER].index('名詞') + 1, (PRONOUN, PRONOUN))
 POS_DIALOG_ROWS = tuple(
@@ -56,11 +68,13 @@ POS_FONT_TAGS = {key: 'pos_font_' + str(index)
 # the mouse moves over the colour palette).  うに 2026-10-13
 POS_COLOR_TAGS = {key: 'pos_color_' + str(index)
                   for index, key in enumerate(POS_CATEGORIES)}
-POS_FONT_DEFAULTS = {key: 1.0 for key in POS_CATEGORIES}
-POS_FONT_DEFAULTS.update({'名詞': 1.1, '動詞': 1.1, '形容詞': 1.1, '副詞': 1.1,
-                          '助動詞': 1.1, '数詞': 1.2, PRONOUN: 1.2,
-                          # 2026-10-26 うにさん「品詞サイズのフィラーを1.4倍、朱・明るいをデフォルトに」
-                          'フィラー': 1.4})
+# 2026-11-01 うにさん（画像のとおり）「サイズ処理前後で文字が小さくなるのが大きくなるより、大きいものが小さくなるほうが
+# 見栄えがよかった。フォントのデフォルトサイズを12、品詞は画像の倍率に変更」: 本文の字を 12 にして、内容語を 1.0・
+# 機能語や記号を 0.8〜0.9 に下げる形（前は 11 の字に内容語を 1.1〜1.2 で上げていた）
+POS_FONT_DEFAULTS = {'名詞': 1.0, PRONOUN: 1.1, '名詞（サ変）': 0.9, '数詞': 1.1, '動詞': 1.0, '形容詞': 1.0,
+                     '形容動詞': 0.9, '副詞': 1.0, '連体詞': 0.9, ARTICLE: 0.8, '接続詞': 0.9, '感動詞': 0.9,
+                     '助詞': 0.8, COMPOUND_PARTICLE: 0.9, PREPOSITION: 0.9, '助動詞': 1.0, '接頭詞': 0.9,
+                     '記号': 0.9, 'フィラー': 1.3, 'その他': 0.9, '英字': 1.0}
 MULTIPLIER_MIN = 0.5
 MULTIPLIER_MAX = 2.0
 _COLOR = re.compile(r'#[0-9a-fA-F]{6}')
@@ -116,7 +130,8 @@ POS_COLOR_DEFAULTS.update({'名詞': palette_color('緑', 'ごく明るい'),
                            '数詞': palette_color('緑', 'とても明るい'),
                            PRONOUN: palette_color('緑', '明るい'),
                            'フィラー': palette_color('朱', '明るい'),
-                           '英字': palette_color('グレー', '明るい'),
+                           # 2026-11-01 うにさん「（その他英字の）色を藍・とても明るい」
+                           '英字': palette_color('藍', 'とても明るい'),
                            '記号': palette_color('グレー', '明るい')})
 POS_COLOR_DEFAULTS_LIGHT = {key: '' for key in POS_CATEGORIES}
 POS_COLOR_DEFAULTS_LIGHT.update({'名詞': palette_color('青緑', '濃い'),
@@ -125,7 +140,8 @@ POS_COLOR_DEFAULTS_LIGHT.update({'名詞': palette_color('青緑', '濃い'),
                                  PRONOUN: palette_color('緑', '中間'),
                                  # 朱・明るい as it reads on white (the same mirror as 代名詞)
                                  'フィラー': palette_color('朱', '中間'),
-                                 '英字': palette_color('グレー', 'やや濃い'),
+                                 # 藍・とても明るい as it reads on white (display_color: とても明るい ↔ やや濃い)
+                                 '英字': palette_color('藍', 'やや濃い'),
                                  '記号': palette_color('グレー', 'やや濃い')})
 
 
@@ -241,7 +257,28 @@ def major_pos(pos):
         return '数詞'
     if major == '名詞' and separator and sub.split(':')[0] == PRONOUN:
         return PRONOUN
+    if major == '助詞' and separator and '連語' in sub.split(':'):
+        return COMPOUND_PARTICLE
     return major if major in POS_LABEL_BY_KEY else 'その他'
+
+
+def _mark_char(c):
+    """句読点・括弧・引用符・記号（数学・通貨・★♪○■ のような絵の記号も。janome は辞書に無い記号を名詞と付ける）。"""
+    return unicodedata.category(c)[0] in 'PS'
+
+
+_TARI = ('たり', 'だり')
+_TARI_HOSTS = ('動詞', '形容詞', '助動詞')
+
+
+def _dictionary_conjunction(surface):
+    """janome の辞書に、同じ字の接続詞が在るか（表示だけ・読めなければ False）。"""
+    try:
+        from morphology import dictionary_base_pos
+        found = dictionary_base_pos(surface)
+    except Exception:
+        return False
+    return bool(found) and any(item.startswith('接続詞') for item in found)
 
 
 # Digits inside a joined noun (``3個``, ``３本目``) are still numerals.
@@ -263,6 +300,33 @@ def spans(text, tokens):
                 and text[start:end] == surface):
             continue
         major = major_pos(pos)
+        if (major != 'その他' and any(unicodedata.category(c)[0] == 'N' for c in surface)
+                and all(unicodedata.category(c)[0] == 'N' or _mark_char(c) or c.isspace() for c in surface)):
+            # 数の字と記号だけの並び（① ½ ² ②、: janome は 名詞・サ変接続 と付ける）は、数の字を数詞・記号を記号に
+            # 分ける（2026-11-01）
+            position = start
+            while position < end:
+                kind = '数詞' if unicodedata.category(text[position])[0] == 'N' else '記号'
+                stop = position + 1
+                while stop < end and ('数詞' if unicodedata.category(text[stop])[0] == 'N' else '記号') == kind:
+                    stop += 1
+                result.append((kind, position, stop))
+                position = stop
+            continue
+        if major != 'その他' and surface.strip() and all(_mark_char(c) or c.isspace() for c in surface):
+            # 記号だけの並びは記号（2026-11-01 うにさん「英語の記号に見える部分が名詞判定」: janome は辞書に無い
+            # ASCII の記号 <= (*) -> && - , や ★♪○■ を 名詞・サ変接続 と付ける）。品詞の分からない字（その他）はそのまま
+            major = '記号'
+        if major == '記号':
+            pass
+        elif major == '助詞' and len(surface) >= 2 and _dictionary_conjunction(surface):
+            # 助詞と付いても、辞書に同じ字の接続詞が在れば接続詞の書式（および・ならびに: 2026-11-01 うにさん。
+            # janome は前の語によって および を接続助詞と付けることがある）。1字の助詞（が）は触らない
+            major = '接続詞'
+        elif surface in _TARI and result and result[-1][2] == start and result[-1][0] in _TARI_HOSTS:
+            # 動詞・形容詞・助動詞の直後の たり・だり は前の語の書式（なかったり・見たり: 2026-11-01 うにさん。
+            # janome は たり を並立助詞とも助動詞とも付け、同じ たり の大きさが揃わなかった）
+            major = result[-1][0]
         if major not in _NUMERAL_HOSTS:
             result.append((major, start, end))
             continue

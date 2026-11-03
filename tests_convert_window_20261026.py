@@ -209,6 +209,22 @@ class TestWindow(unittest.TestCase):
         self.assertIn(cw._instance.buttons[0].cget('text'), self.editor.get('1.0', 'end'))
         self.assertEqual(self.root.clipboard_get(), cw._instance.buttons[0].cget('text'))
 
+    def test_after_a_click_the_cursor_is_after_the_text_and_the_field_has_focus(self):
+        # 2026-10-30 うにさん「文変換ウインドウをクリックしてペーストした後は、ペーストの右にカーソルを置いて
+        # フォーカスする（単語帳と同じ挙動）」
+        self.editor.mark_set('insert', '2.3')
+        cw.open_from_app(self.app)
+        self.root.update()                                            # the opening's own focus hand-back
+        self.editor.mark_set('insert', '1.2')
+        focused = []
+        self.editor.focus_set = lambda: focused.append('set')
+        self.editor.focus_force = lambda: focused.append('force')
+        text = cw._instance.buttons[0].cget('text')
+        cw._instance.buttons[0].invoke()
+        self.root.update()
+        self.assertEqual(self.editor.get('1.2', 'insert'), text)       # the cursor is right after the text
+        self.assertEqual(focused, ['set'])                            # tests never bring a window to the front
+
     def test_pos_styles_follow_editor(self):
         # うにさん 16:06Z: 品詞ごとの大きさと色を窓の中にも
         from pos_font import POS_COLOR_TAGS, POS_FONT_TAGS

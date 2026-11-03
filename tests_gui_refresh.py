@@ -273,6 +273,10 @@ def child():
                         frame=a._tab_widgets[index]['frame'];left=viewport.canvasx(0)
                         assert left-2<=frame.winfo_x(),(width,index,left,frame.winfo_x())
                         assert frame.winfo_x()+frame.winfo_width()<=left+width+2,(width,index,left,frame.winfo_x(),frame.winfo_width())
+                        # 見切れるときは選んだタブを中央に（両端は寄せたまま・2026-10-31 うにさん）
+                        total=a.tab_bar.winfo_reqwidth();middle=frame.winfo_x()+frame.winfo_width()/2
+                        if total>width and 1<left<total-width-1:
+                            assert abs(middle-(left+width/2))<=4,(width,index,left,middle)
                 finally:a.session.tabs=tabs;a.session.active=active
             check('selected_tab_visible_after_width_changes',resized_tabs)
             print('REFRESH_REPORT '+json.dumps(reports,ensure_ascii=False),flush=True)

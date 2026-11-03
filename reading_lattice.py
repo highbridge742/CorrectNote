@@ -47,6 +47,7 @@ _KATA = re.compile('[ァ-ヶ]')
 _table = None   # 読み -> [(表記, 左id, 右id, 費用, 品詞の大分類)]
 _trie = None
 _conn = None
+_prefixes = None   # 詰めた形のとき: 読みの頭の全部（木の代わり・_words_from）
 
 
 def _hira(text):
@@ -62,6 +63,10 @@ def _janome_version():
 
 
 CACHE_NAME = 'reading_lattice_table.pickle.gz'
+# 詰めた形（compact_tables・2026-10-31）の控え。表と木で約340MB → 数十MB。答えは同じ（同じ語・同じ並び・同じ探し方）。
+# CN_PLAIN_TABLES=1 なら今までの dict と木
+COMPACT_NAME = 'reading_lattice_compact.pickle.gz'
+COMPACT_VERSION = 1
 
 
 def default_cache_path():
@@ -130,16 +135,66 @@ def _build_table_entries():
     return table
 
 
+def _compact_wanted():
+    try:
+        import compact_tables
+        return compact_tables.enabled()
+    except Exception:
+        return False
+
+
+def _load_compact(path, stamp):
+    """詰めた形の控え (表, 読みの頭) か None。"""
+    try:
+        import compact_tables
+        with gzip.open(path, 'rb') as f:
+            got_stamp, state = pickle.load(f)
+        if got_stamp != stamp + ('compact', COMPACT_VERSION):
+            return None
+        return (compact_tables.CompactLattice.from_state(state['table']),
+                compact_tables.CompactWords(compact_tables._Keys(state['prefixes'], '\n')))
+    except Exception:
+        return None
+
+
+def _compact_from(table, path, stamp):
+    """dict の表から詰めた形を作り、控えに書く（書けなくても作った形は返す）。形にできなければ None。"""
+    try:
+        import compact_tables
+        small = compact_tables.CompactLattice.of(table)
+        prefixes = compact_tables.CompactWords.of({k[:i] for k in table for i in range(1, len(k) + 1)})
+    except (ImportError, ValueError):
+        return None
+    try:
+        # 解析の子が2つ同時に作ることがあるので、書きかけの名前はプロセスごと
+        tmp = '%s.%d.tmp' % (path, os.getpid())
+        with gzip.open(tmp, 'wb', compresslevel=6) as f:
+            pickle.dump((stamp + ('compact', COMPACT_VERSION),
+                         dict(table=small.state(), prefixes=prefixes._keys._blob)), f, protocol=4)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+    return small, prefixes
+
+
 def load(cache_path=None, rebuild=False, build=True):
     """読みの表と連接を用意する（2回目からは何もしない）。build=False なら控えから読むだけで、
     控えが無い・合わないときは作らずに戻る（解析の子の warmup 用。作るときの janome.sysdic.entries() の
-    あとに同じプロセスで作る DictIndex が空になるため・2026-10-25）。"""
-    global _table, _trie, _conn
+    あとに同じプロセスで作る DictIndex が空になるため・2026-10-25）。
+    詰めた形（_compact_wanted）では、詰めた形の控えがあればそれだけを読み、無ければ dict の表から作って控える。"""
+    global _table, _trie, _conn, _prefixes
     if _table is not None and not rebuild:
         return
     import janome.sysdic as sysdic
     path = cache_path or default_cache_path()
     stamp = (TABLE_VERSION, _janome_version())
+    compact = _compact_wanted()
+    compact_path = os.path.join(os.path.dirname(path), COMPACT_NAME)
+    if compact and not rebuild:
+        got = _load_compact(compact_path, stamp)
+        if got is not None:
+            _table, _trie, _prefixes, _conn = got[0], None, got[1], sysdic.connections
+            return
     table = None
     if not rebuild:
         try:
@@ -160,13 +215,19 @@ def load(cache_path=None, rebuild=False, build=True):
             os.replace(tmp, path)
         except Exception:
             pass
+    if compact:
+        got = _compact_from(table, compact_path, stamp)
+        if got is not None:
+            table = None
+            _table, _trie, _prefixes, _conn = got[0], None, got[1], sysdic.connections
+            return
     trie = {}
     for k in table:
         node = trie
         for ch in k:
             node = node.setdefault(ch, {})
         node['$'] = k
-    _table, _trie, _conn = table, trie, sysdic.connections
+    _table, _trie, _prefixes, _conn = table, trie, None, sysdic.connections
 
 
 class Result(object):
@@ -208,7 +269,37 @@ def _words_from(t, i, neighbors, max_edit):
             if j + 1 < len(t) and t[j + 1] in node and ch in node[t[j + 1]]:
                 walk(node[t[j + 1]][ch], j + 2, ec + SWAP, ne + 1, ops + [('swap', j, ch + t[j + 1], t[j + 1] + ch)])
 
+    if _prefixes is not None:
+        return _words_from_compact(t, i, neighbors, max_edit)
     walk(_trie, i, 0, 0, [])
+    return out
+
+
+def _words_from_compact(t, i, neighbors, max_edit):
+    """_words_from の詰めた形（木の節＝読みの頭の文字列）。同じ順で歩き、同じものを返す。
+    `ch in 節` は「頭＋ch」が読みの頭か、`'$' in 節` は頭そのものが読みか。"""
+    out = []
+    prefixes, keys = _prefixes, _table
+
+    def walk(p, j, ec, ne, ops):
+        if p in keys:
+            out.append((j, p, ec, tuple(ops)))
+        if j >= len(t):
+            return
+        ch = t[j]
+        if p + ch in prefixes:
+            walk(p + ch, j + 1, ec, ne, ops)
+        if ne < max_edit:
+            if neighbors is not None:
+                for c, d in neighbors(ch):
+                    if isinstance(c, str) and c != ch and p + c in prefixes:   # 木の節は字の鍵だけ
+                        walk(p + c, j + 1, ec + SUB_BASE + int(SUB_PER_DIST * d), ne + 1,
+                             ops + [('sub', j, ch, c)])
+            walk(p, j + 1, ec + EXTRA, ne + 1, ops + [('extra', j, ch, '')])
+            if j + 1 < len(t) and p + t[j + 1] in prefixes and p + t[j + 1] + ch in prefixes:
+                walk(p + t[j + 1] + ch, j + 2, ec + SWAP, ne + 1, ops + [('swap', j, ch + t[j + 1], t[j + 1] + ch)])
+
+    walk('', i, 0, 0, [])
     return out
 
 

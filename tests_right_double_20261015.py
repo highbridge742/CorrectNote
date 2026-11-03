@@ -57,11 +57,11 @@ class RightDoubleTests(unittest.TestCase):
     def test_a_slow_second_press_or_another_place_is_not_a_double(self):
         self.press(1000)
         self.press(1600)             # 0.6 s later
-        self.press(1700, x=60)       # 10 px away
+        self.press(1700, x=110)      # 60 px away
         self.assertEqual(self.doubles, [])
-        self.press(1800, x=61)
+        self.press(1800, x=111)
         self.assertEqual(self.doubles, [self.text])
-        self.press(1900, x=61)       # a third press starts over
+        self.press(1900, x=111)       # a third press starts over
         self.assertEqual(self.doubles, [self.text])
 
     def test_a_slow_second_press_after_a_long_release_is_not_a_double(self):

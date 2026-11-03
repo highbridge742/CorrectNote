@@ -57,7 +57,9 @@ class MemoryRuntimeTests(unittest.TestCase):
                         # other tabs' rows go to that same child (no second process).
                         worker = app._correction_worker
                         M.queue_release(app, 'foreground')
-                        self.assertFalse(hasattr(app, '_memory_foreground_job') and app._memory_foreground_job)
+                        # 2026-10-30: closed only after a quiet minute, so it is still open here
+                        self.assertTrue(app._memory_foreground_job)
+                        M.cancel_release(app, 'foreground')
                         self.assertTrue(worker.process.is_alive())
                         identifier = A._request(app, task, ('background row', index), background=True)
                         self.assertIs(app._correction_worker, worker)

@@ -47,21 +47,21 @@ class PronounRowTests(unittest.TestCase):
         self.assertEqual(keys[keys.index('名詞') + 1], PRONOUN)
         self.assertEqual(dict(POS_DIALOG_ROWS)['名詞'], '名詞')
         self.assertEqual(keys[-1], '英字')
-        self.assertEqual(POS_CATEGORIES[-1], PRONOUN)
+        self.assertEqual(POS_CATEGORIES[-3:], (PRONOUN, '前置詞', '助詞（複合）'))   # 前置詞 and 助詞（複合） came after 代名詞 (2026-11-01)
         self.assertEqual(POS_FONT_TAGS['名詞'], 'pos_font_0')
         self.assertEqual(POS_FONT_TAGS['冠詞'], 'pos_font_17')
 
     def test_defaults_are_1_2_and_bright_green(self):
-        self.assertEqual(normalize_multipliers(None)[PRONOUN], 1.2)
+        self.assertEqual(normalize_multipliers(None)[PRONOUN], 1.1)
         self.assertEqual(color_defaults(True)[PRONOUN], palette_color('緑', '明るい'))
         self.assertEqual(color_defaults(False)[PRONOUN], display_color(palette_color('緑', '明るい'), False))
         import settings
-        self.assertEqual(settings.DEFAULTS['pos_font_multipliers'][PRONOUN], 1.2)
+        self.assertEqual(settings.DEFAULTS['pos_font_multipliers'][PRONOUN], 1.1)
 
     def test_settings_from_before_take_the_new_defaults(self):
         old_sizes = {'名詞': 1.5, '連体詞': 1.3}
         old_colors = {'名詞': '#123456'}
-        self.assertEqual(normalize_multipliers(old_sizes)[PRONOUN], 1.2)
+        self.assertEqual(normalize_multipliers(old_sizes)[PRONOUN], 1.1)
         self.assertEqual(normalize_colors(old_colors)[PRONOUN], palette_color('緑', '明るい'))
         self.assertEqual(normalize_colors(old_colors, dark=False)[PRONOUN], color_defaults(False)[PRONOUN])
         import settings

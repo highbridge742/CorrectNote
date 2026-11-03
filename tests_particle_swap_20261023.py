@@ -28,5 +28,10 @@ class ParticleSwapTests(unittest.TestCase):
         self.assertEqual(self.run_ime('びょうきをなおす')['corrected'], '病気を治す')
 
 
+    def test_familiar_word_starting_inside_the_swap_stays(self):
+        # 助詞の字と次の語の頭（は｜がっこう）を入れ替えると身近な語（学校）が崩れるので入れ替えない（2026-10-31）
+        self.assertNotIn('がはっこう', self.run_ime('きょうははがっこうにいく。')['corrected'] + self.run_ime('あしたはがっこうにいきます。')['corrected'])
+
+
 if __name__ == '__main__':
     unittest.main()

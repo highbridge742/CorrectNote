@@ -39,9 +39,13 @@ def remember(app, values):
     while len(cache)>PLAN_CACHE_ROWS or total>PLAN_CACHE_CHARS:
         oldest=next(iter(cache));total-=len(oldest);cache.pop(oldest)
     app._ctrl_boundary_chars=(cache,total)
-    for w in (getattr(app,'editor',None),getattr(app,'result_view',None),getattr(app,'_quick_text',None)):
+    for w in (getattr(app,'editor',None),getattr(app,'result_view',None),getattr(app,'_quick_text',None),
+              *_doc_window_copies(app)):
         colors=getattr(w,'_correctnote_boundary_colors',None)
         if isinstance(colors,BoundaryColors):colors.data_ready(values)
+    for window in getattr(app,'_doc_windows',()):
+        try:window.paint_peer()
+        except Exception:pass
     queue=getattr(app,'_queue_analysis_gutters',None)
     if queue is not None:queue(values)
 
@@ -62,6 +66,16 @@ def plan_for(app,widget,row,text):
         for saved in (colors._painted.get(row),colors._last_plans.get(row)):
             if saved is not None and saved[0]==text and saved[1] is not None:
                 value=saved[1];break
+    if value is None and widget is getattr(app,'result_view',None):
+        # 補正欄の解析待ちの行は、補正の無い同じ字なら、入力欄の同じ行の品詞の大きさ・色をそのまま使う
+        # （同じ字の区切りと品詞は同じ。2026-11-01 うにさん「19行目以外が小さかった」——解析が済むまで
+        # 元の大きさで出て、解析の済んだ行とそろわなかった）
+        editor=getattr(app,'editor',None)
+        source=getattr(editor,'_correctnote_boundary_colors',None)
+        if isinstance(source,BoundaryColors):
+            for saved in (source._painted.get(row),source._last_plans.get(row)):
+                if saved is not None and saved[0]==text and saved[1] is not None:
+                    value=saved[1];break
     return value
 
 
@@ -93,6 +107,8 @@ class BoundaryColors:
         self._painted_styles=self._sized_majors()
         self._painted_colors=self._colored_majors()
         self._view_job=None;self._scroll_job=None;self._drawn_view=None
+        self._plans_job=None;self._plans_failed=set();self._plans_scope=None;self._plans_texts=();self._plans_until=0.0
+        self._new_rows_band=None;self._new_rows_until=0.0
         observe_text(widget)
         widget._correctnote_observers.setdefault('changed',[]).append(self.changed)
         widget._correctnote_observers.setdefault('viewed',[]).append(self.viewed)
@@ -254,29 +270,43 @@ class BoundaryColors:
         for tag in tags:
             self.widget.tag_remove(tag,start,end)
 
-    def _first_tagged_row(self,row):
-        """First row at or after ``row`` carrying a POS tag, or None.
+    def _bare_rows(self,span=64):
+        """bare(row) for ascending rows: True when no POS tag is on the row.
 
-        Rows before it have nothing to clear. After a tab's text is loaded no
-        row has tags, so a pass over the document skips two Tk calls per POS
-        and row (most of the cost of a tab switch)."""
-        w=self.widget;best=None
-        for tag,_major in self._row_tags():
-            found=w.tag_nextrange(tag,f'{row}.0','end')
-            if found:
-                r=int(str(found[0]).split('.')[0])
-                if best is None or r<best:best=r
-        return best
+        After a tab's text is loaded no row has tags, so a pass over the
+        document skips two Tk calls per POS and row (most of the cost of a tab
+        switch). Each POS is first looked for once up to the end of the text;
+        one that is not there is not asked again. The others are asked once
+        per window of rows, bounded to the window (2026-11-01, speed: asking
+        every POS for the first tagged row up to the end after each tagged row
+        took 6 of 15 s while scrolling a 3,600-row tab). POS tags lie inside
+        one row (they are added per token), so a range starts on its row."""
+        w=self.widget;alive=None;window=[0,set()]
+        def bare(row):
+            nonlocal alive
+            if alive is None:
+                alive=[tag for tag,_major in self._row_tags() if w.tag_nextrange(tag,f'{row}.0','end')]
+            if not alive:return True
+            if row>window[0]:
+                last=row+span-1;end=f'{last+1}.0';rows=set()
+                for tag in alive:
+                    index=f'{row}.0'
+                    while True:
+                        found=w.tag_nextrange(tag,index,end)
+                        if not found:break
+                        tagged=int(str(found[0]).split('.')[0]);rows.add(tagged)
+                        index=f'{tagged+1}.0'
+                window[0]=last;window[1]=rows
+            return row not in window[1]
+        return bare
 
     def _paint_rows(self,rows):
         """paint_row for ascending rows, skipping clears on untagged rows."""
         rows=list(rows)
         if not rows:return
-        tagged=self._first_tagged_row(rows[0])
+        bare=self._bare_rows()
         for row in rows:
-            bare=tagged is None or row<tagged
             self.paint_row(row,bare=bare)
-            if not bare:tagged=self._first_tagged_row(row+1)
 
     def _has_pos_tags(self,row):
         w=self.widget
@@ -326,7 +356,7 @@ class BoundaryColors:
             self.queue_draw();return
         self._hide_until_settled()
         # Rows that just came into view still need their markers and fonts.
-        self._paint_visible_now()
+        self._paint_new_rows()
         self.queue()
 
     def _hide_until_settled(self):
@@ -348,7 +378,7 @@ class BoundaryColors:
         try:
             if self._current_view()==self._drawn_view:return
         except tk.TclError:return
-        self._paint_visible_now()
+        self._paint_new_rows()
 
     def _view_settled(self):
         self._scroll_job=None
@@ -471,8 +501,10 @@ class BoundaryColors:
         # (Enter, paste, a tab's text) need the rest of the document sized.
         if edit is None or edit[1]:self._schedule_sweep()
 
-    def _follow_edit(self,row,delta):
-        first,last=row,row+max(0,-delta)
+    def _follow_edit(self,row,delta,last_row=None):
+        # Rows from the first to the last the edit took text from (and the removed ones) are laid anew; their
+        # tags went with the old text even when the row's text came back the same (a multi-row replace)
+        first,last=row,max(row+max(0,-delta),last_row if last_row is not None else row)
         def moved(r):
             if r<first:return r
             if r<=last:return None
@@ -587,6 +619,20 @@ class BoundaryColors:
         try:return ime_watch.composition_live(self.widget.winfo_id())
         except tk.TclError:return True
 
+    NEW_ROWS_S = 0.25
+
+    def _paint_new_rows(self):
+        """For a scroll: the same rows in view a moment ago were just painted. Reading every visible row again
+        on each pixel step of the wheel was hundreds of Tk calls a frame (2026-11-03)."""
+        try:
+            band=self._visible_range()
+        except tk.TclError:
+            return
+        now=time.monotonic()
+        if band==self._new_rows_band and now<self._new_rows_until:return
+        self._new_rows_band=band;self._new_rows_until=now+self.NEW_ROWS_S
+        self._paint_visible_now()
+
     def _paint_visible_now(self):
         """Paint visible rows whose plan is already known, synchronously."""
         if self._closed or not self.enabled():return
@@ -634,7 +680,7 @@ class BoundaryColors:
             lines=w.get('1.0','end-1c').split('\n')
             cache=getattr(self.app,'_ctrl_boundary_plans',None)
             if not isinstance(cache,dict):cache={}
-            row=self._sweep_row;painted=0;tagged=self._first_tagged_row(row)
+            row=self._sweep_row;painted=0;bare_row=self._bare_rows()
             # Rows out of view move no visible mark. Redrawing the marks after
             # every slice measured every visible row again (bbox/dlineinfo)
             # while the sizes kept changing, the largest cost of a tab switch
@@ -647,9 +693,7 @@ class BoundaryColors:
                 # each time its view moved (Windows, with the marks on).
                 if text and (signature is None or signature[0]!=text
                              or (signature[1] is None and cache.get(text) is not None)):
-                    bare=tagged is None or row<tagged
-                    self.paint_row(row,bare=bare,draw=lo<=row<=hi);painted+=1
-                    if not bare:tagged=self._first_tagged_row(row+1)
+                    self.paint_row(row,bare=bare_row,draw=lo<=row<=hi);painted+=1
                 row+=1
             self._sweep_row=row
             if row<=len(lines):self._next_sweep_slice()
@@ -686,11 +730,144 @@ class BoundaryColors:
             self._paint_rows(sorted(set(rows)))
         except tk.TclError:pass
 
+    PLANS_WAIT_S = 3.0
+    PLANS_POLL_MS = 15
+    PLANS_RETRY_MS = 300
+    TYPING_S = 1.0
+
+    def _finished_row(self,w,row,text):
+        """The memo's row whose analysis is over: nothing more will bring its plan once the cache has let it go, and
+        it stayed marked as unanalysed with nothing scheduled (2026-11-03)."""
+        if w is not getattr(self.app,'editor',None):return False
+        results=getattr(self.app,'line_results',None) or ()
+        result=results[row-1] if 0<row<=len(results) else None
+        return bool(result) and result.get('original')==text and not result.get('pending')
+
+    def _plan_missing(self,row,text):
+        """A visible row with no plan yet. With a child, it makes them: reading the tables here for this cost
+        about 90MB of the window's memory, kept to the end, and a stop of each jump (2026-11-03)."""
+        import analysis_async
+        if analysis_async.child_alive(self.app) and text not in self._plans_failed:
+            self._ask_plans_soon(text)
+            return None
+        # No child, or it did not answer in time: a row whose analysis is over gets nothing more from it, and
+        # stayed marked as unanalysed with nothing scheduled (2026-11-03)
+        results=getattr(self.app,'line_results',None) or ()
+        if 0<row<=len(results) and (results[row-1] or {}).get('pending'):
+            return None     # its analysis is coming and brings the plan
+        return self._plan_now(text)
+
+    def _ask_plans_soon(self,text):
+        if text in self._plans_failed or self._closed or self._plans_scope is not None:return
+        if self._plans_job is not None:
+            try:self.widget.after_cancel(self._plans_job)
+            except tk.TclError:pass
+        # After the view stops: a row in the child gives way to the question, and is begun again
+        try:self._plans_job=self.widget.after(self.SCROLL_SETTLE_MS,self._ask_plans)
+        except tk.TclError:self._plans_job=None
+
+    def _ask_plans(self):
+        self._plans_job=None
+        if self._closed or not self.enabled():return
+        import analysis_async
+        from literal_lines import literal_only
+        app=self.app;w=self.widget
+        try:
+            if self._composing():return
+            # The row being typed gets its plan with its answer: the question would begin that row again
+            if time.monotonic()-getattr(app,'_last_edit_at',0.0)<self.TYPING_S:
+                self._plans_job=w.after(self.PLANS_RETRY_MS,self._ask_plans);return
+            lo,hi=self._visible_range()
+            last=int(w.index('end-1c').split('.')[0])
+            texts=[]
+            for row in range(lo,min(last,hi+self.MARGIN_ROWS)+1):
+                text=w.get(f'{row}.0',f'{row}.end')
+                if (text and text not in self._plans_failed and not literal_only(text)
+                        and plan_for(app,w,row,text) is None):
+                    texts.append(text)
+            if not texts:return
+            pending=getattr(app,'_async_request',None)
+            typed=getattr(app,'_typed_row_pending',None)
+            # Nor a row just typed: the question would begin it again
+            if (pending is not None and pending[0][0]=='prepare') or (typed is not None and typed()):
+                self._plans_job=w.after(self.PLANS_RETRY_MS,self._ask_plans);return
+        except tk.TclError:return
+        scope=analysis_async.plans_ask(app,texts)
+        if scope is None:
+            self._plans_given_up(texts);return
+        self._plans_scope=scope;self._plans_texts=texts
+        self._plans_until=time.monotonic()+self.PLANS_WAIT_S
+        self._plans_job=w.after(self.PLANS_POLL_MS,self._poll_plans)
+
+    def _poll_plans(self):
+        """The answer arrives while the window goes on: waiting for it stopped each jump by up to 0.4 s."""
+        self._plans_job=None
+        import analysis_async
+        scope,texts=self._plans_scope,self._plans_texts
+        if self._closed:
+            analysis_async.plans_cancel(self.app,scope);self._plans_scope=None;return
+        present,values=analysis_async.plans_poll(self.app,scope)
+        if present and values is None:
+            if time.monotonic()<self._plans_until:
+                try:self._plans_job=self.widget.after(self.PLANS_POLL_MS,self._poll_plans)
+                except tk.TclError:analysis_async.plans_cancel(self.app,scope);self._plans_scope=None
+                return
+            analysis_async.plans_cancel(self.app,scope)
+            present=False
+        self._plans_scope=None
+        if present:
+            if values:remember(self.app,values)
+            # A row these rows did not cover (the view moved meanwhile) asks by itself when it is painted again
+            self._repaint_for_plans()
+        else:
+            self._plans_given_up(texts)
+
+    def _repaint_for_plans(self):
+        try:self._paint_visible_now()
+        except tk.TclError:pass
+
+    def _plans_given_up(self,texts):
+        # Not asked again: the row's analysis brings it, or _plan_missing makes it when that is over
+        if len(self._plans_failed)>4096:self._plans_failed.clear()
+        self._plans_failed.update(texts)
+
+    def _plan_now(self,text):
+        """補正欄の見えている行で、品詞の大きさ・色の区切り（plan）がまだ無いものを、その場で作る。
+
+        2026-11-01 うにさん「19行目以外が小さかった」: 補正した行の字（本文と違う字）の区切りは解析の子が
+        作って届けるが、控え（PLAN_CACHE_ROWS／CHARS）から押し出されていると、届くまで元の大きさで出て、
+        届いた行（カーソルの行など）とそろわなかった。同じ字なら同じ区切りなので、本体の形態素解析で作る
+        （見えている行だけ・1行数ミリ秒）。作ったものは控えに入れて使い回す。"""
+        try:
+            store=getattr(self.app,'store',None)
+            tokenize=getattr(store,'_tokenize_fn',None)
+            if tokenize is None:
+                import corrector
+                tokenize=store._tokenize_fn=corrector.make_tokenizer(store)
+            values=plans([text],tokenize)
+        except Exception:
+            return None
+        value=values.get(text)
+        if value is not None:
+            # remember と同じ上限で控える（ほかの欄へは知らせない: この行だけの描き直し）
+            app=self.app
+            cache=getattr(app,'_ctrl_boundary_plans',None)
+            if not isinstance(cache,dict):cache=app._ctrl_boundary_plans={}
+            owner,total=getattr(app,'_ctrl_boundary_chars',(None,0))
+            if owner is not cache:total=sum(map(len,cache))
+            if cache.pop(text,None) is None:total+=len(text)
+            cache[text]=value
+            while len(cache)>PLAN_CACHE_ROWS or total>PLAN_CACHE_CHARS:
+                oldest=next(iter(cache));total-=len(oldest);cache.pop(oldest)
+            app._ctrl_boundary_chars=(cache,total)
+        return value
+
     def paint_row(self,row,bare=False,draw=True):
         """Sizes, colours and stops for one row from its known plan.
 
-        ``bare`` says the caller knows the row has no POS tags yet; ``draw``
-        False leaves the marks alone (the row is out of view)."""
+        ``bare`` says the caller knows the row has no POS tags yet (or is
+        _bare_rows' test, asked only when the row is painted); ``draw`` False
+        leaves the marks alone (the row is out of view)."""
         w=self.widget
         text=w.get(f'{row}.0',f'{row}.end')
         if not text:
@@ -699,7 +876,10 @@ class BoundaryColors:
         signature=self._painted.get(row)
         if signature is not None and signature[0]==text and signature[1] is not None:
             return
+        if callable(bare):bare=bare(row)
         value=plan_for(self.app,w,row,text)
+        if value is None and draw and (w is getattr(self.app,'result_view',None) or self._finished_row(w,row,text)):
+            value=self._plan_missing(row,text)
         signature=(text,value)
         if value is None and not bare and self._has_pos_tags(row):
             # Typing: keep this row's sizes until the new plan arrives.
@@ -762,10 +942,31 @@ def ctrl_held(app):
     return bool(getattr(app,'_ctrl_boundaries_held',False))
 
 
+def _doc_window_copies(app):
+    """The second windows' own text boxes (a tab the main window no longer shows・doc_window copy mode)."""
+    return [w.text for w in getattr(app,'_doc_windows',()) if getattr(w,'mode',None)=='copy' and w.text is not None]
+
+
 def _panes(app):
-    for name in ('editor','result_view','_quick_text'):
-        colors=getattr(getattr(app,name,None),'_correctnote_boundary_colors',None)
+    for widget in [getattr(app,name,None) for name in ('editor','result_view','_quick_text')]+_doc_window_copies(app):
+        colors=getattr(widget,'_correctnote_boundary_colors',None)
         if isinstance(colors,BoundaryColors) and not colors._closed:yield colors
+
+
+def paint_view(app, widget, lo, hi):
+    """Paint rows lo..hi (1-based) of `widget`'s text for another view of it.
+
+    A second window showing the same tab is a peer of the memo and shares its tags, but the memo's painter
+    paints only the rows in the memo's own view (2026-10-30 うにさん「別ウインドウで開いたウインドウの文字が、
+    品詞ごとの書式が反映されていないことが多い」)."""
+    colors=getattr(widget,'_correctnote_boundary_colors',None)
+    if not isinstance(colors,BoundaryColors) or colors._closed or not colors.enabled():return
+    try:
+        if colors._composing():return
+        colors._configure_pos_fonts()
+        last=int(widget.index('end-1c').split('.')[0])
+        colors._paint_rows(range(max(1,lo),min(last,hi)+1))
+    except tk.TclError:pass
 
 
 def install(app,widget):

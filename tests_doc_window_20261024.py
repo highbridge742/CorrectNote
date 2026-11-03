@@ -119,6 +119,75 @@ class DocWindowTests(unittest.TestCase):
         window.text.insert('1.0', 'x')
         self.assertEqual(a.editor.get('1.0', '1.1'), 'x')
 
+    def test_part_of_speech_formatting_reaches_the_second_window(self):
+        # 2026-10-30 うにさん「別ウインドウで開いたウインドウの文字が、品詞ごとの書式が反映されていないことが多い」:
+        # the peer shares the memo's tags but the memo's painter painted only the memo's own view; the copy had
+        # no painter at all
+        import boundary_colors
+        a = self.a
+        window = a._open_in_window(0)
+        self.root.update()
+        painted = []
+        with patch.object(boundary_colors, 'paint_view', side_effect=lambda app, w, lo, hi: painted.append((w, lo, hi))):
+            window.paint_peer()
+            self.root.update()
+        self.assertTrue(painted)
+        self.assertIs(painted[-1][0], a.editor)
+        top, bottom = window.visible_rows()
+        self.assertLessEqual(painted[-1][1], top + 1)
+        self.assertGreaterEqual(painted[-1][2], bottom + 1)
+        self.switch(1)
+        self.assertEqual(window.mode, 'copy')
+        self.assertIsInstance(getattr(window.text, '_correctnote_boundary_colors', None), boundary_colors.BoundaryColors)
+        self.assertIn(window.text, boundary_colors._doc_window_copies(a))
+        window.paint_peer()                                     # a copy: nothing for the memo's painter
+        self.root.update()
+
+    def test_line_numbers_buttons_and_shortcuts_act_on_this_windows_text(self):
+        # 2026-10-30 うにさん「別ウインドウにも行番号を付け、ボタンメニューを並べる。文字を引用モードで引用したり、
+        # 括弧で括る、再変換をボタンとショートカットでできるようにする」
+        import app as app_module
+        a = self.a
+        window = a._open_in_window(0)
+        self.root.update()
+        self.assertIsInstance(window.gutter, app_module.LineNumberGutter)
+        self.assertIs(window.gutter.target, window.text)
+        self.assertEqual(sorted(window.buttons), ['bracket_1', 'bracket_2', 'bracket_3', 'bracket_4', 'bracket_5',
+                                                  'quote', 'reconvert'])
+        seen = []
+        def wrap(open_ch, close_ch, widget=None, **kw):
+            if not widget.tag_ranges('sel'):
+                seen.append((open_ch, widget.index('insert'), ''));return
+            seen.append((open_ch, widget.index('insert'), widget.get('sel.first', 'sel.last')))
+            widget.insert('sel.last', close_ch); widget.insert('sel.first', open_ch)
+        a._wrap_with_brackets = wrap
+        a.editor.mark_set('insert', '2.0')
+        peer = window.text
+        peer.tag_add('sel', '1.3', '1.4'); peer.mark_set('insert', '1.4')
+        window.buttons['bracket_2'].invoke()                  # 「」 on this window's selection
+        self.root.update()
+        self.assertEqual(seen, [('「', '1.4', '鏡')])
+        self.assertEqual(peer.get('1.0', '1.end'), '今日は「鏡」が良い')
+        keys = []
+        a.BRACKET_KEY, a.CANDIDATE_KEY = 'F2', 'F5'
+        a._on_f5_brackets = lambda event: keys.append(('F2', event.widget is a.editor, a.editor.index('insert')))
+        a._on_f2_candidates = lambda event: keys.append(('F5', event.widget is a.editor, a.editor.index('insert')))
+        a._on_pick_key = lambda event: keys.append(('F1', event.widget is a.editor, a.editor.index('insert')))
+        peer.tag_remove('sel', '1.0', 'end'); peer.mark_set('insert', '2.1')
+        for key in ('F2', 'F5', 'F1'):
+            self.assertEqual(window.on_key(key), 'break')        # bound to <F1>/<F2>/<F5> of the text
+        self.root.update()
+        self.assertEqual(keys, [('F2', True, '2.1'), ('F5', True, '2.1'), ('F1', True, '2.1')])
+        # another tab in the main window: a button brings this tab back into it first
+        self.switch(1)
+        self.assertEqual(window.mode, 'copy')
+        switched = []
+        a._switch_tab = lambda index: (switched.append(index), setattr(a.session, 'active', index), a._load_active_tab())
+        window.buttons['bracket_1'].invoke()
+        self.root.update()
+        self.assertEqual(switched, [0])
+        self.assertEqual(window.mode, 'peer')
+
     def test_bold_after_an_emoji_is_written_back_in_place(self):
         # Tk 8.6 on Windows reports UTF-16 columns: an emoji counts twice there. The copy writes the B/I/U/S
         # back in Python characters, as text_format keeps them (2026-10-24)

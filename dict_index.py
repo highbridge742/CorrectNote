@@ -402,7 +402,7 @@ class DictIndex:
         どちらにも効く。形を変えられないとき（印の字が混じる等）は辞書のまま。"""
         try:
             import compact_tables
-            if not compact_tables.enabled() or not self._by_reading:
+            if not compact_tables.low() or not self._by_reading:
                 return
             by_reading = compact_tables.CompactLists.of(self._by_reading)
             by_surface = compact_tables.CompactLists.of(self._by_surface)

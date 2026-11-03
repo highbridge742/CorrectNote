@@ -42,27 +42,33 @@ FOREIGN_DEPTH = 4
 @lru_cache(maxsize=1)
 def _class_words():
     """分類語彙表の全体表（synonyms.load_table・wlsp_synonyms.json.gz）から類ごとに 見出し → 分類番号 を引く。
-    {'体': {語: frozenset(番号)}, '用': …, '相': …}。表が無ければ空。"""
+    {'体': {語: '番号|番号'}, '用': …, '相': …}。表が無ければ空。
+    番号の組は1本の文字列で持つ（frozenset の山は 約25MB。文字列なら数分の1・答えは同じ・2026-10-30）。"""
     from synonyms import load_table
     t = load_table()
     out = {}
     for word, entries in t.words():
         for e in entries:
             out.setdefault(e[0], {}).setdefault(word, set()).add(e[1])
-    return {k: {w: frozenset(c) for w, c in d.items()} for k, d in out.items()}
+    return {k: {w: '|'.join(sorted(c)) for w, c in d.items()} for k, d in out.items()}
+
+
+@lru_cache(maxsize=_cache_size(4096))
+def _code_set(joined):
+    return frozenset(joined.split('|')) if joined else frozenset()
 
 
 @lru_cache(maxsize=1)
 def _data():
+    """(体の語 → 番号の文字列, 読み → '見出し\t見出し…')。読みは表の1つ目の読み。"""
     from synonyms import load_table
     t = load_table()
-    words = {}
+    words = _class_words().get('体', {})
     by_reading = {}
-    for face, cs in _class_words().get('体', {}).items():
+    for face in words:
         reads = t.readings(face)
-        words[face] = (reads[0] if reads else '', cs)
         for read in reads[:1]:
-            by_reading.setdefault(read, []).append(face)
+            by_reading[read] = by_reading[read] + '\t' + face if read in by_reading else face
     return words, by_reading
 
 
@@ -72,13 +78,13 @@ def available():
 
 def codes(word):
     """語の分類番号の組（無ければ空）。"""
-    e = _data()[0].get(word)
-    return e[1] if e else frozenset()
+    return _code_set(_data()[0].get(word, ''))
 
 
 def words_read(reading):
     """その読みの見出しの並び。"""
-    return tuple(_data()[1].get(reading, ()))
+    got = _data()[1].get(reading)
+    return tuple(got.split('\t')) if got else ()
 
 
 def _table_nouns(p, v):
@@ -92,7 +98,7 @@ def _verb_data():
 
 
 def verb_codes(verb):
-    return _verb_data().get(verb, frozenset())
+    return _code_set(_verb_data().get(verb, ''))
 
 
 @lru_cache(maxsize=1)

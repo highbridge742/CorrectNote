@@ -75,7 +75,7 @@ def child():
             labels={menu.entrycget(i,'label'):i for i in range(menu.index('end')+1) if menu.type(i)!='separator'}
             for label,accelerator in [('検索…','Ctrl+F'),
                 ('行を選択','Shift+Space'),('コピー','選択してF1 / 行選択してShift+Space'),('ペースト','F4 / Ctrl+V / Win+V'),
-                ('改行','F3 / Enter'),('後ろ1文字を削除','CapsLock / BackSpace'),
+                ('改行','無選択でF3 / Enter'),('ブラウザを開いて検索','選択してF3'),('後ろ1文字を削除','CapsLock / BackSpace'),
                 ('括弧を挿入','F2入力ごとに括弧を切替'),
                 ('語を拾って差し込む','無選択でF1 / = / Insert'),
                 ('簡易入力ウィンドウを開く','Ctrl+Insert / Ctrl+Shift+-'),

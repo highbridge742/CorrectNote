@@ -3449,6 +3449,16 @@ def test_shift_toggle_48kv():
         def readings_for_surface(self, s):
             return []
 
+        def surfaces_for_reading(self, r, limit=None):
+            return []
+
+        def __getattr__(self, name):
+            # 本物の dict_index に後から足された引き口（活用形の表記など）は、
+            # この代役では「何も知らない」と答える（2026-10-30・補正担当）
+            if name.startswith('_'):
+                raise AttributeError(name)
+            return lambda *a, **k: []
+
     class _St(object):
         def reading_of(self, s):
             return None
@@ -3483,7 +3493,7 @@ def test_shift_toggle_48kv():
     # ⑤ **変換が既定**（うにさんの指定・2026-08-29 の2度目の正し:
     # 「かなのまま打ちたいことの確信がなければ漢字変換する」）
     class _Di2(_Di):
-        def surfaces_for_reading(self, r):
+        def surfaces_for_reading(self, r, limit=None):
             return {'みす': ['ミス']}.get(r, [])
 
     class _St2(_St):
@@ -3519,7 +3529,7 @@ def test_shift_toggle_48kv():
             return []
 
     class _Di3(_Di):
-        def surfaces_for_reading(self, r):
+        def surfaces_for_reading(self, r, limit=None):
             return {'にん': ['人']}.get(r, [])
 
     di6 = _Di3({'すき', 'にん'})
@@ -3816,7 +3826,7 @@ def test_compose_kana_run_48ky():
             return self._t.get(r, [])
 
     class _Di(object):
-        def surfaces_for_reading(self, r):
+        def surfaces_for_reading(self, r, limit=None):
             return []
 
         def readings_for_surface(self, s):
@@ -6770,7 +6780,9 @@ def test_romaji_cost_wiring_48nj():
     # **かな配列の隣は見ない**——`や`(0,6) の隣 `ん` は、
     # ローマ字入力の人にとって根拠ではない（うにさんの指定）
     check('かな配列の隣（ん）は、ローマ字では入れない', got.get('ん'), None)
-    check('かな入力でも別段の ん は置換へ入れない', kana.get('ん'), None)
+    # 2026-10-24 から、かな入力ではすぐ上下のキー（縦の隣）も置換に入れる
+    # （うにさんの指定「躊躇せず入れる」）。や の真下の ん は縦の隣
+    check('かな入力では縦の隣の ん も置換へ入れる（2026-10-24）', kana.get('ん'), K.VERTICAL_DISTANCE)
     check('かな入力では同じ段の ゆ が隣に居る', kana.get('ゆ'), 1.0)
     check('かな入力では た は隣ではない（音の似かたで 1.4）',
           kana.get('た'), 1.4)
@@ -6783,9 +6795,9 @@ def test_romaji_cost_wiring_48nj():
     os.environ['CN_ROMAJI_COST'] = '0'
     try:
         K.nearby_candidates.cache_clear()
-        check('CN_ROMAJI_COST=0 でもかな配列の別段は置換へ入れない',
+        check('CN_ROMAJI_COST=0（かな配列だけの昔の形）でも縦の隣は同じ扱い',
               dict(K.nearby_candidates(
-                  'や', input_method='romaji')).get('ん'), None)
+                  'や', input_method='romaji')).get('ん'), K.VERTICAL_DISTANCE)
         check('CN_ROMAJI_COST=0 はかな配列の左右を使う',
               dict(K.nearby_candidates('や', input_method='romaji')).get('ゆ'), 1.0)
     finally:
@@ -7669,7 +7681,7 @@ def test_logical_pos_rules_48nx_48ny():
     check('数量表現を外す道が在る',
           "if pp.startswith('名詞:数'):" in osrc, True)
     check('**同じ対を二重に出さない**（語の対の表と重なる）',
-          'if _one not in out:' in osrc, True)
+          'if _one not in out' in osrc, True)   # 後ろに原文の範囲の条件が付いた（48-AHB）
     return all_ok
 
 

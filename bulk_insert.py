@@ -201,7 +201,7 @@ class BulkInsertDialog:
         ranges = editor.tag_ranges('sel')
         if not ranges:
             return
-        from app import _stable_text_index
+        _stable_text_index = self._stable_index()
         first, last = (_stable_text_index(editor,i) for i in (ranges[0], ranges[-1]))
         offsets, unused = insertion_offsets(editor.get(first,last), int(value),
                                             self.direction.get() == 'end')
@@ -306,8 +306,17 @@ class BulkInsertDialog:
         self.undo_button.config(state='normal' if self._undo_records else 'disabled')
         self.message.config(text='直前の一括挿入を戻しました。')
 
-    def apply(self):
+    def _stable_index(self):
+        # The running app's module: under `py app.py` an import would load all of app.py a second time
+        import sys
+        module = sys.modules.get(type(self.app).__module__)
+        if hasattr(module, '_stable_text_index'):
+            return module._stable_text_index
         from app import _stable_text_index
+        return _stable_text_index
+
+    def apply(self):
+        _stable_text_index = self._stable_index()
         from text_edit import undo_group
         import ime_watch
         self.save()

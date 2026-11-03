@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 # CorrectNote — Copyright (C) 2026 Takahashi Yuu; GPL-3.0-or-later.
 """Tk integration for volatile work identity. Persistent caches stay value caches."""
-from analysis_work import Document,observe_text
+from analysis_work import Document,bulk_edits,observe_text
 from contextlib import contextmanager
+import time
 
 
 def owner_for_tab(app,tab):
@@ -126,10 +127,11 @@ def install(app):
         # Only the current edit's row and generation; no text/history is kept.
         # A tab switch or a later edit invalidates this priority automatically.
         app._priority_input_row=(token(app),source.count('\n',0,edit[0])) if edit else None
+        app._heavy_redo=();app._last_edit_at=time.monotonic()
         if doc is None or doc.owner!=owner(app):
             app._input_document=Document(owner(app),source)
         else:
-            if not discard:
+            if not discard and not getattr(app.editor,'_correctnote_bulk_edits',False):
                 import ui_projection
                 ui_projection.rebase(app,doc.text,source,edit)
             doc.update(source,discard_readings=discard,edited=True,edit=edit)

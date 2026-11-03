@@ -64,7 +64,7 @@ class ToolbarWidgetTests(unittest.TestCase):
     def setUp(self):
         self.root=tk.Tk();self.root.geometry('1800x500');self.errors=[]
         self.root.report_callback_exception=lambda *exc:self.errors.append(exc)
-        self.a=SimpleNamespace(root=self.root,settings=Settings(),_queue_toolbar_fit=lambda:None)
+        self.placed=[];self.a=SimpleNamespace(root=self.root,settings=Settings(),_queue_toolbar_fit=lambda:None,_place_dialog=lambda *x:self.placed.append(x))
         self.a._toolbar_hover_hint=lambda event,active,hint:setattr(self,'hint',hint)
         self.a._tab_viewport=tk.Frame(self.root,height=20);self.a._tab_viewport.pack(fill='x')
         self.a._toolbar=tk.Frame(self.root);self.a._toolbar.pack(fill='x')
@@ -107,6 +107,8 @@ class ToolbarWidgetTests(unittest.TestCase):
         for key in IDS:p.set_visible(key,False)
         self.root.update();self.assertEqual(self.a._toolbar.winfo_manager(),'')
         p.open();self.root.update()
+        self.assertEqual(len(self.placed),1)     # by the main window, not where Windows chooses
+        self.assertEqual(self.placed[0][0],p.window)
         p.refresh_list(select='bracket_black');p.toggle_selected();p.move_selected(-99)
         self.root.update()
         self.assertEqual(p.selected(),'bracket_black')

@@ -22,7 +22,8 @@ import analysis_work_app as input_work
 from analysis_worker import state_key, only_ime_moved, result_compatible
 from analysis_work import tab_has_kana as _tab_has_kana
 
-_ROW_FIELDS = ('line', 'input_method', 'keyboard', 'recent', 'readings', 'calculations', 'tab_has_kana')
+_ROW_FIELDS = ('line', 'input_method', 'keyboard', 'recent', 'readings', 'calculations', 'tab_has_kana',
+               'previous_line', 'defer_heavy')
 
 
 def _source_and_cursor(app):
@@ -70,7 +71,9 @@ def speculate(app, comp, reading):
                 keyboard=keyboard_layout.spec(app.settings), nearby=None, lines=lines, row=row,
                 recent=app.recent_words.words() if getattr(app, 'recent_words', None) is not None else (),
                 readings=after.row_readings(row, lines[row]), calculations=after.row_calculations(row, lines[row]),
-                attested=(), tab_has_kana=_tab_has_kana(text))
+                attested=(), tab_has_kana=_tab_has_kana(text),
+                previous_line=analysis_context.previous_line_of(lines, row),
+                defer_heavy=getattr(app, 'NEIGHBOR_DEFER', False) is True)
     state = state_key(app)
     scope = ('speculate', text, row, state)
     import analysis_async
@@ -138,7 +141,8 @@ def take(app, index, task):
     if (spec['row'] != index or spec['text'] != getattr(app, '_analyze_text', None)
             or any(task.get(name) != spec['task'].get(name) for name in _ROW_FIELDS)
             or value.get('input_signature') != analysis_context.signature(
-                task.get('nearby', ()), task.get('readings', ()), task.get('calculations', ()))
+                task.get('nearby', ()), task.get('readings', ()), task.get('calculations', ()),
+                task.get('previous_line'))
             or (value.get('prepared') or {}).get('context') != task.get('context')
             or not result_compatible(app, analysis_context.completed(value), spec['state'])):
         return None

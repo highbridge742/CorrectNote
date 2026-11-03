@@ -19,8 +19,11 @@ class QuickOpenPrepareTests(base.QuickCompositionPrepareTests):
         self.app._finish_quick_analysis.assert_not_called()
         self.assertIsNone(getattr(self.app,'_quick_job',None))
         Q.schedule_prepare(self.app)
-        # Preparation and the existing optional idle warmup have separate timers.
-        self.assertEqual([call.args[0] for call in self.app.root.after.call_args_list],[40,1200])
+        # Preparation and the existing optional idle warmup have separate timers (and the idle release, 2026-10-30;
+        # since 2026-11-01 a kept child is released after ten minutes and its memory handed back after one).
+        import memory_usage as M
+        self.assertEqual([call.args[0] for call in self.app.root.after.call_args_list],
+                         [40,M.IDLE_RELEASE_KEPT_MS,M.IDLE_TRIM_MS,1200])
     def test_replaced_widget_makes_the_pending_callback_inert(self):
         ready=self.scheduled();self.app._quick_text=asynchronous.Widget('別の窓');ready()
         self.worker.submit.assert_not_called();self.snapshot.assert_not_called()

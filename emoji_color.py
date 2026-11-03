@@ -379,6 +379,7 @@ class EmojiOverlay:
         self._hide_tags = set()
         self._failed = False        # colour drawing failed: hide nothing
         self._skipped = set()       # (row, col) of visible emoji left without a label
+        self._emoji_seen = None     # (edit count, any emoji in the pane): _nothing_to_show
         self.labels = []
         self.shown = []
         self.idle = None
@@ -429,8 +430,9 @@ class EmojiOverlay:
         try:
             if not self.w.winfo_exists():
                 return
-            self._flush = True
-            self.refresh()
+            if not self._nothing_to_show():
+                self._flush = True
+                self.refresh()
         except Exception:
             pass
         finally:
@@ -439,6 +441,23 @@ class EmojiOverlay:
             self.poll = self.w.after(POLL_MS, self._tick)
         except Exception:
             self.poll = None
+
+    def _nothing_to_show(self):
+        """No emoji anywhere in the pane, and none shown or tagged: the poll has nothing to do.
+
+        2026-10-31: the two panes' polls (every 90ms, ~20 Tk calls and three screens of text each)
+        were most of the idle main process's CPU. Every edit passes analysis_work.observe_text,
+        which counts it and keeps the whole text; the pane is searched again after each change."""
+        if self.shown or self._skipped or (self._hidden is not None and self._hidden[2]):
+            return False
+        whole = getattr(self.w, '_correctnote_whole_text', None)
+        if whole is None or whole.get('busy'):
+            return False
+        changes = whole.get('changes')
+        seen = self._emoji_seen
+        if seen is None or seen[0] != changes:
+            seen = self._emoji_seen = (changes, bool(EMOJI.search(str(self.w.get('1.0', 'end-1c')))))
+        return not seen[1]
 
     def schedule(self, event=None):
         if self.idle is None and not self.stopped:

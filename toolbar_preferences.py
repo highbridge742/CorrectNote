@@ -264,6 +264,7 @@ class ToolbarPreferences:
             return
         panel, ink, accent = self.palette()
         window = self.window = tk.Toplevel(self.app.root)
+        window.withdraw()       # 置く前に別のモニターの既定の位置へ出さない
         window.title('ボタンの表示と並べ替え')
         window.transient(self.app.root)
         window.configure(bg=panel)
@@ -295,6 +296,10 @@ class ToolbarPreferences:
         button(bottom,'閉じる',self.close).pack(side='right')
         self._listed=[]
         self.refresh_list(select=self.order[0])
+        # 位置を指定しないと Windows の既定の位置（別のモニターのことがある）に出る（2026-11-03 うにさん）
+        window.update_idletasks()
+        self.app._place_dialog(window, window.winfo_reqwidth(), window.winfo_reqheight())
+        window.deiconify()
         self.listbox.focus_set()
 
     def close(self):

@@ -63,8 +63,13 @@ class DecisionStore:
         self._protected = {}
         # word -> 記録。**紫を下げるだけ**（補正は止めない・項目48-QU）
         self._odd_only = {}
+        # 変わった回数（2026-11-01）。解析の状態の鍵に入れ、変わった語（used_changes）を含む行だけやり直す
+        self._revision = 0
         if path and os.path.exists(path):
             self.load()
+
+    def revision(self):
+        return self._revision
 
     # ------------------------------------------------------------
     # 記録する
@@ -81,6 +86,7 @@ class DecisionStore:
             'corrected': corrected,
             'added': time.time(),
         }
+        self._revision += 1
         return True
 
     def protect(self, word):
@@ -92,6 +98,7 @@ class DecisionStore:
         if word in self._protected:
             return False
         self._protected[word] = {'word': word, 'added': time.time()}
+        self._revision += 1
         return True
 
     def leave_odd_alone(self, word):
@@ -123,17 +130,24 @@ class DecisionStore:
         if word in self._odd_only or word in self._protected:
             return False
         self._odd_only[word] = {'word': word, 'added': time.time()}
+        self._revision += 1
         return True
 
     # ------------------------------------------------------------
     # 取り消す
     # ------------------------------------------------------------
     def unreject(self, original, corrected):
-        return self._rejected.pop((original, corrected), None) is not None
+        gone = self._rejected.pop((original, corrected), None) is not None
+        if gone:
+            self._revision += 1
+        return gone
 
     def unprotect(self, word):
         gone = self._protected.pop(word, None) is not None
-        return self._odd_only.pop(word, None) is not None or gone
+        gone = self._odd_only.pop(word, None) is not None or gone
+        if gone:
+            self._revision += 1
+        return gone
 
     # ------------------------------------------------------------
     # 問い合わせ（補正エンジンからはここだけを見る）
@@ -266,6 +280,7 @@ class DecisionStore:
         self._rejected.clear()
         self._protected.clear()
         self._odd_only.clear()
+        self._revision += 1
         for e in data.get('rejected', []):
             o, c = e.get('original'), e.get('corrected')
             if o and c:

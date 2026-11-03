@@ -54,8 +54,9 @@ class AppWiringTests(unittest.TestCase):
     def test_every_candidate_call_in_app_passes_the_input_method(self):
         with open(os.path.join(HERE, 'app.py'), encoding='utf-8') as f:
             tree = ast.parse(f.read())
-        calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-                 and n.func.id in ('build_candidates', 'build_range_candidates')]
+        # The candidates are asked of the child through these two (app._candidates_in_child, 2026-11-02)
+        calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                 and n.func.attr in ('_candidates_in_child', '_range_candidates_in_child')]
         self.assertGreaterEqual(len(calls), 7)
         missing = [n.lineno for n in calls if not any(k.arg == 'input_method' for k in n.keywords)]
         self.assertEqual(missing, [], 'app.py lines without input_method: %s' % missing)
@@ -69,7 +70,7 @@ class AppWiringTests(unittest.TestCase):
             return []
         for method in ('kana', 'romaji'):
             owner = SimpleNamespace(settings={'input_method': method}, store=self.__class__, dict_index=None,
-                                    context_vec=None, _attested_surfaces=None)
+                                    context_vec=None, _attested_surfaces=None, _candidates_in_child=fake)
             with patch.object(app, 'build_candidates', fake):
                 app.CorrectNoteApp._functional_kanji_cands(
                     owner, {'base': 'かれーです', 'reading': 'かれーです', 'text': 'かれーです'}, ())

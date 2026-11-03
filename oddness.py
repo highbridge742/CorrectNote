@@ -1342,6 +1342,18 @@ def _native_nominal_prefix_join_mismatch(text, a, b):
                                for pos in nominal))
 
 
+def _common_noun_pos(surface):
+    """表記が辞書に普通の名詞（固有名詞でない）として在るときの品詞（'名詞:副詞可能' の形）。"""
+    try:
+        from morphology import dictionary_inflections
+        return tuple(dict.fromkeys(
+            ':'.join(x for x in pos.split(',')[:3] if x != '*')
+            for pos, form, base, reading in dictionary_inflections(surface) or ()
+            if pos.startswith('名詞,') and '固有名詞' not in pos and base == surface))
+    except Exception:
+        return ()
+
+
 def is_odd_run(text, tokenize_fn, with_spans=False,
                store=None, dict_index=None, skip_join=False, complete_line=False,
                reading_reasons_out=None, preserve_unknown_source=False,
@@ -1762,6 +1774,20 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         #     立てる）
         elif case_particle_mismatch(a_sf,ap,b_sf,bp):
             _kz = True
+        # (H) **並立の や は次の名詞を要る**（犬やも・内容やが）。
+        #     や の直後に係助詞・格助詞が来る形は並べる相手が無い
+        #     （2026-10-30・補正担当）
+        elif (a_sf == 'や' and ap.startswith('助詞:並立助詞')
+              and b_sf in ('も', 'は', 'が', 'を', 'に')
+              and bp.startswith(('助詞:係助詞', '助詞:格助詞'))):
+            _kz = True
+        # (H2) 助動詞の語幹の よう（〜のよう・このよう）は に・な・だ・で
+        #     を要る。直後に係助詞・並立助詞は来ない（雨のようも）。
+        #     接尾の そう（できそうもない）・知りようもない の よう は
+        #     品詞が違うのでここへ来ない（2026-10-30・補正担当）
+        elif (a_sf == 'よう' and ap.startswith('名詞:非自立:助動詞語幹')
+              and bp.startswith(('助詞:係助詞', '助詞:並立助詞'))):
+            _kz = True
         # (E) **名詞の読みを持たない接続詞に格助詞は付かない**
         #     （しかしを）。それゆえ・そのうえ・だから は名詞や
         #     言い回しに化けるので、閉じた名簿だけ
@@ -2040,6 +2066,12 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
                 continue                    # 見たことのない並びは見ない（48-SM）
             if can_join(a_sf, ap, b_sf, bp,
                         _hira(a[2] if len(a) > 2 else '')) is not False:
+                continue
+            # 解析が普通の名詞を固有名詞（毎日→新聞社の名）と読んだときは、辞書に在る普通の名詞の品詞でも確かめる
+            # （2026-10-30・毎日|日記 に紫）
+            if '固有名詞' in ap and any(
+                    can_join(a_sf, alt, b_sf, bp, _hira(a[2] if len(a) > 2 else '')) is not False
+                    for alt in _common_noun_pos(a_sf)):
                 continue
             # 48-CJ: 解析が表の語を接頭詞＋1字に割った形（同|梱・全|件）は、
             # つないだ語のまま後ろとの並びを見る（同梱語彙・全件一括）。
@@ -2488,6 +2520,14 @@ def suffix_then_yougen(spans, i):
     #      ここで重ねると `無効化して` を壊す（**測って踏んだ**）。
     if (b[0] or '') in _SURU_FORMS:
         return False
+    # (え) **お／ご＋名詞＋ください** は頼みの言い方（お声がけください・ご協力ください。解析が
+    #      がけ を接尾辞と読み、ください を自立の動詞とした・2026-10-30）
+    if (b[0] or '') in ('ください', '下さい', 'くださいませ', '下さいませ'):
+        j = i
+        while j > 0 and (spans[j - 1][2][1] or '').startswith('名詞'):
+            j -= 1
+        if j > 0 and (spans[j - 1][2][1] or '').startswith('接頭詞') and spans[j - 1][2][0] in ('お', 'ご', '御'):
+            return False
     # (い) 左へ辿って **数** に行き着けば数量表現
     j = i
     while j > 0:
@@ -3225,6 +3265,18 @@ def renyou_stray_noun_mismatch(a,b,line_end=False):
     return not seed_japanese.is_unit((a[0] or '')+(b[0] or ''))
 
 
+def _compound_renyou_head(toks, i):
+    """toks[i] が複合動詞の連用形か（前の字句も動詞の連用形で続く・打ち＋違え、または1字句に漢字の塊が2つ・巻き込み）。"""
+    import re
+    a = toks[i]
+    if len(re.findall(r'[一-鿿々]+', a[0] or '')) >= 2:
+        return True
+    if i > 0:
+        p = toks[i - 1]
+        return len(p) >= 7 and p[4] == a[3] and (p[1] or '').startswith('動詞') and p[6] == '連用形'
+    return False
+
+
 def renyou_stray_noun_spans(text, tokenize_fn):
     """`renyou_stray_noun_mismatch` の当たる範囲 (始まり, 終わり) の並び。
 
@@ -3238,8 +3290,19 @@ def renyou_stray_noun_spans(text, tokenize_fn):
     except Exception:
         return []
     out = []
+    import re
     for i in range(len(toks) - 1):
         last = all((t[1] or '').startswith('記号') for t in toks[i + 2:])
+        if last and _compound_renyou_head(toks, i) and not re.fullmatch(r'[ァ-ヺ][ァ-ヺー]*', toks[i + 1][0] or '') \
+                and '固有名詞' not in (toks[i + 1][1] or ''):
+            # 複合動詞の連用形（巻き込み・打ち＋違え）は名詞になり、後ろの名詞と複合語を作る（巻き込み補正・
+            # 書き換え処理）。行の最後の名詞というだけでは切れ端と見ない（2026-10-30・補正担当）
+            continue
+        if i > 0 and toks[i - 1][4] == toks[i][3] and (toks[i - 1][1] or '').startswith(('形容詞', '接頭詞')) \
+                and re.fullmatch(r'[一-鿿々]+', toks[i - 1][0] or ''):
+            # 形容詞の語幹・接頭詞（漢字だけ）＋動詞の連用形は名詞の複合語（浅＋煎り・固＋茹で・高＋跳び）で、後ろの名詞と
+            # 複合語を作る（2026-10-31・補正担当）
+            continue
         if renyou_stray_noun_mismatch(toks[i], toks[i + 1], last):
             out.append((toks[i][3], toks[i + 1][4]))
     return out
@@ -3910,7 +3973,9 @@ def infl_mismatch(a, b, prev=None):
 #: 助動詞の頭（48-CM）。
 _E_DAN_KANA = frozenset('えけげせぜてでねへべぺめれ')
 _POTENTIAL_AUX_HEADS = frozenset(('ます', 'ませ', 'まし', 'ましょ', 'た', 'ない',
-                                  'なかっ', 'なく', 'ず', 'ぬ', 'ん', 'たい', 'たかっ'))
+                                  'なかっ', 'なく', 'ず', 'ぬ', 'ん', 'たい', 'たかっ',
+                                  # 終止・連体の る と仮定の れ（沿え|る・沿え|れば）。解析は文語の り と読む
+                                  'る', 'れ'))
 
 
 #: 副詞＋に のあとが名詞のとき、**その名詞が動詞句になれる**印
@@ -4014,7 +4079,9 @@ def _run_is_word(text, start, end):
     # **送り仮名を挟む複合語そのもの**（貼り付け・打ち間違い）も表の語
     # （項目48-CE・2026-10-11）。解析は `貼り|付け` と割るが、その対の
     # 範囲がちょうど表の語なら、並びは異様ではない。
-    if text[start:end] in words:
+    # ただし前に漢字が続くなら、その漢字の連続ごと下で見る（`号し` が表に
+    # 在っても `田部井号し` は無い・2026-10-30 補正担当）
+    if text[start:end] in words and not (start > 0 and kanji(text[start - 1])):
         return True
     rs, re_ = start, end
     while rs > 0 and kanji(text[rs - 1]):

@@ -182,10 +182,48 @@ class MemoryWorkerRetentionTests(unittest.TestCase):
         self.assertEqual(new.submit.call_args[0][1]['_state_identity'], W.state_key(app))
         self.assertIs(app._correction_worker, new)
 
+    def test_a_kept_child_hands_out_its_memory_after_a_minute_and_closes_after_ten(self):
+        # 2026-11-01 うにさん（案a）: 打鍵の無い 1分でメモリを外へ出し、10分で閉じる
+        app, worker = owner(MEMORY_HIGH)
+        worker.trim_memory = Mock(return_value=True)
+        M.queue_release(app, 'foreground')
+        trim = app._memory_foreground_trim_job
+        self.assertEqual(app.root.calls[trim][0], 60000)
+        self.assertEqual(app.root.calls[app._memory_foreground_job][0], 600000)
+        app.root.run(trim)
+        worker.trim_memory.assert_called_once()
+        worker.close.assert_not_called()
+        self.assertIs(app._correction_worker, worker)
+        app.root.run(app._memory_foreground_job)
+        worker.close.assert_called_once()
+
+    def test_a_busy_or_newly_asked_child_is_not_trimmed(self):
+        app, worker = owner(MEMORY_HIGH)
+        worker.trim_memory = Mock(return_value=True)
+        M.queue_release(app, 'foreground')
+        trim = app._memory_foreground_trim_job
+        app._async_request = ('row', 9)
+        app.root.run(trim)
+        worker.trim_memory.assert_not_called()
+        app._async_request = None
+        M.queue_release(app, 'foreground')
+        trim = app._memory_foreground_trim_job
+        M.cancel_release(app, 'foreground')               # 新しい求め（_request）が来た
+        self.assertIn(trim, app.root.cancelled)
+        app.root.run(trim)
+        worker.trim_memory.assert_not_called()
+
+    def test_low_is_closed_without_a_trim(self):
+        app, worker = owner(MEMORY_LOW)
+        M.queue_release(app, 'foreground')
+        self.assertIsNone(getattr(app, '_memory_foreground_trim_job', None))
+
     def test_high_and_switch_back_cancel_expiry_without_changing_results(self):
         app, worker = owner(MEMORY_HIGH)
         M.queue_release(app, 'foreground')
-        self.assertEqual(app.root.calls, {})
+        # 2026-10-30: high also gives an idle child back, after a minute instead of 5 seconds
+        # 2026-11-01: its memory is handed out after a minute and the child closed after ten
+        self.assertEqual([delay for delay, _ in app.root.calls.values()], [M.IDLE_RELEASE_KEPT_MS, M.IDLE_TRIM_MS])
         app.settings.set('memory_usage', MEMORY_LOW)
         M.queue_release(app, 'foreground')
         name = app._memory_foreground_job
@@ -194,6 +232,71 @@ class MemoryWorkerRetentionTests(unittest.TestCase):
         app.root.run(name)
         worker.close.assert_not_called()
         self.assertIs(app._correction_worker, worker)
+
+    def test_high_and_mid_give_an_idle_child_back_after_a_minute(self):
+        # 2026-10-30 うにさん「解析が終わったら子タスクを終えてメモリを戻さなくてはなりません」
+        for mode in (MEMORY_HIGH, MEMORY_MID):
+            with self.subTest(mode=mode):
+                app, worker = owner(mode)
+                M.queue_release(app, 'foreground')
+                name = app._memory_foreground_job
+                self.assertEqual(app.root.calls[name][0], M.IDLE_RELEASE_KEPT_MS)
+                app.root.run(name)
+                worker.close.assert_called_once()
+                self.assertIsNone(app._correction_worker)
+                self.assertIsNone(app._worker_state)
+
+    def test_mid_does_not_close_the_child_under_a_background_request(self):
+        app, worker = owner(MEMORY_MID)
+        app._async_background_request = (('bg',), 9)
+        M.queue_release(app, 'foreground')
+        first = app._memory_foreground_job
+        app.root.run(first)
+        worker.close.assert_not_called()
+        self.assertNotEqual(app._memory_foreground_job, first)      # looked at again later
+        app._async_background_request = None
+        app.root.run(app._memory_foreground_job)
+        worker.close.assert_called_once()
+
+    def test_prefetch_child_closes_only_without_a_background_request(self):
+        app, _ = owner(MEMORY_HIGH)
+        prefetched = Mock()
+        app._prefetch_worker, app._prefetch_worker_state = prefetched, ('p',)
+        app._async_background_request = (('bg',), 3)
+        self.assertFalse(M.release_prefetch(app))
+        prefetched.close.assert_not_called()
+        app._async_background_request = None
+        self.assertTrue(M.release_prefetch(app))
+        prefetched.close.assert_called_once()
+        self.assertIsNone(app._prefetch_worker)
+        self.assertIsNone(app._prefetch_worker_state)
+        self.assertFalse(M.release_prefetch(app))
+
+    def test_helper_takes_open_tab_rows_only_in_high_and_not_while_typing(self):
+        # 2026-10-30 うにさん「子2つで分けて」: the other tabs' child helps the open tab in high only
+        import analysis_work_app as work
+        for mode, expected in ((MEMORY_HIGH, True), (MEMORY_MID, False), (MEMORY_LOW, False)):
+            with self.subTest(mode=mode):
+                app, _ = owner(mode)
+                token, deps = object(), ('deps',)
+                app._analyze_work, app._analyze_dependencies, app._analyze_text = token, deps, 'text'
+                app._analyze_ctx, app._analyze_units_only = {}, False
+                app._analyze_todo, app._analyze_pos = list(range(20)), 0
+                app._interacting = lambda: False
+                with patch.object(work, 'token', return_value=token), patch.object(A, 'state_key', return_value=deps):
+                    self.assertEqual(A.helper_allowed(app), expected)
+                    app._interacting = lambda: True
+                    self.assertFalse(A.helper_allowed(app))
+                    app._interacting = lambda: False
+                    app._analyze_pos = 20 - A.HELPER_MIN_ROWS + 1         # a short pass: one child is enough
+                    self.assertFalse(A.helper_allowed(app))
+                    app._analyze_pos = 0
+                    app._helper = dict(key=A._helper_key(app), row=5, done={3})
+                    self.assertTrue(A.helper_done(app, 3) and A.helper_done(app, 5))
+                    self.assertFalse(A.helper_done(app, 4))
+                    self.assertTrue(A.helper_busy(app) and A.helper_wanted(app))
+                    app._analyze_text = 'another text'                    # a new pass: the old claims are not this pass's
+                    self.assertFalse(A.helper_done(app, 3) or A.helper_busy(app))
 
     def test_close_cancels_release_before_closing_and_late_callback_is_inert(self):
         app, worker = owner()
@@ -336,9 +439,9 @@ class MemoryTierTests(unittest.TestCase):
                 (MEMORY_LOW, dict(low=True, compact=True, fg=False, quick=False, shared=False,
                                   prefetch=False, background=False, prewarm=False, preload=False, qprep=False)),
                 (MEMORY_MID, dict(low=False, compact=False, fg=True, quick=False, shared=True,
-                                  prefetch=False, background=True, prewarm=True, preload=True, qprep=False)),
+                                  prefetch=False, background=True, prewarm=True, preload=False, qprep=False)),
                 (MEMORY_HIGH, dict(low=False, compact=False, fg=True, quick=True, shared=False,
-                                   prefetch=True, background=True, prewarm=True, preload=True, qprep=True))):
+                                   prefetch=True, background=True, prewarm=True, preload=False, qprep=True))):
             app, _ = owner(value)
             got = dict(low=M.low(app), compact=M.compact(app), fg=M.retains(app, 'foreground'),
                        quick=M.retains(app, 'quick'), shared=M.shares_worker(app),
@@ -383,7 +486,7 @@ class MemoryTierTests(unittest.TestCase):
         from settings import MEMORY_MID
         app, worker = owner(MEMORY_MID)
         M.queue_release(app, 'foreground')
-        self.assertEqual(app.root.calls, {})
+        self.assertEqual([delay for delay, _ in app.root.calls.values()], [M.IDLE_RELEASE_KEPT_MS, M.IDLE_TRIM_MS])
         self.assertIs(app._correction_worker, worker)
         quick = Mock()
         app._quick_worker = quick
@@ -444,8 +547,8 @@ class MemoryTierTests(unittest.TestCase):
     def test_apply_tier_keeps_or_releases_per_tier(self):
         from settings import MEMORY_MID
         for value, fg_timer, quick_timer, prefetch_closed, warm in (
-                (MEMORY_LOW, True, True, True, False), (MEMORY_MID, False, True, True, True),
-                (MEMORY_HIGH, False, False, False, True)):
+                (MEMORY_LOW, True, True, True, False), (MEMORY_MID, True, True, True, True),
+                (MEMORY_HIGH, True, True, False, True)):
             with self.subTest(value=value):
                 app, worker = owner(value)
                 app._quick_worker = Mock()
@@ -479,7 +582,7 @@ class MemoryTierTests(unittest.TestCase):
                 app, _ = owner(value)
                 M.export_env(app)
                 self.assertEqual(os.environ.get(compact_tables.ENV), expected, value)
-                self.assertEqual(compact_tables.enabled(), expected == '1')
+                self.assertEqual(compact_tables.low(), expected == '1')
         finally:
             if saved is None:
                 os.environ.pop(compact_tables.ENV, None)
@@ -514,27 +617,23 @@ class MemoryTierTests(unittest.TestCase):
 class MemoryPreloadTests(unittest.TestCase):
     """2026-10-14 うにさん「低にしているのに約1500MB」: low does not preload
     the optional public tables into the main process; they load on first use.
-    2026-10-15: mid preloads them like high (「中は高に寄せた処理で」)."""
-    def test_mid_preloads_like_high(self):
+    2026-10-31: no tier preloads them (the main process keeps about 120MB less when idle; the first right-click
+    waits about 0.6 seconds once)."""
+    def test_no_tier_preloads(self):
         from settings import MEMORY_MID
-        app, _ = owner(MEMORY_MID)
-        loaded, importer = self._tables()
-        with importer:
-            self.assertEqual(M.preload_tables(app), M.OPTIONAL_PRELOAD)
-        self.assertEqual(loaded, list(M.OPTIONAL_PRELOAD))
+        for tier in (MEMORY_LOW, MEMORY_MID, MEMORY_HIGH):
+            with self.subTest(tier=tier):
+                app, _ = owner(tier)
+                loaded, importer = self._tables()
+                with importer:
+                    self.assertEqual(M.preload_tables(app), ())
+                self.assertEqual(loaded, [])
 
     def _tables(self):
         loaded = []
         modules = {name: SimpleNamespace(available=lambda name=name: loaded.append(name) or True)
                    for name in M.OPTIONAL_PRELOAD}
         return loaded, patch('importlib.import_module', side_effect=lambda name: modules[name])
-
-    def test_high_preloads_the_optional_tables(self):
-        app, _ = owner(MEMORY_HIGH)
-        loaded, importer = self._tables()
-        with importer:
-            self.assertEqual(M.preload_tables(app), M.OPTIONAL_PRELOAD)
-        self.assertEqual(loaded, list(M.OPTIONAL_PRELOAD))
 
     def test_low_leaves_them_for_first_use(self):
         app, _ = owner(MEMORY_LOW)

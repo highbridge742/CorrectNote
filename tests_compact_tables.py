@@ -15,27 +15,74 @@ HERE = Path(__file__).resolve().parent
 
 class _TableForm:
     """Run a block with CN_COMPACT_TABLES set ('1') or unset (None), then restore
-    whatever this process had (another test module may have exported it)."""
+    whatever this process had (another test module may have exported it).
+    Unset also sets CN_PLAIN_TABLES=1: the cost and compound tables are compact in
+    every tier since 2026-10-31, and these tests compare them with the ordinary form."""
     def __init__(self, flag):
         self.flag = flag
 
     def __enter__(self):
-        self.saved = os.environ.get(C.ENV)
+        self.saved = os.environ.get(C.ENV), os.environ.get(C.PLAIN_TABLES_ENV)
         if self.flag is None:
             os.environ.pop(C.ENV, None)
+            os.environ[C.PLAIN_TABLES_ENV] = '1'
         else:
             os.environ[C.ENV] = self.flag
+            os.environ.pop(C.PLAIN_TABLES_ENV, None)
         return self
 
     def __exit__(self, *exc):
-        if self.saved is None:
-            os.environ.pop(C.ENV, None)
-        else:
-            os.environ[C.ENV] = self.saved
+        for name, value in zip((C.ENV, C.PLAIN_TABLES_ENV), self.saved):
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
         return False
 
 
 class CompactShapeTests(unittest.TestCase):
+    def test_fast_lookup_finds_the_same_positions_as_bisection(self):
+        # 2026-10-31: a sample of every _BLOCK-th key, then one str.find inside the block
+        import random
+
+        def bisected(keys, value):
+            if not isinstance(value, str) or keys._sep in value:
+                return -1
+            low, high = 0, len(keys)
+            while low < high:
+                middle = (low + high) // 2
+                if keys.key(middle) < value:
+                    low = middle + 1
+                else:
+                    high = middle
+            return low if low < len(keys) and keys.key(low) == value else -1
+
+        rnd = random.Random(31)
+        for size in (0, 1, 2, 63, 64, 65, 128, 129, 1000):
+            words = sorted({''.join(rnd.choice('あいうかきくa') for _ in range(rnd.randint(0, 4))) for _ in range(size)})
+            for sep in ('\x00', '\n'):
+                keys = C._Keys.of(words, sep)
+                probes = words + [w + 'ん' for w in words] + [w[:-1] for w in words] + ['', 'ん', 'zz', sep, 'a' + sep, None, 3]
+                for probe in probes:
+                    self.assertEqual(keys.index(probe), bisected(keys, probe), (size, probe))
+
+    def test_tables_are_compact_in_every_tier_and_the_index_only_in_low(self):
+        saved = {name: os.environ.get(name) for name in (C.ENV, C.PLAIN_TABLES_ENV, C.PLAIN_WORDS_ENV)}
+        try:
+            for name in saved:
+                os.environ.pop(name, None)
+            self.assertEqual((C.enabled(), C.low(), C.words_compact()), (True, False, True))
+            os.environ[C.PLAIN_TABLES_ENV] = '1'
+            self.assertEqual((C.enabled(), C.low(), C.words_compact()), (False, False, True))
+            os.environ[C.ENV] = '1'
+            self.assertEqual((C.enabled(), C.low(), C.words_compact()), (True, True, True))
+        finally:
+            for name, value in saved.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
     def test_words_answer_like_a_frozenset(self):
         words = C.CompactWords.of(['b', 'a', '', 'c'])
         self.assertEqual((len(words), sorted(words)), (4, ['', 'a', 'b', 'c']))
@@ -203,31 +250,47 @@ class CompactRealDataTests(unittest.TestCase):
                 'import seed_english;print(type(s).__name__,len(s),"neighbours" in s,"zzzz" in s,'
                 'len(getattr(seed_english,"EXTRA_WORDS",())))')
         out = {}
-        for flag in ('1', None):
+        # compact in every tier since 2026-10-31 (the read table is released); CN_PLAIN_WORDS=1 keeps the frozenset
+        for key, flag, plain in (('low', '1', None), ('default', None, None), ('plain', None, '1')):
             env = dict(os.environ)
             env.pop(C.ENV, None)
+            env.pop(C.PLAIN_WORDS_ENV, None)
             if flag:
                 env[C.ENV] = flag
+            if plain:
+                env[C.PLAIN_WORDS_ENV] = plain
             run = subprocess.run([sys.executable, '-X', 'utf8', '-c', code], cwd=str(HERE), env=env,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding='utf8', timeout=300)
-            out[flag] = run.stdout.strip().splitlines()[-1].split()
-        self.assertEqual(out[None][0], 'frozenset')
-        self.assertEqual(out['1'][0], 'CompactWords')
-        self.assertEqual(out['1'][1:4], out[None][1:4])
-        self.assertEqual(out['1'][2:4], ['True', 'False'])
-        self.assertEqual(out['1'][4], '0')          # the read table is released in low
-        self.assertNotEqual(out[None][4], '0')
+            out[key] = run.stdout.strip().splitlines()[-1].split()
+        self.assertEqual(out['plain'][0], 'frozenset')
+        for key in ('low', 'default'):
+            self.assertEqual(out[key][0], 'CompactWords')
+            self.assertEqual(out[key][1:4], out['plain'][1:4])
+            self.assertEqual(out[key][2:4], ['True', 'False'])
+            self.assertEqual(out[key][4], '0')          # the read table is released
+        self.assertNotEqual(out['plain'][4], '0')
 
     def test_worker_environment_switches_the_engine_tables(self):
         # The flag is read in the process that loads the tables (the worker).
         code = ('import corrector,compact_tables as C;corrector._table_readings_for_surface("");'
                 'import word_table;w,_=word_table.read_word_sets("seed_japanese.txt.gz");'
                 'print(type(corrector._TABLE_READINGS).__name__,type(w).__name__)')
-        for flag, expected in (('1', 'CompactPairs CompactWords'), (None, 'dict frozenset')):
+        # The word lists and the cost tables are compact in every tier since 2026-10-31; CN_PLAIN_WORDS=1 keeps
+        # the frozenset and CN_PLAIN_TABLES=1 the dicts (both only outside low)
+        for flag, plain, tables, expected in (('1', None, None, 'CompactPairs CompactWords'),
+                                              (None, None, None, 'CompactPairs CompactWords'),
+                                              (None, '1', None, 'CompactPairs frozenset'),
+                                              (None, None, '1', 'dict CompactWords'),
+                                              ('1', '1', '1', 'CompactPairs CompactWords')):
             env = dict(os.environ)
-            env.pop(C.ENV, None)
+            for name in (C.ENV, C.PLAIN_WORDS_ENV, C.PLAIN_TABLES_ENV):
+                env.pop(name, None)
             if flag:
                 env[C.ENV] = flag
+            if plain:
+                env[C.PLAIN_WORDS_ENV] = plain
+            if tables:
+                env[C.PLAIN_TABLES_ENV] = tables
             out = subprocess.run([sys.executable, '-X', 'utf8', '-c', code], cwd=str(HERE), env=env,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding='utf8',
                                  timeout=300)

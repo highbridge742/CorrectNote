@@ -260,12 +260,21 @@ class LastChoiceStore:
             self._revision += 1
         return gone
 
-    # 旧 `ChoiceStore` と同じ呼び方の口（前後の語は持たないので見ない）
+    # 旧 `ChoiceStore` と同じ呼び方の口。前後の語ごと覚えた同音の語（_contexts）も消す（2026-11-01 うにさん
+    # 「補正欄で元に戻すクリックをしても、元に戻らなくなった」——表示に出すようにした _contexts を消せなかった）
     def forget(self, original, prev=None, next=None):
-        return self.forget_unit(original)
+        gone = self._contexts.pop((prev or '', original, next or ''), None) is not None
+        if gone:
+            self._revision += 1
+        return self.forget_unit(original) or gone
 
     def forget_all(self, original):
-        return self.forget_unit(original)
+        keys = [key for key in self._contexts if key[1] == original]
+        for key in keys:
+            del self._contexts[key]
+        if keys:
+            self._revision += 1
+        return self.forget_unit(original) or bool(keys)
 
     def forget_record(self, rec):
         """一覧から選んだ1件を消す（読みの枠も語の枠もここから）。"""
@@ -313,7 +322,10 @@ class LastChoiceStore:
         return original in self._units
 
     def originals(self):
-        return list(self._units.keys())
+        """選び直しを覚えている元の表記（表示の組み立て・units._find_choice_ranges が本文の中を探す）。
+        前後の語ごと覚えた同音の語（_contexts）も入れる。入れないと、補正欄で同音の語を選んでも
+        記録だけが残り、表示が替わらなかった（2026-11-01 うにさん）。どの前後で使うかは lookup が決める。"""
+        return list(dict.fromkeys(list(self._units.keys()) + [key[1] for key in self._contexts]))
 
     def readings(self):
         return dict(self._readings)

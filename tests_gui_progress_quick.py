@@ -22,8 +22,8 @@ def child():
    if fn():return
    assert time.monotonic()<end,('timeout',a.status.cget('text'))
    time.sleep(.004)
- def settle():
-  end=time.monotonic()+.1
+ def settle(seconds=.1):
+  end=time.monotonic()+seconds
   while time.monotonic()<end:root.update();time.sleep(.004)
   assert not errors,errors
  try:
@@ -58,6 +58,9 @@ def child():
    a.status.config(text='');settle();expanded=a._body.winfo_height()
    with patch.object(a,'_foreground_analysis_pending',return_value=True):
     a.status.config(text='解析中… 1/2 行');settle()
+    # 解析の進み具合だけのときは STATUS_SHOW_MS 待ってから出す（短い解析でちらつかない・2026-11-01）
+    assert not a.status.winfo_ismapped()
+    a._queue_status_visibility();settle(a.STATUS_SHOW_MS/1000+.15)
     assert a.status.winfo_ismapped()
     assert a._body.winfo_height()<expanded
    a.status.config(text='');a._queue_status_visibility();settle()

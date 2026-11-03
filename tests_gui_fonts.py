@@ -107,7 +107,8 @@ class FontTkTests(unittest.TestCase):
         a=self.a;w=a.editor
         w.delete('1.0','end');w.insert('1.0','😀資料は大きい。')
         text=w.get('1.0','end-1c')
-        a.settings.set('pos_font_multipliers',{'名詞':1.1,'形容詞':1.1})
+        # 助詞 1.0 is not sized (its default became 0.9 on 2026-11-01)
+        a.settings.set('pos_font_multipliers',{'名詞':1.1,'形容詞':1.1,'助詞':1.0})
         a._ctrl_boundary_plans={text:((),((3,4),),
             (('名詞',1,3),('助詞',3,4),('形容詞',4,7),('記号',7,8)))}
         colors=BoundaryColors(a,w)

@@ -740,9 +740,35 @@ def _indexed(store, attr, vocab):
     cached = getattr(store, attr, None)
     if cached is not None and cached[0] == stamp:
         return cached[1]
+    # 直し先が _merged_cache の「足しただけ」の更新（同じ表に語を足しただけ）なら、索引も足した語だけ足す
+    # （2026-11-01・速さ。起動時の英語の覚え直しで、1語覚えるたびに56,000語の索引を作り直していた。答えは同じ）。
+    if (cached is not None and len(cached) >= 4 and cached[2] is vocab
+            and getattr(store, attr + '_grown', None) is vocab and len(vocab) >= cached[3]):
+        index = cached[1]
+        idx, heads = index
+        n_new = len(vocab) - cached[3]
+        if n_new:
+            from itertools import islice
+            added = list(islice(reversed(vocab), n_new))
+            added.reverse()
+            new_heads = False
+            for w in added:
+                if not w:
+                    continue
+                key = (w[0], len(w))
+                if w[0] not in heads and key not in idx:
+                    new_heads = True
+                idx.setdefault(key, []).append(w)
+            if new_heads:
+                heads[:] = sorted({k[0] for k in idx})
+        try:
+            setattr(store, attr, (stamp, index, vocab, len(vocab)))
+        except Exception:
+            pass
+        return index
     index = _distance1_index(vocab)
     try:
-        setattr(store, attr, (stamp, index))
+        setattr(store, attr, (stamp, index, vocab, len(vocab)))
     except Exception:
         pass
     return index
@@ -766,13 +792,44 @@ def _merged_cache(store, attr, seed, learned):
     cached = getattr(store, attr, None)
     if cached is not None and cached[0] == stamp:
         return cached[1]
+    # 覚えた語が「足されただけ」（前の語はどれも同じ表記のまま残っている）なら、表を作り直さず足した語だけ
+    # 重ねる（2026-11-01・速さ。dict(seed)＋update(learned) と同じ中身・同じ並びになる）。索引の控えにも
+    # 「この表は足しただけ」と知らせる（_indexed が足した語だけ索引に足す）。
+    if (cached is not None and len(cached) >= 4 and cached[3] is seed
+            and cached[0][1] == len(seed) and len(learned) >= len(cached[2])):
+        prev = cached[2]
+        grown = True
+        for k, v in prev.items():
+            if learned.get(k, _MISSING) != v:
+                grown = False
+                break
+        if grown:
+            out = cached[1]
+            for k, v in learned.items():
+                if k not in prev:
+                    out[k] = v
+            try:
+                setattr(store, attr, (stamp, out, dict(learned), seed))
+                for ia in _GROWN_INDEX.get(attr, ()):
+                    setattr(store, ia + '_grown', out)
+            except Exception:
+                pass
+            return out
     out = dict(seed)
     out.update(learned)
     try:
-        setattr(store, attr, (stamp, out))
+        setattr(store, attr, (stamp, out, dict(learned), seed))
+        for ia in _GROWN_INDEX.get(attr, ()):
+            setattr(store, ia + '_grown', None)
     except Exception:
         pass
     return out
+
+
+_MISSING = object()
+# 表の控えと、その表から作る索引の控えの組（_merged_cache が足しただけで済ませた時に _indexed へ知らせる）
+_GROWN_INDEX = {'_english_target_cache': ('_english_index_cache',),
+                '_katakana_target_cache': ('_katakana_index_cache',)}
 
 
 def _katakana_targets(store):
@@ -1484,7 +1541,7 @@ def learn_english_words(text, store, category='英語'):
     return added
 
 
-def relearn_english_from_texts(texts, store):
+def relearn_english_from_texts(texts, store, record=None):
     """
     メモ全文から英単語を覚え直す（起動時に一度）。
 
@@ -1514,6 +1571,10 @@ def relearn_english_from_texts(texts, store):
     ほうが、汚れが残るより確実。
 
     戻り値: 覚えた語の数
+
+    record: 並びを渡すと、覚えた語を覚えた順に (読み, 語, 回数) で足す（2026-10-31・速さ）。解析の子（analysis_worker の english_relearn）が
+    語彙の写しでこれを作り、Tk の側は apply_english_relearn で同じ足し方をなぞるだけにする（主スレッドで 6〜9 秒
+    止まっていた: 覚えるたびに語彙の版が変わり、56,000 語の直し先の索引を語の数だけ作り直していた）。
     """
     from collections import Counter
     counts = Counter()
@@ -1605,9 +1666,47 @@ def relearn_english_from_texts(texts, store):
                 store.add(english_reading(word), word, '英語')
             store._english_vocab_cache = None
             added += 1
+            if record is not None:
+                record.append((english_reading(word), word, max(1, n)))
         except Exception:
             pass
     return added
+
+
+def apply_english_relearn(store, record):
+    """relearn_english_from_texts(record=...) が写しで作った覚え直しを、本物の語彙に同じ順で当てる。
+
+    英単語の記録をいったん全部捨ててから、同じ語を同じ回数・同じ順で足す（relearn と同じ手順の、判断を除いた
+    ところだけ）。写しを取ってから語彙が変わっていないときだけ使う（呼び手が見る）。戻り値: 覚えた語の数。"""
+    try:
+        stale = [e for e in store.to_list()
+                 if (e.get('reading') or '').startswith(ENGLISH_PREFIX)]
+        for e in stale:
+            store.remove(e['reading'], e['surface'])
+    except Exception:
+        pass
+    store._english_vocab_cache = None
+    for reading, word, n in record:
+        try:
+            for _ in range(n):
+                store.add(reading, word, '英語')
+        except Exception:
+            pass
+    store._english_vocab_cache = None
+    return len(record)
+
+
+def scratch_store(store):
+    """英単語の覚え直しを裏で試すための語彙の写し（中身・版だけ。analysis_worker.Runtime.set_state と同じ作り）。"""
+    from vocabulary import VocabularyStore
+    copy = VocabularyStore()
+    for entry in store.to_list():
+        copy._by_reading[entry['reading']][entry['surface']] = dict(entry)
+    revision = store.revision()
+    copy._revision = revision
+    copy._shape_revision = revision
+    copy._shape_revision_ja = revision
+    return copy
 
 
 def _english_vocabulary(store, min_count=1):
@@ -1782,8 +1881,9 @@ def _english_seed_all():
         pass
     try:
         import compact_tables
-        if compact_tables.enabled():
-            # メモリ使用量「低」（2026-10-15）: 236,938 語を1本の文字列で持つ
+        if compact_tables.words_compact():
+            # 2026-10-31 からどの段でも（子1つで約40MB少ない・英文の補正も同じ速さで同じ答え。CN_PLAIN_WORDS=1 で従来の形）。
+            # もとはメモリ使用量「低」（2026-10-15）: 236,938 語を1本の文字列で持つ
             # （約 18MB → 約 3MB。引くのは二分探索）。答えは同じ。読み終えた
             # 種の表（EXTRA_WORDS）はこの名簿にしか要らないので手放す
             # （ENGLISH_WORDS は `_english_seed` の直し先として残る）。
@@ -2096,7 +2196,7 @@ _ACRONYM_RE = None
 _ACRONYM_SEED = frozenset((
     'AAC', 'ACT', 'ADHD', 'ADV', 'AI', 'AIDS', 'AM', 'ANA', 'API', 'APK',
     'APP', 'AR', 'ASAP', 'ATM', 'AVI', 'AWS', 'BCC', 'BD', 'BGM', 'BIM',
-    'BIN', 'BIOS', 'BMI', 'BMP', 'BS', 'CAD', 'CAE', 'CAM', 'CC', 'CD',
+    'BIN', 'BIOS', 'BMI', 'BMP', 'BOM', 'BS', 'CAD', 'CAE', 'CAM', 'CC', 'CD',
     'CDN', 'CEO', 'CF', 'CFO', 'CG', 'CIO', 'CLI', 'CM', 'CMO', 'COO',
     'CPI', 'CPU', 'CRT', 'CRUD', 'CSR', 'CSS', 'CSV', 'CT', 'CTO', 'DB',
     'DIY', 'DJ', 'DLL', 'DM', 'DNA', 'DNS', 'DOC', 'DOCX', 'DTP', 'DVD',

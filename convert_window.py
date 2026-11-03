@@ -982,6 +982,19 @@ class ConvertWindow:
                 pass
         return True
 
+    def _focus_after_paste(self, target):
+        try:
+            if not target.winfo_exists():
+                return
+            target.see('insert')
+            # 試験・確かめ（CORRECTNOTE_NO_EXTERNAL_PASTE）では窓を前に出さない（人の画面の焦点を奪わない）
+            if self._native is None or os.environ.get('CORRECTNOTE_NO_EXTERNAL_PASTE') == '1':
+                target.focus_set()
+            else:
+                target.focus_force()     # この窓は焦点を取らない（noactivate）。入れた欄の窓を前にして焦点を置く
+        except tk.TclError:
+            pass
+
     def paste(self, text):
         app = self.app
         to_clip = True
@@ -1013,12 +1026,14 @@ class ConvertWindow:
             else:
                 target.insert('insert', text)
                 done = True
-            if self._native is None:
-                target.focus_set()
         except tk.TclError:
             pass
         if not done:
             return
+        # 入れた文字の右にカーソルを置いて、その欄へ焦点を返す（2026-10-30 うにさん「文変換ウインドウを
+        # クリックしてペーストした後は、ペーストの右にカーソルを置いてフォーカスする（単語帳と同じ挙動）」）。
+        # 変換中の文字の確定を待ってから入る道（_insert_word_book_text）もあるので、入り終えてから
+        self.root.after_idle(lambda: self._focus_after_paste(target))
         try:
             app.status.config(text=_t('文変換の文を入れました', 'Inserted the converted sentence'))
         except AttributeError:

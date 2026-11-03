@@ -1503,6 +1503,11 @@ def project(text,store,index,decisions=None,partial=False):
                         if (len(known)>=2 and known[0].pos=='動詞' and known[-1].pos=='助動詞'
                                 and all(t.pos in ('動詞','助動詞') for t in known)
                                 and not any(t.pos in ('動詞','形容詞','助動詞') for t in emitted)):continue
+                        # 2026-11-02: 用言（動詞・形容詞）に助詞・助動詞の続くかな（ないかと・あるかも）も述語の形。
+                        # 名詞の表記（内科）に替えない（うに「問題がないかと」）
+                        if (len(known)>=2 and known[0].pos in ('動詞','形容詞')
+                                and all(t.pos in ('助詞','助動詞') for t in known[1:])
+                                and not any(t.pos in ('動詞','形容詞','助動詞') for t in emitted)):continue
                         usual=''.join(t.reading for t in emitted if t.has_reading)
                         if (face!=remembered and all(t.has_reading for t in emitted)
                                 and not E._adj_ok_one_char(rd,usual,'kana')):continue
@@ -1743,7 +1748,11 @@ def _fields(text):
     separators.extend(match.span() for match in _FIELD_END.finditer(text))
     start=0
     for end,following in sorted(separators)+[(len(text),len(text))]:
-        if start<end:yield start,end
+        # 欄の頭と尻の空白（字下げ・全角の空白）は欄の文に含めない（2026-10-30・補正担当）
+        lo,hi=start,end
+        while lo<hi and text[lo] in ' 　':lo+=1
+        while hi>lo and text[hi-1] in ' 　':hi-=1
+        if lo<hi:yield lo,hi
         start=max(start,following)
 
 

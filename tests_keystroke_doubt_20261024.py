@@ -67,5 +67,47 @@ class OccurrenceAlternativesTest(unittest.TestCase):
         self.assertEqual(KD._compose_kana(['か', '゛', 'さ']), 'がさ')
 
 
+class PresumeTest(unittest.TestCase):
+    """うにさん 11-01 04:11Z: しきい値より短い隣の2打は巻き込みを基本疑う。作った行・作ったコストだけ。"""
+    def run_(self, cost):
+        return KD.repair_with_doubts('あめろ', 'あめろ', ['あろ', 'あめ'], lambda t: (t, False),
+                                     lambda t: cost[t], lambda t: t, lambda t: 0.0)
+
+    def test_drop_taken_when_not_worse(self):
+        # 前の門（2000 良くなるときだけ）では採らない差でも採る
+        self.assertEqual(self.run_({'あめろ': 5000, 'あめ': 4500, 'あろ': 9000}), ('あめ', 'fix'))
+
+    def test_drop_taken_when_slightly_worse(self):
+        self.assertEqual(self.run_({'あめろ': 5000, 'あめ': 5800, 'あろ': 9000}), ('あめ', 'fix'))
+
+    def test_drop_refused_when_much_worse(self):
+        self.assertEqual(self.run_({'あめろ': 5000, 'あめ': 7000, 'あろ': 9000}), ('あめろ', None))
+
+    def test_old_gate_still_available(self):
+        r = KD.repair_with_doubts('あめろ', 'あめろ', ['あろ', 'あめ'], lambda t: (t, False),
+                                  lambda t: {'あめろ': 5000, 'あめ': 4500, 'あろ': 9000}[t], lambda t: t, lambda t: 0.0,
+                                  margin=KD.DEFAULT_MARGIN)
+        self.assertEqual(r, ('あめろ', None))
+
+    def test_unresolved_doubt_is_purple(self):
+        out = KD._mark_doubted('xあめろy', {'corrected': 'xあめろy', 'odd_spans': [], 'original_spans': []},
+                               'xあめろy', [(1, 4)])
+        self.assertEqual(out['odd_spans'], [(1, 4)])
+        self.assertEqual(out['odd_reasons'][0][:2], (1, 4))
+
+    def test_purple_not_over_existing(self):
+        base = {'corrected': 'xあめろy', 'odd_spans': [(2, 3)], 'original_spans': []}
+        self.assertIs(KD._mark_doubted('xあめろy', base, 'xあめろy', [(1, 4)]), base)
+
+    def test_rolled_voiced_marks(self):
+        # ゛ と ゜ はほぼ同時に押すと両方入る（作った読み）。゜ を抜く形が出る
+        import kana_layout as kl, keyboard_layout as kb
+        key_at = {p: k for k, p in kb.positions().items()}
+        out, t = [], 0.0
+        for i, k in enumerate(KD._kana_key_reading('ぎ゜ん')):
+            out.append((key_at[kl.KANA_POSITIONS[k]], t)); t += 5.0 if i == 1 else 150.0
+        self.assertIn('ぎん', KD.occurrence_alternatives('ぎ゜ん', out, 'kana')[0])
+
+
 if __name__ == '__main__':
     unittest.main()

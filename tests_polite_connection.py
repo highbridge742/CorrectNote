@@ -448,6 +448,8 @@ class PoliteConnectionTests(unittest.TestCase):
                  patch.object(R,'_grammatical_suffix',side_effect=lambda tail,st:st==state and tail==particle) as check:
                 self.assertTrue(R._allows_grammatical_tail(forms,particle,rd,sf))
                 check.assert_called_once_with(particle,state)
+            # the remembered answers (2026-10-30) were made under the patches above
+            R.clear_grammar_memo()
             with patch.object(R,'_modern_te_allowed',return_value=None):
                 self.assertFalse(R._allows_grammatical_tail(forms,particle,rd,sf))
 

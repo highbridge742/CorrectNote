@@ -104,8 +104,10 @@ def _cancel_idle_release(app):
 
 def queue_idle_prewarm(app,delay=1200):
     """Use quiet time for public resources; never replace a pending correction."""
+    # Closed when idle in every tier (high and mid after a minute, 2026-10-30); the prewarm below still uses
+    # the quiet time while the child is kept
+    memory_usage.queue_release(app, 'quick')
     if not memory_usage.retains(app, 'quick'):
-        memory_usage.queue_release(app, 'quick')
         return
     widget=getattr(app,'_quick_text',None);worker=getattr(app,'_quick_worker',None)
     if (widget is None or worker is None or getattr(app,'_closing',False)

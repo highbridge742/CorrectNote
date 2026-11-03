@@ -22,7 +22,23 @@ class UsedKeysTest(unittest.TestCase):
         finally:
             UK.stop(token)
         a = rec.answer()
-        self.assertEqual((a['vocab'], a['whole'], a['recent']), (['かみ', 'てすと'], False, False))
+        self.assertEqual((a['vocab'], a['whole'], a['recent']), ([], False, False))
+        # 語彙のキーは篩で持つ（2026-10-31）。引いたキーは必ず当たる
+        self.assertTrue(UK.keys_hit(a, 'vocab', {'かみ'}))
+        self.assertTrue(UK.keys_hit(a, 'vocab', {'てすと', 'つくえ'}))
+        self.assertFalse(UK.keys_hit(a, 'vocab', set()))
+
+    def test_bloom_never_misses_and_rarely_hits_others(self):
+        keys = {'かな%d' % i for i in range(1500)}
+        a = {'vocab': [], 'vocab_bloom': UK.bloom(keys)}
+        self.assertTrue(all(UK.keys_hit(a, 'vocab', {k}) for k in keys))
+        others = sum(UK.keys_hit(a, 'vocab', {'べつ%d' % i}) for i in range(2000))
+        self.assertLess(others, 10)
+        self.assertLess(len(a['vocab_bloom'][1]), 4100)
+        self.assertIsNone(UK.bloom(()))
+        self.assertFalse(UK.keys_hit({'vocab': [], 'vocab_bloom': None}, 'vocab', {'かな'}))
+        self.assertTrue(UK.keys_hit({'vocab': [], 'vocab_bloom': [64, '!!']}, 'vocab', {'かな'}))
+        self.assertTrue(UK.keys_hit({'choice': ['もと']}, 'choice', {'もと'}))
 
     def test_whole_scan_marks_whole(self):
         token, rec = UK.start()
@@ -80,6 +96,31 @@ class UsedKeysTest(unittest.TestCase):
             UK.stop(token)
         a = rec.answer()
         self.assertEqual((a['loan'], a['whole']), (True, False))
+
+    def test_vocab_query_is_not_whole(self):
+        # 語彙の全部を相手にする探しは whole にせず、探しと答えの指紋を残す（2026-10-31）
+        import vocabulary
+        for r, w in (('さくらもち', '桜餅'), ('さくらんぼ', '桜桃')):
+            self.store.add(r, w); self.store.add(r, w)
+        token, rec = UK.start()
+        try:
+            found = vocabulary.find_similar_readings('さくらもぢ', self.store)
+            vocabulary.store_is_young(self.store)
+        finally:
+            UK.stop(token)
+        a = rec.answer()
+        self.assertIn('さくらもち', [x[0] for x in found])
+        self.assertEqual((a['whole'], len(a['queries'])), (False, 2))
+        self.assertTrue(UK.queries_unchanged(self.store, a['queries']))
+        # 関係の無い語が増えても答えは同じ。近い読みの語が増えたら答えが変わり、やり直しになる
+        self.store.add('つくえ', '机'); self.store.add('つくえ', '机')
+        self.assertTrue(UK.queries_unchanged(self.store, a['queries']))
+        self.store.add('さくらもじ', '桜文字'); self.store.add('さくらもじ', '桜文字')
+        self.assertFalse(UK.queries_unchanged(self.store, a['queries']))
+
+    def test_query_key_without_plain_arguments_is_unknown(self):
+        self.assertIsNone(UK._query_key('find_similar_readings', ('かみ', self.store, object()), {}, 1))
+        self.assertFalse(UK.queries_unchanged(self.store, [['["nothing", ["\\u0000store"], []]', '00']]))
 
     def test_loan_change(self):
         self.assertTrue(UK.is_loan_change('ぺん', 'ペン'))

@@ -18,13 +18,21 @@
    変えるものと紫が残るものは捨てる。自然さが印なしの結果より margin（2000）以上低いときだけ採る。
    打った行にあり得ない所があり、抜いた形で消えるときは margin を外す（必ず誤りの印）。
    採らないときは印なしの結果（今まで通りの補正・紫）のまま。特定の文字列を名指ししない。
+5. 巻き込みを基本疑う（うにさん 11-01 04:11Z「キーの打鍵間隔が閾値を下回るときは、隣接の巻き込みを基本疑って
+   ください」）: しきい値より短い隣の2打は巻き込みと見て、抜いた形が紫を残さず文節の外を変えず、自然さが印なしの
+   結果より PRESUME_TOLERANCE（1000）を超えて悪くならなければ採る（前の「margin 以上良くなるときだけ」をやめた）。
+   どちらを抜くかは抜いた所の前後だけの自然さで比べ、2つの差が CHOOSE_GAP より小さければ決めない。
+   採れなかった印は、その文節を紫にする（決めるか紫か）。
 """
-import difflib, time
+import difflib, os, time
 import kana_rules
 
 DEFAULT_THRESHOLD_MS = 30.0
-DEFAULT_MARGIN = 2000.0
+DEFAULT_MARGIN = 2000.0       # 前の門（今は使わない。測りの比べのために残す）
+CHOOSE_GAP = 1.0              # 2つの抜き方の点の差がこれより小さければ決めずに紫
+PRESUME_TOLERANCE = 1000.0    # 抜いた形が印なしの結果よりこれ以上悪いときだけ巻き込みとしない
 PATH_WEIGHT = 0.5
+LINE_PATH_WEIGHT = 2.0       # 基本疑う形で、どちらを抜くかを行全体の自然さで比べるときの重み
 _STALE_MS = 1000.0            # 離しの来ない押しは 1 秒で捨てる（組がずれないように）
 
 
@@ -93,36 +101,67 @@ def _local(line, cand_line, got, slack=2):
                for o in difflib.SequenceMatcher(None, line, got, autojunk=False).get_opcodes())
 
 
-def choose_drop(alternatives, reading_of, yomi_logp, path_cost):
-    """alternatives: 印の2打のどちらかを抜いた行（2つ）。返り値: (選んだ行, あり得ない所で決めたか)。"""
+def _window(line, text, width=4):
+    """text のうち line と違う所の前後 width 字だけ（長いかなの行は janome の自然さが行の終わりの方しか見ないので）。"""
+    r = _region(line, text)
+    if r is None: return text
+    lo = max(0, r[0] - width)
+    hi = min(len(line), r[1] + width)
+    return text[lo:hi + len(text) - len(line)]
+
+
+def choose_drop(alternatives, reading_of, yomi_logp, path_cost, line=None):
+    """alternatives: 印の2打のどちらかを抜いた行（2つ）。返り値: (選んだ行, あり得ない所で決めたか)。
+    line を渡すと、自然さは抜いた所の前後だけで比べる。"""
+    return _choose(alternatives, reading_of, yomi_logp, path_cost, line)[:2]
+
+
+def _choose(alternatives, reading_of, yomi_logp, path_cost, line=None):
     def key(alt):
         rd = reading_of(alt)
-        pc = path_cost(alt)
-        return (len(kana_rules.bad_spots(rd)), -(yomi_logp(rd) - PATH_WEIGHT * (pc or 0) / 1000.0))
+        if line is None or os.environ.get('CN_KD_LINE') == '0':
+            pc, w = path_cost(alt if line is None else _window(line, alt)), PATH_WEIGHT
+        else:
+            # 行全体の自然さで比べ、重みを上げる（抜いた所の前後だけでは語の途中で切れ、短い形が軽く出た: 今日は吉が・
+            # 会社も近くに。新しい試験の巻き込み 754件で 誤り34→16・決めない21→11・2026-11-02）
+            pc, w = path_cost(alt), LINE_PATH_WEIGHT
+        return (len(kana_rules.bad_spots(rd)), -(yomi_logp(rd) - w * (pc or 0) / 1000.0))
     ks = [key(a) for a in alternatives]
     best = min(range(len(alternatives)), key=lambda i: ks[i])
     by_rule = len({k[0] for k in ks}) > 1
-    return alternatives[best], by_rule
+    gap = min((abs(k[1] - ks[best][1]) for i, k in enumerate(ks) if i != best and k[0] == ks[best][0]), default=None)
+    return alternatives[best], by_rule, gap
 
 
-def repair_with_doubts(line, base, alternatives, run, path_cost, reading_of, yomi_logp, margin=DEFAULT_MARGIN):
+def repair_with_doubts(line, base, alternatives, run, path_cost, reading_of, yomi_logp, margin=None):
     """
     line: 打った行。base: 印なしの補正の結果。alternatives: 印の2打のどちらかを抜いた行（2つ）。
     run(text) -> (補正した行, 紫が残ったか)。yomi_logp(読み) -> 対数確率（yomigram.logp_parts(読み)[0]）。
+    margin: None なら巻き込みを基本疑う（抜いた形が PRESUME_TOLERANCE を超えて悪くなければ採る）。
+    数を渡すと前の門（margin 以上良くなるときだけ採る）。
     返り値: (行, 'fix' | None)。
     """
-    alt, _ = choose_drop(alternatives, reading_of, yomi_logp, path_cost)
+    alt, by_rule, gap = _choose(alternatives, reading_of, yomi_logp, path_cost, line if margin is None else None)
+    if margin is None and not by_rule and gap is not None and gap < CHOOSE_GAP:
+        return base, None      # どちらが余分か決められない（紫にする）
     sure = len(kana_rules.bad_spots(reading_of(line))) > len(kana_rules.bad_spots(reading_of(alt)))
     got, odd = run(alt)
     cands = []
     for g, o in ((alt, False), (got, odd)):
-        if not o and _local(line, alt, g):
+        # 抜いた形の補正が読みを替えずに漢字にしただけなら、文節の外の変換も採る（かなの行も漢字にする所は漢字に）
+        if not o and (_local(line, alt, g) or (g is got and reading_of(g) == reading_of(alt))):
             c = path_cost(g)
             if c is not None: cands.append((c, g))
     if not cands: return base, None
     cands.sort()
+    if margin is None:
+        # 基本疑う形では、抜いた形を補正に通した結果（漢字にした行）を先に使う
+        cands.sort(key=lambda x: x[1] != got)
     bc = path_cost(base)
-    if bc is None or cands[0][0] >= bc - (0.0 if sure else margin): return base, None
+    if bc is None: return base, None
+    if margin is None:
+        if not sure and min(c for c, _ in cands) > bc + PRESUME_TOLERANCE: return base, None
+    elif cands[0][0] >= bc - (0.0 if sure else margin): return base, None
     return cands[0][1], 'fix'
 
 
@@ -202,7 +241,7 @@ def repair_line(line, base, occurrences, input_method, run, convert=None):
     """
     line: 打った行。base: 印なしの補正の結果（dict）。occurrences: [(start, end, surface, reading, strokes)]。
     run(text) -> 印なしの補正の結果（dict）。convert(読み) -> IME の1つ目の変換（無ければ読みのまま入れる）。
-    採ったときは、印の文節を直した結果（dict）を返す。採らないときは base のまま。
+    採ったときは、印の文節を直した結果（dict）を返す。採れない印があれば、その文節を紫にした base を返す。
     """
     import morphology, yomigram
     KT = str.maketrans(_HIRA)
@@ -216,6 +255,7 @@ def repair_line(line, base, occurrences, input_method, run, convert=None):
         if text not in runs: runs[text] = run(text)
         r = runs[text]
         return r.get('corrected') or text, bool(r.get('odd_spans'))
+    doubted = []
     for occ in occurrences or ():
         try:
             start, end, surface, reading, strokes = occ[:5]
@@ -225,6 +265,7 @@ def repair_line(line, base, occurrences, input_method, run, convert=None):
         # 印なしの補正が文節の外を直した行は混ぜない（どちらの直しも崩さないため、印なしのまま）
         if done != line and not _local(line, line[:start] + '\0' + line[end:], done, slack=0): continue
         for ra, rb in occurrence_alternatives(reading, strokes, input_method):
+            if (start, end) not in doubted: doubted.append((start, end))
             alts = []
             for r in (ra, rb):
                 face = None
@@ -239,4 +280,17 @@ def repair_line(line, base, occurrences, input_method, run, convert=None):
             return {'original': line, 'corrected': got, 'changed': True,
                     'details': [[line[a:b], got[c:d], '打鍵の間隔']], 'spans': [[c, d]], 'original_spans': [[a, b]],
                     'odd_spans': [], 'unsure_spans': [], 'odd_reasons': []}
-    return base
+    return _mark_doubted(line, base, done, doubted)
+
+
+def _mark_doubted(line, base, done, doubted):
+    """採れなかった印の文節を紫にする（紫の位置は打った行のもの）。印なしの補正が既に直した・紫にした所は触らない。"""
+    if not doubted or not isinstance(base, dict): return base
+    odd = [tuple(x) for x in (base.get('odd_spans') or ())]
+    taken = odd + [tuple(x) for x in (base.get('original_spans') or ())]
+    add = [(a, b) for a, b in doubted if not any(x < b and a < y for x, y in [t[:2] for t in taken])]
+    if not add: return base
+    out = dict(base)
+    out['odd_spans'] = odd + add
+    out['odd_reasons'] = [tuple(x) for x in (base.get('odd_reasons') or ())] + [(a, b, '打鍵の間隔（巻き込み）') for a, b in add]
+    return out

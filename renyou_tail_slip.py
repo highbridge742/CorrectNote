@@ -99,6 +99,10 @@ def propose(text, input_method='kana'):
                 # 尾は連用形に付く助動詞から始まり、助動詞・助詞だけ（ます・ました・たい）。助詞から始まる尾（のか）は別の形
                 if not _aux_tail_only(ctoks[i + 1:]) or ctoks[i + 1].pos != '助動詞':
                     continue
+                # 直した並びも、かなの文法で説明が付くこと（元の並びより説明が付かない形にしない: やりきる → やりきね・
+                # うに 2026-11-02）
+                if not _explained(cand):
+                    continue
                 cands.add(cand)
         if len(cands) == 1:
             out.append((a, b, next(iter(cands))))

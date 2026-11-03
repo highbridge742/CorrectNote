@@ -66,16 +66,27 @@ class SelectionContextTests(unittest.TestCase):
         names=('_open_quick_dropdown','_editor_dropdown_items','_open_dropdown')
         for name in names:
             method=copy.deepcopy(next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name==name))
+            # The dispatch can sit in a nested function (the dropdown's cached parts): there, read its order.
+            dispatch=[n for n in ast.walk(method) if isinstance(n,ast.If)
+                      and "unit.get('functional')" in ast.unparse(n.test)
+                      and '_range_candidates_in_child' in ast.unparse(n)]
+            self.assertTrue(dispatch,name)
+            if not any(n in method.body for n in dispatch):
+                self.assertIn('_functional_kanji_cands',ast.unparse(dispatch[0].body[-1]),name)
+                self.assertIn("'range'",ast.unparse(dispatch[0].orelse[0].test),name)
+                self.assertIn('_range_candidates_in_child',ast.unparse(dispatch[0].orelse[0].body[-1]),name)
+                continue
             # Run the actual candidate-dispatch body, without constructing Tk.
             edge=next(i for i,n in enumerate(method.body) if isinstance(n,ast.If)
-                      and 'build_range_candidates' in ast.unparse(n) and 'build_candidates' in ast.unparse(n))
+                      and '_range_candidates_in_child' in ast.unparse(n) and '_candidates_in_child' in ast.unparse(n))
             method.body=method.body[:edge+1]+[ast.Return(value=ast.Name(id='cands',ctx=ast.Load()))]
             calls=[]
-            ns={'build_candidates':lambda *a,**k:calls.append('word') or ['word'],
-                'build_range_candidates':lambda *a,**k:calls.append('range') or ['range'],
-                'find_known_readings_flex':None}
+            word=lambda *a,**k:calls.append('word') or ['word']
+            ranged=lambda *a,**k:calls.append('range') or ['range']
+            ns={'build_candidates':word,'build_range_candidates':ranged,'find_known_readings_flex':None}
             exec(compile(ast.fix_missing_locations(ast.Module(body=[method],type_ignores=[])),'app.py','exec'),ns)
-            obj=SimpleNamespace(dict_index=SimpleNamespace(ready=True),line_units=[[]],_quick_units=[[]],store=None,context_vec=None,
+            obj=SimpleNamespace(_candidates_in_child=word,_range_candidates_in_child=ranged,
+                dict_index=SimpleNamespace(ready=True),line_units=[[]],_quick_units=[[]],store=None,context_vec=None,settings={},
                 _unit_surroundings=lambda *a:[],_functional_kanji_cands=lambda *a:calls.append('functional') or ['functional'])
             unit=dict(kind='range',segments=[('でしょう','でしょう')],functional=True,base='でしょう',reading='でしょう')
             args=(obj,1,unit,[]) if name=='_editor_dropdown_items' else (obj,None,1,unit)

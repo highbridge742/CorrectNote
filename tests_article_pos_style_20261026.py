@@ -33,13 +33,14 @@ class ArticleRowTests(unittest.TestCase):
         keys = [k for k, _l in POS_DIALOG_ROWS]
         self.assertEqual(keys[keys.index('連体詞') + 1], ARTICLE)
         self.assertEqual(keys[-1], '英字')
-        # 代名詞 came after 冠詞 (2026-10-26), so 冠詞 is next to last
-        self.assertEqual(POS_CATEGORIES[-2:], (ARTICLE, '代名詞'))
+        # 代名詞 came after 冠詞 (2026-10-26), and 前置詞 after 代名詞 (2026-11-01)
+        self.assertEqual(POS_CATEGORIES[-4:], (ARTICLE, '代名詞', '前置詞', '助詞（複合）'))
         self.assertEqual(POS_FONT_TAGS['連体詞'], 'pos_font_8')
         self.assertEqual(dict(POS_DIALOG_ROWS)['連体詞'], '連体詞・限定詞')
 
     def test_defaults_look_as_rentaishi(self):
-        self.assertEqual(normalize_multipliers(None)[ARTICLE], normalize_multipliers(None)['連体詞'])
+        # 大きさは 0.9倍（2026-11-01 うにさん「冠詞のデフォルトを0.9倍にする」）。色は連体詞と同じ
+        self.assertEqual(normalize_multipliers(None)[ARTICLE], 0.8)   # 画像のとおり（2026-11-01 うにさん）
         for dark in (True, False):
             self.assertEqual(color_defaults(dark)[ARTICLE], color_defaults(dark)['連体詞'])
 

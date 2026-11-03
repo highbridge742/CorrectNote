@@ -213,8 +213,10 @@ def _regions(line, toks, odd, dict_index):
                     break
                 typed += gap + c[2]
                 pos = c[1]
-            if typed:
-                out.append((s, e, typed))
+            # 読みを足したのは pos までなので、置き換える所も pos まで（e まで置くと、読みに入っていない後ろの文節が
+            # 消えていた: 試験の作った文で 3件、行の後ろが丸ごと落ちた・2026-11-02）
+            if typed and pos > s:
+                out.append((s, pos, typed))
             continue
         s, e = a, b
         while s > 0 and _kana(line[s - 1]):

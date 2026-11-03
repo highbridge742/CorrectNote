@@ -133,6 +133,30 @@ def _find_choice_ranges(text, tokens, choice_store):
     return taken
 
 
+def _restore_edge_spaces(tokens, text):
+    """形態素解析が行頭・行末の空白を落とした形（語の位置は正しい）に、空白の語を戻す。戻せなければそのまま。
+    （2026-11-03 うにさん「F5 で長い括りになる」: 行末に空白が1つあるだけで連結が元の行と合わず、下の
+    「区切りが取れない」の道へ落ちて、行全体が1つの単位になっていた。打ち直すと空白が無くなって分かれた。）"""
+    if not tokens:
+        return tokens
+    out, pos = [], 0
+    def space(start, end):
+        return (text[start:end], '記号:空白', '', start, end, False, '')
+    for token in tokens:
+        start, end = token[3], token[4]
+        if start < pos or text[start:end] != token[0] or text[pos:start].strip():
+            return tokens
+        if start > pos:
+            out.append(space(pos, start)[:len(token)])
+        out.append(token)
+        pos = end
+    if text[pos:].strip():
+        return tokens
+    if pos < len(text):
+        out.append(space(pos, len(text))[:len(tokens[0])])
+    return out
+
+
 def _units_from_spans(text, spans, details, marked_kind):
     """
     語の区切りが取れないテキストを、補正スパンの内外で単位に分ける。
@@ -239,6 +263,7 @@ def build_suspect_units(result, tokenize_fn, choice_store=None,
     tokens = _refit_broken_kana_units(tokens, tokenize_fn, known_kana_word,
                                       odd_spans=_odd_sp)
 
+    tokens = _restore_edge_spaces(tokens, text)
     if not tokens or ''.join(t[0] for t in tokens) != text:
         # 語の区切りが信用できない（形態素解析が空白などを落とし、
         # 連結が元テキストと一致しない）。以前はここで行全体を
@@ -1642,6 +1667,7 @@ def build_line_units(result, tokenize_fn, choice_store=None,
     # 行全体が「補正あり」の色になる（実機で報告された）。
     # 補正の位置（spans）は分かっているので、その内外で区切った
     # 単位を代わりに使う。
+    tokens = _restore_edge_spaces(tokens, text)
     if not tokens or ''.join(t[0] for t in tokens) != text:
         pieces = _units_from_spans(text, fixed_spans, details, 'fixed')
         tokens = [(u['text'], '不明', u['reading'], u['start'], u['end'],
@@ -1770,6 +1796,18 @@ def build_line_units(result, tokenize_fn, choice_store=None,
         _merge_kana_runs(units, known_kana_word)))
 
 
+def _fragment_reading(word, reading, lo, hi):
+    """語 word の lo〜hi 字目の読み。字の位置で切れなければ ''。"""
+    if not reading:
+        return ''
+    from reinput import _hiragana, cut_column
+    whole = _hiragana(reading)
+    first, last = cut_column(word, whole, lo), cut_column(word, whole, hi)
+    if first is None or last is None or first >= last:
+        return ''
+    return whole[first:last]
+
+
 def make_range_unit(line_text, units, start, end):
     """
     ドラッグで選ばれた範囲 [start, end) を、選び直しの単位に仕立てる。
@@ -1817,8 +1855,10 @@ def make_range_unit(line_text, units, start, end):
         if frag == u['text']:
             reading = u['reading'] or (frag if _kana_only(frag) else '')
         else:
-            # 単位の途中で切れた断片。かなならそのまま読みにできる
-            reading = frag if _kana_only(frag) else ''
+            # 単位の途中で切れた断片。かなならそのまま読みにできる。漢字を含めば、語の読みを
+            # 字の位置で切る（放している → 放して = はなして。読みが無いと同音の語が出ない・2026-11-03）
+            reading = (frag if _kana_only(frag)
+                       else _fragment_reading(u['text'], u['reading'], s - u['start'], e - u['start']))
         segments.append((frag, reading))
 
     if not segments:

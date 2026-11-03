@@ -205,6 +205,9 @@ class CompletedTabTests(unittest.TestCase):
 
     def _dirty_background(self):
         from analysis_context import Reads,signature
+        # These rows test their own readings; the row above has its own test (tests_previous_line_20261102)
+        from unittest.mock import patch
+        above=patch('analysis_context.previous_line_of',return_value=None);above.start();self.addCleanup(above.stop)
         a=self.a;owner=work.owner(a);lines=['冒頭','資料','資料','12+3','末尾']
         doc=a._input_document;doc.update('\n'.join(lines))
         doc.remember(3,5,'資料','しりょう');doc.remember(6,8,'資料','しりお')

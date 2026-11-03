@@ -130,6 +130,10 @@ def reading_to_hiragana(s):
     if not s:
         return ''
     z = unicodedata.normalize('NFKC', s)
+    # 付く先の無い濁点・半濁点（ぎ に重ねて打った ゜・2026-11-01 補正担当）は NFKC で空白＋結合文字や結合文字だけに
+    # なり、読みとして捨てられていた。読みの中の ゛゜ に戻す（打ち違いの手がかりとして残す。合成できた所は変わらない）
+    z = (z.replace(' \u3099', '゛').replace(' \u309a', '゜')
+          .replace('\u3099', '゛').replace('\u309a', '゜'))
     return ''.join(chr(ord(c) - 0x60) if 'ァ' <= c <= 'ヶ' else c
                    for c in z)
 

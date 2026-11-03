@@ -14,14 +14,17 @@ class StartupPreparationTests(unittest.TestCase):
             thread=native_thread(*args,**kwargs);threads.append(thread);return thread
         interval=app.sys.getswitchinterval()
         try:
-            with patch.object(analysis_async,'prewarm') as worker,patch.object(app.corrector,'make_tokenizer',return_value='tokenizer'),patch.object(seed_japanese,'available'),patch.object(oddness,'available'),patch.object(context_vec,'ContextVectorStore',return_value=cv),patch.object(vocabulary,'build_context_vocab_cached') as parent_parse,patch.object(threading,'Thread',side_effect=create_thread):
+            # The startup children read the editor's lines only to parse them with the public dictionaries
+            # (analysis_async.start_startup_parse, 2026-11-01); the parent itself parses nothing
+            with patch.object(analysis_async,'prewarm') as worker,patch.object(analysis_async,'start_startup_parse') as children,patch.object(app.corrector,'make_tokenizer',return_value='tokenizer'),patch.object(seed_japanese,'available'),patch.object(oddness,'available'),patch.object(context_vec,'ContextVectorStore',return_value=cv),patch.object(vocabulary,'build_context_vocab_cached') as parent_parse,patch.object(threading,'Thread',side_effect=create_thread):
                 app.CorrectNoteApp._start_warmup(a)
                 for thread in threads:thread.join(3);self.assertFalse(thread.is_alive())
                 self.assertTrue(a._warmup['done']);self.assertNotIn('error',a._warmup)
                 self.assertIs(a._warmup['context_vec'],cv)
                 self.assertEqual(a.store._tokenize_fn,'tokenizer')
                 a.dict_index.ensure_built.assert_called_once_with()
-                worker.assert_called_once_with(a);a.editor.get.assert_not_called();parent_parse.assert_not_called()
+                worker.assert_called_once_with(a);children.assert_called_once_with(a)
+                a.editor.get.assert_not_called();parent_parse.assert_not_called()
         finally:
             for thread in threads:thread.join(3)
             app.CorrectNoteApp._restore_warmup_scheduler(a)

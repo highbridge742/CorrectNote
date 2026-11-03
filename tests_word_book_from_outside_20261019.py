@@ -49,7 +49,7 @@ class FromOutsideRuleTests(unittest.TestCase):
     def test_opened_from_outside_gives_the_front_back(self):
         book = self.book()
         native = SimpleNamespace(previous=(0x55, os.getpid() + 1), restore_previous=Mock(return_value=True))
-        def fake_open(give_back=False, outside=None):
+        def fake_open(give_back=False, outside=None, near_pointer=False):
             book.window = Mock(); book._native = native
             if give_back:
                 book._give_back_after_open()
@@ -65,7 +65,7 @@ class FromOutsideRuleTests(unittest.TestCase):
         book.app.root.focus_get.return_value = text
         native = SimpleNamespace(previous=(0x77, os.getpid()), hwnd=0x99, restore_previous=Mock(),
                                  user=SimpleNamespace(GetForegroundWindow=lambda: 0x99))
-        def fake_open(give_back=False, outside=None):
+        def fake_open(give_back=False, outside=None, near_pointer=False):
             book.window = Mock(); book._native = native
             book._give_back_after_open()
         with patch.object(word_book.WordBook, 'open', side_effect=fake_open):

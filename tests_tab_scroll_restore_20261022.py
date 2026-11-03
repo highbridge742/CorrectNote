@@ -68,11 +68,48 @@ class TabScrollRestoreTests(unittest.TestCase):
         a._tab_wheel = Mock(return_value=None); a._wheel_scroll = Mock()
         a._on_wheel(type('E', (), {'delta': 120})())
         self.assertEqual((a._pending_scroll, a._pending_scroll_top), (0.0, None))
-        for name in ('_on_scrollbar', '_goto_line'):
-            body = inspect.getsource(getattr(app.CorrectNoteApp, name))
-            self.assertIn('self._drop_pending_scroll()', body, name)
-        loader = inspect.getsource(app.CorrectNoteApp._load_active_tab)
+        a._syncing = False
+        a._scroll_inertia = None
+        a._release_navigation_padding = Mock()
+        a._clear_navigation_padding = Mock()
+        a._sync_partner_to_line = Mock()
+        a._flush_paper = Mock()
+        a._forget_bracket_cycle = Mock()
+        a._update_header_visibility = Mock()
+        a._on_view_moved = Mock()
+        a.v_scrollbar = Mock()
+        for move in (lambda: a._on_scrollbar('moveto', 0.1), lambda: a._goto_line(5, centered=False)):
+            self.opened_at(200)
+            move()
+            self.assertEqual((a._pending_scroll, a._pending_scroll_top), (0.0, None))
+        # The cursor a tab opened with is noted where the tab is loaded (_load_active_tab_core since the second
+        # window, 2026-10-23)
+        loader = inspect.getsource(app.CorrectNoteApp._load_active_tab_core)
         self.assertIn("self._pending_scroll_cursor = self.editor.index('insert')", loader)
+
+
+class RightDragTests(unittest.TestCase):
+    def test_a_right_drag_drops_the_saved_view(self):
+        from types import SimpleNamespace as NS
+        from unittest.mock import MagicMock
+        a = MagicMock()
+        widget = object()
+        a._drag = dict(widget=widget, mode=None, always_scroll=True, start_x=0, start_y=0)
+        try:
+            app.CorrectNoteApp._drag_motion(a, NS(x=0, y=40, x_root=0, y_root=40), widget)
+        except Exception:
+            pass            # the rest of the scroll needs the real panes; what matters came first
+        self.assertEqual(a._drag['mode'], 'scroll')
+        a._drop_pending_scroll.assert_called_once_with()
+
+    def test_a_small_press_keeps_it(self):
+        from types import SimpleNamespace as NS
+        from unittest.mock import MagicMock
+        a = MagicMock()
+        widget = object()
+        a._drag = dict(widget=widget, mode=None, always_scroll=True, start_x=0, start_y=0)
+        app.CorrectNoteApp._drag_motion(a, NS(x=0, y=3, x_root=0, y_root=3), widget)
+        a._drop_pending_scroll.assert_not_called()
 
 
 if __name__ == '__main__':

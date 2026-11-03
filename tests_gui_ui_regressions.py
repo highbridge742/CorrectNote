@@ -76,6 +76,7 @@ class FontDialogDetailsTests(unittest.TestCase):
 
     def test_size_only_and_default_buttons_accept_windows_font_alias(self):
         a=self.a;a._place_dialog=Mock()
+        a.settings.set('editor_font_family','Yu Mincho')          # the former default, an English alias
         with patch('tkinter.font.families',return_value=('游明朝','Arial')):
             a.open_font_dialog()
         dlg=a._font_dialog
@@ -85,11 +86,72 @@ class FontDialogDetailsTests(unittest.TestCase):
         walk(dlg)
         size=next(w for w in descendants if isinstance(w,tk.Spinbox))
         buttons={w.cget('text'):w for w in descendants if isinstance(w,tk.Button)}
-        size.delete(0,'end');size.insert(0,'24');buttons['適用'].invoke()
+        # 2026-10-31: no 適用 button; a click on a font in the list applies (here the same font, the size changed)
+        self.assertNotIn('適用',buttons);self.assertNotIn('閉じる',buttons)
+        from font_picker import FontList
+        picker=next(w for w in descendants if isinstance(w,FontList))
+        size.delete(0,'end');size.insert(0,'24');picker.on_select('游明朝')
         self.assertEqual(a._editor_font(),('Yu Mincho',24))
         buttons['初期設定'].invoke();self.assertEqual(a._editor_font(),app.EDITOR_FONT)
         size.delete(0,'end');size.insert(0,'28');buttons['OK'].invoke()
-        self.assertEqual(a._editor_font(),('Yu Mincho',28))
+        self.assertEqual(a._editor_font(),(app.EDITOR_FONT[0],28))
+        self.assertIsNone(a._font_dialog)
+        # the size buttons apply at once (2026-10-31)
+        with patch('tkinter.font.families',return_value=('游明朝','Arial')):
+            a.open_font_dialog()
+        descendants=[]
+        walk(a._font_dialog)
+        size=next(w for w in descendants if isinstance(w,tk.Spinbox))
+        size.invoke('buttonup')
+        self.assertEqual(a._editor_font()[1],29)
+        a._font_dialog.destroy()
+
+    def test_a_pc_without_the_default_fonts_passes_them_by(self):
+        # 2026-10-31 うにさん「それらのフォントがもともと入っていないPCでは、エラーにならないようにスルーします」:
+        # the default pins and Noto Serif missing — no pinned group, no error, the font can still be chosen
+        a=self.a;a._place_dialog=Mock()
+        errors=[]
+        self.root.report_callback_exception=lambda *exc:errors.append(exc)
+        with patch('tkinter.font.families',return_value=('Arial','Courier New')):
+            a.open_font_dialog()
+        dlg=a._font_dialog
+        descendants=[]
+        def walk(w):
+            for c in w.winfo_children():descendants.append(c);walk(c)
+        walk(dlg)
+        self.root.update()
+        from font_picker import FontList
+        picker=next(w for w in descendants if isinstance(w,FontList))
+        self.assertEqual(picker.sections()[0],[])                 # none of the 11 pinned fonts is here
+        self.assertEqual(picker.sections()[1],['Arial','Courier New'])
+        buttons={w.cget('text'):w for w in descendants if isinstance(w,tk.Button)}
+        buttons['初期設定'].invoke()                               # Noto Serif, not installed: Tk stands in
+        self.assertEqual(a._editor_font(),app.EDITOR_FONT)
+        picker.on_select('Arial')
+        self.assertEqual(a._editor_font()[0],'Arial')
+        buttons['キャンセル'].invoke()
+        self.root.update()
+        self.assertEqual(errors,[])
+
+    def test_font_click_applies_and_cancel_restores_the_opened_font(self):
+        # 2026-10-31 うにさん「フォントをクリックしたら適用する。…閉じるボタンはキャンセルに変更し、押したらウインドウ開く
+        # 時点のものに戻す」
+        a=self.a;a._place_dialog=Mock()
+        opened=a._editor_font()
+        with patch('tkinter.font.families',return_value=('游明朝','Arial')):
+            a.open_font_dialog()
+        dlg=a._font_dialog
+        descendants=[]
+        def walk(w):
+            for c in w.winfo_children():descendants.append(c);walk(c)
+        walk(dlg)
+        from font_picker import FontList
+        picker=next(w for w in descendants if isinstance(w,FontList))
+        buttons={w.cget('text'):w for w in descendants if isinstance(w,tk.Button)}
+        picker.on_select('Arial')
+        self.assertEqual(a._editor_font()[0],'Arial')            # applied at once
+        buttons['キャンセル'].invoke()
+        self.assertEqual(a._editor_font(),opened)                # back to the font of the opening
         self.assertIsNone(a._font_dialog)
 
     def test_end_rule_keeps_row_height_and_caret_at_large_font(self):

@@ -105,7 +105,11 @@ class GotoBox:
         return 'break'
 
     def _colors(self):
-        import app as A
+        # The running app's own module: under `py app.py` an `import app` is a second copy with the first theme's colours
+        import sys
+        A = sys.modules.get(type(self.app).__module__)
+        if not hasattr(A, 'BG'):
+            import app as A
         return {'bg': getattr(A, 'BG', '#ffffff'), 'panel': getattr(A, 'PANEL', '#f0f0f0'),
                 'ink': getattr(A, 'INK', '#000000'), 'rule': getattr(A, 'RULE', '#888888')}
 

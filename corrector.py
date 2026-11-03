@@ -2014,6 +2014,17 @@ def _lu_compose_odd_run(run, store, input_method=None, tokenize_fn=None,
     return None
 
 
+@__import__('functools').lru_cache(maxsize=8192)
+def _kana_dictionary_adverb(frag):
+    """辞書に、この かな のままの表記・読みで副詞として載っているか。"""
+    try:
+        from morphology import dictionary_inflections
+        return any(pos.startswith('副詞,') and base == frag and reading == frag
+                   for pos, form, base, reading in dictionary_inflections(frag) or ())
+    except Exception:
+        return False
+
+
 def explain_cores(run, store, min_len=3, max_len=8, after_kanji=False):
     """
     ひらがな連続の中から、誤字が潜んでいそうな「窓」を切り出す。
@@ -2045,6 +2056,10 @@ def explain_cores(run, store, min_len=3, max_len=8, after_kanji=False):
             frag = run[i:i + ln]
             try:
                 if any(e['count'] >= 2 for e in store.lookup(frag)):
+                    opts.append((ln, 'word'))
+                elif ln >= 3 and _kana_dictionary_adverb(frag):
+                    # 辞書が かな書きの副詞 と言う語（しばらく・ほとんど）。入れた直後で語彙の数が育っていなくても語として説明する
+                    # （2026-10-30。しばらくお待ち の し|ば|ら|く が窓になり、らくお→らお と字を消していた）
                     opts.append((ln, 'word'))
             except Exception:
                 pass
@@ -3065,6 +3080,10 @@ def _preceded_by_digit(line, start):
         j -= 1
     return j > 0 and (line[j - 1].isdigit()
                       or '０' <= line[j - 1] <= '９')
+
+
+# 拗音の大きい字 → 小さい字（ローマ字の siyu と syu の揺れ・下の shift_only）
+_BIG_TO_SMALL_YOON = {'や': 'ゃ', 'ゆ': 'ゅ', 'よ': 'ょ'}
 
 
 def _trace(stage, detail):
@@ -10283,7 +10302,9 @@ def _fix_samekey_in_run(line, start, end, store, tokenize_fn,
     #      打ち損ねた `る`」ではない —— `。` はもう打ててある。
     #      第38回までの「行末限定」が持っていた安全の復元。
     #      **閉じ括弧の前は対象のまま**（`（強調ぬ）` を守る）。
-    if end < len(line) and line[end] in _SENTENCE_PUNCT:
+    # コロンも同じ。`題目１：` の `１` は見出しの番号で、`！：` と
+    # 記号を2つ並べるつもりの打ち方は無い（2026-10-30）。
+    if end < len(line) and line[end] in _SENTENCE_PUNCT + '：:；;':
         _trace('同じキー',
                f'{core!r} の直後に {line[end]!r} が既に在るので触らない')
         return None
@@ -11167,8 +11188,20 @@ _DESIGN35_CHOSEN = set()
 
 def _design35_chosen(line, start, end, new_surface):
     surface = line[start:end]
-    return any((a, surface, new_surface) in _DESIGN35_CHOSEN
-               for a in (line, line[:start] + ' ' + line[end:], line[:start] + '　' + line[end:]))
+    if any((a, surface, new_surface) in _DESIGN35_CHOSEN
+           for a in (line, line[:start] + ' ' + line[end:], line[:start] + '　' + line[end:])):
+        return True
+    # 対の表が見たのが行の1つの欄（タブの左の文）だけのとき、その欄が行のこの位置を含めば同じ証明
+    # （荷物が思い<タブ>…: 2026-10-30・補正担当）
+    for a, sf, fix in list(_DESIGN35_CHOSEN):
+        if sf != surface or fix != new_surface or not a or len(a) >= len(line):
+            continue
+        at = line.find(a)
+        while at >= 0:
+            if at <= start and end <= at + len(a):
+                return True
+            at = line.find(a, at + 1)
+    return False
 
 
 def _homophone_by_context(surface, reading, store, context_vec,
@@ -14585,6 +14618,23 @@ def _ime_pair_readings(chunk, line=None, start=None, end=None, span=12):
     return out
 
 
+def _faithful_common_words(chunk):
+    """塊の漢字を含む語が1つ以上あり、どれも世の中でよく使う語（ime_reconvert の段で COMMON 以内）か。"""
+    try:
+        import ime_reconvert
+        from morphology import tokenize as _tok
+        toks = list(_tok(chunk))
+        # 1字の漢字が続く所（変｜所）は語の並びとして読めていない（IME が打ち違いを1字ずつの漢字に当てた形）
+        if any(len(a.surface) == 1 and len(b.surface) == 1 and is_kanji(a.surface) and is_kanji(b.surface)
+               and a.end == b.start for a, b in zip(toks, toks[1:])):
+            return False
+        words = [t.base_form if t.base_form and t.base_form != '*' else t.surface
+                 for t in toks if any(is_kanji(c) for c in t.surface)]
+        return bool(words) and all(ime_reconvert._rank(w) <= ime_reconvert.COMMON for w in words)
+    except Exception:
+        return False
+
+
 def _ime_one_key_respell(chunk, readings, store, tokenize_fn, dict_index=None,
                          line=None, start=None, end=None, ties=None):
     """
@@ -14643,6 +14693,11 @@ def _ime_one_key_respell(chunk, readings, store, tokenize_fn, dict_index=None,
             # 明らかに自然なら見る（2026-10-22・`課題をば占める`）。
             # 行が無い呼び方では今までどおり触らない
             if faithful and line is None:
+                continue
+            # 打ったとおりに読める塊で、漢字を含む語がどれも世の中でよく使う語（前・見る）なら、IME は打ったとおりに
+            # 変えただけで、本人の書きたい語。行の自然さだけで1打を戻した別の語（人前・来る）に替えない
+            # （2026-10-30・うにさんの誤判定 ひとつ前は→人前は・F2で見ると→F2で来ると）
+            if faithful and line is not None and _faithful_common_words(chunk):
                 continue
             # 打ったとおりに読める塊が、隣の漢字と続いて1つの漢字の並びの一部（側｜置詞）なら、その片方だけを
             # 1打で別の語（我が）に替えない。行の自然さは隣の並び（置詞）の珍しさで大きく出てしまう
@@ -16893,6 +16948,14 @@ def _reopen_odd_chunk(chunk, store, tokenize_fn, dict_index=None,
                     shift_only=(input_method=='kana' and rd!=fixed
                         and len(rd)==len(fixed)
                         and all(a==b or b in same_key_characters(a)
+                                for a,b in zip(rd,fixed)))
+                    # ローマ字でも、拗音の大きい字と小さい字だけの違い（しゆ／しゅ:
+                    # siyu と syu）は同じ音の打ち方の揺れ。かなの Shift と同じに扱う
+                    # （2026-10-30・ほかの語へ飛ぶより先に採る）
+                    # 塊そのものの読み（朱脣 の しゅしん）へ戻すだけの手は除く
+                    shift_only=shift_only or (input_method=='romaji' and rd!=fixed
+                        and fixed not in readings and len(rd)==len(fixed)
+                        and all(a==b or _BIG_TO_SMALL_YOON.get(a)==b
                                 for a,b in zip(rd,fixed)))
                     key = (_reading_gap(rd, _ar) if _ar else 0,
                            0 if shift_only else 1) + key

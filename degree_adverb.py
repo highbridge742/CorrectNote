@@ -18,7 +18,8 @@ import os
 from functools import lru_cache
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_END = '。！!？?'
+# タブは欄の区切りで、その欄の文はそこで終わる（行の右に別の欄を書いた行・2026-10-30）
+_END = '。！!？?\t'
 
 
 @lru_cache(maxsize=1)

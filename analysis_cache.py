@@ -308,50 +308,154 @@ def _engine_source_stamp(app_dir):
     # 指紋は「この答えを出したエンジン」を表すものなので、読み込んだ
     # ときの大きさで固定する。
     global _ENGINE_SOURCES_SEEN
-    try:
+    with _ENGINE_SOURCES_LOCK:      # 起動の準備（prewarm_engine_sources）が作っている途中なら待つ
         _seen = _ENGINE_SOURCES_SEEN
-    except NameError:
-        _seen = None
-    if _seen is not None and _seen[0] == app_dir:
-        return list(_seen[1])
+        if _seen is not None and _seen[0] == app_dir:
+            return list(_seen[1])
+        out = [[name, size, crc] for name, size, crc in _engine_source_files(app_dir)]
+        _ENGINE_SOURCES_SEEN = (app_dir, list(out))
+        return out
+
+
+def prewarm_engine_sources(app_dir):
+    """起動の準備のあいだに、裏のスレッドで指紋を作っておく（2026-11-01）。原型の .py を全部読むので、ディスクに
+    無いとき（起動の直後）は 0.4秒ほどかかる。控えを読むとき（最初の解析）に本体の手で作ると、そのぶん起動が遅れる。
+    読み込んだときの姿で固定するのは今までどおり（作った1回を以後も返す）。"""
+    try:
+        threading.Thread(target=_engine_source_stamp, args=(app_dir,), daemon=True,
+                         name='engine-sources').start()
+    except Exception:
+        pass
+
+
+
+# 手で並べた見張りの一覧（起点）。ここから import をたどって、補正の段を漏れなく拾う（_engine_source_files）。
+# データの表（.gz など）は、ここに書いたものと同梱の表（bundle_manifest）。
+_ENGINE_SOURCES_LISTED = ('analysis_worker.py', 'analysis_async.py', 'analysis_work_app.py',
+    'analysis_work.py', 'tab_analysis.py', 'initial_setup.py', 'janome_import.py',
+    'corrector.py', 'vocabulary.py', 'kana_layout.py',
+    'halfwidth.py', 'romaji_source.py', 'romaji_repair.py', 'loanword.py', 'morphology.py',
+    'kanji_guess.py', 'context_vec.py', 'dict_index.py',
+    'okurigana.py', 'naturalness.py', 'charngram.py',
+    'ngram_ja.py', 'ngram_yomi.py',
+    'literal_examples.py', 'reading_segments.py', 'reading_likelihood.py',
+    'contextual_repair.py', 'last_keystroke.py', 'inflected_lexicon.py', 'reading_likelihood.py',
+    'semantic_roles.py', 'mark_usage.py',
+    'repaired_spelling.py', 'kana_spelling.py', 'particle_frames.py',
+    'small_vowel_repair.py', 'ime_inverse_gate.py',
+    'ime_language.py', 'ime_candidates.py', 'ime_session.py',
+    'oddness.py', 'pos_grammar.py',
+    # **単語リストも補正の答えを変える**（項目48-BU で
+    # 触らない語を広げたら `callout` の扱いが変わった）。
+    # 中身だけ差し替えたときに気付けるよう、ここに置く。
+    'seed_english.py', 'seed_katakana.py',
+    # 英文のスペースの入れ忘れ（項目48-ES）と、その名簿。
+    # キーボードの配列の表（項目48-KB）
+    'en_space.py', 'seed_english_names.py', 'keyboard_layout.py',
+    # 英語の打ち違いと、その使われやすさの表（2026-10-16）
+    'en_typo.py', 'en_freq.json.gz',
+    # 前後の語で決める英語の取り違えと、その語の組の表（2026-10-23）
+    'en_context.py', 'en_context.json.gz',
+    # **1語として在るかの表**（項目48-FC）。
+    # 差し替えると補正の答えが変わるので見張る。
+    'seed_japanese.py', 'seed_japanese.txt.gz',
+    # 補正の後段（correction_entry から呼ぶ段とその表・2026-10-30）。ここに無いと、段を
+    # 差し替えても控えの古い答えが残る（語の組を直したのに画面で直らなかった）
+    'correction_entry.py', 'collocation_repair.py', 'collocation_table.py',
+    'ime_reconvert.py', 'ja_wordfreq.json.gz', 'honorific_stem.py', 'pair_choice.py',
+    'tatoeba_pairs.json.gz', 'word_pair_mark.py', 'renyou_tail_slip.py', 'semantic_class.py',
+    'nearby_one_key.py')
+
+# たどっても答えを変えない画面・保存の側のモジュール。ここで止める（中身を見ず、その先へもたどらない）。
+# 漏れても困るのは「画面だけ直しても控えを捨てる」ことだけ（起動のあとの解析がやり直しになる）で、答えは古くならない。
+_ENGINE_SOURCES_UI = frozenset((
+    'app', 'appearance', 'appearance_art', 'boundary_colors', 'editor_guides', 'emoji_color', 'ui_projection',
+    'text_edit', 'text_format', 'text_navigation', 'text_links', 'bookmark_tracking', 'recent_files', 'session',
+    'file_format', 'settings', 'pos_font', 'ime_watch', 'ime_events', 'quick_analysis', 'memory_usage',
+    'cache_limits', 'usage_counts', 'ui_lang', 'ui_lang_en'))
+
+_IMPORT_LINE = None
+_DATA_SUFFIXES = ('.gz', '.bin', '.pickle', '.json', '.txt', '.tsv')
+
+
+def _import_lines(text):
+    """text の import の行の (from の名前, import の名前たち)。'import' の字を探してその行だけ照らす
+    （全部の行に正規表現を当てると、原型 14MB で 0.15秒かかった・こちらは 0.01秒）。"""
     out = []
-    for name in ('analysis_worker.py', 'analysis_async.py', 'analysis_work_app.py',
-                 'analysis_work.py', 'tab_analysis.py', 'initial_setup.py', 'janome_import.py',
-                 'corrector.py', 'vocabulary.py', 'kana_layout.py',
-                 'halfwidth.py', 'romaji_source.py', 'romaji_repair.py', 'loanword.py', 'morphology.py',
-                 'kanji_guess.py', 'context_vec.py', 'dict_index.py',
-                 'okurigana.py', 'naturalness.py', 'charngram.py',
-                 'ngram_ja.py', 'ngram_yomi.py',
-                 'literal_examples.py', 'reading_segments.py', 'reading_likelihood.py',
-                 'contextual_repair.py', 'last_keystroke.py', 'inflected_lexicon.py', 'reading_likelihood.py',
-                 'semantic_roles.py', 'mark_usage.py',
-                 'repaired_spelling.py', 'kana_spelling.py', 'particle_frames.py',
-                 'small_vowel_repair.py', 'ime_inverse_gate.py',
-                 'ime_language.py', 'ime_candidates.py', 'ime_session.py',
-                 'oddness.py', 'pos_grammar.py',
-                 # **単語リストも補正の答えを変える**（項目48-BU で
-                 # 触らない語を広げたら `callout` の扱いが変わった）。
-                 # 中身だけ差し替えたときに気付けるよう、ここに置く。
-                 'seed_english.py', 'seed_katakana.py',
-                 # 英文のスペースの入れ忘れ（項目48-ES）と、その名簿。
-                 # キーボードの配列の表（項目48-KB）
-                 'en_space.py', 'seed_english_names.py', 'keyboard_layout.py',
-                 # 英語の打ち違いと、その使われやすさの表（2026-10-16）
-                 'en_typo.py', 'en_freq.json.gz',
-                 # 前後の語で決める英語の取り違えと、その語の組の表（2026-10-23）
-                 'en_context.py', 'en_context.json.gz',
-                 # **1語として在るかの表**（項目48-FC）。
-                 # 差し替えると補正の答えが変わるので見張る。
-                 'seed_japanese.py', 'seed_japanese.txt.gz'):
-        try:
-            out.append(os.path.getsize(os.path.join(app_dir, name)))
-        except Exception:
-            pass
-    _ENGINE_SOURCES_SEEN = (app_dir, list(out))
+    at = text.find('import')
+    while at >= 0:
+        start = text.rfind('\n', 0, at) + 1
+        end = text.find('\n', at)
+        if end < 0:
+            end = len(text)
+        match = _IMPORT_LINE.match(text, start, end)
+        if match:
+            out.append(match.groups())
+        at = text.find('import', end)
     return out
 
 
+def _engine_source_files(app_dir):
+    """エンジンの原型ファイルを (名前, 大きさ, 中身の CRC32) で返す（2026-11-01）。
+
+    起点（_ENGINE_SOURCES_LISTED と correction_entry・corrector・analysis_worker）から、ファイルの中の
+    import の行（関数の中の import も）を字でたどり、手元に .py があるモジュールを全部拾う。correction_entry
+    から呼ぶ段（odd_respell・rival_repair など）を手の一覧に足し忘れると、その段だけ差し替えても控えの古い
+    答えが残っていた。大きさだけでなく中身の指紋で見る（同じ大きさの書き換えも拾う）。画面の側
+    （_ENGINE_SOURCES_UI）では止める。データの表は、手の一覧と同梱の表（bundle_manifest の表の全部。
+    モジュールの中に名前が書いてある表を探すと、拾えたのは同梱の表と同じ組で、探すのに 0.1秒かかった）。"""
+    global _IMPORT_LINE
+    import re
+    if _IMPORT_LINE is None:
+        _IMPORT_LINE = re.compile(r'^[ \t]*(?:from[ \t]+([A-Za-z_]\w*)[\w.]*[ \t]+import\b|import[ \t]+([A-Za-z_][\w \t,.]*))', re.M)
+    try:
+        from bundle_manifest import NAMES as bundled
+    except Exception:
+        bundled = ()
+    bundled = set(bundled)
+    found = {}
+
+    def read(name):
+        try:
+            with open(os.path.join(app_dir, name), 'rb') as handle:
+                if name.endswith('.gz'):
+                    # gzip の終わりの8バイトは中身の CRC32 と大きさ（表を全部読まずに中身の指紋になる）
+                    size = os.fstat(handle.fileno()).st_size
+                    handle.seek(max(0, size - 8))
+                    found[name] = (size, zlib.crc32(handle.read()))
+                    return None
+                data = handle.read()
+        except Exception:
+            return None
+        found[name] = (len(data), zlib.crc32(data))
+        return data
+
+    todo = [n[:-3] for n in _ENGINE_SOURCES_LISTED if n.endswith('.py')]
+    todo += ['correction_entry', 'corrector', 'analysis_worker']
+    data_names = [n for n in _ENGINE_SOURCES_LISTED if not n.endswith('.py')]
+    data_names += sorted(n for n in bundled if n.endswith(_DATA_SUFFIXES))
+    seen = set()
+    while todo:
+        module = todo.pop()
+        if module in seen or module in _ENGINE_SOURCES_UI:
+            continue
+        seen.add(module)
+        data = read(module + '.py')
+        if data is None:
+            continue
+        text = data.decode('utf-8', 'replace')
+        for first, names in _import_lines(text):
+            for name in ([first] if first else names.split(',')):
+                name = name.strip().split(' ')[0].split('.')[0]
+                if name and name not in seen:
+                    todo.append(name)
+    for name in data_names:
+        if name not in found:
+            read(name)
+    return sorted((name,) + found[name] for name in found)
+
 _ENGINE_SOURCES_SEEN = None
+_ENGINE_SOURCES_LOCK = threading.Lock()
 
 
 def _ime_readings_stamp(ime_readings):
@@ -483,7 +587,9 @@ def reusable_result(result):
     """A value can be cached only after its computation actually completed."""
     return (isinstance(result, dict) and bool(result)
             and not result.get('pending') and not result.get('analysis_error')
-            and result.get('analysis_status') != 'incomplete')
+            and result.get('analysis_status') != 'incomplete'
+            # the typed row's first answer, a heavy step left out (correction_entry defer_heavy): not final
+            and not result.get('deferred_stages'))
 
 
 def _tab_kana(text):

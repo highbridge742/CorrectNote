@@ -276,6 +276,10 @@ _PIECES = {
         ('し', 'END'), ('です', 'END'), ('でしょう', 'END'),
         ('だろう', 'END'), ('まい', 'END'), ('らし', 'IST'),
         ('みたい', 'END'), ('って', 'END'),
+        # 用言の終わりの形＋準体の ん＋だ・です（しているんだ・行くんです・食べるんでしょう）。の の話し言葉の形。
+        # これが無いと する・いる の後ろの んだ が説明できず、1打違いの別のかな（やだ）に直していた（うに 2026-11-02）
+        ('んだ', 'END'), ('んだっ', 'TSU'), ('んです', 'END'), ('んでした', 'END'),
+        ('んだろう', 'END'), ('んでしょう', 'END'),
     ),
 }
 
@@ -2560,6 +2564,14 @@ def _native_object_predicate_mismatches(text):
         in native_object_functional_tail_frames(text)))
 
 
+def _katakana_at(line, k):
+    return 0 <= k < len(line) and ('ァ' <= line[k] <= 'ヺ' or line[k] == 'ー')
+
+
+def _ideograph_at(line, k):
+    return 0 <= k < len(line) and ('\u4e00' <= line[k] <= '\u9fff' or line[k] in '々〆')
+
+
 def _impossible_connection_spans(line):
     """
     **いまの日本語の文では起こらない品詞のつながり**（2026-10-23・補正C）。
@@ -2599,6 +2611,14 @@ def _impossible_connection_spans(line):
         for u in ts[max(0, k - 2):k + 2]:
             if any(not _is_hira(c) and c not in 'ー。、，．,.!?！？' for c in u.surface):
                 return True
+        # 助動詞の連なり（し｜まし｜だ）は語の切れ目が確か。連なりの頭の用言の前を支えに見る（2026-10-30）
+        j = k
+        while j > 0 and ts[j].pos == '助動詞' and ts[j - 1].end == ts[j].start:
+            j -= 1
+        if j < k and ts[j].pos == '動詞' and j > 0:
+            for u in ts[max(0, j - 2):j]:
+                if any(not _is_hira(c) and c not in 'ー。、，．,.!?！？' for c in u.surface):
+                    return True
         return False
 
     for i, t in enumerate(ts):
@@ -2611,8 +2631,14 @@ def _impossible_connection_spans(line):
         a, b = p.start, t.end
         # 片仮名に接するかな（スク**り**ーン・シャ**つ**）は、片仮名の語の中の字の打ち違い。
         # 語として混在した綴りの判定は別の道（混在の名詞）に任せ、ここでは見ない
-        if any(0 <= k < len(line) and ('ァ' <= line[k] <= 'ヺ' or line[k] == 'ー')
-               for k in (t.start - 1, t.end)) and all(_is_hira(c) for c in t.surface):
+        if (all(_is_hira(c) for c in t.surface)
+                and (_katakana_at(line, t.start - 1)
+                     or (_katakana_at(line, t.end) and not _ideograph_at(line, t.start - 1)))):
+            # 漢字の後・片仮名の前のかな（歯車**り**アイコン）は片仮名の語の中ではないので見る（2026-10-30）
+            continue
+        if (t.pos == '助動詞' and t.base_form == 'り' and t.surface in ('る', 'れ')
+                and p.pos == '動詞' and p.infl_form == '仮定形' and p.surface[-1:] in 'えけげせぜてでねへべぺめれ'):
+            # 辞書に無い可能動詞（沿え|る・沿え|れば）を、解析が 五段の仮定形＋文語の り と読んだ形（2026-10-30）
             continue
         if t.pos == '助動詞' and t.base_form in ('り', 'つ', 'けり'):
             pass
@@ -2624,6 +2650,37 @@ def _impossible_connection_spans(line):
             a, b = t.start, nx.end
         elif t.pos == 'フィラー' and p.pos == '動詞' and not line[t.start:].startswith(('まうす', 'もうす')):
             pass
+        elif (t.pos == 'フィラー' and len(t.surface) == 1 and p.pos == '名詞'
+                and nx is not None and nx.start == t.end and nx.pos == '名詞'):
+            # 名詞と名詞の間に1字のフィラー（提出物＋ま＋締め切り）。の・が の打ち違いの跡（2026-10-30）
+            a, b = p.start, nx.end
+        elif t.pos == '助詞' and t.surface == 'て' and (t.pos_sub or '').startswith('格助詞') and p.pos == '名詞':
+            # 名詞に 1字の て が格助詞として付く（状況＋て＋す・改札口＋て）。で の濁点が抜けた跡（2026-10-30）
+            pass
+        elif (t.pos == '助動詞' and t.surface == 'な' and t.base_form == 'だ'
+                and nx is not None and nx.start == t.end and nx.pos == '動詞'
+                and (nx.pos_sub or '').startswith('自立')):
+            # 連体の な の後にすぐ用言（お世話＋な＋なっ・一覧＋な＋まとめ）。な は体言に続く（2026-10-30）
+            a, b = p.start, nx.end
+        elif t.pos == '助動詞' and t.base_form == 'き' and p.pos == '名詞':
+            # 文語の過去 き が名詞に直に付く（精算＋き）（2026-10-30）
+            pass
+        elif t.pos == '助詞' and t.surface == 'ば' and t.pos_sub == '接続助詞' and p.pos == '名詞':
+            # 仮定の ば が名詞に直に付く（落とし物＋ば）。ば は用言の仮定形に付く（2026-10-30）
+            pass
+        elif t.pos == '助動詞' and t.base_form == 'だ' and p.pos == '助動詞' and p.base_form == 'ます':
+            # ます の後に だ が来る（しまし＋だ）。た の濁点の打ち違いの跡（2026-10-30）
+            pass
+        elif t.pos == '助動詞' and t.base_form == 'たい' and p.pos == '助詞':
+            # 願望の たい が助詞に直に付く（は＋たい）。たい は動詞の連用形に付く（2026-10-30）
+            pass
+        elif (t.pos == '名詞' and t.pos_sub == '一般' and len(t.surface) == 1 and _is_hira(t.surface)
+                and t.surface not in 'ゐゑ'
+                and not (line[t.start - 1:t.start] in ('「', '『', '"', '“', '（', '(', '・')
+                         and line[t.end:t.end + 1] in ('」', '』', '"', '”', '）', ')', '・'))):
+            # かな1字が普通の名詞と読まれた（にぱ家族・こ連絡・食べす に）。1字のかなの名詞は、いまの文では
+            # ほぼ漢字で書く（目・木・絵）ので、打ち違いの切れ端（2026-10-30）
+            a, b = t.start, t.end
         elif (t.pos == '名詞' and (t.pos_sub or '').startswith('固有名詞')
                 and all(_is_hira(c) for c in t.surface)
                 and p.pos == '動詞' and (p.infl_form or '').startswith('連用')):

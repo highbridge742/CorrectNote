@@ -22,10 +22,11 @@ class QuickIdlePrewarmTests(unittest.TestCase):
         with patch.object(Q,'snapshot',side_effect=AssertionError('No snapshot')),\
              patch.object(a._quick_text,'get',side_effect=AssertionError('No text read')):
             Q.queue_idle_prewarm(a);Q.queue_idle_prewarm(a)
-            self.assertEqual(len(a.root.jobs),1)
+            # one prewarm timer, plus the idle release of the child (a minute, 2026-10-30)
+            self.assertEqual(sorted(ms for ms,_ in a.root.jobs.values()),[1200,60000])
             self.assertEqual(a.root.jobs[a._quick_prewarm_after_id][0],1200)
             self.run_idle(a);Q.queue_idle_prewarm(a)
-        self.assertEqual(a.root.jobs,{})
+        self.assertEqual(list(a.root.jobs),[a._memory_quick_job])
         w.submit.assert_called_once_with({'kind':'warmup'})
 
     def test_edit_timer_and_live_job_always_take_priority(self):

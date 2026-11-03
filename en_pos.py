@@ -9,7 +9,7 @@ more than one part of speech is settled by its neighbours. English parts of
 speech use the existing rows of the dialog (no new rows):
 
     noun, pronoun -> 名詞   verb -> 動詞   auxiliary/modal -> 助動詞
-    adjective -> 形容詞     adverb -> 副詞  preposition -> 助詞
+    adjective -> 形容詞     adverb -> 副詞  preposition -> 前置詞
     article/determiner -> 連体詞  conjunction -> 接続詞  interjection -> 感動詞
     number word (one, twenty, hundred) -> 数詞
 
@@ -30,7 +30,7 @@ import unicodedata
 
 DICTIONARY = 'en_pos.json.gz'
 CATEGORY = {'N': '名詞', 'O': '代名詞', 'V': '動詞', 'M': '助動詞', 'J': '形容詞',
-            'R': '副詞', 'P': '助詞', 'D': '連体詞', 'C': '接続詞', 'I': '感動詞',
+            'R': '副詞', 'P': '前置詞', 'D': '連体詞', 'C': '接続詞', 'I': '感動詞',
             'U': '数詞'}
 UNKNOWN = '英字'
 # What the right-click 品詞判定 calls each code (CATEGORY is the colour row).

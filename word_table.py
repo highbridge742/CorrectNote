@@ -65,9 +65,10 @@ def read_word_sets(path):
     from analysis_context import check_current_request
     check_current_request()
     path=os.path.normcase(os.path.abspath(path))
-    # メモリ使用量「低」: 同じ語の小さな形（compact_tables）。形が違えば従来どおり。
+    # 同じ語の小さな形（compact_tables）。2026-10-31 からどの段でも（子1つで約120MB少ない・答えは同じ）。
+    # 形が違えば従来どおり
     import compact_tables
-    if compact_tables.enabled():
+    if compact_tables.words_compact():
         try:info=os.stat(path)
         except OSError:info=None
         if info is not None:

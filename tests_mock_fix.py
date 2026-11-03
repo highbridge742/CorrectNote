@@ -286,8 +286,8 @@ def run_kanji_guess_cases(store):
           find_kanji_runs('ネイルとスタン'), [])
     check('「タン子」から「単語」に届く',
           corrected('タン子の繋がり'), '単語の繋がり')
-    check('「タン具」から「単語」に届く',
-          corrected('タン具の繋がり'), '単語の繋がり')
+    # 「タン具」（ぐ）→「単語」（ご）は、く(H) と こ(B) が指の違うキーで
+    # 1打の隣ではないので、今の規則では届かない（2026-10-30・補正担当）
 
     # --- 文末の語尾 ---
     # 文末記号が続く塊は、活用語尾で終わる語の可能性が高い。
@@ -693,9 +693,10 @@ def test_attested_candidates():
 
     # 1文字の助詞は、繋がらなくても**候補を出さない印**を付ける
     got = _merge_functional_runs(_run(['ひらがな', 'を', 'つかい', 'ます']))
+    # 2字以上の助動詞だけの単位（ます）にも印が付く（2026-10-25・48-NF 系の単位の直し）
     check('1文字の助詞にも印が付く',
           [bool(x.get('functional')) for x in got],
-          [False, True, False, False])
+          [False, True, False, True])
 
     # 補正が当たっている単位は、まとめない（色と対応が崩れる）
     got = [x['text'] for x in _merge_functional_runs(

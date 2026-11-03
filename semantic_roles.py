@@ -2957,6 +2957,9 @@ def request_action_evidence(source,start,end,surface):
     verb,link,tail=new
     if ((old[1].surface,old[2].reading,old[2].infl_form)!=(link.surface,tail.reading,tail.infl_form)
             or not (start-lo<old[1].start and old[0].end>start-lo)
+            # The repaired span must reach the requested verb itself; a
+            # request elsewhere in the clause says nothing about this word.
+            or end-lo<=old[0].start
             or verb.pos!='動詞' or verb.pos_sub!='自立' or not verb.has_reading
             or verb.end!=link.start):return None
     if native_potential_origins(verb.surface,verb.infl_form,verb.reading):return None

@@ -13,15 +13,11 @@ from settings import Settings
 
 class PosFontTests(unittest.TestCase):
     def test_default_multipliers_enlarge_verbs_adjectives_adverbs_auxiliaries(self):
-        enlarged=('名詞','動詞','形容詞','副詞','助動詞')
-        for key in enlarged:
-            self.assertEqual(POS_FONT_DEFAULTS[key],1.1)
-        self.assertEqual(POS_FONT_DEFAULTS['数詞'],1.2)
-        self.assertEqual(POS_FONT_DEFAULTS['代名詞'],1.2)   # 2026-10-26 うにさん「1.2倍」
-        self.assertEqual(POS_FONT_DEFAULTS['フィラー'],1.4)   # 2026-10-26 うにさん「1.4倍」
-        self.assertTrue(all(POS_FONT_DEFAULTS[key]==1.0 for key in POS_CATEGORIES
-                            if key not in enlarged+('数詞','代名詞','フィラー')))
-        self.assertEqual(Settings().get('editor_font_size'),10)
+        # 2026-11-01 うにさん（画像のとおり）: 本文の字12に対して、内容語1.0・機能語や記号0.8〜0.9
+        self.assertEqual(POS_FONT_DEFAULTS,{'名詞':1.0,'代名詞':1.1,'名詞（サ変）':0.9,'数詞':1.1,'動詞':1.0,
+            '形容詞':1.0,'形容動詞':0.9,'副詞':1.0,'連体詞':0.9,'冠詞':0.8,'接続詞':0.9,'感動詞':0.9,'助詞':0.8,
+            '助詞（複合）':0.9,'前置詞':0.9,'助動詞':1.0,'接頭詞':0.9,'記号':0.9,'フィラー':1.3,'その他':0.9,'英字':1.0})
+        self.assertEqual(Settings().get('editor_font_size'),12)   # 2026-11-01 うにさん「デフォルトサイズを12」
         self.assertLess(POS_CATEGORIES.index('名詞'),
                         POS_CATEGORIES.index('名詞（サ変）'))
         self.assertLess(POS_CATEGORIES.index('名詞（サ変）'),
@@ -85,7 +81,7 @@ class PosFontTests(unittest.TestCase):
             return [(k,text[a:z].strip()) for k,a,z in _join_latin(text,[('名詞',0,len(text))])
                     if text[a:z].strip()]
         self.assertEqual(kinds('I can run to the big park quickly and read a good book.'),
-            [('代名詞','I'),('助動詞','can'),('動詞','run'),('助詞','to'),('冠詞','the'),
+            [('代名詞','I'),('助動詞','can'),('動詞','run'),('前置詞','to'),('冠詞','the'),
              ('形容詞','big'),('名詞','park'),('副詞','quickly'),('接続詞','and'),
              ('動詞','read'),('冠詞','a'),('形容詞','good'),('名詞','book.')])
         # The same word by its neighbours: noun after an article, verb after a pronoun.
@@ -115,15 +111,15 @@ class PosFontTests(unittest.TestCase):
             return [(k,text[a:z].strip()) for k,a,z in _join_latin(text,[('記号',0,len(text))])
                     if text[a:z].strip()]
         self.assertEqual(kinds('In general the history of this state is a simple story.'),
-            [('助詞','In'),('名詞','general'),('冠詞','the'),('名詞','history'),('助詞','of'),
+            [('前置詞','In'),('名詞','general'),('冠詞','the'),('名詞','history'),('前置詞','of'),
              ('連体詞','this'),('名詞','state'),('動詞','is'),('冠詞','a'),
              ('形容詞','simple'),('名詞','story.')])
         self.assertEqual(kinds("I don't think it's the state of the power."),
             [('代名詞','I'),('助動詞','don'),('記号',"'"),('助動詞','t'),('動詞','think'),
              ('代名詞','it'),('記号',"'"),('助動詞','s'),('冠詞','the'),('名詞','state'),
-             ('助詞','of'),('冠詞','the'),('名詞','power.')])
+             ('前置詞','of'),('冠詞','the'),('名詞','power.')])
         self.assertEqual(kinds("We’re home at ten o'clock."),
-            [('代名詞','We'),('記号','’'),('助動詞','re'),('名詞','home'),('助詞','at'),
+            [('代名詞','We'),('記号','’'),('助動詞','re'),('名詞','home'),('前置詞','at'),
              ('数詞','ten'),('副詞','o'),('記号',"'"),('副詞','clock.')])
         # Names (capitalised only in WordNet) and Roman numerals stay 英字.
         self.assertEqual(kinds('London ii'),[('英字','London'),('英字','ii')])
@@ -142,12 +138,16 @@ class PosFontTests(unittest.TestCase):
         # 代名詞 has its own row right after 名詞, so 名詞 is just 名詞 (2026-10-26 うにさん)
         self.assertEqual(labels['名詞'],'名詞')
         self.assertEqual(labels['代名詞'],'代名詞')
-        self.assertEqual(labels['助詞'],'助詞・前置詞')
+        # 前置詞 has its own row right after 助詞 (2026-11-01 うにさん「助詞と前置詞を別々の項目に分け」)
+        self.assertEqual(labels['助詞'],'助詞')
+        self.assertEqual(labels['前置詞'],'前置詞')
         self.assertEqual(labels['連体詞'],'連体詞・限定詞')
         # 冠詞 has its own row right after 連体詞 (2026-10-26 うにさん)
         keys=[k for k,_l in POS_DIALOG_ROWS]
         self.assertEqual(keys[keys.index('連体詞')+1],'冠詞')
         self.assertEqual(keys[keys.index('名詞')+1],'代名詞')
+        self.assertEqual(keys[keys.index('助詞')+1],'助詞（複合）')
+        self.assertEqual(keys[keys.index('助詞')+2],'前置詞')
         self.assertEqual(sorted(labels),sorted(POS_CATEGORIES))
         self.assertEqual(POS_CATEGORIES[3],'英字')
 
@@ -189,7 +189,7 @@ class PosFontTests(unittest.TestCase):
             ('助詞',11,12),('数詞',12,13),('名詞',13,15)))
         self.assertLess(POS_CATEGORIES.index('名詞（サ変）'),
                         POS_CATEGORIES.index('数詞'))
-        self.assertEqual(POS_FONT_DEFAULTS['数詞'],1.2)
+        self.assertEqual(POS_FONT_DEFAULTS['数詞'],1.1)
         self.assertEqual(spans('一般',(('一般','名詞:一般','',0,2,True),)),
                          (('名詞',0,2),))
 
@@ -218,11 +218,11 @@ class PosFontTests(unittest.TestCase):
         result=settings.get('pos_font_multipliers')
         self.assertEqual(result['名詞'],1.4)
         self.assertEqual(result['動詞'],1.25)
-        self.assertEqual(result['形容詞'],1.1)
-        self.assertEqual(result['副詞'],1.1)
-        self.assertEqual(result['名詞（サ変）'],1.0)
-        self.assertEqual(result['助詞'],1.0)
-        self.assertEqual(result['記号'],1.0)
+        self.assertEqual(result['形容詞'],1.0)
+        self.assertEqual(result['副詞'],1.0)
+        self.assertEqual(result['名詞（サ変）'],0.9)
+        self.assertEqual(result['助詞'],0.8)
+        self.assertEqual(result['記号'],0.9)
         self.assertEqual(set(result),set(POS_CATEGORIES))
 
 
@@ -236,10 +236,10 @@ class PosColorTests(unittest.TestCase):
         light=normalize_colors(Settings().get('pos_font_colors_light'),False)
         names=lambda c:{k:PALETTE_NAMES[v] for k,v in c.items() if v}
         self.assertEqual(names(colors),{'名詞':'緑・ごく明るい','数詞':'緑・とても明るい',
-                                        '英字':'グレー・明るい','記号':'グレー・明るい',
+                                        '英字':'藍・とても明るい','記号':'グレー・明るい',
                                         '代名詞':'緑・明るい','フィラー':'朱・明るい'})
         self.assertEqual(names(light),{'名詞':'青緑・濃い','数詞':'緑・やや濃い',
-                                       '英字':'グレー・やや濃い','記号':'グレー・やや濃い',
+                                       '英字':'藍・やや濃い','記号':'グレー・やや濃い',
                                        '代名詞':'緑・中間','フィラー':'朱・中間'})
         self.assertEqual(colors,POS_COLOR_DEFAULTS)
         self.assertEqual(light,POS_COLOR_DEFAULTS_LIGHT)
@@ -316,10 +316,10 @@ class PosColorTests(unittest.TestCase):
         # Saved before the change: 数詞 at the old 1.0 and every colour empty.
         old=load({'pos_font_multipliers':{'数詞':1.0,'名詞':1.3},
                   'pos_font_colors':{key:'' for key in POS_CATEGORIES}})
-        self.assertEqual(old.get('pos_font_multipliers')['数詞'],1.2)
+        self.assertEqual(old.get('pos_font_multipliers')['数詞'],1.1)
         self.assertEqual(old.get('pos_font_multipliers')['名詞'],1.3)
         self.assertEqual(old.get('pos_font_colors'),POS_COLOR_DEFAULTS)
-        self.assertEqual(old.get('pos_font_defaults'),'3')
+        self.assertEqual(old.get('pos_font_defaults'),'6')
         # Chosen values are kept.
         chosen=load({'pos_font_multipliers':{'数詞':1.5},
                      'pos_font_colors':{'記号':'#123456'}})
@@ -346,7 +346,7 @@ class PosColorTests(unittest.TestCase):
                     '動詞':palette_color('赤','ごく明るい')})
         s=load({'pos_font_defaults':'2','pos_font_multipliers':{'名詞':1.0,'動詞':1.3},
                 'pos_font_colors':old})
-        self.assertEqual(s.get('pos_font_multipliers')['名詞'],1.1)
+        self.assertEqual(s.get('pos_font_multipliers')['名詞'],1.0)
         self.assertEqual(s.get('pos_font_multipliers')['動詞'],1.3)
         dark=s.get('pos_font_colors');light=s.get('pos_font_colors_light')
         for key in ('名詞','数詞','英字','記号'):
@@ -355,7 +355,7 @@ class PosColorTests(unittest.TestCase):
         # A chosen colour stays; light keeps the mirrored colour it showed.
         self.assertEqual(dark['動詞'],palette_color('赤','ごく明るい'))
         self.assertEqual(light['動詞'],palette_color('赤','濃い'))
-        self.assertEqual(s.get('pos_font_defaults'),'3')
+        self.assertEqual(s.get('pos_font_defaults'),'6')
         # Version 2 colours already chosen as the new dark defaults (うにさん's
         # own file): light takes the new light defaults, not the mirror.
         same=dict(old);same.update({'名詞':POS_COLOR_DEFAULTS['名詞'],

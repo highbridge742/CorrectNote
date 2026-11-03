@@ -225,7 +225,12 @@ def install():
             pass
     try:
         import correction_entry
-        for attr in ('_mark_impossible_connections', '_mark_leftover_letters'):
+        # 後から足した段（2026-10-25〜30）も、それぞれ1段として数える
+        for attr in ('_mark_impossible_connections', '_mark_leftover_letters', '_lattice_place', '_word_pair_mark',
+                     '_renyou_tail_slip', '_degree_adverb', '_dangling_verb', '_impossible_slip', '_kanji_doubt',
+                     '_ime_reconvert', '_honorific_stem', '_pair_choice', '_nearby_one_key', '_rival_repair', '_learned_gate', '_predicate_slip',
+                     '_question_ka', '_formal_noun_gap', '_odd_respell', '_kana_keep', '_yoon_slip',
+                     '_te_dropped', '_broken_shape', '_keep_converted'):
             wrap(correction_entry, attr, kind='result')
         _wrap_entry(correction_entry)
     except Exception:

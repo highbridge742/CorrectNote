@@ -10,14 +10,17 @@ from contextlib import contextmanager
 import sys
 import keyboard_layout
 import queue
+import time
 import traceback
 from collections import defaultdict
 
 
 def state_key(app):
     store=getattr(app,'store',None);choices=getattr(app,'choices',None)
+    decisions=getattr(app,'decisions',None);decided=getattr(decisions,'revision',None)
     return (id(store),store.revision() if store is not None else 0,
-            choices.revision() if choices is not None else 0,
+            # 選び直しの記憶と補正の判断（2026-11-01: 判断も「動いたもの」として、その語を含む行だけやり直す）
+            (choices.revision() if choices is not None else 0,decided() if decided is not None else 0),
             getattr(app,'_analysis_state_revision',0), id(getattr(app,'dict_index',None)),
             bool(getattr(getattr(app,'dict_index',None),'ready',False)),
             id(getattr(app,'context_vec',None)),
@@ -77,6 +80,15 @@ def result_compatible(app,result,previous,current=None):
                for surface,values in reads)
 
 
+def _choice_part(value):
+    """状態の鍵の選び直しの欄（選び直しの版, 判断の版）の、選び直しの版（古い形は数1つ）。"""
+    return value[0] if isinstance(value,tuple) else value
+
+
+def _decision_part(value):
+    return value[1] if isinstance(value,tuple) and len(value)>1 else None
+
+
 def _keys_unchanged(app,result,previous,current):
     """The row did not use what moved (used_keys of correction_entry, used_changes in this process)."""
     used=result.get('used_keys')
@@ -84,10 +96,34 @@ def _keys_unchanged(app,result,previous,current):
     if previous[RECENT]!=current[RECENT] and used.get('recent'):return False
     import used_changes
     evidence=result.get('_context_evidence')
+    if previous[CHOICE]!=current[CHOICE]:
+        before,after=_decision_part(previous[CHOICE]),_decision_part(current[CHOICE])
+        if before!=after:
+            # 補正の判断は行の元の文字列に掛かる（直さない置換の元・触らない語・紫を付けない語）。
+            # 変わった語を含まない行の答えは変わらない
+            words=used_changes.changed(getattr(app,'decisions',None),before,after)
+            if words is None or before is None or after is None:return False
+            original=result.get('original') or ''
+            if any(word in original for word in words):return False
     for index,attribute,kind in ((VOCAB,'store','vocab'),(CHOICE,'choices','choice')):
         if previous[index]==current[index]:continue
-        keys=used_changes.changed(getattr(app,attribute,None),previous[index],current[index])
-        if keys is None or keys.intersection(used.get(kind) or ()):return False
+        old,new=previous[index],current[index]
+        if index==CHOICE:
+            old,new=_choice_part(old),_choice_part(new)
+            if old==new:continue
+        keys=used_changes.changed(getattr(app,attribute,None),old,new)
+        if keys is None:return False
+        if index==CHOICE:
+            # 前後の語ごとの選び直しは、その並びが現れる行だけ
+            places,keys=used_changes.split_context_keys(keys)
+            texts=(result.get('original') or '',result.get('corrected') or '')
+            if any(place in text for place in places for text in texts):return False
+        # 子は語彙のキーを篩（vocab_bloom）で返すことがある（used_keys.keys_hit・2026-10-31）。keys_hit の無い
+        # used_keys.py では従来どおり一覧と突き合わせる
+        import used_keys
+        hit=getattr(used_keys,'keys_hit',None)
+        if hit is None and used.get(kind+'_bloom') is not None:return False    # 篩を読めない版では、やり直す側に
+        if (hit(used,kind,keys) if hit is not None else keys.intersection(used.get(kind) or ())):return False
         # the loanword / English tables (used_keys loan, 2026-10-24): only a changed word that can be in them
         # (a katakana or English spelling, an en: reading) redoes the row
         if used.get('loan'):
@@ -98,6 +134,12 @@ def _keys_unchanged(app,result,previous,current):
             # there, or all of it, is redone too
             if not isinstance(evidence,dict) or evidence.get('whole') or keys.intersection(evidence.get('keys') or ()):
                 return False
+            # 語彙の中を探した引き（似た読み・崩した読みなど）は、何を探したかと答えの指紋を queries に残す
+            # （used_keys・2026-10-31）。今の語彙で探し直して指紋が同じなら、その行は動いたものを使っていない
+            if used.get('queries'):
+                import used_keys
+                check=getattr(used_keys,'queries_unchanged',None)
+                if check is None or not check(getattr(app,'store',None),used['queries']):return False
     return True
 
 
@@ -129,13 +171,20 @@ def snapshot(app):
         context_seeded=getattr(cv,'seeded',False),context_seed_version=getattr(cv,'seed_version',0),
         decisions={name:{k:dict(v) for k,v in getattr(decisions,name,{}).items()}
                    for name in ('_rejected','_protected','_odd_only')},
-        choices={name:dict(getattr(choices,name,{})) for name in ('_readings','_units')},
+        # 前後の語ごと覚えた同音の語（_contexts）も渡す（2026-11-01: 渡していなかったので、子の補正と表示に効かなかった）
+        choices={name:dict(getattr(choices,name,{})) for name in ('_readings','_units','_contexts')},
         choice_revision=choices.revision() if choices is not None else 0,
         ime={k:list(v) for k,v in getattr(ime,'_pairs',{}).items()},
         charngram=dict(charngram._LEARNED or {}))
 
 
 _FALLBACK_ROWS=[0]
+
+
+def _native_rows(tokens):
+    """The kept form of a line's native tokens (Runtime.line_tokens)."""
+    return tuple((t.surface,t.pos,t.base_form,t.reading,t.start,t.end,
+                  t.has_reading,t.pos_sub,t.infl_form) for t in tokens)
 
 
 def _count_fallback_rows():
@@ -176,6 +225,7 @@ class Runtime:
         # morphology bounds both maps (2048 entries, oldest first).
         self._parses=({},{})
         self._parse_lines=frozenset()
+        self._parked=[]
         self.index_key=None
         self.index=None
         self._state_identity=None
@@ -198,6 +248,8 @@ class Runtime:
         # Untagged callers and every other model change retain a full reset.
         # A failed reset must never authorize later partial state reuse.
         self._state_identity=None
+        import contextual_repair
+        contextual_repair.clear_grammar_memo()   # a new model: forget the remembered grammar answers (2026-10-30)
         from vocabulary import VocabularyStore
         from dict_index import DictIndex
         from decisions import DecisionStore
@@ -262,6 +314,39 @@ class Runtime:
     def _forget_parses(self):
         for kept in self._parses:kept.clear()
 
+    # The rows of a tab left behind, packed, for when it comes back (2026-11-03): after going to another tab and
+    # back, the first key in a 3,600-line tab parsed 1,600 rows again (6.7 s before the row was looked at). They read
+    # only the public dictionaries (line_tokens), so they are the rows prepare would make. In this process's memory only.
+    PARK_TABS = 2
+    PARK_MIN_LINES = 300
+
+    def _pack_rows(self):
+        if len(self.line_tokens)<self.PARK_MIN_LINES:return None
+        import pickle,zlib
+        words={line:self.content_words[line] for line in self.line_tokens if line in self.content_words}
+        return zlib.compress(pickle.dumps((self.line_tokens,words),protocol=pickle.HIGHEST_PROTOCOL),1)
+
+    def _unpack_rows(self,blob,current):
+        import pickle,zlib
+        rows,words=pickle.loads(zlib.decompress(blob))
+        for line,value in rows.items():
+            if line in current:self.line_tokens.setdefault(line,value)
+        for line,value in words.items():
+            if line in current:self.content_words.setdefault(line,value)
+
+    def _park_parses(self):
+        blob=self._pack_rows()
+        if blob is None:return
+        self._parked.append((frozenset(self.line_tokens),blob))
+        del self._parked[:-self.PARK_TABS]
+
+    def _take_parked(self,current):
+        for index,(lines,blob) in enumerate(self._parked):
+            if len(current&lines)*2>=len(current):
+                del self._parked[index]
+                self._unpack_rows(blob,current)
+                return
+
     @contextmanager
     def _kept_parses(self):
         """Let this request's tokenization scope use the kept parses."""
@@ -285,6 +370,10 @@ class Runtime:
         if len(current&self._parse_lines)*2<len(current):
             # Another text (a tab switch): its fragments are not kept.
             self._forget_parses()
+            from morphology import HAS_JANOME
+            if HAS_JANOME:
+                self._park_parses()
+                self._take_parked(current)
         self._parse_lines=current
         if key in self.prepared:return self.prepared[key]
         from literal_lines import literal_only,prepared
@@ -309,9 +398,7 @@ class Runtime:
                 if line not in self.content_words:
                     words[line]=extract_content_words(self.tokenize,line)
                 if _FALLBACK_ROWS[0]!=failures:unsteady.add(line)
-                elif HAS_JANOME:
-                    rows_by_line[line]=tuple((t.surface,t.pos,t.base_form,t.reading,t.start,t.end,
-                                              t.has_reading,t.pos_sub,t.infl_form) for t in tokens)
+                elif HAS_JANOME:rows_by_line[line]=_native_rows(tokens)
                 return tokens
         from literal_lines import literal_only
         ordinary=[]
@@ -346,6 +433,34 @@ class Runtime:
         self.prepared[key]=value
         while len(self.prepared)>4:self.prepared.pop(next(iter(self.prepared)))
         return value
+
+    def warm_lines(self,lines):
+        """Parse the open tab's lines while the app waits for its start (2026-11-01, speed).
+
+        The first prepare of a 3,600-line tab spent 2.9 s in janome after the
+        English relearning answered, with this child idle before it. The rows
+        and content words read only the public dictionaries (see line_tokens),
+        so they are the ones prepare would make; prepare then reuses them.
+        A real request interrupts this; the lines parsed so far are kept.
+        """
+        from morphology import HAS_JANOME,tokenize,tokenization_scope
+        if not HAS_JANOME:return
+        from literal_lines import literal_only
+        from context_vec import extract_content_words
+        from analysis_context import check_current_request
+        import corrector
+        native=getattr(self,'tokenize',None) or corrector.make_tokenizer(None)
+        for line in dict.fromkeys(lines):
+            check_current_request(frequent=True)
+            if (not line.strip() or literal_only(line) or line in self.unsteady
+                    or (line in self.line_tokens and line in self.content_words)):continue
+            failures=_FALLBACK_ROWS[0]
+            with tokenization_scope():
+                rows=_native_rows(tokenize(line))
+                words=extract_content_words(native,line)
+            # A janome failure fell back to the simple splitter: prepare tries again.
+            if _FALLBACK_ROWS[0]!=failures:continue
+            self.line_tokens[line]=rows;self.content_words[line]=words
 
     def _read_ime(self,surface):
         values=self.ime.readings_for(surface)
@@ -429,6 +544,33 @@ class Runtime:
             load()
         self.tables_ready=True
 
+    def _english_relearn(self,task):
+        """起動時の英単語の覚え直しを、この子で（本体の窓を止めない・2026-10-31）。本体の語彙と最後の選択の写しで
+        loanword.relearn_english_from_texts を回し、覚えた順の (読み, 語, 回数) を返す（本体は同じ足し方をなぞる）。
+        求めに warm があれば、そのあと表の先読み（warmup と同じ）もする（子は新しい求めで古い求めを捨てるので）。"""
+        from vocabulary import VocabularyStore
+        from last_choice import LastChoiceStore,set_active
+        import loanword
+        store=VocabularyStore()
+        for entry in task['entries']:
+            store._by_reading[entry['reading']][entry['surface']]=dict(entry)
+        revision=task.get('revision',0)
+        store._revision=store._shape_revision=store._shape_revision_ja=revision
+        choices=LastChoiceStore()
+        for name,value in (task.get('choices') or {}).items():setattr(choices,name,value)
+        choices._revision=task.get('choice_revision',0);choices.bind(store,None)
+        previous=getattr(self,'choices',None)
+        set_active(choices)
+        record=[]
+        try:
+            loanword.relearn_english_from_texts(task['texts'],store,record=record)
+        finally:
+            set_active(previous)
+        if task.get('warm'):
+            try:self.execute(dict(kind='warmup'))
+            except Exception:traceback.print_exc()
+        return dict(record=record)
+
     def execute(self,task):
         kind=task['kind']
         if kind=='quick':return self.quick(task)
@@ -447,6 +589,12 @@ class Runtime:
         if kind=='initial_dictionary':
             from janome_import import collect_import_entries
             return collect_import_entries()
+        if kind=='english_relearn':
+            return self._english_relearn(task)
+        if kind in ('warmup','prepare'):
+            # The cache limits it sets on morphology: before this child's first tokens, not after them (the
+            # limit only drops one entry per new one, so a cache already past it would stay that size)
+            import correction_entry  # noqa: F401
         if kind=='warmup':
             try:
                 self.prepare_tables()
@@ -476,17 +624,93 @@ class Runtime:
                 import reading_lattice
                 reading_lattice.load(build=False)
             except Exception:pass
+            if task.get('lines'):
+                try:self.warm_lines(task['lines'])
+                except Exception:traceback.print_exc()  # prepare parses what is left
+            try:
+                # What the reconversion list reads and this child does not have yet (ask_child); a row interrupts it
+                from analysis_context import check_current_request
+                check_current_request()
+                import synonyms
+                table=synonyms.load_table()
+                if table:table.by_reading('')
+                check_current_request()
+                synonyms.synonyms('見る')
+            except Exception:pass
             return dict(ready=getattr(self,'tables_ready',False))
+        if kind=='candidates':
+            # The reconversion list, here where the tables are (analysis_async.ask_child, 2026-11-02)
+            from candidates import build_candidates,build_range_candidates
+            from vocabulary import find_known_readings_flex
+            options=dict(dict_index=self.index,context_vec=self.context_vec,**task['options'])
+            if task.get('segments') is not None:
+                return build_range_candidates(task['segments'],self.store,find_known_readings_flex,**options)
+            return build_candidates(task['surface'],task['reading'],self.store,find_known_readings_flex,**options)
+        if kind=='particle_choices':
+            from candidates import particle_intrusion_candidates
+            return particle_intrusion_candidates(task['text'],task['start'],task['end'],self.index)
+        if kind=='suspect_units':
+            # The word units of a row not analysed yet, for F5 and the right-click list (app._editor_line_units)
+            from units import build_suspect_units
+            known=set(task['attested'])
+            def known_kana(text):
+                return bool(text and len(text)>=2 and (self.store.has_reading(text) or text in known))
+            return build_suspect_units(task['result'],self.tokenize,self.choices,known_kana)[1]
+        if kind=='packed_rows':
+            # This child is about to be given back: the window keeps the rows for the next one (analysis_async.keep_rows)
+            self._park_parses()
+            return dict(tabs=self._parked)
+        if kind=='plans':
+            # Sizes and stops of rows on screen still waiting for their analysis (boundary_colors, 2026-11-03)
+            from text_navigation import plans
+            return plans(task['texts'],self.tokenize)
+        if kind=='synonyms':
+            import synonyms
+            return synonyms.synonyms(task['text'])
+        if kind=='odd_run':
+            import corrector
+            return corrector.lu_run_candidates(task['run'],self.store,self.index,self.tokenize,input_method=task['input_method'])
+        if kind=='explain_pos':
+            import explain
+            return explain.pos_lines(task['text'],self.tokenize,store=self.store,dict_index=self.index,**task['options'])
+        if kind=='explain_reason':
+            import explain
+            return explain.reason_lines(task['typed'],task['fixed'],unit=task['unit'],line=task['line'],
+                                        input_method=task['input_method'],tokenize_fn=self.tokenize,store=self.store,
+                                        dict_index=self.index,choices=self.choices,recorded=task['recorded'])
+        if kind=='parse_lines':
+            # A short-lived startup child parses part of the open tab (analysis_async.start_startup_parse).
+            self.warm_lines(task['lines'])
+            # One block of bytes: the app passes it on without unpacking the rows (0.3 s of its window, 2026-11-01)
+            import pickle
+            return dict(blob=pickle.dumps((self.line_tokens,self.content_words),protocol=pickle.HIGHEST_PROTOCOL))
         if kind=='prepare':
+            parsed=task.get('parsed')
+            if parsed:
+                # Lines the startup children parsed: the rows prepare would make (warm_lines)
+                import pickle
+                for blob in parsed['blobs']:
+                    rows,words=pickle.loads(blob)
+                    for line,value in rows.items():self.line_tokens.setdefault(line,value)
+                    for line,value in words.items():self.content_words.setdefault(line,value)
+            if task.get('packed') is not None:
+                from morphology import HAS_JANOME
+                if HAS_JANOME:self._unpack_rows(task['packed'],frozenset(task['lines']))
             from literal_lines import literal_only
             if any(not literal_only(line) for line in task['lines']):self.prepare_tables()
             return self.prepare(task['lines'])
         from morphology import tokenization_scope
-        from ime_session import resource_scope
+        from ime_session import resource_scope,run_activity
         # The same input row produces correction and display units. Reuse
         # read-only resources through both phases, then release them together.
-        with self._kept_parses(),tokenization_scope(),resource_scope():
-            return self._line_task(task)
+        # Rows corrected one after another share the native IME's answers
+        # (ime_session.run_activity: a pause ends the run, 2026-11-01).
+        run_activity(True)
+        try:
+            with self._kept_parses(),tokenization_scope(),resource_scope():
+                return self._line_task(task)
+        finally:
+            run_activity(False)
 
     def _line_task(self,task):
         kind=task['kind']
@@ -519,6 +743,11 @@ class Runtime:
                 # correct_line takes it (tab_context); None or an older correct_line: as before
                 tab_kana=task.get('tab_has_kana')
                 extra=dict(tab_has_kana=tab_kana) if tab_kana is not None and _takes_tab_has_kana(correct_line) else {}
+                # The row above, for a row that opens on a particle (correction_entry, 2026-11-02)
+                if task.get('previous_line') is not None and _takes_previous_line(correct_line):
+                    extra['previous_line']=task['previous_line']
+                if task.get('defer_heavy') and _takes_defer_heavy(correct_line):
+                    extra['defer_heavy']=True
                 result=correct_line(task['line'],self.store,context_vocab=tracked,
                     decisions=self.decisions,input_method=task['input_method'],
                     context_vec=self.context_vec,dict_index=self.index,
@@ -526,6 +755,9 @@ class Runtime:
                     occurrence_readings=task.get('readings',()),
                     occurrence_calculations=task.get('calculations',()),
                     occurrence_strokes=occurrence_strokes(task.get('readings',())),**extra)
+                if isinstance(result,dict) and result.get('deferred_stages'):
+                    # Not final, redone when the typing stops: nothing may keep it across a model change
+                    result=dict(result);result.pop('used_keys',None)
                 if tab_kana is not None and isinstance(result,dict):
                     # which tab state made this row: the app redoes it when the tab gains or loses its kana
                     result=dict(result,_tab_has_kana=tab_kana)
@@ -548,7 +780,7 @@ class Runtime:
         if evidence is None and result.get('_context_evidence') is not None:
             evidence=dict(result['_context_evidence'],unit_keys=tuple(sorted(unit_keys.items())))
         from analysis_context import signature
-        inputs=(signature(nearby,task.get('readings',()),task.get('calculations',()))
+        inputs=(signature(nearby,task.get('readings',()),task.get('calculations',()),task.get('previous_line'))
                 if kind=='line' else result.get('_input_signature'))
         from text_navigation import plans
         navigation=plans((result['original'],result['corrected'],original_units[0],corrected_units[0]),self.tokenize)
@@ -559,6 +791,8 @@ class Runtime:
 
 
 _TAKES_TAB_KANA={}
+_TAKES_PREVIOUS={}
+_TAKES_DEFER={}
 
 
 def _takes_tab_has_kana(function):
@@ -571,6 +805,28 @@ def _takes_tab_has_kana(function):
         except (TypeError,ValueError):
             _TAKES_TAB_KANA[key]=False
     return _TAKES_TAB_KANA[key]
+
+
+def _takes_previous_line(function):
+    """Whether correct_line has the previous_line parameter (correction_entry, 2026-11-02)."""
+    if function not in _TAKES_PREVIOUS:
+        try:
+            import inspect
+            _TAKES_PREVIOUS[function]='previous_line' in inspect.signature(function).parameters
+        except (TypeError,ValueError):
+            _TAKES_PREVIOUS[function]=False
+    return _TAKES_PREVIOUS[function]
+
+
+def _takes_defer_heavy(function):
+    """Whether correct_line has the defer_heavy parameter (correction_entry, 2026-11-02)."""
+    if function not in _TAKES_DEFER:
+        try:
+            import inspect
+            _TAKES_DEFER[function]='defer_heavy' in inspect.signature(function).parameters
+        except (TypeError,ValueError):
+            _TAKES_DEFER[function]=False
+    return _TAKES_DEFER[function]
 
 
 def occurrence_strokes(readings):
@@ -619,17 +875,20 @@ def _exit_with_parent():
     return thread
 
 
-def _serve(inbox,outbox):
+def _serve(inbox,outbox,pause_flag=None):
     _exit_with_parent()
     from tsf_worker import worker_connection_scope
     # Native IME answers are kept per typed line for this worker's life
     # (ime_session.line_answers_scope, 2026-10-17 speed).
     from ime_session import line_answers_scope
     with worker_connection_scope() as connection_owner,line_answers_scope():
-        _serve_requests(inbox,outbox,connection_owner)
+        _serve_requests(inbox,outbox,connection_owner,pause_flag)
 
 
-def _serve_requests(inbox,outbox,connection_owner):
+PAUSE_MAX_S=30.0     # 親が戻し忘れても、これより長くは止まらない
+
+
+def _serve_requests(inbox,outbox,connection_owner,pause_flag=None):
     from analysis_context import request_scope,check_current_request,SupersededAnalysis
     runtime=Runtime();no_request=object();pending=no_request
     while True:
@@ -647,13 +906,22 @@ def _serve_requests(inbox,outbox,connection_owner):
         def superseded():
             nonlocal pending
             if pending is no_request:
-                try:pending=inbox.get_nowait()
-                except queue.Empty:return False
+                until=None
+                while True:
+                    try:pending=inbox.get_nowait()
+                    except queue.Empty:
+                        if pause_flag is None or not pause_flag.value:return False
+                        now=time.monotonic()
+                        if until is None:until=now+PAUSE_MAX_S
+                        elif now>=until:return False
+                        time.sleep(.01)
+                        continue
+                    break
             return True
         try:
             if pending_state is not None:runtime.set_state(pending_state)
             if request['task']['kind']=='cancel':continue
-            if request['task']['kind'] in ('quick','quick_prepare','line','units','prepare','warmup'):
+            if request['task']['kind'] in ('quick','quick_prepare','line','units','prepare','warmup','candidates','plans','synonyms','explain_pos','explain_reason','odd_run'):
                 # Preserve the next request/state while the old read-only
                 # correction unwinds its owned resources and context scopes.
                 with request_scope(superseded,poll_interval=.005):
@@ -735,7 +1003,9 @@ class Worker:
         # instead of printing errors for deliberately discarded requests.
         # Unexpected process loss still raises WorkerExitedError in poll.
         self.inbox._ignore_epipe=True;self.outbox._ignore_epipe=True
-        self.process=context.Process(target=_serve,args=(self.inbox,self.outbox),daemon=True)
+        # 打った行を解いている間だけ立つ（裏の子は止まって待つ・打ち切らない）。本文は通らない
+        self.pause_flag=context.RawValue('b',0)
+        self.process=context.Process(target=_serve,args=(self.inbox,self.outbox,self.pause_flag),daemon=True)
         self.process.start()
         self.serial=0;self.ready={};self.closed=False
         self.sender=None
@@ -763,6 +1033,22 @@ class Worker:
         if not self.closed and not self.process.is_alive():
             raise WorkerExitedError('Analysis process exited before returning a result')
         return None
+    def trim_memory(self):
+        """Hand the idle child's resident memory back to Windows (EmptyWorkingSet, 2026-11-01). The process
+        stays, so the next row needs no new child: Task Manager's memory 501 -> 57MB, the first typed row 0.33s
+        (a new child: 5.6s). Pages come back as the next row touches them. True when done."""
+        if self.closed or sys.platform!='win32' or not self.process.is_alive():return False
+        try:
+            import ctypes
+            kernel=ctypes.windll.kernel32;kernel.OpenProcess.restype=ctypes.c_void_p
+            handle=kernel.OpenProcess(0x0100|0x0400,False,self.process.pid)  # SET_QUOTA | QUERY_INFORMATION
+            if not handle:return False
+            try:
+                trim=ctypes.windll.psapi.EmptyWorkingSet;trim.argtypes=[ctypes.c_void_p]
+                return bool(trim(handle))
+            finally:kernel.CloseHandle(ctypes.c_void_p(handle))
+        except Exception:
+            return False
     def close(self):
         if self.closed:return
         self.closed=True

@@ -25,6 +25,17 @@ LINE_ANSWERS_MAX=2048   # entries per line before the line's store starts over
 LINE_STORES_MAX=4       # recently typed lines kept apart (background rows interleave)
 LINE_IDLE=120.0         # seconds without a correction before a line's answers expire
 _LINE_STORES=None       # None: disabled
+# Answers shared by every line of one analysis run (2026-11-01, speed: the heavy
+# material asked the native IME the same strings from different rows, 198 of
+# 682 morphological queries). The same input gets the same answer from the same
+# native IME; a run is a stretch of corrections without a pause of RUN_IDLE
+# between them (run_activity, called by the analysis worker), so
+# the next analysis (after typing stops, a tab switch...) asks the IME again and
+# sees what it learned. Bounded like a line's store, and by RUN_MAX_AGE.
+RUN_ANSWERS_MAX=4096
+RUN_IDLE=1.0
+RUN_MAX_AGE=120.0
+_RUN=None               # [answers, started, last used] while line stores are enabled
 
 
 class LineAnswers:
@@ -32,14 +43,52 @@ class LineAnswers:
         self.line=line;self.answers={};self.used=monotonic()
 
     def get(self,key,default=None):
-        return self.answers.get(key,default)
+        value=self.answers.get(key,_MISSING)
+        if value is not _MISSING:return value
+        run=_run_answers()
+        if run is not None and key in run:
+            value=run[key]
+            self._keep(key,value)
+            return value
+        return default
 
     def put(self,key,value):
+        self._keep(key,value)
+        run=_run_answers()
+        if run is not None:
+            if len(run)>=RUN_ANSWERS_MAX:run.clear()
+            run[key]=value
+
+    def _keep(self,key,value):
         if len(self.answers)>=LINE_ANSWERS_MAX:self.answers.clear()
         self.answers[key]=value
 
     def forget(self,keys):
         for key in keys:self.answers.pop(key,None)
+
+
+_MISSING=object()
+
+
+def _run_answers():
+    """This analysis run's shared answers (None outside a run: see run_activity)."""
+    run=_RUN
+    if run is None or _LINE_STORES is None:return None
+    return run[0]
+
+
+def run_activity(starting):
+    """The analysis worker starts (starting=True) or ends a correction. A correction
+    that starts RUN_IDLE after the last one ended (or RUN_MAX_AGE after the run
+    began) starts a new run, whose answers are asked from the native IME again."""
+    global _RUN
+    if _LINE_STORES is None:return
+    now=monotonic()
+    run=_RUN
+    if starting and (run is None or now-run[2]>RUN_IDLE or now-run[1]>RUN_MAX_AGE):
+        _RUN=[{},now,now]
+    elif run is not None:
+        run[2]=now
 
 
 def _same_typing(old,new):
@@ -87,15 +136,17 @@ def forget_readings(readings):
     for reading in set(readings):
         if reading:keys.extend((('text',8,reading),('morph',0x00010000,reading),('candidates',reading)))
     for store in stores:store.forget(keys)
+    if _RUN is not None:
+        for key in keys:_RUN[0].pop(key,None)
 
 
 @contextmanager
 def line_answers_scope():
     """Keep native answers per typed line while this scope lasts (the worker's life)."""
-    global _LINE_STORES
-    previous=_LINE_STORES;_LINE_STORES=[]
+    global _LINE_STORES,_RUN
+    previous=_LINE_STORES;_LINE_STORES=[];_RUN=None
     try:yield
-    finally:_LINE_STORES=previous
+    finally:_LINE_STORES=previous;_RUN=None
 
 
 def retain(resource):

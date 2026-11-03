@@ -19,8 +19,9 @@ def align_rows(left, right, enabled=True, partners=None):
         return changed
     left_rows=_visible_rows(left);right_rows=_visible_rows(right)
     if partners is None:
-        first=min(left_rows[0],right_rows[0]);last=max(left_rows[1],right_rows[1])
-        pairs=[(row,row) for row in range(first,last+1)]
+        # What each pane shows, not everything between: right after a jump the panes are thousands of rows
+        # apart for a moment, and measuring those rows stopped the window for 1.6 s (2026-11-03).
+        pairs=[(row,row) for row in sorted({*range(left_rows[0],left_rows[1]+1),*range(right_rows[0],right_rows[1]+1)})]
         lonely=[]
     else:
         # The correction pane can lag behind an edit: pair rows by the
@@ -49,6 +50,13 @@ def align_rows(left, right, enabled=True, partners=None):
     for row in lonely:
         if row<=ends[1]-1:changed=_set_padding(right,row,0) or changed
     return changed
+
+
+def clear_padding(w):
+    """Drops one pane's row gaps; the next align_rows measures from nothing."""
+    for tag in w.tag_names():
+        if tag.startswith(_PREFIX):w.tag_remove(tag,'1.0','end')
+    w._paired_row_signature=None
 
 
 def _visible_rows(w):

@@ -13,11 +13,12 @@ CorrectNote process in Task Manager, analysis included — low 700MB, mid
 
     high  Correction runs in worker processes, kept ready: the open tab's
           worker (with idle warm-up), a background worker for the other
-          tabs, the quick-input worker. The main process preloads tables.
+          tabs, the quick-input worker. (The main process preloaded its optional
+          tables until 2026-10-31; no tier does now, see preloads.)
           Completed values (results, display units, prepared contexts) are
           kept for every open tab, so returning to any tab costs nothing.
     mid   Like high with one child: the open tab's worker is kept ready
-          (warm-up, preloaded main tables), and the other tabs are analysed
+          (warm-up), and the other tabs are analysed
           in the background by that same worker whenever the open tab has
           nothing in flight (no second child). The quick-input worker still
           closes 5 seconds after its last result.
@@ -41,6 +42,13 @@ from settings import MEMORY_LOW, MEMORY_MID, MEMORY_HIGH
 
 
 IDLE_RELEASE_MS = 5000
+# 高・中でも、解析が済んで打鍵の無い時間がこれだけ続いたら子を閉じてメモリを戻す（2026-10-30 うにさん
+# 「解析が終わったら子タスクを終えてメモリを戻さなくてはなりません」）。次の求めで作り直す（最初の1行が数秒遅れる）
+# 2026-11-01 うにさん（案a「外へ出し後で閉じる」）: 打鍵の無い 1分でメモリを Windows へ外へ出し（Worker.trim_memory・
+# タスクマネージャーの値は 501 → 57MB、子は残るので休んだあとの最初の1行は 5.6 → 0.33秒）、10分で閉じて解放する
+IDLE_TRIM_MS = 60000
+IDLE_RELEASE_KEPT_MS = 600000
+_TRIM_JOBS = {'foreground': '_memory_foreground_trim_job', 'quick': '_memory_quick_trim_job'}
 _FIELDS = {
     'foreground': ('_correction_worker', '_worker_state', '_memory_foreground_job'),
     'quick': ('_quick_worker', '_quick_worker_state', '_memory_quick_job'),
@@ -100,8 +108,11 @@ def prewarm(app):
 
 
 def preloads(app):
-    """Whether the main process reads its optional public tables at start."""
-    return mode(app) in (MEMORY_HIGH, MEMORY_MID)
+    """Whether the main process reads its optional public tables at start: no tier does since 2026-10-31
+    (うにさん「速さより処理負荷を重視」; the coordinator's call). They serve only the right-click candidates and
+    explanations; each loads itself on first use (about 0.6 seconds once), and the idle main process keeps about
+    120MB less."""
+    return False
 
 
 def quick_prepare(app):
@@ -170,9 +181,9 @@ def export_env(app):
 
 # Public tables the correction workers use. The main process only needs them
 # for right-click candidates and explanations, and each module loads itself on
-# first use. High and mid preload them for speed; low leaves them unloaded
-# (about 120MB less in the main process, measured 2026-10-14; first use waits
-# ~0.6s).
+# first use. High and mid preloaded them for speed until 2026-10-31; now no tier
+# does (about 120MB less in the main process, measured 2026-10-14; first use
+# waits ~0.6s).
 OPTIONAL_PRELOAD = ('seed_japanese', 'oddness')
 
 
@@ -205,6 +216,7 @@ def cancel_job(app, name):
 
 def cancel_release(app, channel):
     cancel_job(app, _FIELDS[channel][2])
+    cancel_job(app, _TRIM_JOBS[channel])
 
 
 def cancel_releases(app):
@@ -228,10 +240,19 @@ def foreground_busy(app):
     return _busy(app, 'foreground')
 
 
-def queue_release(app, channel, delay=IDLE_RELEASE_MS):
+def release_delay(app, channel):
+    """How long an idle child of `channel` stays: low (and mid's quick child) 5 seconds; a child the tier
+    keeps ready (high, mid's open tab) ten minutes after its last result, its memory handed out after one
+    (IDLE_TRIM_MS, 2026-11-01; it was closed after one minute from 2026-10-30)."""
+    return IDLE_RELEASE_KEPT_MS if retains(app, channel) else IDLE_RELEASE_MS
+
+
+def queue_release(app, channel, delay=None):
     """Close only the same idle child, after its result has reached the UI."""
-    if retains(app, channel) or getattr(app, '_closing', False):
+    if getattr(app, '_closing', False):
         return
+    if delay is None:
+        delay = release_delay(app, channel)
     worker_name, state_name, job_name = _FIELDS[channel]
     worker = getattr(app, worker_name, None)
     if worker is None:
@@ -242,12 +263,15 @@ def queue_release(app, channel, delay=IDLE_RELEASE_MS):
         if getattr(app, job_name, None) != identifier:
             return
         setattr(app, job_name, None)
-        if (retains(app, channel) or getattr(app, '_closing', False)
-                or getattr(app, worker_name, None) is not worker):
+        if getattr(app, '_closing', False) or getattr(app, worker_name, None) is not worker:
             return
-        if _busy(app, channel):
+        if _in_use(app, channel):
+            # mid: the other tabs use this same child; it is not closed under their request
             queue_release(app, channel, delay)
             return
+        if channel == 'foreground':
+            import analysis_async
+            analysis_async.keep_rows(app, worker)
         try:
             worker.close()
         except Exception:
@@ -261,6 +285,44 @@ def queue_release(app, channel, delay=IDLE_RELEASE_MS):
 
     identifier = app.root.after(delay, release)
     setattr(app, job_name, identifier)
+    if retains(app, channel) and delay > IDLE_TRIM_MS:
+        trim_name = _TRIM_JOBS[channel]
+
+        def trim():
+            if getattr(app, trim_name, None) != trimming:
+                return
+            setattr(app, trim_name, None)
+            if (getattr(app, '_closing', False) or getattr(app, worker_name, None) is not worker
+                    or _in_use(app, channel)):
+                return
+            try:
+                worker.trim_memory()
+            except Exception:
+                traceback.print_exc()
+
+        trimming = app.root.after(IDLE_TRIM_MS, trim)
+        setattr(app, trim_name, trimming)
+
+
+def _in_use(app, channel):
+    return _busy(app, channel) or (channel == 'foreground' and shares_worker(app)
+                                   and getattr(app, '_async_background_request', None) is not None)
+
+
+def release_prefetch(app):
+    """High: the child for the other tabs is closed once every other tab has been analysed (2026-10-30). A later
+    background step makes a new one when a tab needs it again."""
+    worker = getattr(app, '_prefetch_worker', None)
+    if worker is None or getattr(app, '_closing', False) or getattr(app, '_async_background_request', None) is not None:
+        return False
+    try:
+        worker.close()
+    except Exception:
+        traceback.print_exc()
+        return False
+    app._prefetch_worker = None
+    app._prefetch_worker_state = None
+    return True
 
 
 def switch_tables(app, previous):

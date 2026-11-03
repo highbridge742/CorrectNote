@@ -134,3 +134,11 @@ word_book.json.tmp
 backups/
 # 読みの格子の表（reading_lattice が初回に作る控え・2026-10-25）。作り直せるので入れない
 reading_lattice_table.pickle.gz
+reading_lattice_compact.pickle.gz
+# janome の内蔵辞書の語の控え（janome_import・2026-11-01）。初回に作る
+janome_entries.pickle.gz
+# 類語の表の詰めた形の控え（synonyms・2026-11-01）。初回に作る
+wlsp_synonyms_compact.pickle.gz
+# 本人の語彙と使用の記録（2026-11-04 の確認で ignore に無かった）
+vocabulary_personal.json
+usage_counts.json

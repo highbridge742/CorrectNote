@@ -21,6 +21,49 @@ def dangling(text):
             if t.pos == '動詞' and t.infl_form == '連用タ接続' and not text[t.end:].startswith(_FOLLOW)]
 
 
+def _noun_join(text, s):
+    """動詞と読まれた所の頭の漢字を名詞の読みで読み、後ろのかなとつなぐと辞書の名詞の1語になる形（空＋いろ → そらいろ
+    → 空色）→ (開始, 終了, 語, '読みのつなぎ') か None。IME が読みの途中までを漢字にした跡で、字を足さずに説明が付く。
+    つないだ語が一般の文章に在る語（ime_reconvert の表）で、1つに決まるときだけ。2026-10-31"""
+    try:
+        import reading_lattice
+        import ime_reconvert
+        from morphology import tokenize
+        reading_lattice.load()
+    except Exception:
+        return None
+    def kanji(ch):
+        return '一' <= ch <= '鿿' or ch == '々'
+    k = s
+    while k < len(text) and kanji(text[k]):
+        k += 1
+    if k == s:
+        # 動詞の前の漢字の名詞（役＋いん → やくいん → 役員）
+        while s > 0 and kanji(text[s - 1]):
+            s -= 1
+    head = text[s:k]
+    if not head:
+        return None
+    toks = list(tokenize(head))
+    if len(toks) != 1 or toks[0].pos != '名詞' or not toks[0].reading:
+        return None
+    r0 = ''.join(chr(ord(c) - 0x60) if 'ァ' <= c <= 'ヶ' else c for c in toks[0].reading)
+    j = k
+    while j < len(text) and 'ぁ' <= text[j] <= 'ゖ':
+        j += 1
+    found = set()
+    end = None
+    for jj in range(j, k, -1):
+        faces = {surf for surf, _l, _r, _c, pos in reading_lattice._table.get(r0 + text[k:jj], ())
+                 if pos == '名詞' and surf.startswith(head) and ime_reconvert._rank(surf) < 800}
+        if faces:
+            found, end = faces, jj
+            break
+    if len(found) != 1:
+        return None
+    return (s, end, found.pop(), '読みのつなぎ')
+
+
 def propose(text):
     """[(開始, 終了, 置く文字列 or None)]（text の位置）。"""
     from morphology import tokenize, path_cost
@@ -29,6 +72,9 @@ def propose(text):
         return []
     out = []
     s, e = found[0]
+    joined = _noun_join(text, s)
+    if joined is not None:
+        return [joined]
     cands = []
     for p in range(s, e + 1):
         for h in _KANA:
@@ -61,7 +107,8 @@ def repair_line(line, result, decided=()):
     changed = [(o[3], o[4]) for o in difflib.SequenceMatcher(None, line, done, autojunk=False).get_opcodes()
                if o[0] != 'equal']
     odd_now = [tuple(x[:2]) for x in list(result.get('odd_spans') or ()) + list(result.get('unsure_spans') or ())]
-    s, e, rep = marks[0]
+    s, e, rep = marks[0][:3]
+    label = marks[0][3] if len(marks[0]) > 3 else '抜けた1字'
     if any(x < e and s < y for x, y in changed):
         return result
     org = None
@@ -79,6 +126,6 @@ def repair_line(line, result, decided=()):
     new = done[:s] + rep + done[e:]
     ops = [o for o in difflib.SequenceMatcher(None, line, new, autojunk=False).get_opcodes() if o[0] != 'equal']
     out.update({'original': line, 'corrected': new, 'changed': True,
-                'details': list(result.get('details') or []) + [[done[s:e], rep, '抜けた1字']],
+                'details': list(result.get('details') or []) + [[done[s:e], rep, label]],
                 'spans': [[o[3], o[4]] for o in ops], 'original_spans': [[o[1], o[2]] for o in ops]})
     return out

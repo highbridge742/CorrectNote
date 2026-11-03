@@ -26,10 +26,12 @@ class WlspClassTests(unittest.TestCase):
         self.assertEqual(r['corrected'], '部屋の照明を消した。')
 
     def test_familiar_out_of_class_noun_is_purple(self):
-        # しゃしん→しゃいん: 社員 は身近な語なので替えないが、撮る の組の仲間でないので紫
+        # しゃしん→しゃいん: 社員 は身近な語なので替えない。
+        # 10-30（batch10）から、元の語が候補（写真）と同じくらい一般の文で使う語なら紫も付けない
+        # （表に組が無いのは表の狭さで、正しい文 表記／病気 に紫が立っていたため）。紫が付かないことを確かめる
         r = self.run_ime('旅先で社員を撮った。', [('社員', 'しゃいん')])
         self.assertEqual(r['corrected'], '旅先で社員を撮った。')
-        self.assertTrue(self.purple(r, 'よく使う組'))
+        self.assertFalse(self.purple(r, 'よく使う組'))
 
     def test_correct_class_members_are_left_alone(self):
         # 表に無い正しい組でも、組の意味の仲間なら何も付けない
