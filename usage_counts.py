@@ -49,20 +49,43 @@ def _result_changed(result, ret):
 
 
 def _kept(fixes, line, final):
-    """出した直しが最後の答えに残ったか。"""
+    """出した直しが最後の答えに残ったか。
+
+    直しの字が元の行より多く答えに現れたら残った。加えて、元の行そのものに出した直し（位置つき）は、直した所の
+    元の字が答えで減っていれば残った（かなの直し よんて→よんで が後の段で 読んで になると、直しの字は答えに
+    現れないが、直しは効いている・2026-11-03）。(None, 値) の形の直しは字だけで見る（呼んだ行が分からない）。
+    """
     if final == line:
         return False
-    for ret in fixes:
-        items = ret if isinstance(ret, (list, tuple)) else [ret]
+    for entry in fixes:
+        call_line, ret = entry if isinstance(entry, _Call) else (None, entry)
+        if isinstance(ret, tuple) and len(ret) >= 2 and isinstance(ret[0], str) and not isinstance(ret[1], int):
+            items = [(None, None, ret[0])]       # (直し先, 種類, …) の形（_design35_fix）
+        else:
+            items = ret if isinstance(ret, (list, tuple)) else [ret]
         shaped = False
         for f in items:
             if isinstance(f, (list, tuple)) and len(f) >= 3 and isinstance(f[2], str) and f[2]:
                 shaped = True
                 if final.count(f[2]) > line.count(f[2]):
                     return True
+                s0, e0 = f[0], f[1]
+                if (call_line == line and isinstance(s0, int) and isinstance(e0, int) and 0 <= s0 < e0 <= len(line)
+                        and final.count(line[s0:e0]) < line.count(line[s0:e0])):
+                    return True
         if not shaped:
             return True
     return False
+
+
+class _Call(tuple):
+    """(呼んだ行, 返り値)。呼んだ行が文字列でなければ None。"""
+    __slots__ = ()
+
+
+def _keep_sentinel(ret):
+    # 「直さない」と決めた印（_design35_fix の _D35_KEEP など、ただの object）は働いた数に入れない
+    return type(ret) is object
 
 
 def wrap(module, attr, kind='fixes', label=None):
@@ -81,7 +104,10 @@ def wrap(module, attr, kind='fixes', label=None):
     else:
         def counted(*a, **k):
             ret = fn(*a, **k)
-            _note(name, ret if ret else None)
+            if not ret or _keep_sentinel(ret):
+                _note(name, None)
+            else:
+                _note(name, _Call((a[0] if a and isinstance(a[0], str) else None, ret)))
             return ret
     counted.__wrapped__ = fn
     counted._usage_counts = True
