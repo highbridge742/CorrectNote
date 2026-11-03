@@ -54,6 +54,7 @@ class LongLiteralRowTests(unittest.TestCase):
    tokenize=Mock(return_value=[]);widget=Mock();widget.get.return_value=text
    widget.compare.return_value=False
    a=N(store=N(_tokenize_fn=tokenize),_move_text_cursor=Mock())
+   a._text_edge_column=lambda *args:app.CorrectNoteApp._text_edge_column(a,*args)
    event=N(widget=widget,state=1)
    with patch.object(app,'_python_text_position',return_value=(1,1)):
     self.assertEqual(app.CorrectNoteApp._move_text_edge(a,event,1),'break')

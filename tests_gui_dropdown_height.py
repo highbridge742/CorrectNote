@@ -64,11 +64,12 @@ class DropdownHeightTests(unittest.TestCase):
     def test_quick_list_uses_monitor_space_beyond_its_small_window(self):
         quick=tk.Toplevel(self.root);quick.geometry('240x100+300+200');self.root.update()
         self.a._quick_win=quick
-        dd,lb=self.show(30,quick,(0,0,1200,800))
+        # Tall enough for all thirty below the row: a list that does not fit goes short (fit_dropdown, 2026-11-03)
+        dd,lb=self.show(30,quick,(0,0,1200,1400))
         self.assertEqual(int(lb.cget('height')),30)
         self.assertGreater(dd.winfo_height(),quick.winfo_height())
         self.assertGreaterEqual(dd.winfo_rooty(),0)
-        self.assertLessEqual(dd.winfo_rooty()+dd.winfo_height(),800)
+        self.assertLessEqual(dd.winfo_rooty()+dd.winfo_height(),1400)
         self.assertIsNotNone(lb.bbox(29))
         self.assertEqual(self.errors,[])
 

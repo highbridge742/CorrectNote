@@ -75,6 +75,11 @@ def _token_rarity(t, tokens=None):
         if prev and getattr(prev[0], 'base_form', '') and prev[0].surface != prev[0].base_form:
             whole = prev[0].surface + face
             return min(r, _freq().get(whole, _rank(prev[0].base_form)))
+    if t.pos == '動詞' and r >= DOUBT and os.environ.get('CN_RECONVERT_COMPOUND_ONE') != '0':
+        # 1語に解析された複合動詞（見入る・書き込む）は、前の動詞の連用形と後ろの動詞のどちらも身近なら、その珍しさで見る
+        r2 = _compound_verb_rarity(face)
+        if r2 is not None:
+            r = min(r, r2)
     if r >= 800 and t.pos == '名詞':
         for k in range(1, len(face) - 1):
             a, b = face[:k], face[k:]
@@ -84,6 +89,28 @@ def _token_rarity(t, tokens=None):
             if ra <= 520 and rb <= 520:
                 return max(ra, rb)
     return r
+
+
+@lru_cache(maxsize=4096)
+def _compound_verb_rarity(face):
+    try:
+        from morphology import tokenize
+    except Exception:
+        return None
+    best = None
+    for k in range(1, len(face) - 1):
+        head, tail = face[:k], face[k:]
+        if not _strong(head) or not _strong(tail[:1]):
+            continue
+        tt = list(tokenize(tail))
+        if len(tt) != 1 or tt[0].pos != '動詞' or tt[0].surface != tail:
+            continue
+        ht = list(tokenize(head + 'ます'))
+        if not ht or ht[0].pos != '動詞' or ht[0].surface != head or not getattr(ht[0], 'base_form', ''):
+            continue
+        v = max(_rank(ht[0].base_form), _rank(getattr(tt[0], 'base_form', '') or tail))
+        best = v if best is None else min(best, v)
+    return best
 
 
 def _span_rarity(text, a, b, tokens):

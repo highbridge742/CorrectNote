@@ -128,7 +128,10 @@ class WordLoadingCancelTests(unittest.TestCase):
         index=self.dir/'compound.gz';index.write_bytes(gzip.compress(json.dumps(value).encode(),mtime=0));index_sha=hashlib.sha256(index.read_bytes()).hexdigest();stale=[False];decode=json.loads
         def parsed(*args,**kwargs):
             result=decode(*args,**kwargs);stale[0]=True;return result
-        with patch.object(W,'_COMPOUND_SOURCE_SHA256',source_sha),patch.object(W,'_COMPOUND_INDEX_SHA256',index_sha):
+        # The plain tables: the compact ones (the default in every tier, compact_tables.enabled) give the same answers
+        # but do not compare equal to a Counter
+        with patch.object(W,'_COMPOUND_SOURCE_SHA256',source_sha),patch.object(W,'_COMPOUND_INDEX_SHA256',index_sha),\
+                patch('compact_tables.enabled',return_value=False):
             with patch('json.loads',side_effect=parsed),request_scope(lambda:stale[0]):
                 with self.assertRaises(SupersededAnalysis):W.read_compound_tables(path,index)
             self.assertEqual(W.read_compound_tables(path,index),(collections.Counter(value['left']),collections.Counter(value['right']),set(map(tuple,value['pairs']))))

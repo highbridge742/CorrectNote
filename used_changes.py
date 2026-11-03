@@ -9,6 +9,7 @@ memory. `changed(obj, rev_from, rev_to)` gives the keys that changed between two
 is not known: a revision moved by anything not noted here (a load, a direct edit) or a note pushed out by the
 limit. None means every row is redone. Nothing is written anywhere; no text, times or counts."""
 import functools
+import weakref
 
 LIMIT = 4000                     # notes kept per store; older ones go and their revisions become unknown
 _LOGS = {}                       # id(store) -> [(rev_before, rev_after, frozenset(keys))]
@@ -18,7 +19,11 @@ _installed = False
 def _note(obj, before, after, keys):
     if after == before:
         return
-    log = _LOGS.setdefault(id(obj), [])
+    log = _LOGS.get(id(obj))
+    if log is None:
+        log = _LOGS[id(obj)] = []
+        # A store's notes go with it: a later store at the same id would read them as its own (2026-11-04)
+        weakref.finalize(obj, _LOGS.pop, id(obj), None)
     log.append((before, after, frozenset(k for k in keys if isinstance(k, str) and k)))
     if len(log) > LIMIT:
         del log[:len(log) - LIMIT]

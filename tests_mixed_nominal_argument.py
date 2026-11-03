@@ -61,7 +61,10 @@ class MixedNominalArgumentTests(unittest.TestCase):
         import corrector as C
         from decisions import DecisionStore
         source = 'スくりーんをくたせさい。'
-        with patch.object(C, '_check_replacement', return_value=(None, 'fixture_shared_gate')) as gate:
+        import odd_respell as OR
+        # 共通の最終検査の試験。紫の所の読み直し（odd_respell）は検査の外の後段なので、ここでは止める（2026-11-03）
+        with patch.object(C, '_check_replacement', return_value=(None, 'fixture_shared_gate')) as gate, \
+                patch.object(OR, 'repair_line', side_effect=lambda line, result, *a, **k: result):
             result = self.correct(source)
             self.assertTrue(gate.called)
             self.assertEqual(result['corrected'], source)
@@ -80,11 +83,19 @@ class MixedNominalArgumentTests(unittest.TestCase):
 
     def test_normal_opaque_classical_and_input_method_preserve_original_results(self):
         for source in ('スくりーんをください。', 'シャつをあらいます。',
-                'コード値「キり」を使います。', '呼称は「ナり」です。',
-                'スくりーん甲をくたせさい。', 'スくりーん_01をくたせさい。',
-                '「スくりーん」をくたせさい。', 'ナりをくたせさい。'):
+                'コード値「キり」を使います。', '呼称は「ナり」です。', 'ナりをくたせさい。'):
             with self.subTest(source=source):
                 self.assertEqual(self.correct(source)['corrected'], source)
+        # 混ぜ書きの名詞の後ろが見分けにくい形（甲・_01・「」）でも、名詞は書いたまま。くたせさい は紫のままか、
+        # 紫の所の打ち違いの戻し（odd_respell）で ください（和語はかなのまま）。下さい や スクリーン にはしない
+        # （2026-11-03 補正担当: 決めるか紫か）
+        for source in ('スくりーん甲をくたせさい。', 'スくりーん_01をくたせさい。', '「スくりーん」をくたせさい。'):
+            with self.subTest(source=source):
+                result = self.correct(source)
+                if result['corrected'] == source:
+                    self.assertTrue(result['odd_spans'])
+                else:
+                    self.assertEqual(result['corrected'], source.replace('くたせさい', 'ください'))
         source = 'スくりーんをくたせさい。'
         result = self.correct(source, method='romaji')
         self.assertEqual(result['corrected'], source)

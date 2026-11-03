@@ -553,6 +553,26 @@ def _unexplained_change_guard(line, result):
             if old_bad:
                 left.append((a1, b1))
                 continue
+        # 片仮名の語の後ろに続くかな（シャつ を の つ）は、混ぜ書きの名詞の一部。直していないその頭を除いた残り
+        # （をください）が説明の付く形なら、直しのせいではない（2026-11-03 tests_mixed_nominal_argument）
+        if os.environ.get('CN_CHANGE_GUARD_KATA') != '0' and a > 0 and 'ァ' <= corrected[a - 1] <= 'ヶ':
+            first = min([j1 for j1, j2 in changed if a <= j1 < b] or [b])
+            ok = False
+            for cut in range(1, first - a + 1):
+                p0 = _to_line(a)
+                if p0 is None or line[p0:p0 + cut] != corrected[a:a + cut]:
+                    break
+                try:
+                    import pos_grammar
+                    before_kanji = b < len(corrected) and ('一' <= corrected[b] <= '鿿' or corrected[b] == '々')
+                    if pos_grammar.explain_kana_run(corrected[a + cut:b], after_kanji=False, kanji_stem='',
+                                                    before_kanji=before_kanji, bare_head=False):
+                        ok = True
+                        break
+                except Exception:
+                    break
+            if ok:
+                continue
         keep.append((a, b))
     bad = keep
     if not bad:
@@ -834,6 +854,14 @@ def _noun_suffix_mark(line, result, store, dict_index, decisions):
 
 def _line_stages_now(line, plain, store, dict_index, decisions, context_vec, input_method, nearby_words):
     first = plain(line)
+    # 文字のまま扱う行（長い1行のデータ・リンクなど）は、入口で飛ばした答えのまま。後ろの段で解析し直さない
+    # （約5,700字の行で noun_suffix が50秒を超えた・挙動関連担当 2026-11-03）
+    try:
+        from literal_lines import literal_only
+        if literal_only(line):
+            return first
+    except Exception:
+        pass
     # 1回目の補正だけで長くかかった行（195字の行で約60秒・行全体の補正し直しを重ねて7分で終わらなかった、
     # 挙動関連担当の測り 2026-11-03）は、補正し直しの段を回さない。直せない所は紫のまま
     slow = _slow_first_pass()
@@ -882,7 +910,30 @@ def _line_stages_now(line, plain, store, dict_index, decisions, context_vec, inp
     result = _yoon_slip(line, result, decisions, input_method)
     result = _keep_converted(line, result, decisions)
     result = _broken_shape(line, result, decisions, input_method)
-    return result
+    return _drop_mixed_katakana_marks(line, result)
+
+
+def _drop_mixed_katakana_marks(line, result):
+    """混ぜ書きの片仮名の名詞（スくりーん・シャつ）の中だけに付いた紫は外す（書いたままの語・2026-11-03
+    tests_mixed_nominal_argument。PC では段の後ろの方で ー に紫が付いていた）。名詞を超える紫は残す。"""
+    import os
+    if os.environ.get('CN_MIXED_KATA_MARKS') == '0' or not isinstance(result, dict) or not result.get('odd_spans'):
+        return result
+    try:
+        import broken_shape as _bs
+        mixed = _bs.mixed_katakana_spans(line)
+    except Exception:
+        return result
+    if not mixed:
+        return result
+    inside = lambda o: any(s <= o[0] and o[1] <= e for s, e in mixed)
+    odd = [o for o in result['odd_spans'] if not inside(o)]
+    if len(odd) == len(result['odd_spans']):
+        return result
+    out = dict(result)
+    out['odd_spans'] = odd
+    out['odd_reasons'] = [r for r in (result.get('odd_reasons') or ()) if not inside(r)]
+    return out
 
 
 def _after_stroke_repair(line, base, out, again):
@@ -1480,9 +1531,20 @@ def _mark_impossible_connections(line, result):
     done = [tuple(sp[:2]) for sp in (result.get('original_spans') or ())]
     odd = list(result.get('odd_spans') or ())
     added = False
+    # 混ぜ書きの片仮名の名詞（スくりーん）の中の切れ目は品詞のつながりではない（2026-11-03）
+    if os.environ.get('CN_POS_ODD_MIXED') != '0':
+        try:
+            import broken_shape as _bs
+            mixed = _bs.mixed_katakana_spans(line)
+        except Exception:
+            mixed = []
+        spans = [(a, b) for a, b in spans if not any(s <= a and b <= e for s, e in mixed)]
     for a, b in spans:
         # 直した範囲と重なる所・その2字の内には付けない（直しの跡の語の切れ目は当てにならない: 風がつょい→風がつよい）
         if any(a < e + 2 and s - 2 < b for s, e in done) or any(tuple(o[:2]) == (a, b) for o in odd):
+            continue
+        # 元からの紫の中に入る所は足さない（スくりーん の ー: 外の紫で足りる・2026-11-03 tests_mixed_nominal_argument）
+        if os.environ.get('CN_POS_ODD_NESTED') != '1' and any(o[0] <= a and b <= o[1] for o in odd):
             continue
         odd.append((a, b))
         added = True
@@ -1493,6 +1555,10 @@ def _mark_impossible_connections(line, result):
         # 位置は元の行に写す（2026-10-30・補正担当）
         try:
             fixed_spans = _impossible_connection_spans(corrected)
+            if os.environ.get('CN_POS_ODD_MIXED') != '0':
+                import broken_shape as _bs
+                mixed2 = _bs.mixed_katakana_spans(corrected)
+                fixed_spans = [(a, b) for a, b in fixed_spans if not any(s <= a and b <= e for s, e in mixed2)]
         except Exception:
             fixed_spans = []
         import difflib

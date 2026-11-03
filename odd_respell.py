@@ -1966,6 +1966,22 @@ def _repair_line(line, result, run, store, dict_index, context_vec=None, decided
         if not fixed:
             continue
         fixed = cur[:fs] + fixed + cur[fe:]
+        try:
+            import kana_keep as _kk
+            fixed = _kk.wago_kana_respell(line, fixed)
+        except Exception:
+            pass
+        if os.environ.get('CN_RESPELL_MIXED_KATA') != '1':
+            # 混ぜ書きの片仮名の名詞（スくりーん）は書いたままの語（tests_mixed_nominal_argument の決まり）。
+            # その中を書き換える読み直しは採らない（2026-11-03）
+            try:
+                import broken_shape as _bs
+                mixed = _bs.mixed_katakana_spans(line)
+                if mixed and any(o[0] != 'equal' and any(ms < max(o[2], o[1] + 1) and o[1] < me for ms, me in mixed)
+                                 for o in difflib.SequenceMatcher(None, line, fixed, autojunk=False).get_opcodes()):
+                    continue
+            except Exception:
+                pass
         ops = [o for o in difflib.SequenceMatcher(None, line, fixed, autojunk=False).get_opcodes() if o[0] != 'equal']
         if not ops or any(x < o[2] and o[1] < y for o in ops for x, y in (decided or ())):
             continue

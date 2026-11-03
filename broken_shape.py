@@ -34,6 +34,59 @@ _STRAY_SYMBOL = re.compile(r'(?<=[\u3041-\u3093])[=＝@＠#＃$＄%％^＾&＆*�
                            r'(?=[\u3041-\u30ff\u4e00-\u9fff々])')
 
 
+
+def _mixed_katakana_word(line, a, b):
+    """片仮名1字の後ろのかなを片仮名にすると辞書の片仮名の名詞1語になる所（スくりーん・シャつ）は、混ぜ書きの名詞
+    （浮いた1字ではない・2026-11-03 tests_mixed_nominal_argument）。"""
+    import os
+    if os.environ.get('CN_BROKEN_MIXED_KATA') == '0':
+        return False
+    j = b
+    while j < len(line) and ('ぁ' <= line[j] <= 'ゖ' or line[j] == 'ー'):
+        j += 1
+    if j == b:
+        return False
+    try:
+        from morphology import tokenize
+    except Exception:
+        return False
+    for k in range(j, b, -1):
+        kata = line[a:b] + ''.join(chr(ord(c) + 0x60) if 'ぁ' <= c <= 'ゖ' else c for c in line[b:k])
+        tt = list(tokenize(kata))
+        if len(tt) == 1 and tt[0].pos == '名詞' and tt[0].has_reading:
+            return k
+    return False
+
+
+def mixed_katakana_spans(line):
+    """片仮名で始まり、後ろのかなを片仮名にすると辞書の片仮名の名詞1語になる所（スくりーん・スクりーン・シャつ） [(start, end)]。"""
+    out = []
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if 'ァ' <= ch <= 'ヶ' and (i == 0 or not ('ァ' <= line[i - 1] <= 'ヶ' or line[i - 1] == 'ー')):
+            j = i
+            while j < len(line) and ('ァ' <= line[j] <= 'ヶ' or line[j] == 'ー'):
+                j += 1
+            if j < len(line) and 'ぁ' <= line[j] <= 'ゖ':
+                k = j
+                while k < len(line) and ('ぁ' <= line[k] <= 'ゖ' or 'ァ' <= line[k] <= 'ヶ' or line[k] == 'ー'):
+                    k += 1
+                try:
+                    from morphology import tokenize
+                    for e in range(k, j, -1):
+                        kata = ''.join(chr(ord(c) + 0x60) if 'ぁ' <= c <= 'ゖ' else c for c in line[i:e])
+                        tt = list(tokenize(kata))
+                        if len(tt) == 1 and tt[0].pos == '名詞' and tt[0].has_reading:
+                            out.append((i, e))
+                            break
+                except Exception:
+                    pass
+            i = max(j, i + 1)
+            continue
+        i += 1
+    return out
+
 def _kanji(s):
     return bool(s) and all('一' <= c <= '鿿' or c == '々' for c in s)
 
@@ -134,7 +187,8 @@ def spans(text, tokens=None):
                 out.append((t.start, t.end, '片仮名が混じっています'))
         if (len(t.surface) == 1 and _kata(t.surface) and t.surface not in 'ーヶヵ'
                 and not (p and _kata(p.surface[-1:])) and not (q and _kata(q.surface[:1])) and (p or q)
-                and not (p and p.pos == '記号' and (q is None or q.pos == '記号'))):
+                and not (p and p.pos == '記号' and (q is None or q.pos == '記号'))
+                and not _mixed_katakana_word(text, t.start, t.end)):
             out.append((t.start, t.end, '片仮名1字が混じっています'))
         if (t.pos == '動詞' and t.surface == 'し' and t.base_form == 'する' and q and q.pos == '動詞'
                 and (q.pos_sub or '') == '自立' and _kanji(q.surface[:1]) and q.base_form not in _AFTER_SHI):

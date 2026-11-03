@@ -292,6 +292,8 @@ class MemoryWorkerRetentionTests(unittest.TestCase):
                     self.assertFalse(A.helper_allowed(app))
                     app._analyze_pos = 0
                     app._helper = dict(key=A._helper_key(app), row=5, done={3})
+                    # a row the helper finished counts while its answer is there (helper_done, 2026-11-03)
+                    app.line_results = [dict(original='文', corrected='文')] * 20
                     self.assertTrue(A.helper_done(app, 3) and A.helper_done(app, 5))
                     self.assertFalse(A.helper_done(app, 4))
                     self.assertTrue(A.helper_busy(app) and A.helper_wanted(app))

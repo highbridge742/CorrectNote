@@ -68,7 +68,8 @@ def child():
    root.state('zoomed');settle()
    assert a.status.winfo_ismapped()
    root.state('normal');settle()
-   assert not a.status.winfo_ismapped()
+   # A desktop without a drawn window answers later (CI, 2026-11-04)
+   until(lambda:not a.status.winfo_ismapped(),20)
    # Both layouts keep the small indicators and the original number text.
    a.settings.set('layout','unified');a._apply_layout();settle();a.editor_gutter.redraw()
    assert not a.editor_gutter.find_withtag('analysis_state')

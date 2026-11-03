@@ -138,6 +138,40 @@ def _conversions(line, fixed):
     return out
 
 
+def wago_kana_respell(line, fixed):
+    """かなで打った所を打ち違いとして読みごと直したとき（くたせさい→下さい）、直した語が和語なら漢字にせずかなで書く
+    （くださいと打つ人は ください と書く・かなのままでよいのは和語 2026-11-01 うに）。漢語（電話）は漢字のまま。"""
+    import os
+    if os.environ.get('CN_RESPELL_WAGO_KANA') == '0' or not fixed or fixed == line:
+        return fixed
+    from morphology import tokenize
+    toks = list(tokenize(fixed))
+    new = fixed
+    for tag, i1, i2, j1, j2 in sorted(difflib.SequenceMatcher(None, line, fixed, autojunk=False).get_opcodes(),
+                                      key=lambda o: o[3], reverse=True):
+        if tag != 'replace' or not _is_hira(line[i1:i2]) or not any(_kanji(c) for c in fixed[j1:j2]):
+            continue
+        cover = [t for t in toks if t.end > j1 and t.start < j2]
+        if not cover:
+            continue
+        s, e = min(t.start for t in cover), max(t.end for t in cover)
+        if line[i1 - (j1 - s):i1] != fixed[s:j1] or line[i2:i2 + (e - j2)] != fixed[j2:e]:
+            continue
+        a, b = i1 - (j1 - s), i2 + (e - j2)
+        if a < 0 or not _is_hira(line[a:b]):
+            continue
+        rd = _reading(fixed[s:e])
+        if not rd or rd == line[a:b]:
+            continue          # 読みを替えない漢字化は repair_line の受け持ち
+        try:
+            if is_kango(fixed[s:e], rd):
+                continue
+        except Exception:
+            continue
+        new = new[:s] + rd + new[e:]
+    return new
+
+
 def repair_line(line, result, decided=()):
     if not isinstance(result, dict):
         return result

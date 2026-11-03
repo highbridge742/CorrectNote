@@ -67,7 +67,10 @@ class DictionaryReaderTests(unittest.TestCase):
             calls[0]+=1;return calls[0]>=2
         R._native_written_nominal_readings.cache_clear()
         try:
-            with patch.object(J,'HAS_JANOME',True),patch.object(J.importlib,'import_module',side_effect=module):
+            # Not the saved copy of the words (janome_import._entry_parts, 2026-11-01): the made-up modules are read,
+            # and nothing of them is written over it for the tests after this one
+            with patch.object(J,'HAS_JANOME',True),patch.object(J.importlib,'import_module',side_effect=module),\
+                    patch.object(J,'_entries_cache_path',return_value=None):
                 with request_scope(newer),self.assertRaises(SupersededAnalysis):
                     R._native_written_nominal_readings()
                 self.assertEqual(R._native_written_nominal_readings.cache_info().currsize,0)

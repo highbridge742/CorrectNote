@@ -42,6 +42,18 @@ class Keys(unittest.TestCase):
         self.assertIsNone(s.lookup('買える', '金で', ''))
 
 
+class StoreGoes(unittest.TestCase):
+    def test_a_store_leaves_no_notes_for_the_next_at_its_id(self):
+        import gc
+        s = store()
+        s.record('買える', '変える', 'homo', 'よって', 'ので')
+        key = id(s)
+        self.assertIn(key, U._LOGS)
+        del s
+        gc.collect()
+        self.assertNotIn(key, U._LOGS)
+
+
 class Rows(unittest.TestCase):
     def state(self, choice):
         previous = [None] * 10

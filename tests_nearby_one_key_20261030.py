@@ -32,7 +32,7 @@ class NearbyOneKeyTests(unittest.TestCase):
     def test_wired_after_pair_choice(self):
         import inspect, correction_entry as C
         self.assertIn('_nearby_one_key(line, result, nearby_words, input_method, decisions)',
-                      inspect.getsource(C._correct_line_strokes))
+                      inspect.getsource(C._line_stages_now))
 
 
 if __name__ == '__main__':
