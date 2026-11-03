@@ -8732,6 +8732,7 @@ class CorrectNoteApp:
         # タブの本文の入れ替えは編集ではない: Undo の履歴に積まない。下の edit_reset は、
         # いま Text に残っている前のタブの分を空にするためのもの（前のタブの分は tab_undo が預かった）
         self.editor.configure(undo=False)
+        self.editor._correctnote_tab_swap = True    # 新しい編集ではない: 書式やルーラーのやり直しを消さない
         try:
             with display_update(self):
                 self.editor.delete('1.0', 'end')
@@ -8741,6 +8742,7 @@ class CorrectNoteApp:
                 formatter=getattr(self.editor,'_correctnote_text_format',None)
                 if formatter is not None:formatter.restore(tab.get('text_styles'))
         finally:
+            self.editor._correctnote_tab_swap = False
             self.editor.configure(undo=True)
         import analysis_work_app as input_work
         input_work.select_document(self,self.editor_source_text())
@@ -11763,6 +11765,15 @@ class CorrectNoteApp:
             # Shift+Home / Shift+End once more at the line's edge copies the selection (2026-10-30)
             for key in ('Home','End'):
                 pane.bind(f'<Shift-{key}>',self._ime_first(self._on_shift_edge_copy),add=True)
+            # 送る先が無い時の PageUp / PageDown は1行目・最終行へ。Ctrl+Home / End はボタンと同じ（2026-11-04）
+            for key,forward in (('Prior',False),('Next',True)):
+                pane.bind(f'<{key}>',self._ime_first(
+                    lambda e,f=forward:self._on_page_key_edge(e,f,False)),add=True)
+                pane.bind(f'<Shift-{key}>',self._ime_first(
+                    lambda e,f=forward:self._on_page_key_edge(e,f,True)),add=True)
+            for key,last in (('Home',False),('End',True)):
+                pane.bind(f'<Control-{key}>',self._ime_first(
+                    lambda e,l=last:(self._goto_document_edge(l),'break')[1]),add=True)
         for sequence in ('<Break>','<Pause>','<Cancel>'):
             try:
                 self.root.bind_all(sequence,self._on_break_bookmark)
@@ -12279,11 +12290,56 @@ class CorrectNoteApp:
             self.result_view.mark_set('insert', f'{target}.0')
             self.result_view.focus_set()
 
-    def _goto_document_edge(self, last=False):
-        self._close_dropdown()
+    def _document_edge_line(self, last):
         text = self.editor_source_text().rstrip('\n')
-        line = text.count('\n')+2 if last and text else 1
+        return text.count('\n')+2 if last and text else 1
+
+    def _edge_stamp(self, last):
+        """Nothing has happened since the edge was reached: the same press, the same tab, no edit, no move."""
+        session = getattr(self, 'session', None)
+        return (last, session.current() if session is not None else None,
+                getattr(self, '_last_editor_change_at', None), self.editor.index('insert'),
+                self.editor.index('@0,0').split('.')[0])
+
+    def _goto_document_edge(self, last=False):
+        """1行目・最終行のボタンと Ctrl+Home / Ctrl+End。続けて押すと移る前の所へ戻り、次はまた端へ（2026-11-04 うにさん）。"""
+        self._close_dropdown()
+        back = getattr(self, '_edge_back', None)
+        self._edge_back = None
+        if back is not None and back['stamp'] == self._edge_stamp(last):
+            self._goto_line(int(back['insert'].split('.')[0]), centered=False)
+            self.editor.mark_set('insert', back['insert'])
+            for widget in (self.editor, self.result_view):
+                widget.yview(back['top'])
+            self.root.update_idletasks()
+            self.editor_gutter.redraw()
+            self.result_gutter.redraw()
+            return
+        origin = self.editor.index('insert')
+        top = self.editor.index('@0,0')
+        line = self._document_edge_line(last)
         self._goto_line(line, centered=last, stay_at_top=last and self._line_above_middle(line))
+        if int(origin.split('.')[0]) != line:
+            self._edge_back = dict(stamp=self._edge_stamp(last), insert=origin, top=top)
+
+    def _on_page_key_edge(self, event, forward, extend):
+        """PageUp / PageDown with nowhere further to go: the cursor goes to the first or the last row, as the button
+        does (Tk only moves it by what the view moved: in a short tab nothing happened. 2026-11-04 うにさん)."""
+        widget = getattr(event, 'widget', None)
+        if widget is not self.editor and widget is not getattr(self, 'result_view', None):
+            return None
+        target = f'{self._document_edge_line(forward)}.0'
+        try:
+            # The far end is in view already (the blank rows below the text do not count as somewhere to go)
+            if forward:
+                if widget.bbox(target) is None and widget.yview()[1] < 1.0:
+                    return None
+            elif widget.yview()[0] > 0.0:
+                return None
+            widget.tk.call('::tk::TextKeySelect' if extend else '::tk::TextSetCursor', widget._w, target)
+        except tk.TclError:
+            return None
+        return 'break'
 
     def _line_above_middle(self, line):
         """先頭から並べて、その行が窓の中央より上に来るか（短い文書の最終行）。中央に置くには上の余白を

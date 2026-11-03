@@ -293,7 +293,12 @@ class BulkInsertDialog:
             self.message.config(text='本文の編集やタブ切替後は、このボタンでは戻せません。'); return
         first, last = self._undo_records[-1]
         try:
-            editor.edit_undo()
+            # This button's own step, in this tab: not the next step over all the tabs (tab_undo)
+            editor._correctnote_undo_here = True
+            try:
+                editor.edit_undo()
+            finally:
+                editor._correctnote_undo_here = False
         except tk.TclError:
             self._undo_records.clear(); self._undo_identity = None
             self.undo_button.config(state='disabled')

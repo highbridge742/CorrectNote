@@ -53,7 +53,6 @@ class UndoFeedback:
         # left (tab_undo), older than anything in the Text's own history
         self.log=[];self.redo_log=[];self.log_chars=0
         self.parked=[];self.parked_redo=[]
-        self.on_empty=None      # a Ctrl+Z with nothing to undo here (tab_undo)
         self._pending_text=None
         self.boundary=not bool(self._call('edit','canundo'))
         self.last_kind=None
@@ -125,6 +124,11 @@ class UndoFeedback:
             entry=(self.parked or self.log).pop(0)
             self.log_chars-=sum(len(a)+len(b) for _start,a,b in entry[2])
         # With some of its steps gone the rest still leads back from the text as it is; only the older ones go
+
+    def next_seq(self,kind):
+        """The number of the step an undo or a redo here would take; None when there is none known."""
+        entries=(self.log or self.parked) if kind=='undo' else (self.redo_log or self.parked_redo)
+        return entries[-1][0] if entries else None
 
     def take(self):
         """The steps of the tab being left."""
@@ -219,10 +223,10 @@ class UndoFeedback:
         is_replay=args[:2] in (('edit','undo'),('edit','redo'))
         if is_replay:
             if self.replay is None:
-                if args[1]=='undo' and not int(self._call('edit','canundo')):
-                    if not (self.parked and self._bring_back()) and self.on_empty is not None:
-                        self.on_empty()
-                elif args[1]=='redo' and not int(self._call('edit','canredo')) and self.parked_redo:
+                can=int(self._call('edit','can'+args[1]))
+                if args[1]=='undo' and not can:
+                    if self.parked:self._bring_back()
+                elif args[1]=='redo' and not can and self.parked_redo:
                     self._redo_kept()
                     return ''
             return self._replay(args[1],native)

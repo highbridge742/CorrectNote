@@ -308,22 +308,37 @@ class TextFormat:
 
     def due_step_seq(self, kind):
         """The number of the step Ctrl+Z / Ctrl+Y would take now, or None (analysis_work._hooks_in_turn)."""
+        from analysis_work import same_step_text
         stack = self.history if kind == 'undo' else self.redo
-        if not stack or stack[-1][0] != self._text():
+        if not stack or not same_step_text(stack[-1][0], self._text()):
             return None
         return stack[-1][3] if len(stack[-1]) > 3 else 0
+
+    def step_top(self, kind):
+        """The step next in this stack, of any tab: (number, its text, its tab or None) (tab_undo)."""
+        stack = self.history if kind == 'undo' else self.redo
+        return (stack[-1][3], stack[-1][0], None) if stack else None
+
+    def step_drop(self, kind):
+        (self.history if kind == 'undo' else self.redo).pop()
 
     def undo_step(self, kind):
         """Take one Ctrl+Z / Ctrl+Y step if a style change is next in line.
 
         A style change is next when the text is as it was when the change was
         made: text edits after it are undone first, those before it after."""
+        from analysis_work import same_step_text
         stack, other = (self.history, self.redo) if kind == 'undo' else (self.redo, self.history)
-        if not stack or stack[-1][0] != self._text():
+        if not stack or not same_step_text(stack[-1][0], self._text()):
             return False
         entry = stack.pop()
         self.restore(entry[1] if kind == 'undo' else entry[2])
         other.append(entry)
+        # Where it changed, for a Ctrl+Z that came here from another tab (tab_undo)
+        points = {tuple(item) for styles in (entry[1], entry[2]) for items in (styles or {}).values() for item in items}
+        same = {tuple(item) for items in (entry[1] or {}).values() for item in items} & {
+            tuple(item) for items in (entry[2] or {}).values() for item in items}
+        self.last_place = (lambda p: '%d.0+%dc' % (p[0], p[1]))(min(points - same)) if points - same else None
         self._schedule_save()
         return True
 
@@ -341,7 +356,8 @@ class TextFormat:
 
     def changed(self, args=None):
         if (self.redo and args and args[0] in ('insert', 'delete', 'replace')
-                and not getattr(self.widget, '_correctnote_replay_depth', 0)):
+                and not getattr(self.widget, '_correctnote_replay_depth', 0)
+                and not getattr(self.widget, '_correctnote_tab_swap', False)):
             # A new edit ends what can be redone, as for text.
             self.redo.clear()
         if not self.pending or not args or args[0] not in ('insert', 'replace'):

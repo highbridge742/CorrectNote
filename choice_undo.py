@@ -51,14 +51,24 @@ class ChoiceUndo:
 
     def due_step_seq(self, kind):
         """Ctrl+Z / Ctrl+Y がいま取る一手の番号か None（analysis_work._hooks_in_turn）。"""
+        from analysis_work import same_step_text
         stack = self.history if kind == 'undo' else self.redo
-        if not stack or stack[-1][0] != self._text():
+        if not stack or not same_step_text(stack[-1][0], self._text()):
             return None
         return stack[-1][3]
 
+    def step_top(self, kind):
+        """The step next in this stack, of any tab: (number, its text, its tab or None) (tab_undo)."""
+        stack = self.history if kind == 'undo' else self.redo
+        return (stack[-1][3], stack[-1][0], None) if stack else None
+
+    def step_drop(self, kind):
+        (self.history if kind == 'undo' else self.redo).pop()
+
     def undo_step(self, kind):
+        from analysis_work import same_step_text
         stack, other = (self.history, self.redo) if kind == 'undo' else (self.redo, self.history)
-        if not stack or stack[-1][0] != self._text():
+        if not stack or not same_step_text(stack[-1][0], self._text()):
             return False
         entry = stack.pop()
         where = entry[4] if len(entry) > 4 else None
@@ -66,6 +76,8 @@ class ChoiceUndo:
         self._row_first = (lambda: row_first(where[0])) if where and row_first is not None else None
         self._restore(entry[1] if kind == 'undo' else entry[2], kind)
         other.append(entry)
+        # Where it changed, for a Ctrl+Z that came here from another tab (tab_undo)
+        self.last_place = '%d.0+%dc' % (where[0], where[1]) if where else None
         if len(entry) > 4 and entry[4]:
             try:
                 self._mark(entry[4], kind)
@@ -136,7 +148,8 @@ class ChoiceUndo:
                     pass
         # 本文を新しく編集したら、やり直せる選び直しは終わり（本文の Undo と同じ）
         if (self.redo and args and args[0] in ('insert', 'delete', 'replace')
-                and not getattr(self.widget, '_correctnote_replay_depth', 0)):
+                and not getattr(self.widget, '_correctnote_replay_depth', 0)
+                and not getattr(self.widget, '_correctnote_tab_swap', False)):
             self.redo.clear()
 
 

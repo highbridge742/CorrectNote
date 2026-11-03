@@ -284,6 +284,292 @@ class Elsewhere(Base):
         self.show(self.tabs[1])
         self.assertEqual(self.body['a'], cut)
 
+    def redo(self):
+        try:
+            self.text.edit_redo()
+        except tk.TclError:
+            pass
+
+    def test_newest_edit_first_though_this_tab_has_its_own(self):
+        # B has an older edit, A the newest: the cut comes back first, in A
+        self.show(self.tabs[1])
+        self.text.insert('1.0', 'B古')
+        self.text.edit_separator()
+        b_old = self.get()
+        self.show(self.tabs[0])
+        self.text.delete('2.0', '3.0')
+        self.show(self.tabs[1])
+        self.assertEqual(self.get(), b_old)
+        self.undo()
+        self.settle()
+        self.assertIs(self.current, self.tabs[0])
+        self.assertEqual(self.get(), '一行目\n二行目\n三行目\n')
+        self.assertEqual(self.body['b'], b_old)
+        self.undo()
+        self.settle()
+        self.assertIs(self.current, self.tabs[1])
+        self.assertEqual(self.get(), 'ほかのタブ\n')
+
+    def test_redo_goes_the_same_way_back(self):
+        self.show(self.tabs[1])
+        self.text.insert('1.0', 'B古')
+        self.text.edit_separator()
+        b_old = self.get()
+        self.show(self.tabs[0])
+        self.text.delete('2.0', '3.0')
+        cut = self.get()
+        self.show(self.tabs[2])
+        self.undo()
+        self.settle()
+        self.undo()
+        self.settle()
+        self.assertIs(self.current, self.tabs[1])
+        self.assertEqual(self.get(), 'ほかのタブ\n')
+        self.redo()
+        self.settle()
+        self.assertIs(self.current, self.tabs[1])
+        self.assertEqual(self.get(), b_old)
+        self.redo()
+        self.settle()
+        self.assertIs(self.current, self.tabs[0])
+        self.assertEqual(self.get(), cut)
+
+    def test_newer_own_step_stays_here(self):
+        self.text.delete('2.0', '3.0')
+        self.show(self.tabs[1])
+        self.text.insert('1.0', 'B新')
+        self.text.edit_separator()
+        self.undo()
+        self.settle()
+        self.assertEqual(self.switched, [])
+        self.assertEqual(self.get(), 'ほかのタブ\n')
+
+    def test_the_key_and_the_virtual_event_take_the_same_way(self):
+        self.root.deiconify()
+        self.text.pack()
+        for event in ('<Control-Key-z>', '<<Undo>>'):
+            self.switched.clear()
+            self.show(self.tabs[1])
+            self.text.insert('1.0', 'B古')
+            self.text.edit_separator()
+            self.show(self.tabs[0])
+            self.text.delete('1.0', '2.0')
+            before_b = self.body['b']
+            self.show(self.tabs[1])
+            self.text.focus_force()
+            self.root.update()
+            self.text.event_generate(event)
+            self.settle()
+            self.assertEqual(self.switched, [0], event)
+            self.assertEqual(self.body['b'], before_b, event)
+            self.assertTrue(self.get().startswith('一行目'), event)
+            self.text.focus_force()
+            self.root.update()
+            self.text.event_generate(event)     # the older edit, in B
+            self.settle()
+            self.assertIs(self.current, self.tabs[1], event)
+            self.assertEqual(self.get(), 'ほかのタブ\n', event)
+
+    def test_two_quick_presses(self):
+        self.show(self.tabs[1])
+        self.text.insert('1.0', 'B古')
+        self.text.edit_separator()
+        self.show(self.tabs[0])
+        self.text.delete('2.0', '3.0')
+        self.show(self.tabs[2])
+        self.undo()
+        self.undo()
+        self.settle()
+        self.assertEqual(self.body['a'] if self.current is not self.tabs[0] else self.get(), '一行目\n二行目\n三行目\n')
+        self.assertEqual(self.get() if self.current is self.tabs[1] else self.body['b'], 'ほかのタブ\n')
+
+
+class StyleSteps:
+    """A step that is not text, as the bold, the ruler and a re-choice keep theirs."""
+    def __init__(self, text):
+        self.widget = text
+        self.history, self.redo = [], []
+        self.applied = []
+        text._correctnote_observers.setdefault('undo_hooks', []).append(self.undo_step)
+
+    def make(self, name, place=None):
+        from analysis_work import next_step_seq
+        self.history.append((self.widget.get('1.0', 'end-1c'), name, next_step_seq(self.widget), place))
+        self.applied.append(name)
+
+    def due_step_seq(self, kind):
+        from analysis_work import same_step_text
+        stack = self.history if kind == 'undo' else self.redo
+        if not stack or not same_step_text(stack[-1][0], self.widget.get('1.0', 'end-1c')):
+            return None
+        return stack[-1][2]
+
+    def step_top(self, kind):
+        stack = self.history if kind == 'undo' else self.redo
+        return (stack[-1][2], stack[-1][0], None) if stack else None
+
+    def step_drop(self, kind):
+        (self.history if kind == 'undo' else self.redo).pop()
+
+    def undo_step(self, kind):
+        if self.due_step_seq(kind) is None:
+            return False
+        stack, other = (self.history, self.redo) if kind == 'undo' else (self.redo, self.history)
+        entry = stack.pop()
+        other.append(entry)
+        self.applied.remove(entry[1]) if kind == 'undo' else self.applied.append(entry[1])
+        self.last_place = entry[3]
+        return True
+
+
+class OneHistory(Elsewhere):
+    def setUp(self):
+        super().setUp()
+        self.steps = StyleSteps(self.text)
+        # the text of a tab shown or left, as _capture_session keeps it
+        for tab in self.tabs:
+            tab['text'] = self.body[tab['name']]
+        real = self.show
+
+        def show(tab):
+            if self.current is not None:
+                self.current['text'] = self.get()
+            real(tab)
+        self.show = show
+
+    def long_text(self):
+        self.root.deiconify()
+        self.text.configure(height=10)
+        self.text.pack()
+        self.text.delete('1.0', 'end')
+        self.text.insert('1.0', chr(10).join('行%d' % i for i in range(1, 201)))
+        self.text.edit_reset()
+        self.text.mark_set('insert', '1.0')
+        self.text.yview('1.0')
+        self.root.update()
+
+    def test_same_tab_a_place_out_of_view_shows(self):
+        self.long_text()
+        self.steps.make('太字', '120.0')
+        self.text.mark_set('insert', '3.0')
+        self.text.yview('1.0')
+        self.root.update()
+        self.assertIsNone(self.text.bbox('120.0'))
+        self.undo()
+        self.root.update()
+        self.assertEqual(self.steps.applied, [])
+        self.assertEqual(self.text.index('insert'), '120.0')
+        self.assertIsNotNone(self.text.bbox('120.0'))
+        self.assertEqual(self.switched, [])
+
+    def test_same_tab_redo_shows_too(self):
+        self.long_text()
+        self.steps.make('太字', '120.0')
+        self.undo()
+        self.root.update()
+        self.text.mark_set('insert', '3.0')
+        self.text.yview('1.0')
+        self.root.update()
+        self.redo()
+        self.root.update()
+        self.assertEqual(self.steps.applied, ['太字'])
+        self.assertIsNotNone(self.text.bbox('120.0'))
+
+    def test_same_tab_a_place_in_view_leaves_the_cursor(self):
+        self.long_text()
+        self.steps.make('太字', '5.0')
+        self.text.mark_set('insert', '3.0')
+        self.text.yview('1.0')
+        self.root.update()
+        self.undo()
+        self.root.update()
+        self.assertEqual(self.steps.applied, [])
+        self.assertEqual(self.text.index('insert'), '3.0')
+        self.assertEqual(self.text.index('@0,0').split('.')[0], '1')
+
+    def test_cut_then_style_in_another_tab(self):
+        cut_before = self.get()
+        self.text.delete('2.0', '3.0')
+        self.show(self.tabs[1])
+        self.steps.make('太字B')
+        self.show(self.tabs[0])
+        self.undo()
+        self.settle()
+        self.assertIs(self.current, self.tabs[1])
+        self.assertEqual(self.steps.applied, [])
+        self.assertEqual(self.body['a'], '一行目\n三行目\n')
+        self.undo()
+        self.settle()
+        self.assertIs(self.current, self.tabs[0])
+        self.assertEqual(self.get(), cut_before)
+
+    def test_style_then_cut_in_another_tab(self):
+        self.show(self.tabs[1])
+        self.steps.make('太字B')
+        self.show(self.tabs[0])
+        before = self.get()
+        self.text.delete('2.0', '3.0')
+        self.show(self.tabs[1])
+        self.undo()
+        self.settle()
+        self.assertIs(self.current, self.tabs[0])
+        self.assertEqual(self.get(), before)
+        self.assertEqual(self.steps.applied, ['太字B'])
+        self.undo()
+        self.settle()
+        self.assertIs(self.current, self.tabs[1])
+        self.assertEqual(self.steps.applied, [])
+
+    def test_redo_the_same_way_back(self):
+        before = self.get()
+        self.text.delete('2.0', '3.0')
+        cut = self.get()
+        self.show(self.tabs[1])
+        self.steps.make('太字B')
+        self.show(self.tabs[2])
+        self.undo()
+        self.settle()
+        self.undo()
+        self.settle()
+        self.assertEqual(self.get(), before)
+        self.redo()
+        self.settle()
+        self.assertIs(self.current, self.tabs[0])
+        self.assertEqual(self.get(), cut)
+        self.redo()
+        self.settle()
+        self.assertIs(self.current, self.tabs[1])
+        self.assertEqual(self.steps.applied, ['太字B'])
+
+    def test_a_step_whose_text_is_gone_does_not_block(self):
+        self.show(self.tabs[1])
+        self.steps.make('太字B')
+        self.tabs[1]['text'] = '読み直した本文\n'
+        self.body['b'] = '読み直した本文\n'
+        self.current = None
+        self.show(self.tabs[2])
+        self.undo()
+        self.settle()
+        self.assertEqual(self.steps.history, [])
+        self.assertEqual(self.switched, [])
+
+    def test_a_button_of_this_tab_stays_in_this_tab(self):
+        self.text.delete('2.0', '3.0')
+        self.show(self.tabs[1])
+        self.text.insert('1.0', '手')
+        self.text.edit_separator()
+        self.show(self.tabs[0])
+        self.text.insert('1.0', '新')
+        self.text.edit_separator()
+        self.undo()
+        self.settle()
+        self.show(self.tabs[2])
+        self.text._correctnote_undo_here = True
+        self.undo()
+        self.text._correctnote_undo_here = False
+        self.settle()
+        self.assertEqual(self.switched, [])
+
 
 if __name__ == '__main__':
     unittest.main()

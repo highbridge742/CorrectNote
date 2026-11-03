@@ -274,10 +274,15 @@ def tab_has_kana(text):
 
 
 def next_step_seq(widget):
-    """A number for a non-text Undo step on this widget, rising with each step (2026-10-25)."""
-    value=getattr(widget,'_correctnote_step_seq',0)+1
-    widget._correctnote_step_seq=value
-    return value
+    """A number for a non-text Undo step, in one order with the text steps of all the tabs (undo_feedback.next_seq;
+    2026-11-04 うにさん「太字などの書式、ルーラーもダメ」)."""
+    from undo_feedback import next_seq
+    return next_seq()
+
+
+def same_step_text(a,b):
+    """Is the text the one a non-text step was made on? A tab that came back has its trailing blank rows padded again."""
+    return a==b or a.rstrip('\n')==b.rstrip('\n')
 
 
 def _hooks_in_turn(hooks,kind):
@@ -375,12 +380,17 @@ def observe_text(widget,on_edit=None,on_cursor=None,on_before_edit=None,track_ch
                 whole['text']=after[1]
     def edit_command(*args):
         if args[:2] in (('edit','undo'),('edit','redo')):
+            # The next step over all the tabs may be in another tab (tab_undo)
+            gate=callbacks.get('replay_gate')
+            if gate is not None and gate(args[1]):return ''
             # Steps that are not text edits (text_format: bold, underline...;
             # editor_guides: the ruler) take their turn in the same Ctrl+Z /
             # Ctrl+Y history. When several are due at the same text, Undo takes
             # the newest step and Redo the oldest (next_step_seq, 2026-10-25).
             for hook in _hooks_in_turn(callbacks.get('undo_hooks',()),args[1]):
                 if hook(args[1]):
+                    shown=callbacks.get('step_taken')
+                    if shown is not None:shown(hook)
                     if callbacks['cursor'] is not None:callbacks['cursor']()
                     return ''
         on_edit=callbacks['edit']

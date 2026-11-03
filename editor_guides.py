@@ -154,7 +154,8 @@ class EditorGuides:
         self._sync_owner()
         entry=stack[-1]
         try:
-            if entry[1] is not self._owner or entry[0]!=self._text():return None
+            from analysis_work import same_step_text
+            if entry[1] is not self._owner or not same_step_text(entry[0],self._text()):return None
         except tk.TclError:return None
         return entry
 
@@ -163,6 +164,14 @@ class EditorGuides:
         entry=self._due(kind)
         return None if entry is None else entry[4]
 
+    def step_top(self,kind):
+        """The step next in this stack, of any tab: (number, its text, its tab) (tab_undo)."""
+        stack=self.history if kind=='undo' else self.redo
+        return (stack[-1][4],stack[-1][0],stack[-1][1]) if stack else None
+
+    def step_drop(self,kind):
+        (self.history if kind=='undo' else self.redo).pop()
+
     def undo_step(self,kind):
         """Take one Ctrl+Z / Ctrl+Y step if a ruler change is next in line (its text and tab are current)."""
         if self._due(kind) is None:return False
@@ -170,11 +179,14 @@ class EditorGuides:
         entry=stack.pop()
         self.set_ruler_rows(entry[2] if kind=='undo' else entry[3])
         other.append(entry)
+        changed=entry[2]^entry[3]
+        self.last_place='%d.0'%min(changed) if changed else None     # for a Ctrl+Z from another tab (tab_undo)
         return True
 
     def _text_changed(self,args=None):
         if (self.redo and args and args[0] in ('insert','delete','replace')
-                and not getattr(self.panes[0],'_correctnote_replay_depth',0)):
+                and not getattr(self.panes[0],'_correctnote_replay_depth',0)
+                and not getattr(self.panes[0],'_correctnote_tab_swap',False)):
             # A new edit ends what can be redone, as for text.
             self.redo.clear()
 

@@ -11,6 +11,8 @@ App = app_module.CorrectNoteApp
 
 class Harness:
     _goto_document_edge = App._goto_document_edge
+    _document_edge_line = App._document_edge_line
+    _edge_stamp = App._edge_stamp
     _line_above_middle = App._line_above_middle
     _goto_line = App._goto_line
     _clear_navigation_padding = App._clear_navigation_padding
