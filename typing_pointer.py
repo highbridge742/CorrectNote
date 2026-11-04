@@ -4,6 +4,17 @@ import tkinter as tk
 import weakref
 
 
+def shape_before_hiding(widget):
+    """The shape to bring back. Whoever hides second finds 'none' there, and kept that as the shape: when the two
+    ended in the other order the pointer stayed hidden, and only the correction pane's own hover showed it again
+    (2026-11-04 うにさん「打ってすぐ別アプリをアクティブにしたら、メモ欄だけカーソルが消えたまま」)."""
+    shape = str(widget.cget('cursor'))
+    if shape == 'none':
+        return getattr(widget, '_correctnote_shown_cursor', '')
+    widget._correctnote_shown_cursor = shape
+    return shape
+
+
 class TypingPointer:
     def __init__(self, root, panes, is_typing, can_hide=lambda: True):
         self.root = root
@@ -59,7 +70,7 @@ class TypingPointer:
             if widget is None or widget in self.saved:
                 continue
             try:
-                old = widget.cget('cursor')
+                old = shape_before_hiding(widget)
                 widget.configure(cursor='none')
                 self.saved[widget] = old
             except tk.TclError:

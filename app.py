@@ -384,7 +384,7 @@ APP_TITLE = 'CorrectNote'
 # 「判断に迷った箇所」から**「不自然な文字列」**へ入れ替え（既定オン・
 # 補正が入った範囲には付けない）、**かな書きのアルファベット読みを
 # 英字に直す**（`エフ2 → F2`）、スクロール後の反映（項目48-IZ〜）。
-APP_VERSION = '1.18.0'
+APP_VERSION = '1.18.1'
 
 # 控え（session.json・ime_readings）と語彙の自動保存の間合い（2026-10-20 うにさんの決定で5分）。
 # 以前は打つ手が止まって1.5秒ごとに丸ごと書き直していた。最初の変更から5分後にまとめて1回
@@ -19216,7 +19216,8 @@ class CorrectNoteApp:
         saved = []
         for w in self._scroll_panes():
             try:
-                saved.append((w, w.cget('cursor')))
+                from typing_pointer import shape_before_hiding
+                saved.append((w, shape_before_hiding(w)))
                 w.config(cursor='none')
             except Exception:
                 continue    # 隠せない欄は飛ばす（見えたままでも動く）

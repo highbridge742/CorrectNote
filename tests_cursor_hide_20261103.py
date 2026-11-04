@@ -93,6 +93,73 @@ class Hider(Base):
         self.assertEqual(self.text.cget('cursor'), 'xterm')
 
 
+class TwoHiders(Base):
+    """The pointer hidden on typing (typing_pointer) and in the key modes (CursorHider) at the same time. うにさん
+    2026-11-04: 打ってすぐ別のアプリへ移ったら、メモ欄だけカーソルが消えたまま."""
+    def setUp(self):
+        super().setUp()
+        from typing_pointer import TypingPointer
+        self.addCleanup(lambda: self.typing.restore())
+        self.typing = TypingPointer(self.root, lambda: [self.text, self.other], lambda e: True)
+        patch.object(self.root, 'winfo_containing', return_value=self.text).start()
+
+    def test_typing_first_and_the_key_mode_ends_last(self):
+        self.typing.hide(self.text)
+        self.h.hide()
+        self.assertEqual(self.cursors(), ('none', 'none'))
+        self.typing.restore()
+        self.h.restore()
+        self.assertEqual(self.cursors(), ('xterm', 'arrow'))
+
+    def test_the_key_mode_first_and_typing_ends_last(self):
+        self.h.hide()
+        self.typing.hide(self.text)
+        self.h.restore()
+        self.typing.restore()
+        self.assertEqual(self.cursors(), ('xterm', 'arrow'))
+
+    def test_each_order_of_ending(self):
+        for first, second in ((self.typing, self.h), (self.h, self.typing)):
+            self.typing.hide(self.text) if first is self.typing else self.h.hide()
+            self.h.hide() if first is self.typing else self.typing.hide(self.text)
+            for ender in (first, second):
+                ender.restore()
+            self.assertEqual(self.cursors(), ('xterm', 'arrow'))
+
+    def test_leaving_the_app_with_both_hidden(self):
+        # The keys typed in the mode hide on both; the focus goes out: typing ends at once, the mode a moment later
+        self.typing.hide(self.text)
+        self.h.hide()
+        self.typing.restore(NS(widget=self.text))
+        with patch.object(self.text, 'focus_get', return_value=None):
+            self.h.on_focus_out()
+            self.idle()
+        self.assertEqual(self.cursors(), ('xterm', 'arrow'))
+
+    def test_a_shape_asked_for_while_hidden_is_kept(self):
+        self.typing.hide(self.text)
+        self.h.hide()
+        self.typing.defer_cursor(self.other, 'hand2')
+        self.typing.restore()
+        self.h.restore()
+        self.assertEqual(self.other.cget('cursor') in ('hand2', 'arrow'), True)
+        self.assertEqual(self.text.cget('cursor'), 'xterm')
+
+    def test_hidden_again_later_restores_the_same(self):
+        for _ in range(3):
+            self.typing.hide(self.text)
+            self.h.hide()
+            self.typing.restore()
+            self.h.restore()
+        self.assertEqual(self.cursors(), ('xterm', 'arrow'))
+
+    def test_no_keys_after_the_focus_left_does_not_hide(self):
+        self.typing.restore()
+        with patch.object(self.root, 'focus_get', return_value=None):
+            self.typing.poll_composition()
+        self.assertEqual(self.cursors(), ('xterm', 'arrow'))
+
+
 class ReInputKeys(Base):
     def begin(self):
         self.text.mark_set('insert', '1.1')

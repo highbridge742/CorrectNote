@@ -213,7 +213,8 @@ class CursorHider:
     def _hide_on(self, widget):
         try:
             if widget not in self.saved:
-                self.saved[widget] = widget.cget('cursor')
+                from typing_pointer import shape_before_hiding
+                self.saved[widget] = shape_before_hiding(widget)
                 widget.configure(cursor='none')
         except Exception:
             self.saved.pop(widget, None)

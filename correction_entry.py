@@ -1593,7 +1593,7 @@ def _mark_leftover_letters(line, result):
     try:
         from last_keystroke import _letter_span
         if _letter_span(line) is None:
-            return result
+            return _mark_stray_latin(line, result)
     except Exception:
         return result
     k = [i for i, ch in enumerate(line) if ch.isascii() and ch.isalpha()]
@@ -1604,6 +1604,52 @@ def _mark_leftover_letters(line, result):
     out = dict(result)
     out['odd_spans'] = odd + [(a, b)]
     out['odd_reasons'] = list(result.get('odd_reasons') or ()) + [(a, b, f'「{line[a:b]}」はかなの中に残った英字です')]
+    return out
+
+
+def _latin(ch):
+    return ('a' <= ch <= 'z') or ('A' <= ch <= 'Z') or ('ａ' <= ch <= 'ｚ') or ('Ａ' <= ch <= 'Ｚ')
+
+
+def _japanese(ch):
+    return 'ぁ' <= ch <= 'ゖ' or 'ァ' <= ch <= 'ヶ' or '一' <= ch <= '鿿' or ch in 'ー々'
+
+
+def _mark_stray_latin(line, result):
+    """ローマ字入力で、日本語の字に挟まれたか行頭・行末で日本語の字に付いた1〜2字の小文字の英字（全角の英字も）が
+    残った所を紫にする（ｑ明日は・ｈｙエアが。かなの中の英字は _letter_span の受け持ち・2026-11-04 Store 登録スレッドの測り）。
+    英語の語（3字以上・大文字を含む・英数字の続き）は見ない。"""
+    import os
+    if os.environ.get('CN_STRAY_LATIN') == '0':
+        return result
+    odd = list(result.get('odd_spans') or ())
+    reasons = list(result.get('odd_reasons') or ())
+    added = False
+    i = 0
+    while i < len(line):
+        if not _latin(line[i]):
+            i += 1
+            continue
+        j = i
+        while j < len(line) and _latin(line[j]):
+            j += 1
+        run = line[i:j]
+        before = line[i - 1] if i else ''
+        after = line[j] if j < len(line) else ''
+        lower = all(c.islower() for c in run)
+        if (j - i <= 2 and lower and (_japanese(before) or _japanese(after))
+                and not (before and (before.isalnum() and not _japanese(before)))
+                and not (after and (after.isalnum() and not _japanese(after)))
+                and not any(o[0] < j and i < o[1] for o in odd)):
+            odd.append((i, j))
+            reasons.append((i, j, f'「{run}」は日本語の中に残った英字です'))
+            added = True
+        i = j
+    if not added:
+        return result
+    out = dict(result)
+    out['odd_spans'] = sorted(tuple(o[:2]) for o in odd)
+    out['odd_reasons'] = reasons
     return out
 
 
