@@ -270,6 +270,12 @@ r.after(30,tick);r.mainloop()
                 assert word_book_position((130,50,1030,600),(150,200),(0,0,1920,1040),number_left=175)==(0,80)
                 assert word_book_position((100,50,1000,600),(150,200),(0,0,1920,1040),number_left=140)==(850,80)
                 assert word_book_position((-1790,50,-890,600),(150,200),(-1920,0,0,1040),number_left=-1745)==(-1920,80)
+                def held():
+                    # Windows puts a new window back where it first chose as the window is mapped; the word book
+                    # holds its place against that for six rounds of 50ms (word_book._hold_place). Read the place
+                    # after them: right after open it depends on the machine's timing (CI 2026-11-04).
+                    end=time.monotonic()+.5
+                    while time.monotonic()<end:root.update();time.sleep(.01)
                 area=app.monitor_work_area(root.winfo_rootx(),root.winfo_rooty()) or (0,0,root.winfo_screenwidth(),root.winfo_screenheight())
                 root.geometry('1200x520+%d+%d' % (area[0]+350,area[1]+80));root.update()
                 book.open();root.update();win=book.window
@@ -280,7 +286,9 @@ r.after(30,tick);r.mainloop()
                 # Outside space is insufficient; the unused app margin makes the left fit.
                 left=area[0]+frame_width-offset+5
                 root.geometry('+%d+%d' % (left,area[1]+80));root.update()
+                until(lambda:root.winfo_x()==left)      # the book is placed from where the window is known to be
                 book.open();root.update();win=book.window
+                held()
                 number_left=a.editor_gutter.winfo_rootx()+a.editor_gutter.bbox('num')[0]
                 book_right=win.winfo_x()+win.winfo_width()+2*max(0,win.winfo_rootx()-win.winfo_x())
                 assert win.winfo_x()==area[0] and book_right<=number_left,(win.geometry(),root.geometry(),number_left,book_right)
@@ -301,7 +309,9 @@ r.after(30,tick);r.mainloop()
                 # Reclicking an already visible word book still closes it.
                 a.word_book_btn.invoke();assert book.window is None
                 root.geometry('+%d+%d' % (area[0],area[1]+80));root.update()
+                until(lambda:root.winfo_x()==area[0])
                 book.open();root.update();win=book.window
+                held()
                 assert win.winfo_x()>a.editor.winfo_rootx(),win.geometry()
                 book.close()
                 # Measure actual native widgets at each transition, not fixed pixel guesses.
