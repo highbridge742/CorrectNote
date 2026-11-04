@@ -88,6 +88,8 @@ def child():
             for unified in (False,True):
                 (a._set_layout_unified if unified else a._set_layout_split)()
                 until(done);root.update()
+                # From another row: the button pressed again right away goes back to where it came from (2026-11-04)
+                a.editor.mark_set('insert','2.0')
                 a.first_line_btn.invoke();root.update()
                 normal=a.editor.dlineinfo('1.0');normal_baseline=normal[1]+normal[4]
                 for scroll in (lambda:a._on_scrollbar('moveto',0),lambda:a._on_wheel_units(-100)):

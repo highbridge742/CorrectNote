@@ -75,7 +75,9 @@ def child():
                 # An active IME composition remains protected after the quiet
                 # period too; its end can reuse the completed value.
                 fast_response()
-                with patch('ime_watch.composition_active',return_value=True):
+                # composition_live too: it also asks whether the window is in front, and a test window on a desktop
+                # in use is not (it failed on the working PC since v1.17 at least, never on the CI runner)
+                with patch('ime_watch.composition_active',return_value=True),patch('ime_watch.composition_live',return_value=True):
                     until(lambda:time.monotonic()>a._input_display_after+.05,2)
                     assert body()==source and a._unified_autofix_waiting_ime
                 a._refresh_after_analysis(learn=False)
