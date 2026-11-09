@@ -7,6 +7,10 @@ from tab_context import tab_has_kana
 
 def _continues(previous,line):
     # 1行上で答えが変わるのは、行頭の付属語が前の行から続く時だけ（correction_entry の previous_line）
+    # 続くのは行頭がひらがなの付属語の時だけ（_continuation_prefix の決まり）。それ以外の行は解析せずに '' とする:
+    # 行の鍵を作るたびに行を解析し直していた（tests_quick_navigation_scope が「解析は1回」で落ちた・2026-11-10）
+    if not previous or not line or not ('\u3041' <= line[0] <= '\u309f'):
+        return ''
     from correction_entry import _continuation_prefix
     return _continuation_prefix(previous,line)
 

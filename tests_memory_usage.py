@@ -440,7 +440,9 @@ class MemoryTierTests(unittest.TestCase):
         for value, expect in (
                 (MEMORY_LOW, dict(low=True, compact=True, fg=False, quick=False, shared=False,
                                   prefetch=False, background=False, prewarm=False, preload=False, qprep=False)),
-                (MEMORY_MID, dict(low=False, compact=False, fg=True, quick=False, shared=True,
+                # 2026-11-08 うにさん（カード「60秒で外へ出し10分で閉じる」）: 中も簡易入力の子を残す（memory_usage.retains）。
+                # 開いた時の下準備（qprep）は中ではしないまま
+                (MEMORY_MID, dict(low=False, compact=False, fg=True, quick=True, shared=True,
                                   prefetch=False, background=True, prewarm=True, preload=False, qprep=False)),
                 (MEMORY_HIGH, dict(low=False, compact=False, fg=True, quick=True, shared=False,
                                    prefetch=True, background=True, prewarm=True, preload=False, qprep=True))):

@@ -37,6 +37,10 @@ class SavedNative:
     def homophones(self,*args,**kwargs):return ()
 
 @unittest.skipUnless(M.HAS_JANOME,'real native dictionary required')
+# 学習の記録（最後の選択・学んだ語）は既定で切ってある（2026-11-08 batch359、CN_LEARNED_HISTORY=1 で戻る）。
+# この試験は切り替えの裏に残っている機能を見るので、試験の間だけ切り替えを立てる（2026-11-09 公開の検査）
+@patch('vocabulary.LEARNED_OFF', False)
+@patch('last_choice.LEARNED_OFF', False)
 class NativePronounCaseTests(unittest.TestCase):
     def setUp(self):
         self.state=initial();self.tokenize=C.make_tokenizer(self.state.store)

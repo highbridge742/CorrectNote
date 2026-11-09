@@ -28,6 +28,9 @@ class LazySearchTests(unittest.TestCase):
             finally:self.events.append('close-search')
         self.search_factory=self.stack.enter_context(patch('ime_candidates.SearchCandidates',side_effect=search))
         self.stack.enter_context(patch('ime_language.JapaneseIME',side_effect=first))
+        # 2026-11-07 から入口は ime_spelling.GateIME（本物の IME が無ければ記録と辞書で答える）を使う。この試験は
+        # 本物の IME の口（first）が有る・無いの時の探しの道を見るので、GateIME も同じ口にする（2026-11-09 公開の検査）
+        self.stack.enter_context(patch('ime_spelling.GateIME',side_effect=first))
         for name,value in [('reading_segments.native_paused_nominal_ranges',()),
                 ('reading_segments.native_mixed_kana_word_ranges',()),
                 ('reading_segments.native_lexical_phrase',False),

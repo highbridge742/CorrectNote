@@ -8,6 +8,10 @@ import morphology as M,reading_segments as R,units as U
 from last_choice import LastChoiceStore
 
 @unittest.skipUnless(M.HAS_JANOME,'native dictionary required')
+# 学習の記録（最後の選択・学んだ語）は既定で切ってある（2026-11-08 batch359、CN_LEARNED_HISTORY=1 で戻る）。
+# この試験は切り替えの裏に残っている機能を見るので、試験の間だけ切り替えを立てる（2026-11-09 公開の検査）
+@patch('vocabulary.LEARNED_OFF', False)
+@patch('last_choice.LEARNED_OFF', False)
 class MixedChoiceScopeTests(unittest.TestCase):
     source='スくりーんをくたせさい。'
     def bound(self,line,*choices):
@@ -78,6 +82,8 @@ class MixedChoiceScopeTests(unittest.TestCase):
                 Q.object_predicate_candidate_allowed(line,6,11,'ください')
                 self.assertEqual(scan.called,expected)
 
+    # 混ぜ書きの外来語を片仮名にする後段 _long_loan（2026-11-09）は止めて、入口の選びの範囲だけを見る
+    @patch.dict('os.environ', {'CN_KEYSLIP_LONG_LOAN': '0'})
     def test_source_request_boundary_rechecks_original_choice_after_native_acceptance(self):
         import contextual_repair as Q,corrector as C
         from tests_analysis_async import initial

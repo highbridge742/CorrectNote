@@ -50,8 +50,13 @@ def child():
    a.line_results[0]=dict(original[0],analysis_error='synthetic failure')
    assert a._line_analysis_state(1)=='incomplete'
    # A newer edit invalidates the old row markers before the debounce expires.
+   row_one_before=a._line_analysis_state(1)
    a.editor.insert('2.end','追記');a._redraw_gutter_now()
-   assert a._line_analysis_state(1)==a._line_analysis_state(2)=='pending'
+   # 字を足した2行目は未解析。編集していない1行目は前の状態のまま（pending にしない）。2026-11-08 うにさん「タブ移動したら
+   # 全体的に未解析印が付いた」と 11-01・11-05 の「全体に未解析の印」を直した仕様（_unplanned_row_source：段取りと同じく
+   # 変わった行だけを未解析にする）
+   assert a._line_analysis_state(2)=='pending',a._line_analysis_state(2)
+   assert a._line_analysis_state(1)==row_one_before!='pending',(a._line_analysis_state(1),row_one_before)
    a.line_results=original
    a._on_change()
    until(lambda:not a._foreground_analysis_pending() and a._analyze_work==work.token(a))

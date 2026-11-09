@@ -187,6 +187,13 @@ def _explained_kana_revert(line, result):
             if not src or not all('ぁ' <= c <= 'ゖ' for c in src):
                 return result
             dst = fixed[j1:j2]
+            # 小書きの母音を並の字に戻しただけ（でしょぅか→でしょうか: Shift の打ち違い）は、小書きの ぁぃぅぇぉ が
+            # その位置に来ること自体が打ち違いの跡なので、戻さない（2026-11-09 公開の検査 tests_gui_operation_followups）。
+            # CN_EXPLAINED_SMALL_VOWEL=0 で前のまま
+            if (os.environ.get('CN_EXPLAINED_SMALL_VOWEL') != '0' and len(src) == len(dst)
+                    and any(c in 'ぁぃぅぇぉ' for c in src)
+                    and src.translate(str.maketrans('ぁぃぅぇぉ', 'あいうえお')) == dst):
+                return result
             # 平仮名を同じ読みの片仮名にしただけ（びっくり→ビックリ）も見ない
             if dst.translate({c: c - 0x60 for c in range(0x30A1, 0x30F7)}) == src:
                 return result

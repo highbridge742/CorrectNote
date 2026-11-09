@@ -1214,13 +1214,17 @@ def install_on_list(app, listbox):
     def forget(event=None):
         if event is not None and event.widget is not listbox:
             return
+        # bind_class の手続きは root の名簿（_tclCommands）に載る。一覧の deletecommand で消すと root の名簿に名前が
+        # 残り、窓を閉じる時の root.destroy が「can't delete Tcl command」で落ちた（Python 3.11・CI・2026-11-10）。
+        # 載せた root から消す（root の名簿からも外れる）
+        owner = listbox._root()
         for sequence, name in bound:
             try:
                 listbox.tk.call('bind', tag, sequence, '')
             except Exception:
                 pass
             try:
-                listbox.deletecommand(name)
+                owner.deletecommand(name)
             except Exception:
                 pass
         del bound[:]

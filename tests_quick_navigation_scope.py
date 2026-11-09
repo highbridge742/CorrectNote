@@ -5,7 +5,8 @@
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
-import morphology as M,corrector as C,analysis_context as A,ime_session as I
+import morphology as M,corrector as C,analysis_context as A,ime_session as I,correction_entry as E
+# 簡易入力はメモ欄と同じ入口（correction_entry.correct_line）で直す（2026-11-05 から）。両方の入口を差し替える
 from analysis_worker import Runtime
 
 class QuickNavigationScopeTests(unittest.TestCase):
@@ -22,7 +23,7 @@ class QuickNavigationScopeTests(unittest.TestCase):
             r.tokenize(text);seen.append(M._TOKENIZATION_CACHE.get())
             return dict(original=text,corrected=text,analysis_status='complete')
         def displayed(result,*args,**kwargs):r.tokenize(result['original']);return result['original'],[]
-        with patch.object(C,'correct_line',side_effect=correct),patch.object(units,'build_line_units',side_effect=displayed),patch.object(units,'build_suspect_units',side_effect=displayed),patch.object(M,'HAS_JANOME',True),patch.object(M,'_tokenize_uncached',side_effect=self.parsed) as parse:
+        with patch.object(C,'correct_line',side_effect=correct),patch.object(E,'correct_line',side_effect=correct),patch.object(units,'build_line_units',side_effect=displayed),patch.object(units,'build_suspect_units',side_effect=displayed),patch.object(M,'HAS_JANOME',True),patch.object(M,'_tokenize_uncached',side_effect=self.parsed) as parse:
             value=r.execute(task)
             # The ordinary legacy adapter already retains this repeated text.
             self.assertEqual(parse.call_count,1)
@@ -41,7 +42,7 @@ class QuickNavigationScopeTests(unittest.TestCase):
             # Its native reader must still use this unchanged row's lower cache.
             r.tokenize=C.make_tokenizer(r.store)
             return result['original'],[]
-        with patch.object(C,'correct_line',side_effect=correct),patch.object(units,'build_line_units',side_effect=displayed),patch.object(units,'build_suspect_units',side_effect=displayed),patch.object(M,'HAS_JANOME',True),patch.object(M,'_tokenize_uncached',side_effect=self.parsed) as parse:
+        with patch.object(C,'correct_line',side_effect=correct),patch.object(E,'correct_line',side_effect=correct),patch.object(units,'build_line_units',side_effect=displayed),patch.object(units,'build_suspect_units',side_effect=displayed),patch.object(M,'HAS_JANOME',True),patch.object(M,'_tokenize_uncached',side_effect=self.parsed) as parse:
             value=r.execute(task);self.assertEqual(parse.call_count,2)
         # 区切りの印は文字の色を使わないので、2番目の欄（品詞の色塗りの範囲）は空（v113_ctrl_boundary_marker 以降）
         self.assertEqual(value['navigation'],{'資料':((0,2),(),(('名詞',0,2),))})
@@ -51,7 +52,7 @@ class QuickNavigationScopeTests(unittest.TestCase):
         r=self.runtime();task=self.task(['資料','資料',' \t　'])
         source=dict(original='資料',corrected='資料',analysis_status='complete')
         task['reuse']={i:(row_key(task,i),(source,[],('資料',[]))) for i in (0,1)}
-        with patch.object(C,'correct_line',side_effect=AssertionError('completed row was recorrected')),patch.object(M,'HAS_JANOME',True),patch.object(M,'_tokenize_uncached',side_effect=self.parsed) as parse:
+        with patch.object(C,'correct_line',side_effect=AssertionError('completed row was recorrected')),patch.object(E,'correct_line',side_effect=AssertionError('completed row was recorrected')),patch.object(M,'HAS_JANOME',True),patch.object(M,'_tokenize_uncached',side_effect=self.parsed) as parse:
             value=r.execute(task);parse.assert_called_once_with('資料')
         # 区切りの印は文字の色を使わないので、2番目の欄（品詞の色塗りの範囲）は空（v113_ctrl_boundary_marker 以降）
         self.assertEqual(value['navigation'],{'資料':((0,2),(),(('名詞',0,2),))})
