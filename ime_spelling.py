@@ -515,20 +515,70 @@ def _first_case_word_proposal(text,first,descriptors,parts,source_parts,native_b
     return None
 
 
+class FirstIME:
+    """JapaneseIME() の代わりに使える口: 本物の IME が使えればそれ、無ければ打った記録と辞書の代わり
+    （dict_ime.DictIME・2026-11-07 うに「候補は IME でなく辞書から」）。CN_SPELLING_DICT_IME=0 で前のまま
+    （本物の IME が使えなければ、使えない IME のまま返す）。"""
+
+    strict = False
+
+    def __init__(self):
+        self._real = None
+
+    def __enter__(self):
+        try:
+            from ime_language import JapaneseIME
+            self._real = JapaneseIME()
+            ime = self._real.__enter__()
+        except (ImportError, OSError, AttributeError):
+            self._real, ime = None, None
+        if ime is not None and getattr(ime, 'available', False):
+            return ime
+        import os
+        if os.environ.get('CN_SPELLING_DICT_IME') == '0' and ime is not None:
+            return ime
+        try:
+            from dict_ime import DictIME
+            # 辞書で組む変換（打った記録の無い読み）は、まだ雲の正しい文を崩す（雨がふりだした→降りでした: 11-07 の測り）ので
+            # 既定では使わない。CN_SPELLING_DICT_CONVERT=1 で使う。既定は打った記録が証す変換だけ（strict）
+            return DictIME(strict=self.strict or os.environ.get('CN_SPELLING_DICT_CONVERT') != '1')
+        except Exception:
+            return ime if ime is not None else _NoIME()
+
+    def __exit__(self, *args):
+        if self._real is not None:
+            return self._real.__exit__(*args)
+        return False
+
+
+class GateIME(FirstIME):
+    """IME の判定の入口（ime_inverse_gate）用: 本物の IME が無ければ、打った記録が証す変換だけを答える。"""
+    strict = True
+
+
+class _NoIME:
+    available = False
+
+
+from contextlib import contextmanager as _contextmanager
+
+
+@_contextmanager
+def first_ime():
+    """FirstIME の口（使えなければ None）。"""
+    with FirstIME() as ime:
+        yield ime if getattr(ime, 'available', False) else None
+
+
 def project_first_words(text, store, dictionary, decisions, tokenize, *, subject_completion=False):
     import corrector as engine
     import morphology as native
     from semantic_roles import (object_before, case_argument_before, candidate_evidence,
         subject_before, subject_candidate_evidence)
-    try:
-        from ime_language import JapaneseIME
-    except (ImportError,OSError,AttributeError):
-        return None
-
     if not text:return None
     mixed=any(not ('ぁ'<=c<='ゖ' or c=='ー') for c in text)
-    with JapaneseIME() as ime:
-        if not ime.available:
+    with first_ime() as ime:
+        if ime is None or not ime.available:
             return None
         conversion=source_first_words(text,ime)
         if not conversion:return None
@@ -717,7 +767,7 @@ def project_first_words(text, store, dictionary, decisions, tokenize, *, subject
         if not mixed and not semantic_positive and current!=text:
             from ime_homophone import positive_predicate_alternatives
             alternatives=positive_predicate_alternatives(current,first,text,tokenize,ime,
-                subject_completion=subject_completion)
+                subject_completion=subject_completion,dict_index=dictionary)
             if len(alternatives)==1:
                 alternate=alternatives[0][0]
                 alternative_words=ime.reverse_words(alternate)

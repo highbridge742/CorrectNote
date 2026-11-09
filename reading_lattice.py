@@ -157,6 +157,18 @@ def _load_compact(path, stamp):
         return None
 
 
+def _load_compact_kept(path, stamp):
+    """_load_compact の答えを、出来上がった形のまま控え（compact_tables._pickled・cn_reading_lattice.cache.pickle）から
+    読む（2026-11-07・解析の子の起動）。gz を展開して位置の並びを作り直すのに子ごと約0.14秒（雲）→ 約0.02秒。
+    詰めた形の控え（COMPACT_NAME）の大きさ・更新時刻と版が同じ間だけ使う。中身は同じ物なので答えは同じ。"""
+    try:
+        import compact_tables
+        kept = ('lattice', stamp, COMPACT_VERSION, compact_tables._file_stamp(path))
+    except Exception:
+        return _load_compact(path, stamp)
+    return compact_tables._pickled('cn_reading_lattice.cache.pickle', kept, lambda: _load_compact(path, stamp))
+
+
 def _compact_from(table, path, stamp):
     """dict の表から詰めた形を作り、控えに書く（書けなくても作った形は返す）。形にできなければ None。"""
     try:
@@ -191,7 +203,7 @@ def load(cache_path=None, rebuild=False, build=True):
     compact = _compact_wanted()
     compact_path = os.path.join(os.path.dirname(path), COMPACT_NAME)
     if compact and not rebuild:
-        got = _load_compact(compact_path, stamp)
+        got = _load_compact_kept(compact_path, stamp)
         if got is not None:
             _table, _trie, _prefixes, _conn = got[0], None, got[1], sysdic.connections
             return

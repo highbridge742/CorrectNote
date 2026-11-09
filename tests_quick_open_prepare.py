@@ -12,7 +12,7 @@ class QuickOpenPrepareTests(base.QuickCompositionPrepareTests):
         return self.app.root.after.call_args[0][1]
     def test_opening_only_schedules_then_prepares_without_text_analysis(self):
         ready=self.scheduled();self.worker.submit.assert_not_called()
-        self.assertEqual(self.app.root.after.call_args[0][0],40)
+        self.assertEqual(self.app.root.after.call_args[0][0],Q.OPEN_PREPARE_MS)
         with patch.object(self.widget,'get',side_effect=AssertionError('preparation must not read text')):
             ready()
         self.assertEqual(self.worker.submit.call_args[0][0],{'kind':'quick_prepare'})
@@ -23,7 +23,7 @@ class QuickOpenPrepareTests(base.QuickCompositionPrepareTests):
         # since 2026-11-01 a kept child is released after ten minutes and its memory handed back after one).
         import memory_usage as M
         self.assertEqual([call.args[0] for call in self.app.root.after.call_args_list],
-                         [40,M.IDLE_RELEASE_KEPT_MS,M.IDLE_TRIM_MS,1200])
+                         [Q.OPEN_PREPARE_MS,M.IDLE_RELEASE_KEPT_MS,M.IDLE_TRIM_MS,1200])
     def test_replaced_widget_makes_the_pending_callback_inert(self):
         ready=self.scheduled();self.app._quick_text=asynchronous.Widget('別の窓');ready()
         self.worker.submit.assert_not_called();self.snapshot.assert_not_called()

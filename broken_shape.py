@@ -115,6 +115,18 @@ def _reading_of(t):
     return t.reading if getattr(t, 'has_reading', True) and t.reading else t.surface
 
 
+def _long_noun_reading(surface):
+    """漢字1字が、固有名詞・接尾でない名詞として2拍以上の読みを辞書に持つか（間＝あいだ）。"""
+    if __import__('os').environ.get('CN_BROKEN_NO_HEAD') == '0':
+        return False
+    try:
+        from morphology import dictionary_inflections
+        rows = dictionary_inflections(surface) or ()
+    except Exception:
+        return False
+    return any(str(r[0]).startswith(('名詞,一般', '名詞,副詞可能')) and len(r) > 3 and _mora(r[3]) >= 2 for r in rows)
+
+
 def extra_chars(text, tokens=None):
     """1拍の漢字1字が、前後の語の読みのどちらかの隣のキーを一緒に押した1字の足し（かな入力）と見える所。
     [(字の始まり, 字の終わり)]。紫の決め手（_EXTRA）の付いた字だけ。"""
@@ -128,6 +140,10 @@ def extra_chars(text, tokens=None):
             continue
         for i, t in enumerate(tokens):
             if not (a <= t.start and t.end <= b and _one_kanji_noun(t) and _mora(t.reading) == 1):
+                continue
+            if i and tokens[i - 1].surface == 'の' and tokens[i - 1].pos == '助詞' and _long_noun_reading(t.surface):
+                # の＋漢字1字の名詞（しばらくの｜間｜秘密に）は、解析が1拍に読んでも2拍以上の読み（あいだ）の名詞の頭で
+                # ありうる（例文 Tatoeba の正しい文で 間 を抜いていた・2026-11-07）。CN_BROKEN_NO_HEAD=0 で前のまま
                 continue
             p = _reading_of(tokens[i - 1]) if i else ''
             q = _reading_of(tokens[i + 1]) if i + 1 < len(tokens) else ''
@@ -144,9 +160,24 @@ def _clean_after_cut(text, d):
     ks, ke = d
     cut = text[:ks] + text[ke:]
     try:
-        return not any(a <= ks <= b for a, b, _w in spans(cut))
+        if any(a <= ks <= b for a, b, _w in spans(cut)):
+            return False
     except Exception:
         return False
+    # 除いた所の手前が、言い切りの用言のすぐ後ろに形容詞が来る形（する｜よい｜です: 予定です を よい手です と打った）
+    # のままなら、1字の足しではなく語の打ち違い。除いても文にならない（2026-11-06 かなの試験）。CN_BROKEN_CUT_VERB_ADJ=0
+    import os
+    if os.environ.get('CN_BROKEN_CUT_VERB_ADJ') != '0':
+        try:
+            import morphology
+            toks = list(morphology.tokenize(cut))
+            for x, y in zip(toks, toks[1:]):
+                if x.end == y.start and y.start <= ks <= y.end and x.pos == '動詞' \
+                        and (x.infl_form or '').startswith('基本形') and y.pos == '形容詞':
+                    return False
+        except Exception:
+            pass
+    return True
 
 
 def spans(text, tokens=None):
@@ -172,7 +203,14 @@ def spans(text, tokens=None):
             if (p and p.pos == '助詞' and q and q.pos == '名詞' and len(q.surface) >= 2 and _kanji(q.surface[:1])
                     and (_kanji(q.surface) or (q.pos_sub or '').startswith('副詞可能'))):
                 out.append((t.start, q.end, '語の前に1字が混じっています'))
-            if p and p.pos in ('助動詞', '動詞', '形容詞') and (q is None or q.pos == '助動詞' or q.pos == '記号'):
+            if (p and p.pos in ('助動詞', '動詞', '形容詞') and (q is None or q.pos == '助動詞' or q.pos == '記号')
+                    and not ((p.infl_form or '') in ('基本形', '体言接続', '連体形') and q is not None and q.pos == '助動詞'
+                             and __import__('os').environ.get('CN_BROKEN_ATTR_NOUN') != '0')
+                    and not ((p.infl_form or '') in ('基本形', '体言接続', '連体形') and q is not None and q.surface in '、，,'
+                             and _long_noun_reading(t.surface)
+                             and __import__('os').environ.get('CN_BROKEN_ATTR_COMMA') != '0')):
+                # 連体の形＋読点の前の1字の名詞で、2拍以上の読みを持つ語（待っている間、）も名詞を修飾する正しい形（2026-11-07）
+                # 言い切り・連体の形＋1字の名詞＋だ・です（いい子だから・赤い花だ）は名詞を修飾する正しい形（2026-11-07）
                 out.append((t.start, t.end, '言い終わりの後ろに1字が混じっています'))
         if (_one_kanji_noun(t) and p and q and p.pos not in ('助詞', '記号', '連体詞', '接頭詞', '形容詞', '名詞')
                 and q.pos not in ('助詞', '記号', '助動詞', '名詞')):
@@ -260,6 +298,38 @@ def repair_line(line, result, decided=(), input_method='kana'):
         return result
     if not found:
         return result
+    # 言い終わりの片仮名（してねた → して｜ネタ）が、元の行のかなを片仮名にしただけで、元のかな（てねた）が用言の形として
+    # 説明できるなら、紫にせずかなに戻す（入口の変換が かなの動詞 を片仮名の名詞にした）。CN_BROKEN_KATA_BACK=0
+    import os
+    if os.environ.get('CN_BROKEN_KATA_BACK') != '0':
+        try:
+            import pos_grammar
+            for s0, e0, why in found:
+                if why != '言い終わりに片仮名が混じっています' or e0 - s0 < 3:
+                    continue
+                k0 = s0 + 1
+                kata = done[k0:e0]
+                hira = ''.join(chr(ord(c) - 0x60) if 'ァ' <= c <= 'ヶ' else c for c in kata)
+                if hira == kata or not all('ぁ' <= c <= 'ゖ' or c == 'ー' for c in hira):
+                    continue
+                hit = False
+                for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, done, line, autojunk=False).get_opcodes():
+                    if tag == 'replace' and i1 <= k0 and e0 <= i2 and line[j1:j2] == done[i1:k0] + hira + done[e0:i2]:
+                        hit = True
+                lb = s0
+                while lb > 0 and 'ぁ' <= done[lb - 1] <= 'ゖ':
+                    lb -= 1
+                if not hit or not pos_grammar.explain_kana_run(done[lb:k0] + hira, after_kanji=lb > 0):
+                    continue
+                new = done[:k0] + hira + done[e0:]
+                ops2 = [o for o in difflib.SequenceMatcher(None, line, new, autojunk=False).get_opcodes() if o[0] != 'equal']
+                res2 = dict(result)
+                res2.update({'corrected': new, 'changed': new != line,
+                             'details': [d for d in (result.get('details') or ()) if not (len(d) > 1 and kata in str(d[1]))],
+                             'spans': [[o[3], o[4]] for o in ops2], 'original_spans': [[o[1], o[2]] for o in ops2]})
+                return repair_line(line, res2, decided, input_method)
+        except Exception:
+            pass
     marked = [tuple(x[:2]) for x in list(result.get('odd_spans') or ()) + list(result.get('unsure_spans') or ())]
     ops = difflib.SequenceMatcher(None, done, line, autojunk=False).get_opcodes()
 

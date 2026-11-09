@@ -120,6 +120,12 @@ def surface_for_reading(reading):
         return None
 
 
+# 過去に選んだ表記で補正を変えない（2026-11-08 うにさん「過去に何を打ったかで補正が変わる処理を、一旦無効に」）。
+# last_choice.json は読まない・書かない・消さない。この間の選び直しも覚えない。
+# 環境変数 CN_LEARNED_HISTORY=1 で起動すれば前のとおり（vocabulary.LEARNED_OFF と同じ切り替え）。
+LEARNED_OFF = os.environ.get('CN_LEARNED_HISTORY', '') != '1'
+
+
 class LastChoiceStore:
     """最後に選んだ表記を、読みごと・語ごとに1枠だけ持つ。"""
 
@@ -168,6 +174,8 @@ class LastChoiceStore:
         戻り値: 何か書いたら True（旧 `record` は「新規なら True」を
         返していたが、読んでいる側は無い）。
         """
+        if LEARNED_OFF:
+            return False
         if self._is_homophone_swap(original, chosen, reading):
             key = (prev or '', original, next or '')
             if self._contexts.get(key) == chosen:
@@ -215,7 +223,7 @@ class LastChoiceStore:
 
         戻り値: 何か書いたら True。
         """
-        if not isinstance(chosen, str) or not chosen:
+        if LEARNED_OFF or not isinstance(chosen, str) or not chosen:
             return False
         wrote = False
         if isinstance(original, str) and original:
@@ -364,7 +372,7 @@ class LastChoiceStore:
     # ------------------------------------------------------------
     def save(self, path=None):
         path = path or self.path
-        if not path:
+        if not path or LEARNED_OFF:
             return
         data = {
             'readings': {k: self._readings[k] for k in sorted(self._readings)},
@@ -380,7 +388,7 @@ class LastChoiceStore:
 
     def load(self, path=None):
         path = path or self.path
-        if not path or not os.path.exists(path):
+        if not path or LEARNED_OFF or not os.path.exists(path):
             return
         try:
             with open(path, encoding='utf-8') as f:

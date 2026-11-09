@@ -131,10 +131,12 @@ def previous_part(previous_line):
 def reuse_rows(results,todo,previous,signatures,old_context,new_context,attested):
     """Reuse only completed values whose semantic inputs still match exactly."""
     from analysis_cache import reusable_result
+    # Only what a row to do can take is looked at (the whole tab was checked for one typed row)
+    wanted={(results[index]['original'],signatures[index]) for index in todo}
     available={}
     for row in previous:
         key=(row or {}).get('_input_signature')
-        if (key is not None and reusable_result(row)
+        if (key is not None and (row.get('original'),key) in wanted and reusable_result(row)
                 and compatible(row,old_context,new_context,attested)):
             available[(row['original'],key)]=row
     remaining=[]

@@ -389,7 +389,17 @@ def _tokens_for(text, tokenize_fn=None):
     if HAS_JANOME and _mtok is not None:
         try:
             out = []
-            for t in _mtok(text):
+            # くだけた形（おもしれえ）は元の形容詞（おもしろい）の活用として説明する（2026-11-09 うにさん「正しくは 面白い の
+            # 活用」）。表記・位置は元の字のまま（colloquial_adj.tokenize_with）。CN_COLLOQUIAL_POS=0 で前の形
+            _split = _mtok
+            import os
+            if os.environ.get('CN_COLLOQUIAL_POS') != '0' and any(c in text for c in ('え', 'ー', 'ぇ')):
+                try:
+                    import colloquial_adj
+                    _split = lambda s, _m=_mtok: colloquial_adj.tokenize_with(s, _m)
+                except Exception:
+                    _split = _mtok
+            for t in _split(text):
                 pos = t.pos
                 sub = getattr(t, 'pos_sub', '')
                 if sub:

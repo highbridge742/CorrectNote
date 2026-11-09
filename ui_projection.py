@@ -23,12 +23,12 @@ def results(app):
     tail = 0
     while tail < min(len(current), len(previous)) - head and current[-1-tail]['original'] == previous[-1-tail]['original']:
         tail += 1
-    matches = {i: i for i in range(head)}
-    matches.update((len(current)-tail+i, len(previous)-tail+i) for i in range(tail))
     visible = list(current)
-    for i, old in matches.items():
-        if current[i].get('pending'):
-            value = previous[old]
+    start_of_tail = len(current)-tail
+    moved = len(previous)-len(current)
+    for i, row in enumerate(current):
+        if row.get('pending') and (i < head or i >= start_of_tail):
+            value = previous[i if i < head else i+moved]
             if not value.get('pending') or value.get('_display_only'):
                 visible[i] = dict(value, pending=True, _display_only=True)
     return visible
@@ -213,6 +213,40 @@ def _key(index):
     return tuple(map(int, str(index).split('.')))
 
 
+class _Keys:
+    """(行, 桁) for the indices update_tag is asked for, as widget.index would give them (2026-11-07, speed).
+
+    A 3,000-row tab asked Tk for 60,354 indices over 12 keystrokes (0.25 s of the main thread): the cache of
+    update_tag is dropped at every keystroke. 'R.C' and 'R.0+Nc' inside a row with no character above the BMP
+    (Tk 8.6 counts those as two) are worked out here; anything else (past the row's end, other forms, 'end')
+    still asks Tk."""
+
+    def __init__(self, widget, text):
+        self.widget, self.text, self.lines, self.plain = widget, text, None, {}
+
+    def __call__(self, index):
+        if isinstance(index, str):
+            head, dot, rest = index.partition('.')
+            col = None
+            if dot and head.isdigit():
+                if rest.isdigit():
+                    col = rest
+                elif rest[:2] == '0+' and rest[-1:] == 'c' and rest[2:-1].isdigit():
+                    col = rest[2:-1]
+            if col is not None and head.isascii() and col.isascii():
+                if self.lines is None:
+                    self.lines = self.text.split('\n')
+                row, col = int(head), int(col)
+                if 1 <= row <= len(self.lines):
+                    line = self.lines[row - 1]
+                    plain = self.plain.get(row)
+                    if plain is None:
+                        plain = self.plain[row] = not line or max(line) < '\U00010000'
+                    if plain and col <= len(line):
+                        return (row, col)
+        return _key(self.widget.index(index))
+
+
 def update_tag(widget, tag, ranges, stable_index):
     """Modify only changed tag intervals, preserving unrelated rows and Unicode indices."""
     requested = tuple(ranges)
@@ -224,7 +258,8 @@ def update_tag(widget, tag, ranges, stable_index):
         widget._projection_tag_text = text
     if cache.get(tag) == (requested, native):
         return
-    wanted = sorted((_key(widget.index(a)), _key(widget.index(b))) for a,b in requested)
+    key_of = _Keys(widget, text)
+    wanted = sorted((key_of(a), key_of(b)) for a,b in requested)
     merged = []
     for start, end in wanted:
         if start >= end:
@@ -237,14 +272,16 @@ def update_tag(widget, tag, ranges, stable_index):
     existing = {(_key(a), _key(b)) for a,b in zip(native[::2], native[1::2])}
     def position(pair):
         return stable_index(widget, '%s.%s' % pair)
-    for a,b in sorted(existing-desired):
+    removed = sorted(existing-desired)
+    for a,b in removed:
         widget.tag_remove(tag, position(a), position(b))
     added = sorted(desired-existing)
     for lo in range(0, len(added), 1000):
         values = [position(p) for pair in added[lo:lo+1000] for p in pair]
         if values:
             widget.tag_add(tag, *values)
-    cache[tag] = (requested, tuple(map(str, widget.tag_ranges(tag))))
+    # Nothing removed or added: the tag's ranges are the ones read above (no second read from Tk)
+    cache[tag] = (requested, tuple(map(str, widget.tag_ranges(tag))) if removed or added else native)
 
 
 def update_row_tag(widget, tag, row, ranges, stable_index):
@@ -307,6 +344,55 @@ def _common_length(old, new, limit, head):
         else:
             hi = mid - 1
     return lo
+
+
+# The correction pane is read-only (state disabled), and writing to it needs the state normal for the time. Text.configure
+# lays out the whole pane each time (56 ms twice over for one row in a 3,700-row tab, the largest part of a key's paint:
+# 2026-11-05). Another view of the same text (a peer: never on screen) is writable all the time and changes what the pane shows.
+WRITE_THROUGH_PEER = True
+
+
+def _write_peer(widget):
+    known = getattr(widget, '_correctnote_write_peer_name', None)
+    if known is not None:
+        return known or None
+    name = False
+    if WRITE_THROUGH_PEER:
+        try:
+            original = widget._w + '_correctnote_work'
+            name = widget._w + '_correctnote_writer'
+            widget.tk.call(original, 'peer', 'create', name, '-state', 'normal', '-undo', 0, '-takefocus', 0)
+            def gone(event, name=name):
+                # a sibling, not a child: it does not go with the pane by itself (and would keep the text alive)
+                if event.widget is widget:
+                    try:
+                        widget.tk.call('destroy', name)
+                    except Exception:
+                        pass
+            widget.bind('<Destroy>', gone, add=True)
+        except Exception:
+            name = False
+    try:
+        widget._correctnote_write_peer_name = name
+    except Exception:
+        pass
+    return name or None
+
+
+def start_writing(widget):
+    """The read-only pane's text may be changed until stop_writing."""
+    peer = _write_peer(widget)
+    if peer is None:
+        widget.config(state='normal')
+    else:
+        widget._correctnote_write_peer = peer
+
+
+def stop_writing(widget):
+    if getattr(widget, '_correctnote_write_peer', None) is not None:
+        widget._correctnote_write_peer = None
+    elif not getattr(widget, '_correctnote_write_peer_name', None):
+        widget.config(state='disabled')
 
 
 def replace_text(widget, old, new):

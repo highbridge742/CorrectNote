@@ -505,6 +505,13 @@ class BoundaryColors:
         # Rows from the first to the last the edit took text from (and the removed ones) are laid anew; their
         # tags went with the old text even when the row's text came back the same (a multi-row replace)
         first,last=row,max(row+max(0,-delta),last_row if last_row is not None else row)
+        if not delta and first==last:
+            # A key within one row: no other row moved, only this one is laid anew (every row was gone over for each key)
+            for name in ('_painted','_last_plans','_marker_indices'):
+                getattr(self,name).pop(row,None)
+            for key in [key for key in self.lines if key[0]==row]:
+                del self.lines[key]
+            return
         def moved(r):
             if r<first:return r
             if r<=last:return None
@@ -677,7 +684,13 @@ class BoundaryColors:
             # One read of the text; rows already sized for their text are
             # skipped without asking Tk, so a pass over a long document is
             # cheap. Rows that need work are re-read in paint_row.
-            lines=w.get('1.0','end-1c').split('\n')
+            # One split per version of the text: a slice over a very long file split it all again (36 ms at 172,000 rows)
+            whole=getattr(w,'_correctnote_whole_text',None)
+            changes=whole.get('changes') if isinstance(whole,dict) and not whole.get('busy') else None
+            kept=getattr(self,'_sweep_lines',None)
+            if changes is not None and kept is not None and kept[0]==changes:lines=kept[1]
+            else:
+                lines=w.get('1.0','end-1c').split(chr(10));self._sweep_lines=(changes,lines)
             cache=getattr(self.app,'_ctrl_boundary_plans',None)
             if not isinstance(cache,dict):cache={}
             row=self._sweep_row;painted=0;bare_row=self._bare_rows()

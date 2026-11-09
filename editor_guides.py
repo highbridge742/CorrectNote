@@ -70,7 +70,9 @@ class EditorGuides:
         self._cancel('_restore_job')
         if self._flash is None:
             self._flash=(pane,pane.cget('insertbackground'),pane.cget('insertofftime'))
-        pane.configure(insertbackground=FLASH_COLOR,insertofftime=0)
+            # Only as the flash begins: configure makes Tk lay out and draw the whole pane again, and each arrow key
+            # paid 40ms for a colour it already had (2026-11-05 うにさん「左右キーでのカーソル移動が重い」)
+            pane.configure(insertbackground=FLASH_COLOR,insertofftime=0)
         self._restore_job=self.root.after(FLASH_MS,self.restore)
 
     def restore(self):

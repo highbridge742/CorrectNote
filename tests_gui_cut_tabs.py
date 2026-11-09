@@ -75,7 +75,11 @@ def child():
     def emit(**values):
         value=dict(phase=phase[0],**values);report.append(value)
         print('CASE',json.dumps(value,ensure_ascii=False),flush=True)
-    with patch.object(app,'GlobalHotkeys',return_value=Mock()),patch.object(app.CorrectNoteApp,'_learn_now',lambda *args:None),patch.object(analysis_worker.Worker,'submit',submit),patch.object(analysis_worker.Worker,'poll',poll):
+    # The cut deletes only once the clipboard holds the text (safe_cut, 2026-10-23), read back from the Windows
+    # clipboard: here it is read back from the test's own clipboard, so the user's clipboard is not opened
+    import safe_cut
+    held=lambda text,backend=None:safe_cut._normal(str(root.tk.getvar('test_clipboard')))==safe_cut._normal(text)
+    with patch.object(safe_cut,'clipboard_holds',held),patch.object(app,'GlobalHotkeys',return_value=Mock()),patch.object(app.CorrectNoteApp,'_learn_now',lambda *args:None),patch.object(analysis_worker.Worker,'submit',submit),patch.object(analysis_worker.Worker,'poll',poll):
         try:
             a=app.CorrectNoteApp(root);until(done);until(lambda:complete(1));initial=a.store.revision()
             owners=[work.owner_for_tab(a,t) for t in a.session.tabs]

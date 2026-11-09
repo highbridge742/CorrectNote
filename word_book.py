@@ -637,7 +637,10 @@ class WordBook:
         temporary = self.path.with_suffix('.json.tmp')
         value = dict(version=2, sets=self.sets, active_set=self.active_set, visible=self.visible, width=self.width)
         try:
-            temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
+            text=json.dumps(value, ensure_ascii=False, indent=2)
+            import file_same
+            if file_same.same(str(self.path), text):return
+            temporary.write_text(text, encoding='utf-8')
             os.replace(str(temporary), str(self.path))
         except OSError as exc:
             self.app.status.config(text='単語帳を保存できませんでした：' + str(exc))

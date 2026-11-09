@@ -64,7 +64,14 @@ def _places(line, store, dict_index):
             i = j
             continue
         # かなのままで既に名詞と読める所（人ごとに の ごと・先生がた の がた）は、書くつもりのかな
-        if any(t.start == i and t.pos == '名詞' and t.has_reading for t in tokenize(line)):
+        # ただし、名詞の読みとつなぐと辞書の1語になる字（電話だい → 電話代）だけは見る。CN_SUFFIX_JOINED_NOUN=0 で前のまま
+        _at = [t for t in tokenize(line) if t.start == i and t.pos == '名詞' and t.has_reading]
+        already = bool(_at)
+        # 接尾と読めるかな（人ごと・学生たち）は書くつもりのかな。見ない
+        if already and '接尾' in (_at[0].pos_sub or ''):
+            i = j
+            continue
+        if already and __import__('os').environ.get('CN_SUFFIX_JOINED_NOUN') == '0':
             i = j
             continue
         base = path_cost(line)
@@ -77,8 +84,8 @@ def _places(line, store, dict_index):
                 faces = LK._kanji_choices(rd, store, dict_index)
             except Exception:
                 faces = []
-            cands = [(f, False) for f in faces
-                     if len(f) == 1 and _kanji(f) and ime_reconvert._rank(f) <= COMMON_FACE]
+            cands = [] if already else [(f, False) for f in faces
+                                        if len(f) == 1 and _kanji(f) and ime_reconvert._rank(f) <= COMMON_FACE]
             # 名詞の読みとつなぐと辞書の1語（乗車＋けん → じょうしゃけん → 乗車券）になる字。辞書の候補の先頭が
             # 名詞の字そのままに漢字1字を足した形のときだけ
             if head_read:
@@ -89,6 +96,12 @@ def _places(line, store, dict_index):
                 if whole and whole[0].startswith(head_face) and len(whole[0]) == len(head_face) + 1 \
                         and _kanji(whole[0][-1]):
                     cands.append((whole[0][-1], True))
+            # 置く所のかなが元の解析で助詞・助動詞だけ（先生｜が｜た）なら、文法のかなとして読める。接尾の字（型）は置かない
+            # （名詞とつないで辞書の1語になる字は置く）。CN_SUFFIX_GRAMMAR_KANA=0 で前のまま
+            if __import__('os').environ.get('CN_SUFFIX_GRAMMAR_KANA') != '0':
+                _span = [t for t in tokenize(line) if i <= t.start < i + L]
+                if _span and _span[-1].end == i + L and all(t.pos in ('助詞', '助動詞') and t.has_reading for t in _span):
+                    cands = [c for c in cands if c[1]]
             for f, joined in cands:
                 alt = line[:i] + f + line[i + L:]
                 toks = list(tokenize(alt))

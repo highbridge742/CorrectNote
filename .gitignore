@@ -139,6 +139,11 @@ reading_lattice_compact.pickle.gz
 janome_entries.pickle.gz
 # 類語の表の詰めた形の控え（synonyms・2026-11-01）。初回に作る
 wlsp_synonyms_compact.pickle.gz
+# 子の起動を速くする詰めた形の控え（読み索引・費用の表・語の一覧、2026-11-07）。初回に作る
+dict_index.json.compact.pickle
+dict_index.json.compact.pickle.*
+cn_*.cache.pickle
+cn_*.cache.pickle.*
 # 本人の語彙と使用の記録（2026-11-04 の確認で ignore に無かった）
 vocabulary_personal.json
 usage_counts.json

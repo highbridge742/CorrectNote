@@ -1849,6 +1849,33 @@ def _english_seed():
     global _seed_english_cache
     if _seed_english_cache is not None:
         return _seed_english_cache
+    out = _seed_kept('cn_english_seed.cache.pickle', 'seed_english', _english_seed_build,
+                     lambda: _english_seed_build() or None)
+    _seed_english_cache = out if out is not None else _english_seed_build()
+    return _seed_english_cache
+
+
+def _seed_kept(name, module_name, *builds):
+    """種の表（.py）から作る物を控え（compact_tables._pickled）から読む（2026-11-07・解析の子の起動とメモリ）。
+    子ごとに種の .py を読み込んで（英語は約20万語の定数、子1つで約20MB 残る）作り直していた。元の .py の
+    大きさ・更新時刻（EXE では EXE の）と作り方（builds の中身）が同じ間は控えを返す。中身は作ったものと同じ。
+    控えが使えなければ builds[-1]() の答え（None なら呼ぶ側が作る）。CN_TABLE_PICKLE=0 で前の形。"""
+    try:
+        import hashlib, importlib.util, marshal, sys
+        import compact_tables
+        if getattr(sys, 'frozen', False):
+            origin = sys.executable
+        else:
+            spec = importlib.util.find_spec(module_name)
+            origin = spec.origin if spec is not None else None
+        code = hashlib.sha1(b''.join(marshal.dumps(b.__code__) for b in builds)).hexdigest()
+        stamp = (module_name, compact_tables._file_stamp(origin), sys.version_info[:2], code)
+    except Exception:
+        return builds[-1]()
+    return compact_tables._pickled(name, stamp, builds[-1])
+
+
+def _english_seed_build():
     out = {}
     try:
         import seed_english
@@ -1856,7 +1883,6 @@ def _english_seed():
             out[w] = w
     except Exception:
         out = {}
-    _seed_english_cache = out
     return out
 
 
@@ -1872,6 +1898,25 @@ def _english_seed_all():
     global _seed_english_all_cache
     if _seed_english_all_cache is not None:
         return _seed_english_all_cache
+    got = None
+    try:
+        import compact_tables
+        if compact_tables.words_compact():
+            got = _seed_kept('cn_english_seed_all.cache.pickle', 'seed_english', _english_seed_build,
+                             _english_seed_all_build, _english_seed_all_compact)
+    except Exception:
+        got = None
+    _seed_english_all_cache = got if got is not None else _english_seed_all_build()
+    return _seed_english_all_cache
+
+
+def _english_seed_all_compact():
+    got = _english_seed_all_build()
+    import compact_tables
+    return got if isinstance(got, compact_tables.CompactWords) else None
+
+
+def _english_seed_all_build():
     out = set(_english_seed())
     seed_english = None
     try:
@@ -1887,15 +1932,14 @@ def _english_seed_all():
             # （約 18MB → 約 3MB。引くのは二分探索）。答えは同じ。読み終えた
             # 種の表（EXTRA_WORDS）はこの名簿にしか要らないので手放す
             # （ENGLISH_WORDS は `_english_seed` の直し先として残る）。
-            _seed_english_all_cache = compact_tables.CompactWords.of(out)
+            got = compact_tables.CompactWords.of(out)
             del out
             if seed_english is not None and hasattr(seed_english, 'EXTRA_WORDS'):
                 seed_english.EXTRA_WORDS = ()
-            return _seed_english_all_cache
+            return got
     except Exception:
         pass
-    _seed_english_all_cache = frozenset(out)
-    return _seed_english_all_cache
+    return frozenset(out)
 
 
 def _english_targets(store):

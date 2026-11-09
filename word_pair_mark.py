@@ -110,6 +110,24 @@ def propose(text, dict_index):
     return out
 
 
+SURE_GAIN = 3000   # 候補1つの組を置いた行の並びの費用（path_cost）がこれだけ下がるなら、紫を付けずに置く
+
+
+def _sure(done, s, e, face):
+    """候補が1つで、置いた行が元の行より並びの費用で SURE_GAIN 以上自然なら決め手あり（紫なし）。
+    決め手の無い置き換えは、後ろの _purple_on_fix が紫だけに戻す（2026-11-09 手分けA）。CN_WORD_PAIR_SURE=0 で前のまま。"""
+    import os
+    if os.environ.get('CN_WORD_PAIR_SURE') == '0':
+        return False
+    try:
+        import morphology
+        a = morphology.path_cost(done)
+        b = morphology.path_cost(done[:s] + face + done[e:])
+        return a is not None and b is not None and b <= a - SURE_GAIN
+    except Exception:
+        return False
+
+
 def _to_original(line, done, s, e):
     """done の [s, e) を line の位置に戻す（その範囲はほかの補正が触っていない所）。"""
     for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, done, line, autojunk=False).get_opcodes():
@@ -134,6 +152,7 @@ def repair_line(line, result, store, dict_index, decided=()):
     odd_now = [tuple(x[:2]) for x in list(result.get('odd_spans') or ()) + list(result.get('unsure_spans') or ())]
     new = done
     odd_add, details = [], []
+    sure_n = 0
     for s, e, faces in sorted(marks, reverse=True):
         if any(x < e and s < y for x, y in changed):
             continue
@@ -143,13 +162,17 @@ def repair_line(line, result, store, dict_index, decided=()):
         if len(faces) == 1:
             new = new[:s] + faces[0] + new[e:]
             details.append([done[s:e], faces[0], '語の組'])
+            if _sure(done, s, e, faces[0]):
+                sure_n += 1
+                continue
         odd_add.append(org)
-    if not odd_add:
+    if not odd_add and not sure_n:
         return result
     out = dict(result)
-    out['odd_spans'] = sorted(set(odd_now) | set(odd_add))
-    out['odd_reasons'] = list(result.get('odd_reasons') or ()) + [
-        (a, b, f'「{line[a:b]}」は隣の語とつなぐと別の語の読みです') for a, b in odd_add]
+    if odd_add:
+        out['odd_spans'] = sorted(set(odd_now) | set(odd_add))
+        out['odd_reasons'] = list(result.get('odd_reasons') or ()) + [
+            (a, b, f'「{line[a:b]}」は隣の語とつなぐと別の語の読みです') for a, b in odd_add]
     if new != done:
         ops = [o for o in difflib.SequenceMatcher(None, line, new, autojunk=False).get_opcodes() if o[0] != 'equal']
         out.update({'original': line, 'corrected': new, 'changed': True,

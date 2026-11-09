@@ -133,7 +133,28 @@ def _choose(alternatives, reading_of, yomi_logp, path_cost, line=None):
     return alternatives[best], by_rule, gap
 
 
-def repair_with_doubts(line, base, alternatives, run, path_cost, reading_of, yomi_logp, margin=None):
+COMMON_RARE, COMMON_USUAL = 600, 450
+
+
+def _diff_noun(text, other):
+    """text の、other と違う所がちょうど名詞1語なら (表記, 珍しさ)。それ以外は None。"""
+    try:
+        from morphology import tokenize
+        import ime_reconvert as _R
+        ops = [o for o in difflib.SequenceMatcher(None, text, other, autojunk=False).get_opcodes() if o[0] != 'equal']
+        if not ops:
+            return None
+        a, b = ops[0][1], max(ops[-1][2], ops[0][1] + 1)
+        toks = list(tokenize(text))
+        hit = [t for t in toks if t.start < b and a < t.end]
+        if len(hit) != 1 or hit[0].pos != '名詞':
+            return None
+        return hit[0].surface, _R._token_rarity(hit[0], toks)
+    except Exception:
+        return None
+
+
+def repair_with_doubts(line, base, alternatives, run, path_cost, reading_of, yomi_logp, margin=None, odd_spans=None):
     """
     line: 打った行。base: 印なしの補正の結果。alternatives: 印の2打のどちらかを抜いた行（2つ）。
     run(text) -> (補正した行, 紫が残ったか)。yomi_logp(読み) -> 対数確率（yomigram.logp_parts(読み)[0]）。
@@ -142,6 +163,35 @@ def repair_with_doubts(line, base, alternatives, run, path_cost, reading_of, yom
     返り値: (行, 'fix' | None)。
     """
     alt, by_rule, gap = _choose(alternatives, reading_of, yomi_logp, path_cost, line if margin is None else None)
+    if margin is None and len(alternatives) == 2 and os.environ.get('CN_KD_COMMON') != '0':
+        # 抜いた2つの形が名詞1つずつだけ違い、片方は漢字か片仮名だけの珍しい名詞（枷・コチ: 600 以上）、もう一方は
+        # 身近な名詞（川・道: 450 以下）なら身近な方を採る。読みの確率と path_cost は短い珍しい名詞を軽く見ることがある
+        # （為替で→枷で・小道に→コチに。2026-11-06 かな入力の担当。送り仮名の付く複合語 草取り 等は見ない）
+        w = [_diff_noun(alternatives[0], alternatives[1]), _diff_noun(alternatives[1], alternatives[0])]
+        if None not in w:
+            (s0, r0), (s1, r1) = w
+            rare, common = (0, 1) if r0 > r1 else (1, 0)
+            rs = w[rare][0]
+            if (w[rare][1] >= COMMON_RARE and w[common][1] <= COMMON_USUAL
+                    and (all('一' <= c <= '鿿' for c in rs) or all('ァ' <= c <= 'ヶ' or c == 'ー' for c in rs))):
+                pick = alternatives[common]
+                # 読めない並び（ざゅう 等）の多い方には替えない
+                if pick != alt and len(kana_rules.bad_spots(reading_of(pick))) <= len(kana_rules.bad_spots(reading_of(alt))):
+                    alt, by_rule, gap = pick, True, None
+    if margin is None and len(alternatives) == 2 and os.environ.get('CN_KD_CLEAN') != '0':
+        # 抜いた2つの形を補正に通し、選んだ方だけ紫が残り、もう一方は紫なしに通るなら、もう一方を採る
+        # （喪背で/店で・押す手/終えて の取り違え。抜いた形に紫が残るのは、その抜き方が誤りの印・2026-11-05 かな入力の担当）
+        # 紫は抜いた所（2つの形の違う所）に掛かるものだけを見る（行の別の所の紫は抜き方の証にならない）
+        other = alternatives[1] if alt == alternatives[0] else alternatives[0]
+        def odd_here(text, against):
+            ops = [o for o in difflib.SequenceMatcher(None, text, against, autojunk=False).get_opcodes() if o[0] != 'equal']
+            if not ops: return False
+            a, b = ops[0][1], max(ops[-1][2], ops[0][1] + 1)
+            spans = odd_spans(text) if odd_spans is not None else None
+            if spans is None: return run(text)[1]
+            return any(x < b + 1 and a - 1 < y for x, y, *_ in spans)
+        if run(alt)[1] and odd_here(alt, other) and not odd_here(other, alt):
+            alt, by_rule, gap = other, True, None
     if margin is None and not by_rule and gap is not None and gap < CHOOSE_GAP:
         return base, None      # どちらが余分か決められない（紫にする）
     sure = len(kana_rules.bad_spots(reading_of(line))) > len(kana_rules.bad_spots(reading_of(alt)))
@@ -152,7 +202,12 @@ def repair_with_doubts(line, base, alternatives, run, path_cost, reading_of, yom
         if not o and (_local(line, alt, g) or (g is got and reading_of(g) == reading_of(alt))):
             c = path_cost(g)
             if c is not None: cands.append((c, g))
-    if not cands: return base, None
+    if not cands:
+        if margin is None and os.environ.get('CN_KD_FIRST') != '0':
+            # 抜いた形に紫が残っても、間隔の短い2打は先に1字減らす（うに 11-08 03:44Z「紫が付かなくても間隔が短ければ
+            # どちらか1字を削ったほうがいい」）。紫はその文節に付け直す
+            return alt, 'fix_odd'
+        return base, None
     cands.sort()
     if margin is None:
         # 基本疑う形では、抜いた形を補正に通した結果（漢字にした行）を先に使う
@@ -160,7 +215,10 @@ def repair_with_doubts(line, base, alternatives, run, path_cost, reading_of, yom
     bc = path_cost(base)
     if bc is None: return base, None
     if margin is None:
-        if not sure and min(c for c, _ in cands) > bc + PRESUME_TOLERANCE: return base, None
+        # 間隔が短すぎる2打は巻き込みとして先に字を減らす（うに 11-08 03:42Z「打鍵間隔は優先してチェック」）。
+        # 抜いた形が印なしの補正より不自然でも採る。CN_KD_FIRST=0 で前のまま（PRESUME_TOLERANCE を超えて悪ければ採らない）
+        if (not sure and os.environ.get('CN_KD_FIRST') == '0'
+                and min(c for c, _ in cands) > bc + PRESUME_TOLERANCE): return base, None
     elif cands[0][0] >= bc - (0.0 if sure else margin): return base, None
     return cands[0][1], 'fix'
 
@@ -222,8 +280,13 @@ def occurrence_alternatives(reading, strokes, input_method):
     keys = [k for k, _ in strokes]
     if input_method == 'romaji':
         import halfwidth
-        if halfwidth.romaji_to_kana(''.join(keys))[0] != rd: return []
-        make = lambda d: halfwidth.romaji_to_kana(''.join(keys[:d] + keys[d + 1:]))[0]
+        # 句読点のキーはキーの字（, . - / [ ]）で記録されるので、読みの側の字（、。ー・「」）に揃えて比べる
+        # （2026-11-06 ローマ字の試しのスレッド: 句読点を含む確定で巻き込みの戻しが効いていなかった）。CN_KD_PUNCT=0
+        punct = str.maketrans({',': '、', '.': '。', '-': 'ー', '/': '・', '[': '「', ']': '」'}) \
+            if os.environ.get('CN_KD_PUNCT') != '0' else {}
+        conv = lambda ks: (halfwidth.romaji_to_kana(''.join(ks))[0] or '').translate(punct)
+        if conv(keys) != rd: return []
+        make = lambda d: conv(keys[:d] + keys[d + 1:])
     else:
         import kana_layout
         typed = _kana_key_reading(rd)
@@ -234,6 +297,35 @@ def occurrence_alternatives(reading, strokes, input_method):
     for i, j in doubt_pairs(strokes, positions, adjacent):
         a, b = make(i), make(j)
         if a and b and a != b: out.append((a, b))
+    if input_method != 'romaji' and os.environ.get('CN_KD_BETWEEN') != '0':
+        # 1つのキーの両隣（す の両隣の い・か）を、しきい値より短い間隔で続けて押した2打は、間のキーを押すつもりで
+        # 両隣に触れた形（でいか → です）。2打を間のキー1つにした読みを、ほかの形と比べず1つだけの候補にする
+        # （うに 11-08 03:42Z「打鍵間隔の情報は？」）。CN_KD_BETWEEN=0 で見ない
+        import kana_layout
+        at = {}
+        for k_, p_ in kana_layout.KANA_POSITIONS.items():
+            if len(k_) == 1 and 'ぁ' <= k_ <= 'ゖ':
+                at.setdefault(p_, k_)
+        for i, j in between_pairs(strokes, positions, adjacent):
+            mids = [m for p_, m in at.items() if adjacent(positions.get(keys[i]), p_) and adjacent(p_, positions.get(keys[j]))]
+            if len(mids) != 1: continue
+            r = _compose_kana(typed[:i] + [mids[0]] + typed[j + 1:])
+            if r and r != rd: out.append((r,))
+    return out
+
+
+def between_pairs(strokes, positions, adjacent, threshold_ms=DEFAULT_THRESHOLD_MS):
+    """隣どうしではないが、1つのキーを挟む両隣（同じ手）の2打で、押した時刻の差がしきい値未満の (i, i+1)。"""
+    out = []
+    for i in range(len(strokes) - 1):
+        (a, ta), (b, tb) = strokes[i], strokes[i + 1]
+        if not a or not b or a == b: continue
+        pa, pb = positions.get(a), positions.get(b)
+        if pa is None or pb is None or adjacent(pa, pb): continue
+        if pa[0] != pb[0] or abs(pa[1] - pb[1]) != 2: continue       # 同じ段で1つ挟んだ2つ
+        ha, hb = _hand(pa), _hand(pb)
+        if 'C' not in (ha, hb) and ha != hb: continue
+        if tb - ta < threshold_ms: out.append((i, i + 1))
     return out
 
 
@@ -263,23 +355,39 @@ def repair_line(line, base, occurrences, input_method, run, convert=None):
             continue
         if line[start:end] != surface or not reading: continue
         # 印なしの補正が文節の外を直した行は混ぜない（どちらの直しも崩さないため、印なしのまま）
-        if done != line and not _local(line, line[:start] + '\0' + line[end:], done, slack=0): continue
-        for ra, rb in occurrence_alternatives(reading, strokes, input_method):
+        if (done != line and os.environ.get('CN_KD_FIRST') == '0'
+                and not _local(line, line[:start] + '\0' + line[end:], done, slack=0)): continue
+        known = {}
+
+        def reading_of2(text, known=known):
+            k = known.get(text)
+            if k is None:
+                return reading_of(text)
+            return reading_of(k[0]) + k[1] + reading_of(k[2])
+        for rs in occurrence_alternatives(reading, strokes, input_method):
             if (start, end) not in doubted: doubted.append((start, end))
             alts = []
-            for r in (ra, rb):
+            for r in rs:
                 face = None
                 if convert is not None:
                     try: face = convert(r)
                     except Exception: face = None
                 alts.append(line[:start] + (face or r) + line[end:])
-            got, how = repair_with_doubts(line, done, alts, run2, morphology.path_cost, reading_of, yomi)
-            if how != 'fix' or got == done: continue
+                if os.environ.get('CN_KD_TYPED_READING') != '0':
+                    # 抜いた形の読みは打った読み（r）を使う。表記から読み直すと 毛 → もう のように打った読みと違う読みで
+                    # 比べてしまう（けとは と けさは の比べが もうとは になった・2026-11-08）。CN_KD_TYPED_READING=0
+                    known[alts[-1]] = (line[:start], r, line[end:])
+            got, how = repair_with_doubts(line, done, alts, run2, morphology.path_cost, reading_of2, yomi,
+                                          odd_spans=lambda t: [tuple(x[:2]) for x in (runs[t].get('odd_spans') or ())] if t in runs else None)
+            if how not in ('fix', 'fix_odd') or got == done or got == line: continue
             ops = [o for o in difflib.SequenceMatcher(None, line, got, autojunk=False).get_opcodes() if o[0] != 'equal']
             a, b, c, d = ops[0][1], ops[-1][2], ops[0][3], ops[-1][4]
-            return {'original': line, 'corrected': got, 'changed': True,
-                    'details': [[line[a:b], got[c:d], '打鍵の間隔']], 'spans': [[c, d]], 'original_spans': [[a, b]],
-                    'odd_spans': [], 'unsure_spans': [], 'odd_reasons': []}
+            out = {'original': line, 'corrected': got, 'changed': True,
+                   'details': [[line[a:b], got[c:d], '打鍵の間隔']], 'spans': [[c, d]], 'original_spans': [[a, b]],
+                   'odd_spans': [], 'unsure_spans': [], 'odd_reasons': []}
+            if how == 'fix_odd':
+                out['_stroke_odd'] = [(start, end)]
+            return out
     return _mark_doubted(line, base, done, doubted)
 
 

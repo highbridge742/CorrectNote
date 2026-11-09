@@ -179,9 +179,13 @@ class PaperTkTests(unittest.TestCase):
         except tk.TclError as error:
             raise unittest.SkipTest(f'Tk なし: {error}')
         cls.root.geometry('700x520+0+0')
+        # The form pasted row by row, kept for where the pane cannot show through (tests_paper_through_gui_20261105)
+        cls.through = ap.Paper.SHOW_THROUGH
+        ap.Paper.SHOW_THROUGH = False
 
     @classmethod
     def tearDownClass(cls):
+        ap.Paper.SHOW_THROUGH = cls.through
         cls.root.destroy()
 
     def setUp(self):
@@ -617,6 +621,9 @@ class PaperTkTests(unittest.TestCase):
             self.assertNotEqual(t.winfo_width(), geom[2])
             self.assertIsNotNone(self.paper._settle)
             for step in (6, 9, -4):
+                # Still within the settling time, however long the last check took: a loaded machine passed it
+                # between the steps, and the new place was right but not the one looked for
+                self.paper._size_at = ap.time.monotonic()
                 t.yview_scroll(step, 'pixels')
                 # 前の位置・前の幅の絵のまま、行ごとに付け直している（文字と一緒に動かない）
                 self.assertGreater(self.check_slices(geom), 3, step)
@@ -714,11 +721,16 @@ class PaperTkTests(unittest.TestCase):
 
     def test_scroll_hide_mode(self):
         p, t = self.paper, self.t
-        p.SCROLL_HIDE = True
         try:
+            p.SCROLL_HIDE = True      # off in the app (2026-11-05): the switch only
             p.set('kusaki', '#d0d0cc', '#f0f0ed')
             self.settle()
             self.assertGreater(self.check_slices(), 3)
+            # a jump or a new layout keeps the art: only the wheel and a right drag take it off
+            t.yview_scroll(5, 'pixels')
+            self.assertIsNone(p._rest_job)
+            self.assertGreater(self.check_slices(), 3)
+            p.user_scroll()
             t.yview_scroll(5, 'pixels')
             self.assertIsNotNone(p._rest_job)
             self.assertTrue(all(t.tag_ranges(tag) == () for tag in self.paper_tags()))
@@ -726,7 +738,7 @@ class PaperTkTests(unittest.TestCase):
             t.insert('end', '足した。')
             self.settle(0.05)
             self.assertTrue(all(t.tag_ranges(tag) == () for tag in self.paper_tags()))
-            self.settle(0.3)
+            self.settle(0.4)
             self.assertIsNone(p._rest_job)
             self.assertGreater(self.check_slices(), 3)
             # 動かないスクロール（see で今見えている所）は外さない
@@ -1016,6 +1028,8 @@ class GutterBackdropTests(unittest.TestCase):
     def test_a_new_tk_gets_the_procedures_again(self):
         import tkinter as tk
         from analysis_work import observe_text
+        self.addCleanup(setattr, ap.Paper, 'SHOW_THROUGH', ap.Paper.SHOW_THROUGH)
+        ap.Paper.SHOW_THROUGH = False      # the Tcl procedures belong to the form pasted row by row
         for _ in range(2):
             try:
                 root = tk.Tk()
@@ -1037,6 +1051,7 @@ class GutterBackdropTests(unittest.TestCase):
 
 
 def child():
+    ap.Paper.SHOW_THROUGH = False      # the form pasted row by row (showing through: tests_paper_through_gui_20261105)
     import tkinter as tk
     from unittest.mock import Mock, patch
     import app

@@ -18,13 +18,14 @@ def child():
     root=tk.Tk();root.withdraw();errors=[]
     import traceback
     root.report_callback_exception=lambda *exc:errors.append(''.join(traceback.format_exception(*exc)))
-    calls=[];blocked=set();hold=[True]
+    calls=[];blocked=set();hold=[True];light=set()
     original_submit=analysis_worker.Worker.submit
     original_poll=analysis_worker.Worker.poll
     later='今日も良い天気です。'
     def submit(worker,task,state=None):
         identifier=original_submit(worker,task,state)
         calls.append((task['kind'],task.get('line'),identifier))
+        if task.get('defer_heavy'):light.add(identifier)   # a typed row's light answer, its heavy redo follows (2026-11-07)
         if task['kind']=='line' and task['line']==later and hold[0]:blocked.add(identifier)
         return identifier
     def poll(worker,identifier):
@@ -87,12 +88,15 @@ def child():
                     instance._switch_tab(len(instance.session.tabs)-1);until(done)
                 instance._switch_tab(0)
             until(lambda:bool(instance.line_results) and instance.line_results[0]['original']=='寒ぃ日だ。' and not instance.line_results[0].get('pending'))
-            assert sum(k=='line' and line=='寒ぃ日だ。' for k,line,_ in calls)==1,('First row reanalysed',calls)
+            # the typed row is asked light and then heavy right away (typed queue, 2026-11-07); switching tabs asks neither again
+            assert sum(k=='line' and line=='寒ぃ日だ。' and n not in light for k,line,n in calls)==1,('First row reanalysed',calls,light)
             hold[0]=False
             until(done)
             assert instance.line_results[0]['corrected']=='寒い日だ。'
             assert instance.line_results[2]['corrected']=='よいでしょうか。'
             # Fully cached tabs restore without another correction call.
+            # (a typed row's first answer is finished when the hands stop: that is not a cached tab being read again)
+            until(lambda:done() and not any(r.get('deferred_stages') for r in instance.line_results))
             before=sum(k=='line' for k,_,_ in calls)
             instance._switch_tab(1);until(done)
             instance._switch_tab(0);until(done)

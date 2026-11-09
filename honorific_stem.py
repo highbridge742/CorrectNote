@@ -7,6 +7,7 @@
 名詞の読みに動詞の連用形が無ければ（お茶します）何もしない。特定の語や文字列には合わせない。
 """
 import difflib
+import os
 
 COMMON = 470     # 直し先の動詞の wordfreq の段（基本形か連用形の身近なほう・大きいほど珍しい）
 CLEAR = 60       # 2番手の動詞よりこれだけ身近なら1つに決める
@@ -90,7 +91,7 @@ def repair_line(line, result, decided=()):
                if o[0] != 'equal']
     odd_now = [tuple(x[:2]) for x in list(result.get('odd_spans') or ()) + list(result.get('unsure_spans') or ())]
     new = done
-    odd_add, details = [], []
+    odd_add, details, fixed_org = [], [], []
     for s, e, rep in sorted(marks, reverse=True):
         if any(x < e and s < y for x, y in changed):
             continue
@@ -103,6 +104,7 @@ def repair_line(line, result, decided=()):
         if rep:
             new = new[:s] + rep + new[e:]
             details.append([done[s:e], rep, 'お＋動詞＋する'])
+            fixed_org.append(org)
         elif not any(x < org[1] and org[0] < y for x, y in odd_now):
             odd_add.append(org)
     if not odd_add and new == done:
@@ -113,6 +115,13 @@ def repair_line(line, result, decided=()):
         out['odd_reasons'] = list(result.get('odd_reasons') or ()) + [
             (a, b, f'「お{line[a:b]}する」の「{line[a:b]}」は、同じ読みの動詞（お〜する の形）かもしれません')
             for a, b in odd_add]
+    # お＋動詞＋する の形で決めて直した所に前の段が付けた紫（あまり使わない語 など）は、直しで答えが出たので外す。
+    # 残すと後ろの段が「紫の所を直したもの」として直しを戻す（2026-11-09 うにの未解決タブ）。CN_HONORIFIC_CLEARS_ODD=0 で前のまま
+    if fixed_org and os.environ.get('CN_HONORIFIC_CLEARS_ODD') != '0':
+        hit = lambda a, b: any(x < b and a < y for x, y in fixed_org)
+        out['odd_spans'] = [sp for sp in (out.get('odd_spans') or ()) if not hit(sp[0], sp[1])]
+        if out.get('odd_reasons'):
+            out['odd_reasons'] = [r for r in out['odd_reasons'] if not hit(r[0], r[1])]
     if new != done:
         ops = [o for o in difflib.SequenceMatcher(None, line, new, autojunk=False).get_opcodes() if o[0] != 'equal']
         out.update({'original': line, 'corrected': new, 'changed': True,

@@ -20,6 +20,7 @@ class SpellingFunctionalBoundaryTests(unittest.TestCase):
     def test_native_final_particle_chain_keeps_its_grammatical_spelling(self):
         self.check(('ありますかな？','ありますかね？','ありますかい？','ありますかな','ありますか？'))
     def test_native_inchoative_noun_does_not_detach_its_last_verb(self):
-        self.check(('のみかけ','たべかけ','書きかけ',('よみかけ','読みかけ'),'言いかけ'))
+        # 和語のかなは かなのまま（うに 2026-11-01「和語はかなのまま」・kana_keep）: よみかけ も のみかけ・たべかけ と同じ
+        self.check(('のみかけ','たべかけ','書きかけ','よみかけ','言いかけ'))
 
-if __name__=='__main__':unittest.main()
+if __name__=='__main__':unittest.main()

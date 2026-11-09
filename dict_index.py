@@ -371,6 +371,8 @@ class DictIndex:
     def _load_cache(self):
         if not self.cache_path or not os.path.exists(self.cache_path):
             return False
+        if self._load_compact_cache():
+            return True
         try:
             with open(self.cache_path, encoding='utf-8') as f:
                 data = json.load(f)
@@ -391,9 +393,144 @@ class DictIndex:
             self._band = {r: set(v) for r, v
                           in (data.get('band') or {}).items()}
             self._compact()
+            self._save_compact_cache()
             return True
         except Exception:
             return False
+
+    # 詰めた形の控え（2026-11-07・解析の子の起動）: 索引の JSON（6.6MB）を読んで詰め直すのに、子を作るたび
+    # （最初の1行・簡易入力の最初の1字）と本体の起動で 約0.55秒（雲）かかっていた。詰めた形そのものを pickle で
+    # 索引の隣に置き、索引のファイル（大きさ・更新時刻）と形の版が同じなら、それだけを読む（約0.05秒）。中身は
+    # 詰め直したものと同じ物（鍵・値・順序）なので答えは同じ。書くのは本体だけ（子はアプリの場所へ書かない）。
+    # CN_DICT_INDEX_PICKLE=0 で前の形（JSON を読んで詰める）。
+    _COMPACT_SUFFIX = '.compact.pickle'
+    _COMPACT_FORMAT = 1
+
+    def _compact_path(self):
+        return self.cache_path + self._COMPACT_SUFFIX if self.cache_path else None
+
+    def _compact_stamp(self):
+        import compact_tables
+        st = os.stat(self.cache_path)
+        shape = tuple((c.__name__, tuple(c.__slots__)) for c in
+                      (compact_tables._Keys, compact_tables.CompactLists, compact_tables.CompactWords))
+        return ('dict_index', self._COMPACT_FORMAT, CACHE_VERSION, st.st_size, st.st_mtime_ns,
+                shape, compact_tables._Keys._BLOCK)
+
+    def _compact_parts(self):
+        return (self._by_reading, self._by_surface, self._inflected, self._world, self._band)
+
+    @staticmethod
+    def _compact_kinds():
+        import compact_tables
+        lists, words = compact_tables.CompactLists, compact_tables.CompactWords
+        return (lists, lists, lists, words, lists)
+
+    def _load_compact_cache(self):
+        if os.environ.get('CN_DICT_INDEX_PICKLE') == '0':
+            return False
+        path = self._compact_path()
+        if not path:
+            return False
+        if self._load_mapped_cache():
+            return True
+        if not os.path.exists(path):
+            return False
+        try:
+            import pickle
+            with open(path, 'rb') as f:
+                stamp, parts = pickle.load(f)
+            if stamp != self._compact_stamp():
+                return False
+            parts = tuple(parts)
+            if (len(parts) != 5 or not all(isinstance(part, kind) for part, kind in zip(parts, self._compact_kinds()))
+                    or len(parts[0]) < _MIN_READINGS):
+                return False
+        except Exception:
+            return False
+        (self._by_reading, self._by_surface, self._inflected, self._world, self._band) = parts
+        try:
+            import multiprocessing
+            if multiprocessing.parent_process() is None:
+                self._save_mapped_cache(parts)   # pickle の控えから写像の控えへ（本体だけが書く）
+        except Exception:
+            pass
+        return True
+
+    def _save_compact_cache(self):
+        if os.environ.get('CN_DICT_INDEX_PICKLE') == '0':
+            return
+        try:
+            import multiprocessing
+            if multiprocessing.parent_process() is not None:
+                return          # 解析の子はアプリの場所へ書かない
+            parts = self._compact_parts()
+            if not all(isinstance(part, kind) for part, kind in zip(parts, self._compact_kinds())):
+                return          # 詰められなかった（辞書のまま）ときは控えない
+            if self._save_mapped_cache(parts):
+                return
+            import pickle
+            path = self._compact_path()
+            tmp = '%s.%d.tmp' % (path, os.getpid())
+            with open(tmp, 'wb') as f:
+                pickle.dump((self._compact_stamp(), parts), f, protocol=4)
+            os.replace(tmp, path)
+        except Exception:
+            pass
+
+    # 写像の控え（2026-11-07・mapped_tables）: 詰めた形の値の文字列と数の並びをファイルの頁で持ち、本体と解析の子で
+    # 共有する（子1つ・本体で各 約10MB の専用メモリ）。名前に stamp の印を入れる（写像中は Windows で置き換えられない）。
+    # 答えは同じ物。CN_TABLE_MMAP=0 で pickle の控え。
+    def _mapped_path(self):
+        try:
+            import hashlib
+            import mapped_tables
+            if not mapped_tables.enabled():
+                return None
+            mark = hashlib.sha1(repr((mapped_tables._MAGIC, self._compact_stamp())).encode('utf-8')).hexdigest()[:12]
+            return '%s.%s.mapped' % (self._compact_path(), mark)
+        except Exception:
+            return None
+
+    def _load_mapped_cache(self):
+        path = self._mapped_path()
+        if not path or not os.path.exists(path):
+            return False
+        try:
+            import mapped_tables
+            ok, parts = mapped_tables.read(path, self._compact_stamp())
+            if not ok:
+                return False
+            parts = tuple(parts)
+            if (len(parts) != 5 or not all(isinstance(part, kind) for part, kind in zip(parts, self._compact_kinds()))
+                    or len(parts[0]) < _MIN_READINGS):
+                return False
+        except Exception:
+            return False
+        (self._by_reading, self._by_surface, self._inflected, self._world, self._band) = parts
+        return True
+
+    def _save_mapped_cache(self, parts):
+        path = self._mapped_path()
+        if not path:
+            return False
+        try:
+            import mapped_tables
+            if not mapped_tables.write(path, self._compact_stamp(), tuple(parts)):
+                return False
+        except Exception:
+            return False
+        folder, base = os.path.split(self._compact_path())
+        for name in os.listdir(folder or '.'):
+            full = os.path.join(folder, name)
+            if full != path and (name == base or (name.startswith(base + '.') and name.endswith('.mapped'))):
+                try:
+                    os.remove(full)     # 前の控え（写像中は消せない・次の時に消える）
+                except Exception:
+                    pass
+        # 本体も写像の形に持ち替える（同じ物・頁を子と共有）
+        self._load_mapped_cache()
+        return True
 
     def _compact(self):
         """メモリ使用量「低」（2026-10-15）: 読み込んだ索引を小さな形で持つ
@@ -402,7 +539,8 @@ class DictIndex:
         どちらにも効く。形を変えられないとき（印の字が混じる等）は辞書のまま。"""
         try:
             import compact_tables
-            if not compact_tables.low() or not self._by_reading:
+            # どの段階でも小さな形で持つ（2026-11-05: 本体と子で各 約40MB 減る。答えは同じ、速さは測って差なし）
+            if not self._by_reading:
                 return
             by_reading = compact_tables.CompactLists.of(self._by_reading)
             by_surface = compact_tables.CompactLists.of(self._by_surface)

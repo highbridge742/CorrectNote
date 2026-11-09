@@ -22,7 +22,7 @@ class OrphanFiniteBoundaryTests(unittest.TestCase):
         a=self.a
         for phase in ('seed','fresh'):
             if phase=='fresh':import_from_janome(a.store)
-            rows=[('のひっています','残っています'),('のこっています','残っています')]
+            rows=[('のひっています','残っています'),('のこっています','のこっています')]     # 和語はかなのまま（2026-11-07 補正担当）
             rows += [(t,t) for t in ('ののしっています','のぼっています','がんばっています',
                      'ともします','これをかいています。','これをみてください。',
                      '「のひっています」と書きます。','残っています','ひっています')]

@@ -744,6 +744,15 @@ def _small_vowel_head(line, toks, input_method, guard):
                                    and x.base_form not in ('する', 'いたす', 'くださる', 'おる', 'いる', 'ある', 'なる')
                                    for x in new)):
                         continue
+                    if __import__('os').environ.get('CN_SMALL_VOWEL_TE') != '0':
+                        # て・で の後ろに付く補助の動詞（いる・ある・おく・しまう…）が て・で の後ろでない形
+                        # （えいふぁ → へ｜い｜あ）は語の並びになっていない（2026-11-06 挙動関連担当のアプリの道の試し）
+                        allx = list(morphology.tokenize(other))
+                        if any(x.pos == '動詞' and x.pos_sub.split(':')[0] == '非自立'
+                               and x.base_form in ('いる', 'ある', 'おく', 'しまう', 'みる', 'いく', 'くる')
+                               and not (k2 > 0 and allx[k2 - 1].surface in ('て', 'で'))
+                               for k2, x in enumerate(allx) if x.start < a + len(kana) and a < x.end):
+                            continue
                     c = morphology.path_cost(other)
                     if c is not None and here - c >= 3000:
                         best[other] = min(c, best.get(other, c))

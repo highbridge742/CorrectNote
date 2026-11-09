@@ -256,6 +256,9 @@ class UnicodeUndoCommand:
         finally:self.depth-=bool(replay)
 
     def _invoke(self,args):
+        peer=getattr(self.widget,'_correctnote_write_peer',None)
+        if peer is not None and args and args[0] in ('insert','delete','replace'):
+            return self.widget.tk.call(peer,*args)      # a read-only pane's own text (ui_projection.start_writing)
         feedback=getattr(self.widget,'_correctnote_undo_feedback',None)
         if feedback is None:return self.widget.tk.call(self.original,*args)
         return feedback.invoke(args,lambda:self.widget.tk.call(self.original,*args))

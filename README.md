@@ -1,5 +1,5 @@
 <h1>CorrectNote 説明書</h1>
-<p class="muted">バージョン 1.18.1</p>
+<p class="muted">バージョン 1.18.2</p>
 <p class="store-badge"><a href="https://apps.microsoft.com/detail/9NJZGX71LHTZ?referrer=appbadge&amp;mode=direct"><img src="https://get.microsoft.com/images/ja%20dark.svg" width="200" alt="Microsoft Store から入手"></a></p>
 
 
@@ -709,8 +709,17 @@ Windows の再起動やシャットダウンのときに、まだ控えていな
 タブは薄い四角、改行は↵で表示します。
 </p>
 <p>
+検索ウィンドウのボタンは3行に並んでいます。1行目は「次を検索」「前を検索」（置換のときは「置換」「すべて置換」も）、
+2行目は「全タブ検索 (Alt+I)」、3行目は「元の行に戻る」です。
+</p>
+<p>
+大文字と小文字の区別などの4つのチェックは、「▾ 検索の条件」の見出しの下にあります。見出しを押すと畳めます。
+最初は開いていて、畳んだ形はアプリを閉じるまで覚えています。
+</p>
+<p>
 「全タブ検索」で、全てのタブ（補正前）から検索して一覧に出します。
-ダブルクリックまたはEnterで該当箇所へ移動します。
+ダブルクリックまたはEnterで該当箇所へ移動します。結果のウィンドウの高さは、見つかった件数に合わせて変わります。
+文字列を選んで <span class="kbd">Alt+I</span> を押すと、検索ウィンドウを開いていなくても、選んだ文字列で全タブ検索をします（日本語入力がオンのままでも使えます）。
 </p>
 <a name="guide-search-return"></a>
 <article class="picture-guide">
@@ -718,15 +727,15 @@ Windows の再起動やシャットダウンのときに、まだ控えていな
 <p>検索で別の場所へ移動しても、検索を始める前のカーソル位置へ戻れます。</p>
 <ol class="steps picture-steps">
 <li><h4>続きを書きたい場所にカーソルを置きます</h4><p>ここでは1行目の末尾から検索を始めます。Ctrl+Fを押して検索ウィンドウを開きます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-042.png"><img src="assets/readme_manual/manual-042.png" width="1064" height="492" alt="戻り先となる、検索前のカーソル位置です。"></a><figcaption>戻り先となる、検索前のカーソル位置です。</figcaption></figure></li>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-084.png"><img src="assets/readme_manual/manual-084.png" width="1050" height="752" alt="戻り先となる、検索前のカーソル位置です。"></a><figcaption>戻り先となる、検索前のカーソル位置です。</figcaption></figure></li>
 <li><h4>探す文字を入力します</h4><p>「検索する文字列」に文字を入れ、「次を検索」を押します。例では「会議」を探します。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-043.png"><img src="assets/readme_manual/manual-043.png" width="409" height="327" alt="検索する文字列を入力した画面です。"></a><figcaption>検索する文字列を入力した画面です。</figcaption></figure></li>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-085.png"><img src="assets/readme_manual/manual-085.png" width="272" height="416" alt="検索する文字列を入力した画面です。"></a><figcaption>検索する文字列を入力した画面です。</figcaption></figure></li>
 <li><h4>見つかった場所を確認します</h4><p>本文が検索結果のある行へ移動します。検索を続けても、同じ検索文字列であれば最初の戻り先を覚えています。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-044.png"><img src="assets/readme_manual/manual-044.png" width="1064" height="492" alt="本文の「会議」が見つかり、その位置へ移りました。"></a><figcaption>本文の「会議」が見つかり、その位置へ移りました。</figcaption></figure>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-045.png"><img src="assets/readme_manual/manual-045.png" width="409" height="327" alt="検索ウィンドウの右側に「元の行に戻る」があります。"></a><figcaption>検索ウィンドウの右側に「元の行に戻る」があります。</figcaption></figure></li>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-086.png"><img src="assets/readme_manual/manual-086.png" width="1050" height="752" alt="本文の「会議」が見つかり、その位置へ移りました。"></a><figcaption>本文の「会議」が見つかり、その位置へ移りました。</figcaption></figure>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-087.png"><img src="assets/readme_manual/manual-087.png" width="272" height="416" alt="「元の行に戻る」は、検索ウィンドウのいちばん下の行にあります。"></a><figcaption>「元の行に戻る」は、検索ウィンドウのいちばん下の行にあります。</figcaption></figure></li>
 <li><h4>「元の行に戻る」を押します</h4><p>検索前のタブ・カーソル位置に戻ります。検索ウィンドウを閉じれば、そのまま続きを書けます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-046.png"><img src="assets/readme_manual/manual-046.png" width="1064" height="492" alt="最初の1行目の末尾へ戻りました。"></a><figcaption>最初の1行目の末尾へ戻りました。</figcaption></figure>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-047.png"><img src="assets/readme_manual/manual-047.png" width="409" height="327" alt="検索ウィンドウにも、元の行に戻ったことが表示されます。"></a><figcaption>検索ウィンドウにも、元の行に戻ったことが表示されます。</figcaption></figure></li>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-084.png"><img src="assets/readme_manual/manual-084.png" width="1050" height="752" alt="最初の1行目の末尾へ戻りました。"></a><figcaption>最初の1行目の末尾へ戻りました。</figcaption></figure>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-088.png"><img src="assets/readme_manual/manual-088.png" width="272" height="416" alt="検索ウィンドウにも、元の行に戻ったことが表示されます。"></a><figcaption>検索ウィンドウにも、元の行に戻ったことが表示されます。</figcaption></figure></li>
 </ol>
 <p class="guide-note">検索する文字列を変えると、戻り先も新しい検索の開始位置に切り替わります。戻り先のタブを閉じた場合は戻れません。</p>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>

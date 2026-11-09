@@ -32,6 +32,7 @@ MAX_READ = 12
 # サ変の名詞＋する に戻した形で、する の後ろに残してよいかな（する の活用に付く助動詞・て だけ。し＋いて のような動詞は残さない）
 SAHEN_TAILS = ('', 'ます', 'ました', 'ません', 'て', 'た', 'ない', 'たい')
 SECOND_FROM = 8
+_CONTRACTED = frozenset(('てる', 'でる', 'とく', 'どく', 'ちゃう', 'じゃう', 'てく', 'でく'))
 PARTICLES = ('を', 'に', 'で', 'が', 'は', 'と', 'へ', 'から', 'まで')
 
 
@@ -110,9 +111,32 @@ def _runs(toks, fresh=()):
                         and toks[j + 1].surface[-1:] in 'うくぐすつぬぶむる')):
                 # 補助の動詞が後ろの名詞に付いて連体詞に切れた形（去り＋かかる＋予定）も同じ
                 j += 1
+            if j == i + 1 and toks[j].pos == '動詞' and toks[j].base_form in _CONTRACTED \
+                    and os.environ.get('CN_PREDICATE_CONTRACTED') != '0':
+                # ている・ておく・てしまう の縮まった形（動い＋てる・書い＋とく・食べ＋ちゃう）は話し言葉の正しい形。
+                # 打ち違いの述語と見ない（2026-11-05 うに「解決していたものが戻った」）
+                continue
+            if (j == i and j + 1 < n and toks[j + 1].start == toks[j].end and toks[j + 1].pos == '動詞'
+                    and _all_hira(toks[j + 1].surface) and (t.infl_form or '').startswith('連用')
+                    and os.environ.get('CN_PS_TAIL_VERB') != '0'):
+                # 漢字の動詞の連用形＋かなの動詞が自立に切れた形（取れ＋かかる＋。）も、動詞＋補助の動詞と同じに見る
+                j += 1
             if j > i:
                 form = ''.join(x.surface for x in toks[i:j]) + (toks[j].base_form or toks[j].surface)
                 out.append((i, j, form, 'verb'))
+        if (t.pos == '名詞' and len(t.surface) == 1 and _kanji(t.surface) and 0 < i and i + 2 < n
+                and toks[i - 1].pos == '助詞' and toks[i - 1].end == t.start
+                and toks[i + 1].pos == '助詞' and len(toks[i + 1].surface) == 1 and toks[i + 1].start == t.end
+                and toks[i + 2].pos == '動詞' and _sub(toks[i + 2]) == '自立' and toks[i + 2].start == toks[i + 1].end
+                and not (i + 3 < n and toks[i + 3].pos == '動詞' and toks[i + 3].start == toks[i + 2].end)
+                # 名詞＋格助詞＋動詞（家｜に｜いました・手｜を｜洗う）はふつうの文の形。動詞に直に続けられない の の時だけ見る
+                # （家にいました → 構いました にしていた・2026-11-09 補正担当）。CN_PS_KANJI_PIECE_NO=0 で前のまま
+                and (toks[i + 1].surface == 'の' or os.environ.get('CN_PS_KANJI_PIECE_NO') == '0')
+                and os.environ.get('CN_PS_KANJI_PIECE') != '0'):
+            # 助詞の後ろの 1字の漢字の名詞＋1字の助詞＋動詞（に｜都｜の｜掛かる）: 動詞の読みの1打違いを IME が
+            # 1字の名詞と助詞に切った跡かもしれない。直すのは下の決まり（例文で前の助詞と組・候補1つ）のときだけ
+            out.append((i, i + 2, ''.join(x.surface for x in toks[i:i + 2]) + (toks[i + 2].base_form or toks[i + 2].surface),
+                        'verb'))
         if t.pos == '名詞' and all(_kanji(c) for c in t.surface):
             # 漢字の名詞にかなの助動詞が付いて、すぐかなの動詞が続く形（名詞＋れ＋かかる: 名詞に れ は付かない）
             j = i + 1
@@ -137,7 +161,8 @@ def _runs(toks, fresh=()):
             # サ変の名詞のすぐ後ろに する 以外の自立の動詞（印刷＋居て）か、する の連用形＋漢字の自立の動詞（確認＋し＋舞う）:
             # サ変の名詞に動詞は直に付かない・し＋動詞 は辞書に無ければ IME が する の後ろの打ち違いを別の動詞にした跡
             u = toks[i + 1]
-            if u.pos == '動詞' and _sub(u) == '自立' and u.base_form != 'する' and any(_kanji(c) for c in u.surface):
+            if (u.pos == '動詞' and _sub(u) == '自立' and u.base_form != 'する' and any(_kanji(c) for c in u.surface)
+                    and not _ime_first_verb(u)):
                 out.append((i, i + 1, t.surface + (u.base_form or u.surface), 'sahen'))
             elif (u.pos == '動詞' and u.base_form == 'する' and u.surface == 'し' and i + 2 < n
                   and toks[i + 2].start == u.end and toks[i + 2].pos == '動詞' and _sub(toks[i + 2]) == '自立'
@@ -153,6 +178,44 @@ def _runs(toks, fresh=()):
                     and toks[j + 1].start == toks[j].end:
                 out.append((i, j + 1, ''.join(x.surface for x in toks[i:j + 1]) + 'する', 'suru'))
     return out
+
+
+def _ime_first_verb(u):
+    """動詞の基本形が、その読みで IME が先頭に返す身近な語か（編集｜押す: おす の先頭は 押す）。そうなら、サ変の名詞の
+    すぐ後ろでも助詞を省いた正しい形（ボタンの名前＋押す）として打ち違いと見ない。IME の先頭でない字（印刷｜居て:
+    いる の先頭は 入る）は今のまま見る（2026-11-08 未解決タブの誤判定・ime_order の考え）。CN_PS_IME_FIRST=0 で前のまま。"""
+    if os.environ.get('CN_PS_IME_FIRST') == '0':
+        return False
+    base = u.base_form or u.surface
+    rd = _hira(getattr(u, 'reading', '') or '')
+    if not base or not rd:
+        return False
+    try:
+        import ime_reconvert as R
+        # 基本形の読み: この字句の読みから送り仮名を外した語幹＋基本形の送り仮名（居｜い → いる。居る を読み直すと おる）
+        k = len(u.surface)
+        while k > 0 and not _kanji(u.surface[k - 1]):
+            k -= 1
+        kb = len(base)
+        while kb > 0 and not _kanji(base[kb - 1]):
+            kb -= 1
+        tail_s, tail_b = u.surface[k:], base[kb:]
+        if tail_s and not rd.endswith(_hira(tail_s)):
+            return False
+        brd = rd[:len(rd) - len(tail_s)] + _hira(tail_b)
+        faces = [f for f in R._dict_faces(brd, 40) if any(_kanji(c) for c in f)]
+        if not faces:
+            return False
+        top = min(faces, key=lambda f: (R._rank(f), faces.index(f)))
+        if not (top == base and R._rank(base) <= 500):
+            return False
+        # 名詞を を で取る動詞（押す・使う）だけ: 助詞を省いた形（編集｜押す）になれる。取らない動詞（散歩｜死ぬ）は
+        # 打ち違いの見込みのまま
+        import semantic_fit as F
+        pr = F.profile('を', base)
+        return bool(pr) and len(pr) >= 10
+    except Exception:
+        return False
 
 
 def _known(form, wf, v_all, nouns):

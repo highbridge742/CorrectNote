@@ -177,17 +177,21 @@ SITES = {}        # corrector の行番号 → 置き場の名前
 
 
 def _site_names(module):
-    import inspect
+    # ソースは1行ずつ読み、置き場の行だけ残す（inspect.getsourcelines は corrector の全文を linecache に
+    # 持ち続け、本体で約3MB 使っていた・2026-11-05 挙動関連担当の測り）
+    path = getattr(module, '__file__', None) or ''
+    if path.endswith(('.pyc', '.pyo')):
+        path = path[:-1]
+    out, seen = {}, {}
     try:
-        src, first = inspect.getsourcelines(module)
+        with open(path, encoding='utf-8') as f:
+            for k, text in enumerate(f, 1):
+                t = text.strip()
+                if t.startswith('replacements.append('):
+                    seen[t] = seen.get(t, 0) + 1
+                    out[k] = '本体 ' + t + (f' #{seen[t]}' if seen[t] > 1 else '')
     except Exception:
         return {}
-    out, seen = {}, {}
-    for k, text in enumerate(src):
-        t = text.strip()
-        if t.startswith('replacements.append('):
-            seen[t] = seen.get(t, 0) + 1
-            out[max(first, 1) + k] = '本体 ' + t + (f' #{seen[t]}' if seen[t] > 1 else '')
     return out
 
 

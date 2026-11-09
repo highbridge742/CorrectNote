@@ -4,7 +4,7 @@
 No history is written. Shared text-only disk caches remain a separate concern.
 """
 from analysis_worker import state_key,same_model_state,result_compatible,model_moved,choices_moved
-from analysis_cache import reusable_result
+from analysis_cache import keep_answer,kept_answer,reusable_result
 import analysis_work_app as work
 
 
@@ -18,6 +18,28 @@ def _calculations(app, owner):
     doc=getattr(app,'_input_documents',{}).get(owner)
     if doc is None and owner==work.owner(app):doc=getattr(app,'_input_document',None)
     return tuple(doc.calculations) if doc is not None else ()
+
+
+def learned_since(app,previous,current=None):
+    """previous, with the revision that only automatic learning moved since then set to the current one.
+
+    Learning a word bumps _analysis_state_revision (state_key element 3) so that other tabs' saved values are no
+    longer taken as they stand. Each row can still say whether it used the learned word (used_keys), as the open tab's
+    rows already do (_learning_baseline・2026-11-07). Without this every other tab was read again from the first row
+    after each automatic learning, with the same answers (2026-11-07: 55 of 80 rows in 150 idle seconds).
+    Any other bump on the way (input method, dictionary, an explicit choice) leaves previous as it is."""
+    if previous is None:return previous
+    try:
+        current=state_key(app) if current is None else current
+        if len(previous)!=len(current) or previous[3]==current[3]:return previous
+        steps=getattr(app,'_learning_revisions',None) or {}
+        revision=current[3]
+        while revision!=previous[3]:
+            if revision not in steps:return previous
+            revision=steps[revision]
+        return tuple(previous[:3])+(current[3],)+tuple(previous[4:])
+    except Exception:
+        return previous
 
 
 def prefetch_order(app):
@@ -57,7 +79,7 @@ def completed(app,text,owner=None):
     if (saved and saved['text']==text.rstrip('\n')
             and saved['readings']==_readings(app,owner)
             and saved.get('calculations',())==_calculations(app,owner)):
-        current=state_key(app);previous=saved['dependencies']
+        current=state_key(app);previous=learned_since(app,saved['dependencies'],current)
         if previous==current:return saved
         if same_model_state(previous,current):
             if model_moved(previous,current):
@@ -134,31 +156,75 @@ def display_ready(saved):
                                    for r in saved['results'])
 
 
+def restored_without_proof(result):
+    """A finished row read back from the saved file: it has an answer but no record of what it used (used_keys, up to
+    480 KB a row, is not saved). Whether a change touches it is unknown, but its answer is still the best there is."""
+    return (isinstance(result,dict) and bool(result.get('original')) and bool(result.get('_from_file'))
+            and 'used_keys' not in result and '_context_evidence' not in result
+            and (reusable_result(result) or kept_answer(result)))
+
+
 def previous_values(app,owner):
     """One owner's last analysis is a baseline, not a completed current value."""
     value=getattr(app,'_fg_parked',{}).get(owner)
-    if value is not None:return value
+    if value is not None:return _learned_view(app,value)
     saved=_registry(app).get(owner)
-    if saved is None:return None
-    return dict(saved,lines=saved['text'].split('\n'),ctx=saved['prepared']['context'])
+    if saved is None:
+        # Part of the tab read in the background. When the vocabulary has moved (each finished tab's learning does)
+        # background_compatible turns it down as it stands, and its rows were all read again from the first row
+        # (2026-11-05 うにさん「次のタブを開くと、解析が1行目から始まることが時々ある」): each row is checked by itself below
+        parked=getattr(app,'_bg_parked',{}).get(owner)
+        if not parked or parked.get('ctx') is None:return None
+        return dict(parked,suspect=parked.get('suspect_units',{}),dependencies=learned_since(app,parked.get('dependencies')),
+                    prepared=dict(context=parked['ctx'],attested=parked.get('attested',{}),words=parked.get('words',{})))
+    return dict(saved,lines=saved['text'].split('\n'),ctx=saved['prepared']['context'],
+                dependencies=learned_since(app,saved.get('dependencies')))
+
+
+def _learned_view(app,value):
+    previous=value.get('dependencies')
+    current=learned_since(app,previous)
+    return value if current==previous else dict(value,dependencies=current)
 
 
 def restore_previous(app,text,lines):
     """Restore the old inputs too, so the ordinary differential plan validates them."""
-    owner=work.owner(app);base=previous_values(app,owner)
+    owner=work.owner(app);base=previous_values(app,owner);open_rows=base
     parked=getattr(app,'_bg_parked',{}).get(owner)
     if parked and not background_compatible(app,parked):parked=None
     if parked and parked.get('ctx') is not None:
         base=dict(parked,suspect=parked.get('suspect_units',{}),
             prepared=dict(context=parked['ctx'],attested=parked.get('attested',{}),
                           words=parked.get('words',{})))
+        # The part read in the background, seen through learned_since as every other baseline here is
+        # (previous_values): when only automatic learning had moved since the tab was left, its old key was taken
+        # as it stood, failed same_model_state below, and the whole tab was read again from the first row
+        # (2026-11-08 うにさん「タブ移動したら全体的に未解析印が付きました」). CN_LEARNED_PARKED=0: the old form
+        import os
+        if os.environ.get('CN_LEARNED_PARKED')!='0':
+            base['dependencies']=learned_since(app,parked.get('dependencies'))
     dependencies=state_key(app)
     if (not base or not same_model_state(base.get('dependencies'),dependencies)
             or not base.get('lines') or len(base['results'])!=len(base['lines'])):return
     old_lines=list(base['lines'])
-    results=[r if reusable_result(r) and r.get('original')==line
-             and result_compatible(app,r,base['dependencies'],dependencies)
-             else app._blank_result(line) for r,line in zip(base['results'],old_lines)]
+    # The parked copy holds finished rows only: a row with an answer still to be finished is in the rows as they were left
+    waiting={}
+    if open_rows and open_rows is not base and open_rows.get('dependencies')==base['dependencies']:
+        waiting={i:row for i,row in enumerate(open_rows['results']) if row and row.get('deferred_stages')}
+    results=[]
+    for i,(r,line) in enumerate(zip(base['results'],old_lines)):
+        r=r or waiting.get(i)
+        if (r or {}).get('original')!=line:results.append(app._blank_result(line))
+        elif restored_without_proof(r) and (kept_answer(r) or not result_compatible(app,r,base['dependencies'],dependencies)):
+            # Went away from this tab with rows read back from the saved file, and a word moved: they keep their answers
+            results.append(keep_answer(r));getattr(app,'_arm_heavy_redo',lambda:None)()
+        elif reusable_result(r) and result_compatible(app,r,base['dependencies'],dependencies):results.append(r)
+        elif (r.get('deferred_stages') and not r.get('pending') and not r.get('analysis_error')
+                and result_compatible(app,r,base['dependencies'],dependencies)):
+            # A typed row's first answer, a heavy step left out: it is finished when the hands stop, as it would have
+            # been had the tab stayed open. It was thrown away here and the row read from the start, showing no answer
+            results.append(r);getattr(app,'_arm_heavy_redo',lambda:None)()
+        else:results.append(app._blank_result(line))
     same=('\n'.join(old_lines).rstrip('\n')==text.rstrip('\n')
           and tuple(base.get('readings',()))==_readings(app,owner)
           and tuple(base.get('calculations',()))==_calculations(app,owner))
@@ -188,7 +254,7 @@ def restore_previous(app,text,lines):
     app._analyze_calculations=tuple(base.get('calculations',()))
     app._analyze_text='\n'.join(old_lines)
     app._analyze_work=work.token(app)
-    app._analyze_todo=[i for i,r in enumerate(results) if not reusable_result(r)]
+    app._analyze_todo=[i for i,r in enumerate(results) if not reusable_result(r) and not r.get('deferred_stages')]
     app._analyze_pos=0;app._analyze_units_only=False
 
 
@@ -209,6 +275,27 @@ def rebase_background(app,state):
     state['results']=[r if reusable_result(r) else None for r in results]
 
 
+def saved_partial(app,text,owner):
+    """The rows the saved file holds for a tab not yet opened, for the background: finished rows as they are, and the
+    rows it cannot vouch for (a word has moved since the file was read) left for when the tab is opened, when they
+    are shown as they are and read again. Without this every restart read those rows again from the first row
+    (2026-11-05, 35 of the 35 rows sent in the first minute were in the file)."""
+    key=text.rstrip('\n')
+    partial=(getattr(app,'_analysis_partial',None) or {}).get(key)
+    current=state_key(app)
+    previous=learned_since(app,getattr(app,'_analysis_partial_state',None),current)
+    lines=text.split('\n')
+    if (not partial or previous is None or not same_model_state(previous,current) or len(partial)>len(lines)
+            or _readings(app,owner) or _calculations(app,owner) or key in getattr(app,'_analysis_stale',())):
+        return {}
+    results=[None]*len(lines);skip=set()
+    for i,r in enumerate(partial):
+        if not r or r.get('original')!=lines[i]:continue
+        if previous==current and reusable_result(r):results[i]=r
+        elif reusable_result(r) or kept_answer(r):skip.add(i)
+    return dict(results=results,skip=skip) if any(results) or skip else {}
+
+
 def background_values(app,text,owner,saved):
     """Reuse completed corrections without borrowing another owner's evidence."""
     if saved is not None:
@@ -218,7 +305,8 @@ def background_values(app,text,owner,saved):
     results=text_results(app,text,owner)
     if results is None:
         base=previous_values(app,owner)
-        if not base or not same_model_state(base.get('dependencies'),state_key(app)):return {}
+        if not base:return saved_partial(app,text,owner)
+        if not same_model_state(base.get('dependencies'),state_key(app)):return {}
         if choices_moved(base.get('dependencies'),state_key(app)):
             return dict(previous=base,units={},suspect_units={})      # built again with the new choices
         return dict(previous=base,units=dict(base.get('units',{})),suspect_units=dict(base.get('suspect',{})))
@@ -255,7 +343,7 @@ def background_compatible(app,state):
     In-flight requests retain their old scope and cannot become completed values.
     """
     owner=state.get('owner')
-    current=state_key(app);previous=state.get('dependencies')
+    current=state_key(app);previous=learned_since(app,state.get('dependencies'),current)
     if (owner is None or not same_model_state(previous,current)
             or model_moved(previous,current)      # its context is from the old store: start from the baseline
             or tuple(state.get('readings',()))!=_readings(app,owner)
@@ -290,6 +378,30 @@ def text_results(app,text,owner=None):
             or any(not reusable_result(r) or r.get('original')!=line for r,line in zip(results,lines))):
         return None
     return results
+
+
+def restored_results(app,text,owner=None):
+    """The rows of a tab read back from the saved file, after what they may have used has moved: those that cannot
+    say keep their answers, to be read again when the hands stop. None when a row is known to be out of date."""
+    owner=work.owner(app) if owner is None else owner
+    key=text.rstrip(chr(10))
+    if (not key or _readings(app,owner) or _calculations(app,owner)
+            or key in getattr(app,'_analysis_stale',())):
+        return None
+    results=getattr(app,'_analysis_cache',{}).get(key)
+    previous=getattr(app,'_analysis_cache_dependencies',{}).get(key)
+    current=state_key(app)
+    lines=key.split(chr(10))
+    if results is None or previous is None or previous==current or len(results)!=len(lines):return None
+    from analysis_worker import same_model_state
+    if not same_model_state(previous,current):return None
+    rows=[]
+    for result,line in zip(results,lines):
+        if not reusable_result(result) or result.get('original')!=line:return None
+        if result_compatible(app,result,previous,current):rows.append(result)
+        elif restored_without_proof(result):rows.append(keep_answer(result))
+        else:return None
+    return rows
 
 
 def park_background(app,state):

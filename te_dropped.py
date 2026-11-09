@@ -13,6 +13,7 @@
 ま を足す（動詞の連用形に する は付かない。連用形が名詞になった語は名詞として切られる: 買い物した）。
 品詞と活用の形だけで見る。特定の語や文字列には合わせない。
 """
+import os
 import difflib
 
 _TE_AUX = frozenset(('しまう', 'おく', 'みる', 'いる', 'おる', 'ある', 'いく', 'くる', 'もらう', 'くれる',
@@ -64,6 +65,14 @@ def propose(text):
                 and (a.base_form or '') not in ('する', '為る') and b.surface == 'し' and (b.base_form or '') == 'する'
                 and b.start == c.start - 1 and c.surface in ('た', 'て')):
             # 語幹が漢字1字だけの動詞（見・寝・出 など）は別の動詞の打ち違い（見せて 等）とも読めるので決めずに紫
+            # 3字以上の連用形（逆立ち・後ずさり）は名詞として する が付く正しい形が多いので見ない（例文 Tatoeba の
+            # 正しい文で 逆立ちして→逆立ちまして にしていた・2026-11-07）。CN_TE_LONG_STEM=0 で前のまま
+            if len(a.surface) >= 3 and os.environ.get('CN_TE_LONG_STEM') != '0':
+                continue
+            # お・ご＋連用形＋する（お会いした・お待ちしています）は謙譲の正しい形（2026-11-07 例文 Tatoeba）。CN_TE_O_SURU=0
+            if (i and toks[i - 1].end == a.start and toks[i - 1].surface in ('お', 'ご', '御')
+                    and os.environ.get('CN_TE_O_SURU') != '0'):
+                continue
             out.append((a.start, a.end, c.end, None if _one_kanji_stem(a) else 'ま'))
     for i in range(len(toks) - 1):
         a, b = toks[i], toks[i + 1]
@@ -79,6 +88,11 @@ def propose(text):
             continue
         # 読みの表に1語として在る並び（みいる＝見入る）も複合の動詞として見ない
         if _joined_word(a, b):
+            continue
+        # お・ご＋連用形＋ください（お取りください・お締めください）は敬語の正しい形（例文 Tatoeba の正しい文で紫が
+        # 付いていた・2026-11-07）。CN_TE_O_KUDASAI=0 で前のまま
+        if ((b.base_form or '') in ('くださる', '下さる') and i and toks[i - 1].end == a.start
+                and toks[i - 1].surface in ('お', 'ご', '御') and os.environ.get('CN_TE_O_KUDASAI') != '0'):
             continue
         ins = _te_insertable(a)
         if not ins and (b.base_form or '') in _COMPOUNDABLE:

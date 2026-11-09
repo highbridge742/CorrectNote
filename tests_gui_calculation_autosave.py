@@ -38,6 +38,10 @@ def child(phase,layout,automatic):
      pause(2.1)
      deliver_key(w,'<KeyPress>','Return',13,char='\r');until(done);pause(2.1)
      assert a.line_results[0]['corrected']==expected,a.line_results
+     # The autosave is one save AUTOSAVE_MS (5 min) after the first change: it must be due, and it is run here as
+     # its timer would run it (the test does not wait 5 minutes)
+     job=a._session_after_id;assert job,'no autosave was scheduled'
+     root.after_cancel(job);a._save_session()
      saved=json.loads(Path('session.json').read_text(encoding='utf-8'))
      assert saved['tabs'][0]['text']==full,saved
      assert saved['tabs'][0].get('calculations')==[dict(start=0,end=len(full),surface=full,

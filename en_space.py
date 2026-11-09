@@ -1231,10 +1231,62 @@ def find_missing_spaces(line, store=None, _again=True):
         out.extend(en_typo.line_fixes(line, store, [(a, b) for a, b, _f in out]))
     except Exception:
         pass
+    if _again:
+        taken = [(a, b) for a, b, _f in out]
+        out.extend(f for f in _identifier_fixes(line, store)
+                   if not any(a < f[1] and f[0] < b for a, b in taken))
     if out and _again:
         # 2026-10-23: 隣り合う2語の打ち違い（`knosw hen`）は、片方を直した
         # 行で読み直すと、もう片方の前後が見える。直していない所の直しだけ足す
         out.extend(_second_look(line, store, out))
+    return out
+
+
+# 「_」でつないだ名前（変数名 user_name・_private・name_）。前後に / \ : @ が付くもの（パス・URL）は除く
+_IDENT_RE = re.compile(r'(?<![A-Za-z0-9_/\\:@-])[A-Za-z0-9_]*_[A-Za-z0-9_]*(?![A-Za-z0-9_/\\:@])')
+IDENT_PART_MIN = 5   # 名前の中で直す語の字数の下限（4字以下は略語 addr・recv・idx が多い）
+
+
+def _identifier_fixes(line, store=None):
+    """「_」でつないだ名前の中の英語の語の打ち違い（recieve_data・_adress・lenght_）を直す [(開始, 終了, 直した語)]。
+    名前の外の語と同じ en_typo の1つの打ち違い（使われやすさで1つに決まる時だけ）を、「_」で区切った語ごとに当てる。
+    知っている語・略語（4字以下）・プログラムの語（en_typo._LEAVE）・途中に大文字の語（camelCase）・数字の付く語は
+    そのまま（2026-11-05 うに「前か後ろにアンダーバーをつけると補正されない。変数の打ち間違いケースで考えられる」）。
+    切り替え CN_EN_IDENT_FIX=0。"""
+    import os
+    if os.environ.get('CN_EN_IDENT_FIX') == '0' or '_' not in line:
+        return []
+    out = []
+    for m in _IDENT_RE.finditer(line):
+        run = m.group(0)
+        if not any(ch.isalpha() for ch in run):
+            continue
+        k = m.start()
+        parts = run.split('_')
+        for part in parts:
+            s, e = k, k + len(part)
+            k = e + 1
+            if len(part) < IDENT_PART_MIN or not part.isalpha() or not part.isascii():
+                continue
+            # 小文字・頭だけ大文字・全部大文字（定数 MAX_RETRUN）の語。途中だけ大文字（camelCase）は除く
+            if not (part.islower() or part.isupper() or (part[0].isupper() and part[1:].islower())):
+                continue
+            key = part.lower()
+            if _known(key, store):
+                continue
+            if _romaji_like(key):
+                # ローマ字にも読める語（reponse）は、名前のほかの語が英語の時だけ（kaiin_bangou のような名前は除く）
+                others = [p.lower() for p in parts if p and p != part and p.isalpha()]
+                if not others or not all(len(p) >= 2 and _known(p, store) for p in others):
+                    continue
+            fixed = _typo_fix(key, store, False, None)
+            if fixed and fixed.isalpha() and fixed.lower() != key:
+                fixed = fixed.lower()
+                if part.isupper():
+                    fixed = fixed.upper()
+                elif part[0].isupper():
+                    fixed = fixed[:1].upper() + fixed[1:]
+                out.append((s, e, fixed))
     return out
 
 

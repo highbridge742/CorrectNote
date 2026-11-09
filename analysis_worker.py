@@ -180,6 +180,73 @@ def snapshot(app):
 
 _FALLBACK_ROWS=[0]
 
+# 途中の紫（early_marks・2026-11-05 うにさん「紫だけ先に」）。補正の1段目が済んだ所で、その行の紫だけを本体へ送る。
+# correction_entry は変えず、その最初の補正（_correct_line_halfwidth）をこの子の中でだけ包む
+_EARLY=dict(sink=None,line=None,row=None,sent=True)
+
+
+def _early_install():
+    import correction_entry
+    if getattr(correction_entry._correct_line_halfwidth,'_correctnote_early',False):return
+    first=correction_entry._correct_line_halfwidth
+    def first_answer(text,*args,**kwargs):
+        out=first(text,*args,**kwargs)
+        try:
+            # 行そのものの最初の補正だけ（あとの候補の試しの行は送らない）
+            if not _EARLY['sent'] and _EARLY['sink'] is not None and text==_EARLY['line'] and isinstance(out,dict):
+                _EARLY['sent']=True
+                odd=[tuple(x[:2]) for x in (out.get('odd_spans') or ())]
+                if odd:
+                    outbox,identifier=_EARLY['sink']
+                    outbox.put((('partial',identifier),dict(line=text,row=_EARLY['row'],odd=odd),None))
+        except Exception:
+            pass
+        return out
+    first_answer._correctnote_early=True
+    correction_entry._correct_line_halfwidth=first_answer
+
+
+def _early_begin(line,row=None):
+    import os
+    if os.environ.get('CN_EARLY_ODD')=='0' or _EARLY['sink'] is None:return
+    try:_early_install()
+    except Exception:return
+    _EARLY.update(line=line,row=row,sent=False)
+
+
+def _early_end():
+    _EARLY['sent']=True
+
+
+def _early_send(line,odd_spans):
+    """correction_entry.correct_line の on_early_odd（batch275・2026-11-07）: 入口が紫を決めた直後、直しの段の前に呼ばれる。
+    送るのは first_answer と同じ形（行そのものの紫・1度だけ）。最後の答えの紫で置き換わる（early_marks）。"""
+    try:
+        if _EARLY['sent'] or _EARLY['sink'] is None or line!=_EARLY.get('line'):return
+        _EARLY['sent']=True
+        odd=[tuple(x[:2]) for x in (odd_spans or ())]
+        if odd:
+            outbox,identifier=_EARLY['sink']
+            outbox.put((('partial',identifier),dict(line=line,row=_EARLY['row'],odd=odd),None))
+    except Exception:
+        pass
+
+
+def _early_hook(function):
+    """correct_line に渡す on_early_odd（受けない correct_line・途中の紫を切った時は無し）。"""
+    import os
+    if os.environ.get('CN_EARLY_ODD')=='0' or _EARLY['sink'] is None or _EARLY['sent']:return {}
+    if function not in _TAKES_EARLY:
+        try:
+            import inspect
+            _TAKES_EARLY[function]='on_early_odd' in inspect.signature(function).parameters
+        except (TypeError,ValueError):
+            _TAKES_EARLY[function]=False
+    return dict(on_early_odd=_early_send) if _TAKES_EARLY[function] else {}
+
+
+_TAKES_EARLY={}
+
 
 def _native_rows(tokens):
     """The kept form of a line's native tokens (Runtime.line_tokens)."""
@@ -204,9 +271,28 @@ def _count_fallback_rows():
     morphology._tokenize_fallback=counted
 
 
+def _fast_path_cost():
+    """morphology.path_cost を同じ答えの速い版に差し替える（path_cost_fast、2026-11-07 挙動関連担当が作り、
+    janome と 20,250件で不一致0）。morphology.py は CODE_SHA256 で固定なので、子の中で外から差し替える。
+    naturalness は読み込んだ時に path_cost を名前で持つので、それも向け直す。CN_FAST_PATH_COST=0 で前の形。"""
+    import os
+    if os.environ.get('CN_FAST_PATH_COST')=='0':return False
+    try:
+        import morphology,path_cost_fast
+        if not path_cost_fast.install(morphology):return False
+        import sys
+        natural=sys.modules.get('naturalness')
+        if natural is not None and getattr(natural,'_raw_path_cost',None) is getattr(morphology.path_cost,'__wrapped__',None):
+            natural._raw_path_cost=morphology.path_cost
+        return True
+    except Exception:
+        return False
+
+
 class Runtime:
     def __init__(self):
         _count_fallback_rows()
+        _fast_path_cost()
         self.prepared={}
         self.context_lines={}
         self.content_words={}
@@ -471,8 +557,10 @@ class Runtime:
     def quick(self,task):
         # Preserve quick input's context and unit policy. Native interfaces live
         # for one line, as at the main correction entry, then close in the child.
-        import corrector
-        from vocabulary import find_known_readings_flex
+        # メモ欄と同じ入口（2026-11-05 補正の担当: correction_entry の段が簡易入力で効いていなかった）
+        from correction_entry import correct_line
+        from tab_context import tab_has_kana
+        tab_kana=tab_has_kana(chr(10).join(task['lines']))
         from ime_session import resource_scope
         from ime_colloquial import source_tokenizer
         keyboard_layout.apply_spec(task.get('keyboard'))   # 変わらなければ無料
@@ -513,15 +601,22 @@ class Runtime:
                     # The same source-local native lemma/inflection proof as the
                     # main entry. It never changes tokenization of trial outputs.
                     tokenize=source_tokenizer(line,self.tokenize)
-                    result=corrector.correct_line(line,self.store,tokenize,
-                        find_known_readings_flex,decisions=self.decisions,
+                    readings=task.get('readings',{}).get(index,())
+                    _early_begin(line,index)
+                    result=correct_line(line,self.store,decisions=self.decisions,
                         input_method=task['input_method'],context_vec=self.context_vec,
-                        dict_index=self.index)
+                        dict_index=self.index,occurrence_readings=readings,
+                        occurrence_strokes=occurrence_strokes(readings),
+                        tab_has_kana=tab_kana,previous_line=(task['lines'][index-1] if index else None),
+                        defer_heavy=bool(task.get('defer_heavy')),**_early_hook(correct_line))
+                    _early_end()
+                    result.pop('used_keys',None)    # 裏のタブのやり直し用。簡易入力では使わない
                     result=apply_to_result(result,task['calculations'].get(index,()),
                                          self.decisions,tokenize,self.index)
-                    original_units.append(build_suspect_units(result,tokenize,
+                    from colloquial_pos import pos_tokenizer   # 品詞の表示だけ（おもしれえ・2026-11-09）
+                    original_units.append(build_suspect_units(result,pos_tokenizer(tokenize),
                                           self.choices,known_kana)[1])
-                    corrected_units.append(build_line_units(result,tokenize,
+                    corrected_units.append(build_line_units(result,pos_tokenizer(tokenize),
                                            self.choices,known_kana))
                     results.append(result)
                 # Reuse the same native row scope after original-input evidence
@@ -598,6 +693,14 @@ class Runtime:
         if kind=='warmup':
             try:
                 self.prepare_tables()
+                # What every first row of a child reads and nothing loaded ahead (2026-11-07, speed): the kana
+                # rules (pos_seq_odd, 3.5 s to read the cost table) and the classified-word index (collocation
+                # repair, 0.9 s). Public tables only; the row would load the same ones itself.
+                from analysis_context import check_current_request
+                import kana_rules,semantic_class
+                for load in (kana_rules._load,semantic_class._data):
+                    check_current_request()
+                    load()
                 # This optional public index runs only in prewarm. A real
                 # request interrupts its dictionary walk; normal preparation
                 # never waits for an index the current text may not need.
@@ -655,7 +758,8 @@ class Runtime:
             known=set(task['attested'])
             def known_kana(text):
                 return bool(text and len(text)>=2 and (self.store.has_reading(text) or text in known))
-            return build_suspect_units(task['result'],self.tokenize,self.choices,known_kana)[1]
+            from colloquial_pos import pos_tokenizer
+            return build_suspect_units(task['result'],pos_tokenizer(self.tokenize),self.choices,known_kana)[1]
         if kind=='packed_rows':
             # This child is about to be given back: the window keeps the rows for the next one (analysis_async.keep_rows)
             self._park_parses()
@@ -748,6 +852,8 @@ class Runtime:
                     extra['previous_line']=task['previous_line']
                 if task.get('defer_heavy') and _takes_defer_heavy(correct_line):
                     extra['defer_heavy']=True
+                _early_begin(task['line'])
+                extra.update(_early_hook(correct_line))
                 result=correct_line(task['line'],self.store,context_vocab=tracked,
                     decisions=self.decisions,input_method=task['input_method'],
                     context_vec=self.context_vec,dict_index=self.index,
@@ -755,6 +861,7 @@ class Runtime:
                     occurrence_readings=task.get('readings',()),
                     occurrence_calculations=task.get('calculations',()),
                     occurrence_strokes=occurrence_strokes(task.get('readings',())),**extra)
+                _early_end()
                 if isinstance(result,dict) and result.get('deferred_stages'):
                     # Not final, redone when the typing stops: nothing may keep it across a model change
                     result=dict(result);result.pop('used_keys',None)
@@ -774,8 +881,10 @@ class Runtime:
             if self.store.has_reading(text):return True
             present=text in known;unit_keys[text]=present
             return present
-        corrected_units=build_line_units(result,self.tokenize,self.choices,known_kana)
-        original_units=build_suspect_units(result,self.tokenize,self.choices,known_kana)
+        from colloquial_pos import pos_tokenizer       # 品詞の表示だけ（おもしれえ・2026-11-09）
+        _pos_fn=pos_tokenizer(self.tokenize)
+        corrected_units=build_line_units(result,_pos_fn,self.choices,known_kana)
+        original_units=build_suspect_units(result,_pos_fn,self.choices,known_kana)
         evidence=tracked.evidence(unit_keys.items()) if tracked is not None else None
         if evidence is None and result.get('_context_evidence') is not None:
             evidence=dict(result['_context_evidence'],unit_keys=tuple(sorted(unit_keys.items())))
@@ -888,12 +997,43 @@ def _serve(inbox,outbox,pause_flag=None):
 PAUSE_MAX_S=30.0     # 親が戻し忘れても、これより長くは止まらない
 
 
+WARM_AGAIN_MAX=6     # 割り込まれた先読みをやり直す回数の上限（打ち続けても回り続けない）
+POLL_GAP_S=0.002     # 解いている間に新しい頼みを見に行く間（パイプを見るのは1回27マイクロ秒）
+WARM_IDLE_S=0.3      # やり直すのは、これだけ求めが来なかった時（行の答えの直後に次の行が来る間は割り込まない）
+# 打っている間はやり直さない（2026-11-07）: 0.3秒では打鍵の合い間に始めて次の行で捨てる形が続いていた（PC の作り物の打鍵で
+# 6回・1〜2秒の子の時間）。行が読む表は行そのものが読むので、やり直しの残りは任意の表だけ。手が止まって 2秒から。
+# CN_WARM_IDLE_S で変えられる（0.3 で前の形）
+try:
+    import os as _os
+    WARM_IDLE_S=float(_os.environ.get('CN_WARM_IDLE_S','2.0'))
+except ValueError:
+    WARM_IDLE_S=2.0
+
+
 def _serve_requests(inbox,outbox,connection_owner,pause_flag=None):
     from analysis_context import request_scope,check_current_request,SupersededAnalysis
     runtime=Runtime();no_request=object();pending=no_request
+    # The warmup a newer request took over (2026-11-07, speed): the app's prewarm is followed within 0.5 s by
+    # its first request, which dropped the warmup before it read a table; the child then sat idle for 3 s and
+    # paid 7 s on its first row. It runs again once nothing waits. A row interrupts it as before.
+    warm_again=None;warm_tries=0;ran_through=False
+    poll_after=[0.0]
+    def keep_warmup(old):
+        nonlocal warm_again
+        if old is not None and old['task'].get('kind')=='warmup' and warm_tries<WARM_AGAIN_MAX:
+            # quiet: its answer is not sent (the id is the app's earlier request; nobody waits for it)
+            warm_again=dict(old,state=None,quiet=True)
     while True:
         if not connection_owner.pump():return
-        request=connection_owner.get(inbox) if pending is no_request else pending
+        if pending is no_request and warm_again is not None:
+            request=no_request;until=time.monotonic()+WARM_IDLE_S
+            while time.monotonic()<until:
+                if not connection_owner.pump():return
+                try:request=inbox.get(timeout=.02);break
+                except queue.Empty:pass
+            if request is no_request:request,warm_again=warm_again,None;warm_tries+=1
+        else:
+            request=connection_owner.get(inbox) if pending is no_request else pending
         pending=no_request
         if request is None:return
         pending_state=request.get('state')
@@ -902,10 +1042,17 @@ def _serve_requests(inbox,outbox,connection_owner,pause_flag=None):
             except queue.Empty:break
             if newer is None:return
             if newer.get('state') is not None:pending_state=newer['state']
+            keep_warmup(request)
             request=newer
         def superseded():
             nonlocal pending
             if pending is no_request:
+                # Look at the pipe at most every POLL_GAP_S (2026-11-07, speed): a row asked this 62,676 times in 17 s,
+                # 27 us each on Windows (1.7 s). A newer request is seen at most 2 ms later; answers are the same.
+                # The pause (pause_flag) is still honoured on every call.
+                now=time.monotonic()
+                if now<poll_after[0] and (pause_flag is None or not pause_flag.value):return False
+                poll_after[0]=now+POLL_GAP_S
                 until=None
                 while True:
                     try:pending=inbox.get_nowait()
@@ -918,22 +1065,39 @@ def _serve_requests(inbox,outbox,connection_owner,pause_flag=None):
                         continue
                     break
             return True
+        ran_through=False
         try:
             if pending_state is not None:runtime.set_state(pending_state)
+            # The store is built: the message's copy of the vocabulary need not stay until the next request (18 MB)
+            pending_state=None;request.pop('state',None)
             if request['task']['kind']=='cancel':continue
+            _EARLY['sink']=(outbox,request['id']);_EARLY['sent']=True
             if request['task']['kind'] in ('quick','quick_prepare','line','units','prepare','warmup','candidates','plans','synonyms','explain_pos','explain_reason','odd_run'):
                 # Preserve the next request/state while the old read-only
                 # correction unwinds its owned resources and context scopes.
                 with request_scope(superseded,poll_interval=.005):
                     result=runtime.execute(request['task'])
+                    ran_through=True
                     check_current_request()
             else:result=runtime.execute(request['task'])
+            if request['task']['kind']=='english_relearn' and request['task'].get('warm_after'):
+                # The app keeps this child for rows (memory high's prefetch child): its tables, once idle
+                warm_again=dict(id=request['id'],task=dict(kind='warmup'),state=None,quiet=True)
+            if request.get('quiet'):continue
             if request.get('usage') and isinstance(result,dict) and request['task']['kind'] in ('line','units'):
                 # how the correction stages were used (numbers only, usage_counts): sent with the answer when the
                 # app's Worker asked for it, kept out of Runtime.execute's own answer (2026-10-24)
-                result=dict(result,usage=_take_usage())
+                usage=_take_usage()
+                if (request['task'].get('defer_heavy') and isinstance(result.get('result'),dict)
+                        and result['result'].get('deferred_stages')):
+                    # 打った行の軽い答え（重い段を外した形）は数えない。重い段のやり直しの答えで1回数える
+                    # （2026-11-07 うにさん「軽い答えではカウントしない」）。やり直しの要らない行は、この答えで1回
+                    usage=None
+                result=dict(result,usage=usage)
             outbox.put((request['id'],result,None))
         except SupersededAnalysis:
+            # A warmup that ran to its end is not kept (only the last check saw the newer request)
+            if not ran_through:keep_warmup(request)
             continue
         except BaseException:
             outbox.put((request['id'],None,traceback.format_exc()))
@@ -1007,7 +1171,7 @@ class Worker:
         self.pause_flag=context.RawValue('b',0)
         self.process=context.Process(target=_serve,args=(self.inbox,self.outbox,self.pause_flag),daemon=True)
         self.process.start()
-        self.serial=0;self.ready={};self.closed=False
+        self.serial=0;self.ready={};self.closed=False;self.partials={}
         self.sender=None
         if sys.platform=='win32':
             self.sender=_WindowsQueueSender(self.inbox._writer,context)
@@ -1021,6 +1185,10 @@ class Worker:
         while True:
             try:identifier,result,error=self.outbox.get_nowait()
             except queue.Empty:break
+            if isinstance(identifier,tuple):
+                # 途中の紫（early_marks）: 答えではない。新しい求めの分だけ残す
+                self.partials.setdefault(identifier[1],[]).append(result)
+                continue
             merge_usage(result)      # counted when it arrives, even when the answer is not used
             self.ready[identifier]=(result,error)
         value=self.ready.pop(request_id,None)
@@ -1033,6 +1201,14 @@ class Worker:
         if not self.closed and not self.process.is_alive():
             raise WorkerExitedError('Analysis process exited before returning a result')
         return None
+    def take_partial(self,request_id):
+        """この求めの途中の紫（届いた順）。答えが来た後や古い求めの分は捨てる。"""
+        partials=getattr(self,'partials',None)
+        if not partials:return ()
+        got=partials.pop(request_id,())
+        for k in [k for k in partials if k<request_id]:partials.pop(k,None)
+        return got
+
     def trim_memory(self):
         """Hand the idle child's resident memory back to Windows (EmptyWorkingSet, 2026-11-01). The process
         stays, so the next row needs no new child: Task Manager's memory 501 -> 57MB, the first typed row 0.33s

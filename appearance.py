@@ -59,6 +59,8 @@ import weakref
 import zlib
 from collections import OrderedDict
 
+import paper_window
+
 PAPER_PREFIX = 'cn_paper_'
 DIR_PREFIX = 'correctnote_paper_'
 DIR_SWEEP_AGE = 2 * 24 * 3600    # 落ちて残った一時フォルダは、これより古ければ消す
@@ -472,6 +474,17 @@ CLICK_TAG = 'CorrectNotePaperClick'
 DOUBLE_CLICK_MS = 500
 
 
+def forward_wheel(event, pane):
+    """欄の上に重ねた（後ろに敷いた）窓に来た <MouseWheel> を欄へ渡す（同じ delta・同じ指の位置）。"""
+    try:
+        pane.event_generate('<MouseWheel>', delta=event.delta, state=event.state,
+                            x=event.x_root - pane.winfo_rootx(), y=event.y_root - pane.winfo_rooty(),
+                            rootx=event.x_root, rooty=event.y_root)
+    except Exception:
+        pass
+    return 'break'
+
+
 def _add_click_tag(widget):
     """Canvas の bindtags の頭に CLICK_TAG を足す（2回目からの押下を Text の bind へ）。"""
     tags = widget.bindtags()
@@ -585,7 +598,16 @@ class Paper:
     RETRY = 3           # 切れ端が読めなかったときに描き直す回数（続けて）
     # スクロールしている間は絵を外し、止まって SCROLL_REST_MS で戻す（軽い）。
     # 既定は外さない（うにさんの「右下アンカー」）。重さを比べるための切り替え。
+    # ホイール・右ドラッグで動かしている間だけ外す（2026-11-05 うにさん「処理落ちしたように滑らかに動かない」。
+    # 3,650行のタブ・装飾ありで1コマ 140ms → 37ms。行ごとに絵のタグを付け替えると、Tk が全部の行を組み直す）。
+    # 行への移動や解析の組み直しでは外さない。False で外さなくなる
+    # 2026-11-05 うにさん「裏の絵は外してはダメです。見た目が不自然です」: 外さない。
     SCROLL_HIDE = False
+    # 本文の欄の地の色を透かして、後ろに置いた Canvas の絵を見せる（paper_window・2026-11-05 うにさん「位置が固定
+    # なので、描き直す必要はないように感じる」）。スクロールで何も貼り直さない。使えない環境では行ごとに貼る形のまま。
+    # False で前の作り（行ごとに貼る）に戻る。
+    SHOW_THROUGH = True
+    USER_SCROLL_S = 0.2
     SCROLL_REST_MS = 150
     SLICE_H = 32              # 切れ端の高さの刻み（_tall）
     PREWARM_SLICE_S = 0.008   # 先に作る切れ端: 1回に使う時間
@@ -617,6 +639,7 @@ class Paper:
         self._origin_used = None   # 今のタグの切れ端を作ったときの絵の左上 (x, y)
         self._geom_used = None     # 同じく (x, y, 幅)。幅を変えている間はこれで付け直す
         self._view = None          # SCROLL_HIDE: 前に見た画面の位置
+        self._user_scroll_until = 0.0
         self._rest_job = None      # SCROLL_HIDE: 絵を外している間の、戻す予約
         self._prewarm_key = None
         self._prewarm_todo = []
@@ -637,6 +660,11 @@ class Paper:
         self._hold_job = None
         self._guarded = False
         self._retry = 0
+        self._back = None          # SHOW_THROUGH: 欄の後ろの、絵を描いた Canvas
+        self._through = False      # 今、欄を透かしているか
+        self._through_failed = False
+        self._through_key = None   # 透かしている色（COLORREF）
+        self._back_key = None      # 後ろの絵の (装飾, x, y, 色, 地の色)
         Paper._serial = getattr(Paper, '_serial', 0) + 1
         self._prefix = f'{PAPER_PREFIX}{Paper._serial}_'
         text._correctnote_paper = self
@@ -657,6 +685,9 @@ class Paper:
         changed = decor != self.decor
         self.decor, self.color, self.bg = decor, color, bg
         raw = self._raw()
+        self._back_key = None
+        if decor is None:
+            self._leave_through()
         if changed:
             self._drop_all()
             self._origin_used = self._geom_used = None
@@ -750,18 +781,21 @@ class Paper:
 
     # ---------------------------------------------------------------- 知らせ
     def _on_scrolled(self):
+        if self._through:
+            return      # 絵は窓に固定で、後ろの Canvas に描いてある
         # その場で描き直す（after(0) より先に別の処理が画面を描かせることがあるため）
         try:
-            if self.SCROLL_HIDE and self.decor is not None:
-                mark = self._view_mark()
-                moved = self._view is not None and mark != self._view
-                self._view = mark
-                if moved or self._rest_job is not None:
-                    self._hide_for_scroll()
-                    return
+            if (self.SCROLL_HIDE and self.decor is not None
+                    and (self._rest_job is not None or time.monotonic() < self._user_scroll_until)):
+                self._hide_for_scroll()
+                return
             self.flush()
         except Exception:
             pass
+
+    def user_scroll(self):
+        """The wheel or a right drag is about to move this pane (app._scroll_pixels)."""
+        self._user_scroll_until = time.monotonic() + self.USER_SCROLL_S
 
     def _view_mark(self):
         raw = self._raw()
@@ -798,6 +832,13 @@ class Paper:
 
     def _end_rest(self):
         self._rest_job = None
+        left = self._user_scroll_until - time.monotonic()
+        if left > 0:      # still moving, only slowly: a frame can take longer than the rest
+            try:
+                self._rest_job = self.t.after(int(left * 1000) + 1, self._end_rest)
+                return
+            except Exception:
+                pass
         self._dirty = True
         self._view = self._view_mark()
         try:
@@ -806,6 +847,8 @@ class Paper:
             pass
 
     def _on_changed(self, args=None):
+        if self._through:
+            return
         # 字を足すと、両隣のタグを引き継ぐ。行の境目に打った字には絵が付かず、
         # 改行すると上の行の切れ端が下にも付く。行の場所が同じでも付け直す。
         self._dirty = True
@@ -815,6 +858,8 @@ class Paper:
             pass
 
     def _on_tagged(self):
+        if self._through:
+            return
         try:
             self.queue()
         except Exception:
@@ -831,6 +876,13 @@ class Paper:
                     pass
         self._job = self._settle = self._rest_job = self._prewarm_job = self._hold_job = None
         self.decor = None
+        if self._back is not None:
+            try:
+                self._back.destroy()
+            except Exception:
+                pass
+            self._back = None
+        self._through = False
         self._slots = []
         self._covers = []
         self._prewarm_todo = []
@@ -1063,6 +1115,9 @@ class Paper:
             self._size = (W, H)
         settling = (self._geom_used is not None
                     and now - self._size_at < self.SETTLE_MS / 1000.0)
+        if self._enter_through():
+            self._draw_back(bits, W, H, settling)
+            return
         raw = self._raw()
         if settling:
             self._wait_settle()
@@ -1116,6 +1171,124 @@ class Paper:
         self._draw_edges(bits, ox, oy, W, H)
         if self.SCROLL_HIDE:
             self._view = self._view_mark()
+        _SLICES.trim()
+
+    # ---------------------------------------------------------------- 透かす形（SHOW_THROUGH）
+    def _text_key(self):
+        """欄の地の色の COLORREF。欄そのものから読む（字の裏の画素と同じ色でないと透けない）。"""
+        return paper_window.colorref(self.t.winfo_rgb(str(self.t.cget('background'))))
+
+    def _make_back(self):
+        """欄のすぐ後ろ（同じ親・同じ大きさ）に、絵を描く Canvas を置く。"""
+        import tkinter as tk
+        t = self.t
+        cv = tk.Canvas(t.master, highlightthickness=0, bd=0, bg=self.bg or t.cget('background'),
+                       cursor=t.cget('cursor'), takefocus=0)
+        cv._correctnote_paper_below = True      # typing_pointer: 欄の一部として扱う
+        cv._correctnote_paper_pane = t
+        cv.place(in_=t, x=0, y=0, relwidth=1, relheight=1, bordermode='outside')
+        cv.tk.call('lower', cv._w, t._w)
+        # ホイールは欄へ（2026-11-07 うにさん「ホイールでのスクロールが効かない。2日前から」）。押す・動かすは窓の手続きで
+        # 欄へ送り直せば Tk が欄の操作にするが、ホイールは Tk が「指の下の窓」を探して配るので、透けた所では
+        # この Canvas に <MouseWheel> が来て、欄の bind（両方の欄を動かす _on_wheel）が走らなかった
+        cv.bind('<MouseWheel>', lambda e, pane=t: forward_wheel(e, pane))
+        return cv
+
+    def _enter_through(self):
+        """透かす形で描けるか。初めてならその形にする。だめなら False（行ごとに貼る形のまま）。"""
+        if not self.SHOW_THROUGH or self._through_failed or self.decor is None:
+            return False
+        t = self.t
+        try:
+            key = self._text_key()
+            hwnd = int(t.winfo_id())
+            if self._through:
+                if key != self._through_key:       # 配色が変わった
+                    if not paper_window.show_through(hwnd, key):
+                        raise OSError('show_through')
+                    self._through_key = key
+                    self._back_key = None
+                return True
+            if not paper_window.available():
+                self._through_failed = True
+                return False
+            back = self._back = self._back if self._back is not None else self._make_back()
+            if not paper_window.attach_back(int(back.winfo_id()), hwnd):
+                raise OSError('attach_back')
+            if not paper_window.show_through(hwnd, key):
+                raise OSError('show_through')
+        except Exception:
+            self._give_up_through()
+            return False
+        self._through = True
+        self._through_key = key
+        self._back_key = None
+        self._drop_all()        # 行ごとの切れ端・欄の中の Canvas は要らない
+        return True
+
+    def _give_up_through(self):
+        """透かせなかった。これからは行ごとに貼る。"""
+        self._through_failed = True
+        self._leave_through()
+
+    def _leave_through(self):
+        """装飾なしにした時・透かせなかった時: ふつうの欄に戻す。"""
+        was = self._through
+        self._through = False
+        self._through_key = None
+        self._back_key = None
+        back, self._back = self._back, None
+        try:
+            hwnd = int(self.t.winfo_id()) if was else 0
+        except Exception:
+            hwnd = 0
+        if hwnd:
+            paper_window.stop_showing_through(hwnd)
+        if back is not None:
+            try:
+                paper_window.detach_back(int(back.winfo_id()))
+                back.destroy()
+            except Exception:
+                pass
+
+    def _draw_back(self, bits, W, H, settling):
+        """後ろの Canvas に絵を置く。変わるのは窓の大きさ・装飾・配色の時だけ。"""
+        if settling:
+            self._wait_settle()
+            ox, oy = self._geom_used[:2]
+        else:
+            anchor = self._anchor(H)
+            ox, oy, _bd = self._origin(W, anchor, bits)
+            self._geom_used = (ox, oy, W)
+            self._anchor_used = anchor
+            place = self._place_in_window()
+            self._anchor_place = None if place is None else place + ((W, H),)
+            if self._origin_used != (ox, oy):
+                self._origin_used = (ox, oy)
+                self._refresh_covers()
+        back = self._back
+        key = (self.decor, ox, oy, self.color, self.bg)
+        if key == self._back_key:
+            return
+        name = self._full(bits)
+        if not name:
+            return
+        first = self._back_key is None
+        try:
+            back.configure(bg=self.bg)
+            self._place_art(back, name, ox, oy)
+        except Exception:
+            self._lost(name)
+            return
+        self._back_key = key
+        self._retry = 0
+        if first:
+            # 透かしを始めた時・配色が変わった時は、描き直すまで前の中身が残る
+            try:
+                back.update_idletasks()
+                paper_window.repaint(int(self.t.winfo_id()))
+            except Exception:
+                pass
         _SLICES.trim()
 
     def _apply_slots(self, raw, bits, ox, oy, W, lines):

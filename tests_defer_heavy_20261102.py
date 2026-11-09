@@ -104,12 +104,17 @@ class Redo(unittest.TestCase):
         self.assertEqual((a._analyze_todo, a._analyze_pos, a._heavy_redo, a.scheduled), ([1], 0, {1}, [1]))
 
     def test_waits_while_typing_or_analysing(self):
-        for extra in (dict(_last_edit_at=time.monotonic()), dict(_foreground_analysis_pending=lambda: True),
-                      dict(_neighbor_defer_job='job')):
+        for extra in (dict(_last_edit_at=time.monotonic()), dict(_foreground_analysis_pending=lambda: True)):
             flush, a = self.app(**extra)
             flush(a)
             self.assertTrue(a.armed)
             self.assertEqual(a.scheduled, [])
+
+    def test_goes_before_the_neighbours(self):
+        # 2026-11-07: the neighbours' redo waits for this one (tests_redo_wait_20261107), not the other way round
+        flush, a = self.app(_neighbor_defer_job='job')
+        flush(a)
+        self.assertEqual(a.scheduled, [1])
 
     def test_nothing_to_do(self):
         flush, a = self.app(line_results=[dict(original='one')])

@@ -37,7 +37,8 @@ def schedule_change(app):
     current=_pause_identity(scope)
     if current==getattr(app,'_quick_pause_identity',None):return
     app._quick_pause_identity=current
-    app._quick_display_after=time.monotonic()+DISPLAY_QUIET_MS/1000
+    app._quick_changed_at=time.monotonic()
+    app._quick_display_after=app._quick_changed_at+DISPLAY_QUIET_MS/1000
     identifier=getattr(app,'_quick_after_id',None)
     if identifier:app.root.after_cancel(identifier)
     _schedule(app,COMPUTE_DELAY_MS)
@@ -136,8 +137,8 @@ def queue_idle_prewarm(app,delay=1200):
     app._quick_prewarm_after_id=identifier
 
 
-def _prepare_composition(app):
-    if not memory_usage.quick_prepare(app):return
+def _prepare_composition(app,moving=False):
+    if not moving and not memory_usage.quick_prepare(app):return
     # Opening the quick window or its first IME composition gives the child
     # time to prepare public lexical evidence. No text is analysed.
     if getattr(app,'_quick_composition_prepared',False):return
@@ -165,6 +166,80 @@ def prepare(app):
         traceback.print_exc()
 
 
+AFTER_MOVE_MS = 400
+AFTER_MOVE_KEEP_MS = 60000      # 準備した子を、打ち始めるまで少し残す（中は普段5秒で閉じる）
+
+
+def window_moved(app):
+    """The quick window is being dragged: the time goes to what the first character would wait for (2026-11-05
+    うにさん). The child comes up and reads its tables, off the Tk thread; a real request supersedes that. Low keeps to its
+    one child at a time."""
+    if (memory_usage.low(app) or getattr(app,'_quick_text',None) is None
+            or getattr(app,'_quick_job',None) is not None or getattr(app,'_closing',False)):return
+    _cancel_idle_release(app)
+    memory_usage.cancel_release(app,'quick')
+    try:
+        _prepare_composition(app,moving=True)
+        worker=getattr(app,'_quick_worker',None)
+        if (worker is not None and getattr(worker,'_quick_idle_prewarm_submitted',False) is not True
+                and getattr(app,'_quick_worker_state',None)==state_key(app)):
+            worker.submit(dict(kind='warmup'))
+            worker._quick_idle_prewarm_submitted=True
+    except Exception:
+        traceback.print_exc()
+        return
+    job=getattr(app,'_quick_after_move_id',None)
+    if job is not None:
+        try:app.root.after_cancel(job)
+        except Exception:pass
+    def still():
+        # The usual quiet-time rule again, from the end of the drag
+        app._quick_after_move_id=None
+        if getattr(app,'_quick_text',None) is not None:
+            memory_usage.queue_release(app,'quick',max(memory_usage.release_delay(app,'quick'),AFTER_MOVE_KEEP_MS))
+    app._quick_after_move_id=app.root.after(AFTER_MOVE_MS,still)
+
+
+# 窓が出て打てるようになってから準備する（2026-11-05 うにさん「すぐに文字が打てるほうを優先する」）。
+# 40ms だと準備の約70msが最初の表示の前に入っていた。先に打てば start が同じ準備を引き受ける
+OPEN_PREPARE_MS = 350
+
+
+# 打っている間は重い段を後回しにして軽い答えをすぐ出し、手が止まったら解く（2026-11-05 うにさん「後回しにする」。
+# メモ欄の defer_heavy・_arm_heavy_redo と同じ形・同じ間）
+HEAVY_AFTER_MS = 1200
+
+
+def _cancel_heavy(app):
+    identifier=getattr(app,'_quick_heavy_after_id',None)
+    app._quick_heavy_after_id=None
+    if identifier:
+        try:app.root.after_cancel(identifier)
+        except Exception:pass
+
+
+def _heavy_delay(app,floor=20):
+    """手が止まって HEAVY_AFTER_MS（最後に変えた時から数える・2026-11-07 速さ）。軽い答えが届くまでに手が止まっていれば、
+    届いてからさらに 1.2秒は待たない（メモ欄の _arm_heavy_redo と同じ）。変えた時刻が無ければ今までどおり。"""
+    changed=getattr(app,'_quick_changed_at',None)
+    if not changed:return HEAVY_AFTER_MS
+    left=HEAVY_AFTER_MS-(time.monotonic()-changed)*1000.0
+    return int(max(floor,min(HEAVY_AFTER_MS,left)))
+
+
+def _queue_heavy(app,scope,floor=20):
+    _cancel_heavy(app)
+    def ready():
+        app._quick_heavy_after_id=None
+        if getattr(app,'_quick_text',None) is None or _scope(app)!=scope:return
+        if _composing(app) or getattr(app,'_quick_job',None) is not None:
+            _queue_heavy(app,scope,floor=100)     # 変換中・ほかの解析が先: 0.1秒ごとに見る
+            return
+        app._quick_heavy_scope=scope
+        _schedule(app,COMPUTE_DELAY_MS)
+    app._quick_heavy_after_id=app.root.after(_heavy_delay(app,floor),ready)
+
+
 def schedule_prepare(app):
     if not memory_usage.quick_prepare(app):return
     widget=getattr(app,'_quick_text',None)
@@ -178,7 +253,7 @@ def schedule_prepare(app):
                 or getattr(app,'_quick_prepare_after_id',None)!=identifier):return
         app._quick_prepare_after_id=None
         prepare(app)
-    identifier=app.root.after(40,ready)
+    identifier=app.root.after(OPEN_PREPARE_MS,ready)
     app._quick_prepare_after_id=identifier
 
 
@@ -226,6 +301,9 @@ def start(app):
                       readings={i:doc.row_readings(i,line) for i,line in enumerate(lines)},
                       calculations={i:doc.row_calculations(i,line)+displayed.get(i+1,())
                                     for i,line in enumerate(lines)})
+            # F2 を待っている時は、手が止まるのを待たずに本当の答えを出す
+            if getattr(app,'_quick_heavy_scope',None)!=scope and not getattr(app,'_quick_f2_pending',None):
+                task['defer_heavy']=True
             reusable=quick_row_reuse.select(app,scope,task)
             if reusable:task['reuse']=reusable
             identifier=worker.submit(task,state)
@@ -233,6 +311,12 @@ def start(app):
             app._quick_worker_state=dependencies
             job=dict(scope=scope,identifier=identifier,value=None,task=task);app._quick_job=job
         if job['value'] is None:job['value']=app._quick_worker.poll(job['identifier'])
+        import early_marks
+        take=getattr(app._quick_worker,'take_partial',None)
+        parts=take(job['identifier']) if take is not None else ()
+        for part in (parts if isinstance(parts,(list,tuple)) else ()):
+            # 軽い答えを求めた時だけ（手が止まった後の解き直しは、もう軽い答えが出ている）
+            if job['value'] is None and job['task'].get('defer_heavy'):early_marks.quick(app,part)
         if job['value'] is None:
             _schedule(app)
             return
@@ -247,6 +331,7 @@ def start(app):
             _schedule(app,remaining)
             return
         value=job['value'];app._quick_job=None
+        early_marks.clear_quick(app)      # 答えの紫で描き直す
         from boundary_colors import remember
         remember(app,value.get('navigation'))
         quick_row_reuse.remember(app,scope,job['task'],value)
@@ -259,7 +344,11 @@ def start(app):
                 app._quick_f2_pending=(following,app._quick_text.index('insert'))
         else:
             _f2_ready(app,scope)
-            queue_idle_prewarm(app)
+            if any(row and row.get('deferred_stages') for row in value['results']):
+                # 重い段が先（同じ 1.2 秒に表の先読みを積むと、子がそれを済ませてから重い段に入っていた）
+                _queue_heavy(app,scope)
+            else:
+                queue_idle_prewarm(app)
     except Exception as error:
         app._quick_job=None
         if isinstance(error,WorkerExitedError) and getattr(app,'_quick_worker_retry',None)!=scope:
@@ -277,6 +366,8 @@ def close(app,keep_idle_worker=False):
     keep_idle_worker = keep_idle_worker and memory_usage.retains(app, 'quick')
     input_work.close_quick_readings(app)
     _cancel_idle_release(app)
+    _cancel_heavy(app)
+    app._quick_heavy_scope=None
     for name in ('_quick_after_id','_quick_prepare_after_id','_quick_prewarm_after_id'):
         identifier=getattr(app,name,None)
         if identifier:
@@ -299,12 +390,6 @@ def close(app,keep_idle_worker=False):
     app._quick_worker_retry=None
     app._quick_composition_prepared=False
     if retain:
-        def release():
-            if getattr(app,'_quick_idle_after_id',None)!=identifier:return
-            app._quick_idle_after_id=None
-            if (getattr(app,'_quick_worker',None) is worker
-                    and getattr(app,'_quick_text',None) is None
-                    and getattr(app,'_quick_job',None) is None):
-                worker.close();app._quick_worker=None;app._quick_worker_state=None
-        identifier=app.root.after(60000,release)
-        app._quick_idle_after_id=identifier
+        # 閉じた後も前面の子と同じ: 60秒でメモリを外へ出し、10分で閉じる（2026-11-08 うにさんのカード
+        # 「60秒で外へ出し10分で閉じる」。前は60秒で閉じていて、少し後に開き直すと子を作り直して待った）
+        memory_usage.queue_release(app,'quick')

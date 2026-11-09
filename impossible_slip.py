@@ -205,6 +205,17 @@ def _pair_sides():
     return by_verb, by_noun
 
 
+def _plural_after_noun(text, a, tail):
+    """text[a:] の tail が、解析で名詞のすぐ後ろの接尾の1語（お前｜ら）か。"""
+    try:
+        import morphology
+        toks = list(morphology.tokenize(text))
+    except Exception:
+        return False
+    return any(t.start == a and t.surface == tail and t.pos == '名詞' and (t.pos_sub or '').startswith('接尾')
+               and p.pos == '名詞' and p.end == a for p, t in zip(toks, toks[1:]))
+
+
 def unexplained_runs(text):
     """漢字の直後から始まるかなの並び（送りがな＋機能語）のうち、かなの文法で説明の付かないもの（報告｜しのす）。
     並びの終わりの お・ご が漢字の前なら次の語の頭なので並びに入れない。"""
@@ -218,6 +229,13 @@ def unexplained_runs(text):
             continue
         stem = re.search('[一-鿿々]+$', text[:a]).group()
         if not pos_grammar.explain_kana_run(text[a:b], after_kanji=True, kanji_stem=stem):
+            # 漢字＋人の複数の接尾（お前｜ら・私｜たち）で、残りが説明できるもの（2026-11-07）。CN_SLIP_SCAN_PLURAL=0
+            run = text[a:b]
+            tail = next((t for t in ('たち', 'ども', 'ら') if run.startswith(t)), None)
+            if (tail and __import__('os').environ.get('CN_SLIP_SCAN_PLURAL') != '0'
+                    and (pos_grammar._one_token(stem[-1:] + tail) or _plural_after_noun(text, a, tail))
+                    and (len(run) == len(tail) or pos_grammar.explain_kana_run(run[len(tail):]))):
+                continue
             out.append((a, b))
     return out
 
@@ -261,6 +279,18 @@ def propose(text, input_method='kana', odd_spans=(), scan=False):
     before = {(t.surface, t.pos) for t in _orig_toks}
     adverbial_particles = {k for t in _orig_toks if t.pos == '助詞' and (t.pos_sub or '').startswith('副助詞')
                            for k in range(t.start, t.end)}
+    # 終助詞（待っててね・行くよ・そうだな）も、印の無い所では替えない。話し言葉の文末に多く、替えると 待っててる の
+    # ような別の形が軽く出る（2026-11-05 うに「縮まった形が抜けていたなら同じようなパターンがあるかもしれない」）。
+    # CN_SLIP_SCAN_FINAL=0 で前のまま
+    if __import__('os').environ.get('CN_SLIP_SCAN_FINAL') != '0':
+        adverbial_particles |= {k for t in _orig_toks if t.pos == '助詞' and (t.pos_sub or '').startswith('終助詞')
+                                for k in range(t.start, t.end)}
+    # 名詞のすぐ後ろの複数の接尾（お前｜ら・アイツ｜ら・私｜たち）も、印の無い所では替えない（お前ら→お前に: 例文
+    # Tatoeba の正しい文で見つけた・2026-11-07）。CN_SLIP_SCAN_PLURAL=0 で前のまま
+    if __import__('os').environ.get('CN_SLIP_SCAN_PLURAL') != '0':
+        adverbial_particles |= {k for p, t in zip(_orig_toks, _orig_toks[1:])
+                                if t.pos == '名詞' and (t.pos_sub or '').startswith('接尾') and t.surface in ('ら', 'たち', 'ども')
+                                and p.pos == '名詞' and p.end == t.start for k in range(t.start, t.end)}
     base = morphology.path_cost(text)
     if base is None:
         return []

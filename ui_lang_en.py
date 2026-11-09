@@ -6,6 +6,8 @@
 """
 
 TABLE = {
+    '{0}\n\nファイルの容量が大きいため、開くのに時間が掛かります。開いてよろしいですか？': '{0}\n\nThis file is large, so it will take time to open. Do you want to open it?',
+    '確認': 'Confirm',
     '－ 品詞判定 －': '- Part-of-speech check -',
     '－ 補正根拠 －': '- Correction reason -',
     '【引用モード】無選択でF1で引用モードを開始します（選択してF1はコピー）': '[Quote mode] Press F1 with nothing selected to start quote mode (select text and press F1 to copy)',
@@ -557,6 +559,9 @@ TABLE = {
     'デフォルトに戻す': 'Reset to default',
     '補正が始まるまでの待ち（とタブのホイール・表示の倍率）を、その場で変えて試せます。待ちの最大はおおむね今の既定です。補正の答えは変わりません。': 'Change the waits before correction starts (plus tab wheel and display scaling) and try them on the spot. The maximum wait is roughly the current default. Correction results do not change.',
     '補正の段の使われ方…': 'Correction step usage…',
+    '解析の記録…': 'Analysis record…',
+    '解析の記録': 'Analysis record',
+    '記録はまだありません。': 'Nothing recorded yet.',
     'すべてデフォルトに戻す': 'Reset all to defaults',
     '最小の理由：': 'Reason for minimum: ',
     '{0}{1} — 別のウィンドウ': '{0}{1} — separate window',

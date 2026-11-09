@@ -49,7 +49,9 @@ def child():
        event(w,'<ButtonRelease-1>',index,locks|0x100)
        assert opened.call_count==1,(layout,str(w),locks,index,'opener calls',opened.call_count)
        assert opened.call_args[0][0].target==target;opened.reset_mock()
-     for modifier in (1,4,0x20000,0x200,0x400):
+     # not 0x400: the right button held and a left click pastes (mouse_words, 2026-10-30 うにさん), which here read
+     # the PC's own clipboard into the test document
+     for modifier in (1,4,0x20000,0x200):
       event(w,'<ButtonPress-1>','1.5',0x8|modifier)
       event(w,'<ButtonRelease-1>','1.5',0x108|modifier)
       opened.assert_not_called();w.tag_remove('sel','1.0','end')

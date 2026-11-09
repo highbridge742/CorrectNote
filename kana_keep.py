@@ -14,6 +14,7 @@
 変えただけの所は、元のかなに戻す。打ち違いを直した所（読みが替わった所）は触らない。特定の語は名指ししない。
 """
 import difflib
+import os
 
 
 def _hira(s):
@@ -46,15 +47,25 @@ def native_katakana(face, reading):
         rows = reading_lattice._table.get(reading, ())
     except Exception:
         return False
+    # 片仮名の表記がよく使われ、同じ読みの漢字の表記（名詞の 御簾・動詞の 見す）はどれもめったに使わない語（ミス）は
+    # 外来語（2026-11-04・にゅうりょくみす が 入力みす に戻っていた）
+    if os.environ.get('CN_KANA_KEEP_LOAN_RANK') != '0':
+        try:
+            import ime_reconvert as _R
+            kf = [row[0] for row in rows if row and row[0] and any(_kanji(c) for c in row[0])]
+            if 0 < _R._rank(face) <= 470 and (not kf or min(_R._rank(f) for f in kf) > 650):
+                return False
+        except Exception:
+            pass
     # 同じ読みに動詞・形容詞（活用する語＝和語）の行が在るもの（ずれる の ずれ）。名詞だけの読み（てれび・ぱそこん）は外来語
     if any(len(row) > 4 and row[4] in ('動詞', '形容詞') for row in rows):
         return True
     # 同じ読みの名詞に、平仮名の表記と漢字だけの表記が両方在るもの（うどん・饂飩、たばこ・煙草）は、平仮名で書くのが
     # 普通の語。片仮名にしない（2026-11-03 うに 未解決タブ「補正しなくてよい」）。漢字の表記の無い名詞（てれび・ぱそこん）は外来語
-    import os
     if os.environ.get('CN_KANA_KEEP_KANJI_FACE') != '0':
         names = [row for row in rows if len(row) > 4 and row[4] == '名詞']
-        if any(row[0] == reading for row in names) and any(row[0] and all(_kanji(c) for c in row[0]) for row in names):
+        kanji_faces = [row[0] for row in names if row[0] and all(_kanji(c) for c in row[0])]
+        if any(row[0] == reading for row in names) and kanji_faces:
             return True
     return False
 
@@ -100,6 +111,23 @@ def is_kango(face, reading):
     return go(0, 0)
 
 
+_SAHEN_TAIL = tuple('しじせぜすずさざ')
+
+
+def is_kango_sahen(face, reading):
+    """漢字1字の音読み＋サ変の活用の字（察し・適し・感じ: 察する・適する・感じる）か。字は音読みで、かなは活用の字
+    だけなので漢語（漢字に）。音読みは2字の読み（さっ・てき・かん）だけ（1字の け は 消す の語幹と同じ形）。
+    CN_KANA_KEEP_SAHEN=0 で前のまま（2026-11-08 手分けA）。"""
+    if os.environ.get('CN_KANA_KEEP_SAHEN') == '0':
+        return False
+    if not face or len(face) < 2 or not _kanji(face[0]) or any(_kanji(c) for c in face[1:]):
+        return False
+    tail = face[1:]
+    if tail[0] not in _SAHEN_TAIL or not reading.endswith(tail) or len(reading) - len(tail) < 2:
+        return False
+    return is_kango(face[0], reading[:-len(tail)])
+
+
 def _reading(text):
     from morphology import tokenize
     out = []
@@ -119,7 +147,26 @@ def _conversions(line, fixed):
     from morphology import tokenize
     toks = list(tokenize(fixed))
     out = []
-    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, line, fixed, autojunk=False).get_opcodes():
+    ops = difflib.SequenceMatcher(None, line, fixed, autojunk=False).get_opcodes()
+    # 送り仮名を挟んで1語の中で替わった所（とりたて → 取り立て: と→取・た→立 の2つの替え）は1つにまとめて見る。
+    # 分けて見ると語の区切りまで広げた所が元の行と合わず、和語の名詞が漢字のまま残っていた（2026-11-09 うにの未解決タブ）。
+    # CN_KANA_KEEP_JOIN_OKURI=0 で前のまま
+    if os.environ.get('CN_KANA_KEEP_JOIN_OKURI') != '0':
+        joined = []
+        for o in ops:
+            if o[0] == 'equal':
+                joined.append(o)
+                continue
+            if (len(joined) >= 2 and joined[-1][0] == 'equal' and joined[-2][0] == 'replace' and o[0] == 'replace'
+                    and _is_hira(line[joined[-1][1]:joined[-1][2]])
+                    and any(t.start < joined[-2][4] and joined[-2][3] < t.end and t.start < o[4] and o[3] < t.end
+                            for t in toks)):
+                p = joined[-2]
+                joined[-2:] = [('replace', p[1], o[2], p[3], o[4])]
+                continue
+            joined.append(o)
+        ops = joined
+    for tag, i1, i2, j1, j2 in ops:
         if tag != 'replace' or not any(_kanji(c) or _kata(c) for c in fixed[j1:j2]):
             continue
         cover = [t for t in toks if t.end > j1 and t.start < j2]
@@ -134,6 +181,21 @@ def _conversions(line, fixed):
             continue
         if _reading(fixed[s:e]) != line[a:b]:
             continue          # 読みが替わった所＝打ち違いの直し。触らない
+        # 漢字の語と片仮名の語が続けて置かれた所（にゅうりょくみす → 入力ミス）は語ごとに見る。まとめて見ると
+        # 漢語＋外来語の並びが漢語にならず、漢語の所までかなに戻っていた（2026-11-04）
+        if len(cover) > 1 and os.environ.get('CN_KANA_KEEP_PER_WORD') != '0':
+            parts, at, ok = [], a, True
+            for t in cover:
+                rd = _reading(t.surface) if any(_kanji(c) or _kata(c) for c in t.surface) else t.surface
+                if not rd or line[at:at + len(rd)] != rd:
+                    ok = False
+                    break
+                if rd != t.surface:
+                    parts.append((at, at + len(rd), t.start, t.end))
+                at += len(rd)
+            if ok and at == b and parts and any(all(_kata(c) for c in fixed[x:y]) for _p, _q, x, y in parts):
+                out.extend(parts)
+                continue
         out.append((a, b, s, e))
     return out
 
@@ -191,7 +253,7 @@ def repair_line(line, result, decided=()):
             if all(_kata(c) for c in face):
                 if not native_katakana(face, line[a:b]):
                     continue
-            elif is_kango(face, line[a:b]):
+            elif is_kango(face, line[a:b]) or is_kango_sahen(face, line[a:b]):
                 continue
         except Exception:
             continue
@@ -207,6 +269,16 @@ def repair_line(line, result, decided=()):
     out['changed'] = bool(ops)
     out['spans'] = [[o[3], o[4]] for o in ops]
     out['original_spans'] = [[o[1], o[2]] for o in ops]
+    # 戻したかなの語の位置（戻した後の行の位置）と戻す前の行。後ろの段（文の形の守り）が、戻したかなの和語の名詞
+    # （ひるごはん）を説明の付かない並びと見て直しを丸ごと戻さないよう渡す（2026-11-06）
+    try:
+        pos, off = [], 0
+        for a, b, s, e in sorted(back, key=lambda x: x[2]):
+            pos.append((s + off, s + off + (b - a)))
+            off += (b - a) - (e - s)
+        out['_kana_kept'] = (fixed, pos)
+    except Exception:
+        pass
     kept = {fixed[s:e] for _a, _b, s, e in back}
     out['details'] = [d for d in (result.get('details') or []) if not (len(d) > 1 and d[1] in kept)]
     return out

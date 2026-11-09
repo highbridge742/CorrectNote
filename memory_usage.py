@@ -76,13 +76,15 @@ def compact(app):
 
 def retains(app, channel):
     """Whether an idle child of `channel` ('foreground' or 'quick') stays
-    open. High keeps both; mid keeps the open tab's child and closes the
-    quick-input child; low closes both after their quiet period."""
+    open. High and mid keep both (memory handed out after a minute, closed
+    after ten); low closes both after their quiet period.
+
+    2026-11-08 うにさん（カード「60秒で外へ出し10分で閉じる」）: mid's quick-input child was closed five
+    seconds after its last result, so each reopening waited for a new child. It now stays like the open
+    tab's child. Mid still does not prepare it when the window opens (quick_prepare, 2026-11-05)."""
     tier = mode(app)
-    if tier == MEMORY_HIGH:
+    if tier in (MEMORY_HIGH, MEMORY_MID):
         return True
-    if tier == MEMORY_MID:
-        return channel == 'foreground'
     return False
 
 
@@ -241,8 +243,8 @@ def foreground_busy(app):
 
 
 def release_delay(app, channel):
-    """How long an idle child of `channel` stays: low (and mid's quick child) 5 seconds; a child the tier
-    keeps ready (high, mid's open tab) ten minutes after its last result, its memory handed out after one
+    """How long an idle child of `channel` stays: low 5 seconds; a child the tier
+    keeps ready (high and mid) ten minutes after its last result, its memory handed out after one
     (IDLE_TRIM_MS, 2026-11-01; it was closed after one minute from 2026-10-30)."""
     return IDLE_RELEASE_KEPT_MS if retains(app, channel) else IDLE_RELEASE_MS
 

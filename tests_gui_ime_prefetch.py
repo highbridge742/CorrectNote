@@ -12,8 +12,12 @@ def child():
     assert (Path.cwd()/'.ui-test-isolated').exists()
     assert Path(app.__file__).resolve().parent==Path.cwd().resolve()
     source='\n'.join(['資料を確認します。','寒ぃ日だ。','よいでしょぅか。']*10)
-    next_text='\n'.join('次の資料を読みます。' for _ in range(12))
-    Path('settings.json').write_text(json.dumps(dict(layout='split',input_method='kana',input_method_auto=False)),encoding='utf-8')
+    # distinct rows: the same row would be taken from another row's answer (shared_rows, 2026-11-08) and the
+    # background would not stop at the row the test holds
+    next_text='\n'.join('次の資料%dを読みます。' % k for k in range(12))
+    # the next tab has its own child (memory high): with less free memory the PC chose the middle level, where the
+    # other tab shares the open tab's child and the held background row is never held
+    Path('settings.json').write_text(json.dumps(dict(layout='split',input_method='kana',input_method_auto=False,memory_usage='high')),encoding='utf-8')
     Path('session.json').write_text(json.dumps(dict(version=1,active=0,tabs=[new_tab(text=s) for s in (source,next_text)]),ensure_ascii=False),encoding='utf-8')
     root=tk.Tk();root.withdraw();a=None;errors=[];calls=[];hold=[True];phase=['startup'];report=[]
     root.report_callback_exception=lambda *exc:errors.append(''.join(traceback.format_exception(*exc)))
@@ -22,7 +26,8 @@ def child():
         st=getattr(a,'_bg',None)
         background=worker is getattr(a,'_prefetch_worker',None)
         calls.append(dict(phase=phase[0],kind=task['kind'],line=task.get('line'),
-                          background=background,pos=st['pos'] if background and st is not None else None))
+                          background=background,pos=st['pos'] if background and st is not None else None,
+                          light=bool(task.get('defer_heavy'))))
         return original_submit(worker,task,state)
     def poll(worker,identifier):
         background=worker is getattr(a,'_prefetch_worker',None)
@@ -51,8 +56,9 @@ def child():
             # Normal editing should use its usual 300 ms callback; no manual
             # _analyze/_start_background_tabs calls can mask a lost timer.
             phase[0]='plain_edit';a.editor.insert('15.end','1');a._on_change();until(done)
-            count=sum(c['phase']==phase[0] and c['kind']=='line' and not c['background'] for c in calls)
-            assert count==1,(phase[0],count);emit(reanalyzed=count)
+            # the edited row is asked light and then heavy right away (the typed queue, 2026-11-07): one full answer
+            count=sum(c['phase']==phase[0] and c['kind']=='line' and not c['background'] and not c['light'] for c in calls)
+            assert count==1,(phase[0],count,[c for c in calls if c['phase']==phase[0]]);emit(reanalyzed=count)
             until(waiting)
             first_two=[dict(r) for r in a._bg['results'][:2]]
             for surface,reading in [('校閲','こうえつ'),('点検','てんけん'),('整理','せいり')]:

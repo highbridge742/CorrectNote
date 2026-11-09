@@ -234,6 +234,25 @@ def open_window(app, colors=None):
     # 補正の段の使われ方（usage_counts・2026-10-24）
     tk.Button(dlg, text='補正の段の使われ方…', command=lambda: open_usage_window(app, colors)).pack(
         anchor='w', padx=12, pady=(0, 6))
+    # 解析の記録（項目48-LO・メモリの中の最新40件）。2026-11-09 うにさん「再解析のデバッグは一旦外したまま……一旦外して」：
+    # 窓のボタンは CN_DEBUG_TOOLS=1 の時だけ出す（記録そのものはメモリの中だけで、そのまま取っている）
+    import os as _os_trace
+    if _os_trace.environ.get('CN_DEBUG_TOOLS') == '1':
+        tk.Button(dlg, text='解析の記録…', command=lambda: open_trace_window(app, colors)).pack(
+            anchor='w', padx=12, pady=(0, 6))
+    # スクロールの記録（2026-11-07・本文の欄の一番上の行が変わった時の行番号と関数の名前だけ。本文は残さない）。
+    # 2026-11-09 うにさん「外すのは、デバッグの中のスクロール項目だけ」：CN_DEBUG_TOOLS=1 の時だけ出す
+    import os as _os
+    import scroll_trace
+    trace_on = tk.BooleanVar(master=dlg, value=scroll_trace.enabled(app))
+
+    def toggle_trace():
+        if not scroll_trace.choose(app, trace_on.get()) and trace_on.get():
+            trace_on.set(False)
+    if _os.environ.get('CN_DEBUG_TOOLS') == '1':
+      tk.Checkbutton(dlg, text='スクロールの記録を取る（tools_local\\scroll_trace に行番号と関数の名前だけ・切ると次の起動も切り）',
+                   variable=trace_on, command=toggle_trace, bg=bg, fg=ink, selectcolor=panel,
+                   activebackground=bg, font=('Yu Gothic UI', 9)).pack(anchor='w', padx=12, pady=(0, 6))
     outer = tk.Frame(dlg, bg=bg)
     outer.pack(fill='both', expand=True, padx=(12, 0), pady=(0, 6))
     canvas = tk.Canvas(outer, bg=bg, highlightthickness=0)
@@ -381,6 +400,45 @@ def usage_text():
         for name, called, used, effect in rows:
             parts.append('  %-48s called %7d  used %7d  effect %7d' % (name, called, used, effect))
     return '\n'.join(parts)
+
+
+def trace_text(app):
+    """解析の記録（app._analyze_trace）。時刻・きっかけ・行数・理由の分類だけで、本文は入らない。"""
+    rows = getattr(app, '_analyze_trace', None) or []
+    return '\n'.join(rows) if rows else '記録はまだありません。'
+
+
+def open_trace_window(app, colors=None):
+    """解析の記録を見るだけの窓（2026-11-05「全体に未解析の印」が出た時に、理由を見るため）。"""
+    colors = dict(colors or {})
+    bg = colors.get('bg', '#f6f4ee')
+    ink = colors.get('ink', '#1c2b2d')
+    panel = colors.get('panel', bg)
+    old = getattr(app, '_trace_window', None)
+    if old is not None:
+        try:
+            if old.winfo_exists():
+                old.destroy()
+        except tk.TclError:
+            pass
+    dlg = tk.Toplevel(app.root)
+    app._trace_window = dlg
+    dlg.title('解析の記録')
+    dlg.configure(bg=bg)
+    place = getattr(app, '_place_dialog', None)
+    if place is not None:
+        place(dlg, 760, 420)
+    bar = tk.Scrollbar(dlg)
+    bar.pack(side='right', fill='y')
+    text = tk.Text(dlg, bg=panel, fg=ink, relief='flat', wrap='none', font=('Consolas', 9),
+                   yscrollcommand=bar.set)
+    bar.configure(command=text.yview)
+    text.pack(side='left', fill='both', expand=True)
+    text.insert('1.0', trace_text(app))
+    text.see('end')
+    text.configure(state='disabled')
+    dlg._trace_text = text
+    return dlg
 
 
 def open_usage_window(app, colors=None):

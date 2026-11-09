@@ -21,7 +21,7 @@ def child():
         got=dict(result=surface,result_reading=reading)
         if clauses:got['result_clauses']=clauses
         with patch.object(ime_watch,'read_composition',return_value=got):
-            user.SendMessageW(a.editor.winfo_id(),ime_events.WM_IME_COMPOSITION,0,0x1E00 if clauses else 0xA00)
+            user.SendMessageW(a.root.winfo_id(),ime_events.WM_IME_COMPOSITION,0,0x1E00 if clauses else 0xA00)
     def until(predicate,seconds=90):
         end=time.monotonic()+seconds
         while time.monotonic()<end:
@@ -32,7 +32,7 @@ def child():
     with patch.object(app,'GlobalHotkeys',return_value=Mock()),patch.object(app.CorrectNoteApp,'_learn_now',lambda *args:None):
         try:
             a=app.CorrectNoteApp(root)
-            listener=a._ime_result_events;assert listener.hwnd==a.editor.winfo_id()
+            listener=a._ime_result_events;assert listener.hwnd==a.root.winfo_id()
             a._start_ime_reading_watch();assert a._ime_result_events is listener
             send('行った','ｲｯﾀ');send('行った','ｵｺﾅｯﾀ')
             until(lambda:a.ime_readings.readings_for('行った')==['おこなった','いった'])
@@ -42,26 +42,26 @@ def child():
             assert a.editor_source_text().rstrip('\n')=='別のタブです。',repr(a.editor_source_text())
             assert not a._input_document.occurrences
             # Several native commits may arrive before one ordinary timer.
-            user.SendMessageW(a.editor.winfo_id(),ime_events.WM_IME_STARTCOMPOSITION,0,0)
+            user.SendMessageW(a.root.winfo_id(),ime_events.WM_IME_STARTCOMPOSITION,0,0)
             send('行った','ｲｯﾀ');a.editor.insert('1.0','行った')
             a.editor.insert('1.3','行った');send('行った','ｵｺﾅｯﾀ')
-            user.SendMessageW(a.editor.winfo_id(),ime_events.WM_IME_ENDCOMPOSITION,0,0)
+            user.SendMessageW(a.root.winfo_id(),ime_events.WM_IME_ENDCOMPOSITION,0,0)
             a.editor.mark_set('insert','end-1c')
             a._drain_ime_result_events()
             occurrences=a._input_document.occurrences
             assert [(o.start,o.end,o.surface,o.reading) for o in occurrences]==[
                 (0,3,'行った','いった'),(3,6,'行った','おこなった')],occurrences
-            user.SendMessageW(a.editor.winfo_id(),ime_events.WM_IME_STARTCOMPOSITION,0,0)
+            user.SendMessageW(a.root.winfo_id(),ime_events.WM_IME_STARTCOMPOSITION,0,0)
             a.editor.insert('1.0','資料')
-            user.SendMessageW(a.editor.winfo_id(),ime_events.WM_IME_ENDCOMPOSITION,0,0)
+            user.SendMessageW(a.root.winfo_id(),ime_events.WM_IME_ENDCOMPOSITION,0,0)
             a._drain_ime_result_events()
             assert not any(o.surface=='資料' for o in a._input_document.occurrences)
             print('IME_ACTUAL_COMMIT_RANGES_OK',flush=True)
             revision=a.store.revision()
-            user.SendMessageW(a.editor.winfo_id(),ime_events.WM_IME_STARTCOMPOSITION,0,0)
+            user.SendMessageW(a.root.winfo_id(),ime_events.WM_IME_STARTCOMPOSITION,0,0)
             send('海上読奥','ｶｲｼﾞｮｳﾖﾖｸ',(('海上','ｶｲｼﾞｮｳ'),('読奥','ﾖﾖｸ')))
             a.editor.insert('1.0','海上読奥')
-            user.SendMessageW(a.editor.winfo_id(),ime_events.WM_IME_ENDCOMPOSITION,0,0)
+            user.SendMessageW(a.root.winfo_id(),ime_events.WM_IME_ENDCOMPOSITION,0,0)
             a._drain_ime_result_events()
             doc=a._input_document
             assert [(o.start,o.end,o.surface,o.reading) for o in doc.occurrences if o.end<=4]==[
@@ -74,10 +74,10 @@ def child():
             assert not a.ime_readings.readings_for('海上')
             assert a.store.revision()==revision
             print('IME_RESULT_CLAUSES_APP_OK',flush=True)
-            user.SendMessageW(a.editor.winfo_id(),ime_events.WM_IME_STARTCOMPOSITION,0,0)
+            user.SendMessageW(a.root.winfo_id(),ime_events.WM_IME_STARTCOMPOSITION,0,0)
             send('図表。','ｽﾞﾋｮｳ｡',(('図表。','ｽﾞﾋｮｳ｡'),))
             a.editor.insert('1.0','図表。')
-            user.SendMessageW(a.editor.winfo_id(),ime_events.WM_IME_ENDCOMPOSITION,0,0)
+            user.SendMessageW(a.root.winfo_id(),ime_events.WM_IME_ENDCOMPOSITION,0,0)
             a._drain_ime_result_events()
             doc=a._input_document
             assert [(o.start,o.end,o.surface,o.reading) for o in doc.occurrences if o.end<=3]==[

@@ -147,7 +147,45 @@ def one_slip(key, keep_head=False):
         sides = [key[k] for k in (i - 1, i + 1) if 0 <= k < n]
         if any((ch, c) in _INTRUDE for c in sides) or (doubled and ch in sides):
             out.setdefault(key[:i] + key[i + 1:], 'extra')
+    for text in _shifted_runs(key, first):
+        out.setdefault(text, 'shift')
     out.pop(key, None)
+    return out
+
+
+SHIFT_RUN_MAX = 4   # how many keys in a row the hand may slide over
+SHIFT_MIN_LEN = 5   # shorter words have too many neighbours (dir, abs, str)
+
+
+def _shifted_runs(key, first=0):
+    """Spellings where two or more keys in a row were each pressed one key to
+    the same side on their row: the hand slid off its home position and the
+    following keys went with it (weapon typed weaoin: p and o both one key to
+    the left). One key alone is a plain wrong key. 2026-11-05 うに「pキーが
+    隣接ミスしたことで、後続キーも流れで隣を押すケース」「基準キーのズレ」.
+    Switch CN_EN_SHIFT_RUN=0."""
+    if os.environ.get('CN_EN_SHIFT_RUN') == '0':
+        return []
+    try:
+        pos = _KEYBOARD.positions()
+    except Exception:
+        return []
+    at = {v: k for k, v in pos.items() if k in _LETTERS}
+    out = []
+    n = len(key)
+    if n < SHIFT_MIN_LEN:
+        return out
+    # the slide starts after the first letter (the hand starts on the word's first key) and covers at most half the word
+    first = max(first, 1)
+    top = max(2, n // 2)
+    for d in (-1, 1):
+        # the key each letter was meant to be, if this one was pressed one key to side d
+        meant = [at.get((pos[c][0], pos[c][1] - d)) if c in pos else None for c in key]
+        for i in range(first, n - 1):
+            for j in range(i + 2, min(n, i + min(SHIFT_RUN_MAX, top)) + 1):
+                if any(m is None for m in meant[i:j]):
+                    break
+                out.append(key[:i] + ''.join(meant[i:j]) + key[j:])
     return out
 
 
@@ -222,6 +260,8 @@ ctors decl decls dest dests dtor fns gid gids gio iff iid memoize memoized
 memoizes memoizing nagle parens passwd popen recurse recursed recurses
 recursing repl restype rfile rng rvalue lvalue seeked sprintf strs struct
 structs sys tix tty ttys uat undecoded util utils wfile
+colno colnos lineno linenos rowno rownos
+mofile pwrite requote subdir subdirs
 '''.split())
 
 

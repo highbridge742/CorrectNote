@@ -334,6 +334,33 @@ def build_suspect_units(result, tokenize_fn, choice_store=None,
         _merge_functional_runs(_merge_kana_runs(units, known_kana_word))))
 
 
+def _colloquial_base(text, units):
+    """活用が「くだけた形」の単位（colloquial_pos が付ける。おもしれえ）の base を、元の形容詞（おもしろい）にする
+    （2026-11-09 うにさん「おもしれえ の品詞が 重い の活用になっているが、正しくは 面白い の活用」）。表記・位置・品詞・
+    色は変えない。引けなければ今のまま。ほかの活用の単位は触らない。CN_COLLOQUIAL_POS=0 で何もしない"""
+    import os
+    if os.environ.get('CN_COLLOQUIAL_POS') == '0':
+        return units
+    if not any(isinstance(u, dict) and u.get('infl') == 'くだけた形' for u in units):
+        return units
+    try:
+        import colloquial_adj
+        found = colloquial_adj.spans(text)
+    except Exception:
+        return units
+    for unit in units:
+        if not isinstance(unit, dict) or unit.get('infl') != 'くだけた形':
+            continue
+        start, end = unit.get('start'), unit.get('end')
+        if not (isinstance(start, int) and isinstance(end, int)):
+            continue
+        for s0, e0, word in found:
+            if s0 < end and start < e0 and word:
+                unit['base'] = word
+                break
+    return units
+
+
 def _with_latin_context(text, units):
     """
     **英字だけの単位に、行の文脈を持たせる**（2026-10-15・うにさん
@@ -348,6 +375,7 @@ def _with_latin_context(text, units):
     `analysis_context`（行の字・始まり・終わり）を、**英字だけの
     単位にだけ**付ける——日本語の単位の判定の道は今までどおり。
     """
+    units = _colloquial_base(text, units)
     try:
         from pos_font import _LATIN
     except Exception:

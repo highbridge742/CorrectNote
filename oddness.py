@@ -422,6 +422,14 @@ def _kun_noun_1(a, ap, a_reading):
 #: **接尾どうしでも並べる組**（項目48-KZ(G)・2026-09-03）。
 #: 実機メモ2,144行を走査して残った誤爆は `語系`（セム語系）だけ
 #: ——ほかの3つ（次号・語派・強勢）は `a+b` が表の語なので自動で外れる。
+# **複数の接尾**（者たち・人達・者ら・者ども・者共）は人を表す接尾の後ろにも付く閉じた文法の類（2026-11-07・補正担当。
+# 例文 Tatoeba の正しい文 労働者たち・料理人達 に紫が付いていた）。CN_PLURAL_TAIL=0 で前のまま
+# **かなの形式名詞**（分かる｜わけ・する｜まえ・乗る｜わけ）。解析が わける・まえる の動詞に読んでも、言い切りの動詞に
+# 続くのは連体の形（2026-11-07・例文 Tatoeba の正しい文で (B) が紫にしていた）。CN_KZ_FORMAL_NOUN=0 で前のまま
+_FORMAL_NOUN_KANA = frozenset(('わけ', 'まえ', 'ため', 'はず', 'ほう', 'うち', 'まま', 'ところ', 'とき', 'ふり', 'つもり'))
+
+_PLURAL_TAIL = frozenset(('たち', '達', 'ら', 'ども', '共', '等'))
+
 _SUFFIX_PAIR_OK = frozenset((
     ('語', '系'),
 ))
@@ -1354,6 +1362,36 @@ def _common_noun_pos(surface):
         return ()
 
 
+def _katakana_compound_pair(row):
+    """異様の対 (A, B, …) が、どちらも片仮名だけの身近な語（一般の文の表で 500 以内）か。"""
+    try:
+        a, b = row[0], row[1]
+        if not (isinstance(a, str) and isinstance(b, str) and len(a) >= 2 and len(b) >= 2):
+            return False
+        kata = lambda w: all('ァ' <= c <= 'ヺ' or c == 'ー' for c in w)
+        if not (kata(a) and kata(b)):
+            return False
+        import ime_reconvert
+        return ime_reconvert._rank(a) <= 500 and ime_reconvert._rank(b) <= 500
+    except Exception:
+        return False
+
+
+def _n_contracted_pair(text, start, end):
+    """[start, end) が ら行の ん への縮まった形の語（わかん・知ん・くん・あん・てん）とその後ろの な・の・ね だけの所か。"""
+    try:
+        from morphology import tokenize
+        toks = list(tokenize(text))
+    except Exception:
+        return False
+    for i, t in enumerate(toks):
+        if (t.start == start and t.pos == '動詞' and t.infl_form in ('未然特殊', '体言接続特殊') and t.surface.endswith('ん')
+                and i + 1 < len(toks) and toks[i + 1].start == t.end and toks[i + 1].surface[:1] in 'なのね'
+                and toks[i + 1].end >= end):
+            return True
+    return False
+
+
 def is_odd_run(text, tokenize_fn, with_spans=False,
                store=None, dict_index=None, skip_join=False, complete_line=False,
                reading_reasons_out=None, preserve_unknown_source=False,
@@ -1582,7 +1620,7 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
     if complete_line:
         from semantic_roles import conflicting_object_predicates,object_predicate_conflict_reason
         for obj,predicate,start,end in conflicting_object_predicates(text,source_tokens):
-            if not in_reading_gloss(text,start):
+            if not in_reading_gloss(text,start) and not _purpose_verb_before(source_tokens,start):
                 meaning_conflict_rows.add((obj,predicate,start,end))
                 out.append((obj,predicate,start,end) if with_spans else (obj,predicate))
                 if reading_reasons_out is not None:
@@ -1772,7 +1810,12 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         #     実機メモの正しい5行に紫が立った。`もみとにもどります` の
         #     ①は、かな連続の側の `pos_grammar`（K/Bk・行頭の裸の助詞）が
         #     立てる）
-        elif case_particle_mismatch(a_sf,ap,b_sf,bp):
+        elif case_particle_mismatch(a_sf,ap,b_sf,bp) and not (
+                # 格助詞＋で＋も は 副助詞 でも（誰とでも・友達とでも・駅からでも）。解析が で と も に切るだけ。
+                # CN_CASE_DEMO=0 で前のまま（2026-11-07 例文 Tatoeba の正しい文）
+                b_sf == 'で' and i + 2 < len(spans) and spans[i + 2][0] == b_e
+                and (spans[i + 2][2][0] or '') == 'も'
+                and __import__('os').environ.get('CN_CASE_DEMO') != '0'):
             _kz = True
         # (H) **並立の や は次の名詞を要る**（犬やも・内容やが）。
         #     や の直後に係助詞・格助詞が来る形は並べる相手が無い
@@ -1836,6 +1879,7 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         if ('名詞:接尾:一般' in ap and '名詞:接尾:一般' in bp
                 and (a_sf, b_sf) not in _SUFFIX_PAIR_OK
                 and b_sf not in _SUFFIX_TAIL_FREE       # 説明書付き（48-SN）
+                and not (b_sf in _PLURAL_TAIL and __import__('os').environ.get('CN_PLURAL_TAIL') != '0')
                 and b_sf not in _POSITION_KANJI         # 48-YS: 句内・書内等も既存の位置の類
                 and (a_sf + b_sf) not in (_load() or ())
                 and not _run_is_word(text, a_s, b_e)):
@@ -1989,6 +2033,7 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
         # 話し言葉なので見ない。
         if (ap == '動詞:自立' and a_sf and a_sf[-1] in _U_DAN_KZ
                 and bp == '動詞:自立' and a_sf != b_sf
+                and not (b_sf in _FORMAL_NOUN_KANA and __import__('os').environ.get('CN_KZ_FORMAL_NOUN') != '0')
                 and not _renyou_compound_head(text, spans, i + 1)):
             if not source_range_contains(a_s,b_e):
                 out.append((a_sf, b_sf, a_s, b_e) if with_spans
@@ -1999,6 +2044,9 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
                 and not any(x in ap for x in ('サ変', '形容動詞', '副詞可能',
                                               '数', '非自立'))
                 and not a_sf.endswith('化')
+                # 代名詞＋する（何してるの・何してんの）は を の省いた話し言葉の形（2026-11-05 縮まった形の洗い出しで、
+                # 何してるの が 為してるの に直っていた）。CN_ODD_PRONOUN_SURU=0 で前のまま
+                and not ('代名詞' in ap and os.environ.get('CN_ODD_PRONOUN_SURU') != '0')
                 and bp.startswith('動詞')
                 and b_sf in _SURU_FORMS
                 # 音読みの漢字を重ねた漢語（起票・検品）は、辞書がサ変と付けていなくても「する」が付く語の形
@@ -2204,6 +2252,15 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
     # ——`解析課背中セク、` の `背中|セク`(3-7) が、読みの欄の
     # `かいせ|きか`(9-14) に吸われて**画面から消えた**（実測）。
     # **道を足すたびに崩れる**ので、出口でそろえる（学び22）。
+    if with_spans and out and os.environ.get('CN_ODD_N_CONTRACT') != '0':
+        # ら行の ん への縮まった形（わかん｜ない・知ん｜ないよ・くん｜ない・あん｜の・てん｜の）は話し言葉の正しい形。
+        # 対で見る道が 未然特殊・体言接続特殊 の ん と後ろの な・の・ね の組を異様と見ていた（2026-11-05 うに「縮まった形が
+        # 抜けていたなら同じようなパターンがあるかもしれない」）。CN_ODD_N_CONTRACT=0 で前のまま
+        out=[row for row in out if not _n_contracted_pair(text,row[2],row[3])]
+    if with_spans and out and os.environ.get('CN_ODD_KATA_COMPOUND') != '0':
+        # 身近な片仮名の語2つの並び（スマート｜フォン・ノート｜パソコン）は外来語の複合語で、並べて置ける
+        # （2026-11-06 巻き込みのスレッド: 正しい文の スマートフォン に紫）。CN_ODD_KATA_COMPOUND=0 で前のまま
+        out=[row for row in out if not _katakana_compound_pair(row)]
     if with_spans:
         out.sort(key=lambda t: (t[2], t[3]))
     if with_spans and out:
@@ -2223,6 +2280,8 @@ def is_odd_run(text, tokenize_fn, with_spans=False,
             marks=tuple((row[2],row[3]) for row in out) if with_spans else ()
             for start,end,reading in anomalous_source_fields(text,tokenize_fn,store,dict_index,marks,_ime_display_out):
                 if source_range_contains(start,end):
+                    continue
+                if _numeral_time_field(text[start:end]):
                     continue
                 row=('IME逆読み','原文候補と異様な読み',start,end)
                 out.append(row if with_spans else row[:2])
@@ -4067,7 +4126,105 @@ def odd_spans(text, tokenize_fn, reasons_out=None,
             spans[-1] = (spans[-1][0], max(spans[-1][1], e))
         else:
             spans.append((s, e))
-    return spans
+    spans = _omitted_particle_clear(text, spans, reasons_out)
+    return _colloq_clear(text, spans, tokenize_fn, store, dict_index, preserve_unknown_source, reasons_out)
+
+
+_NUMERAL_RUN = __import__('re').compile('[〇一二三四五六七八九十百千万]+[時分秒度階回人日月年枚個本円歳週]')
+
+
+def _numeral_time_field(field):
+    """IME の逆読みで異様と出た所が、漢数字＋助数詞（四時・三十五度・二階）を含み、それを除くと身近な漢字の語だけ
+    （午後・毎朝）か何も残らない所か。漢数字の読みは揺れる（四時 よじ・よんじ）ので、逆読みの食い違いは打ち違いの
+    跡ではない（2026-11-06 PC の正しい文 午後四時 の紫）。CN_ODD_NUMERAL_FIELD=0 で前のまま"""
+    import os
+    if os.environ.get('CN_ODD_NUMERAL_FIELD') == '0' or not _NUMERAL_RUN.search(field or ''):
+        return False
+    rest = _NUMERAL_RUN.sub(' ', field).split()
+    try:
+        import morphology as _m
+        toks = list(_m.tokenize(field))
+        for mt in _NUMERAL_RUN.finditer(field):
+            before = [t for t in toks if t.end == mt.start()]
+            # 数の直前に1字の漢字が付く（差十五度: 三 の打ち違い）なら数の崩れかもしれない
+            if before and len(before[-1].surface) == 1 and '一' <= before[-1].surface <= '鿿':
+                return False
+        import ime_reconvert as _R
+        import morphology
+        for piece in rest:
+            for t in morphology.tokenize(piece):
+                if t.pos in ('助詞', '記号'):
+                    continue
+                if not all('一' <= c <= '鿿' for c in t.surface) or _R._rank(t.surface) >= _R.DOUBT:
+                    return False
+        return True
+    except Exception:
+        return False
+
+
+def _omitted_particle_clear(text, spans, reasons_out):
+    """話し言葉の助詞の省き（傘忘れた・何食べる・鍵持った: を が抜けた形）は正しい言い方。範囲が、身近な漢字の名詞
+    （一般・代名詞）とすぐ後ろの身近な漢字の動詞の2語だけのとき、印にしない（2026-11-06 正しい文の紫）。
+    珍しい語（加太つける）は今までどおり。CN_ODD_OMITTED_PARTICLE=0 で前のまま"""
+    import os
+    if not spans or os.environ.get('CN_ODD_OMITTED_PARTICLE') == '0':
+        return spans
+    try:
+        import morphology
+        import ime_reconvert as _R
+        toks = list(morphology.tokenize(text))
+    except Exception:
+        return spans
+    kan = lambda w: bool(w) and all('一' <= c <= '鿿' for c in w)
+    keep, gone = [], []
+    for sp in spans:
+        inside = [t for t in toks if sp[0] < t.end and t.start < sp[1]]
+        ok = False
+        if len(inside) == 2 and inside[0].start == sp[0] and inside[1].start == inside[0].end:
+            n_, v_ = inside
+            ok = (n_.pos == '名詞' and (n_.pos_sub or '').split(':')[0] in ('一般', '代名詞') and kan(n_.surface)
+                  and v_.pos == '動詞' and (v_.pos_sub or '').startswith('自立') and '一' <= v_.surface[:1] <= '鿿'
+                  and _R._rank(n_.surface) < _R.DOUBT and _R._rank(v_.base_form or v_.surface) < _R.DOUBT)
+        (gone if ok else keep).append(sp)
+    if gone and reasons_out is not None:
+        reasons_out[:] = [r for r in reasons_out if not any(g[0] <= r[0] and r[1] <= g[1] for g in gone)]
+    return keep
+
+
+# 話し言葉の縮まった形で、字数の変わらないもの（わか**んない**＝わからない）。元の形に戻すと印が消える範囲は印にしない
+_COLLOQ_SAME_LEN = (('んない', 'らない'), ('んなかった', 'らなかった'))
+_COLLOQ_BUSY = []
+
+
+def _colloq_clear(text, spans, tokenize_fn, store, dict_index, preserve_unknown_source, reasons_out):
+    import os
+    if not spans or _COLLOQ_BUSY or os.environ.get('CN_ODD_COLLOQ') == '0':
+        return spans
+    alt, where = text, []
+    for a, b in _COLLOQ_SAME_LEN:
+        k = alt.find(a)
+        while k >= 0:
+            # 前が かな の語（わか・でき）の時だけ（漢字の後ろ: 分か**んない** も同じ）
+            if k > 0 and alt[k - 1] not in '、。 　\t':
+                alt = alt[:k] + b + alt[k + len(a):]
+                where.append((k, k + len(a)))
+            k = alt.find(a, k + 1)
+    if not where:
+        return spans
+    _COLLOQ_BUSY.append(1)
+    try:
+        alt_spans = odd_spans(alt, tokenize_fn, None, store, dict_index, preserve_unknown_source)
+    except Exception:
+        return spans
+    finally:
+        _COLLOQ_BUSY.pop()
+    keep = [sp for sp in spans
+            if not (any(sp[0] < e and s < sp[1] for s, e in where)
+                    and not any(sp[0] < e and s < sp[1] for s, e in alt_spans))]
+    if reasons_out is not None and len(keep) != len(spans):
+        gone = [sp for sp in spans if sp not in keep]
+        reasons_out[:] = [r for r in reasons_out if not any(g[0] <= r[0] and r[1] <= g[1] for g in gone)]
+    return keep
 
 
 def _run_is_word(text, start, end):
@@ -4252,3 +4409,18 @@ def preserves_completed_modifier(source,source_start,changed,changed_start,chang
     # A continuative form also used as a noun can receive an adnominal.
     return any(pos.startswith('名詞,') and reading==first[2]
                for pos,form,base,reading in dictionary_inflections(first[0]) or ())
+
+def _purpose_verb_before(tokens,start):
+    """述語の直前が「動詞の連用形と同じ表記の語＋に」（返しに行く・買いに来る）か。janome が 今日返し・明日買い を
+    名詞＋接尾に切ると、目的語（本を）が後ろの 行く に係って見える。目的語はその連用形の動詞のもの。
+    semantic_roles は同梱の名詞索引の CODE_SHA256 で固定なので、ここ（印を付ける所）で外す
+    （2026-11-05 かな入力の担当: 正しい文「図書館で借りた本を今日返しに行く」の 行く が紫になっていた）。"""
+    if __import__('os').environ.get('CN_ODD_PURPOSE_VERB')=='0':return False   # 0 で前のまま
+    try:
+        from morphology import dictionary_inflections
+        k=next((i for i,t in enumerate(tokens) if t[3]==start),None)
+        if k is None or k<2 or tokens[k-1][0]!='に' or not tokens[k-1][1].startswith('助詞'):return False
+        return any(pos.startswith('動詞,') and form=='連用形'
+                   for pos,form,*_ in dictionary_inflections(tokens[k-2][0]) or ())
+    except Exception:
+        return False

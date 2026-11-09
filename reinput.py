@@ -1199,14 +1199,31 @@ def install_on_list(app, listbox):
     """候補一覧の束縛の先頭に置く。開いた時の選択は、一覧ができたあとで控える。"""
     keys = ListKeys(app, listbox)
     tag = f'{LIST_TAG}{listbox}'
-    listbox.bind_class(tag, '<KeyPress>', keys.press)
-    listbox.bind_class(tag, '<KeyRelease>', keys.release)
-    listbox.bind_class(tag, '<ButtonPress>', keys.pointer)
+    bound = []
+    for sequence, func in (('<KeyPress>', keys.press), ('<KeyRelease>', keys.release), ('<ButtonPress>', keys.pointer)):
+        bound.append((sequence, listbox.bind_class(tag, sequence, func)))
     hider = getattr(app, '_cursor_hider', None)
     if hider is not None:
-        listbox.bind_class(tag, '<Motion>', hider.on_motion)
-        listbox.bind_class(tag, '<FocusOut>', hider.on_focus_out)
+        bound.append(('<Motion>', listbox.bind_class(tag, '<Motion>', hider.on_motion)))
+        bound.append(('<FocusOut>', listbox.bind_class(tag, '<FocusOut>', hider.on_focus_out)))
         hider.add(listbox)
     listbox.bindtags((tag,) + tuple(listbox.bindtags()))
+
+    # 一覧ごとの束縛は、一覧が閉じた時に外す（2026-11-08）: bind_class の束縛は Tk が消さないので、開くたびに
+    # キーの受け手（とそれが持つアプリ・窓）が残っていた（tests_gui_dropdown_height が「閉じた窓が残っている」で落ちていた）
+    def forget(event=None):
+        if event is not None and event.widget is not listbox:
+            return
+        for sequence, name in bound:
+            try:
+                listbox.tk.call('bind', tag, sequence, '')
+            except Exception:
+                pass
+            try:
+                listbox.deletecommand(name)
+            except Exception:
+                pass
+        del bound[:]
+    listbox.bind('<Destroy>', forget, add='+')
     listbox.after_idle(keys.remember_first)
     return keys

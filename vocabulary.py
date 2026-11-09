@@ -792,6 +792,11 @@ class VocabularyStore:
                 return False    # もっと新しい中身が、もう書かれている
             # json.dump と同じ文字列（同じ iterencode の切れ端をつないだもの）
             text = json.dumps(data, ensure_ascii=False, indent=2)
+            import file_same
+            if file_same.same(target, text):
+                written[target] = generation
+                self.legacy_on_disk = False
+                return True
             tmp = target + '.tmp'
             with open(tmp, 'w', encoding='utf-8') as f:
                 f.write(text)
@@ -938,6 +943,13 @@ def personal_from_entries(entries, base_rows):
     return {'version': 1, 'entries': out, 'removed': removed, 'order': order}
 
 
+# 過去に打った語で補正を変えない（2026-11-08 うにさん「過去に何を打ったかで補正が変わる処理を、一旦無効に」）。
+# 上の層（vocabulary_personal.json・古い vocabulary.json）は読まない・書かない・消さない。語彙は同梱の下の層だけ
+# （初めの状態と同じ）で、この間に打った語も覚えない（add が何もしない）。ファイルはそのまま残るので、
+# 環境変数 CN_LEARNED_HISTORY=1 で起動すれば前のとおり上の層を重ねて覚える。
+LEARNED_OFF = os.environ.get('CN_LEARNED_HISTORY', '') != '1'
+
+
 class LayeredVocabularyStore(VocabularyStore):
     """下の層（同梱）＋上の層（本人）の語彙。メモリの上では VocabularyStore と同じ形。
 
@@ -957,7 +969,9 @@ class LayeredVocabularyStore(VocabularyStore):
         target = path or self.path
         personal = None
         from_old = False
-        if target and os.path.exists(target):
+        if LEARNED_OFF:
+            pass                                      # 上の層は読まない（上の LEARNED_OFF）
+        elif target and os.path.exists(target):
             with open(target, encoding='utf-8') as f:
                 personal = json.load(f)
         elif self.old_path and os.path.exists(self.old_path):
@@ -1016,17 +1030,22 @@ class LayeredVocabularyStore(VocabularyStore):
     def personal_data(self):
         return personal_from_entries(self.to_list(), load_base_rows(self.base_path))
 
+    def add(self, reading, surface, category='その他', world=0, solid=None):
+        if LEARNED_OFF:
+            return False                              # 打った語を覚えない（上の LEARNED_OFF）
+        return VocabularyStore.add(self, reading, surface, category, world, solid)
+
     def save(self, path=None):
         target = path or self.path
-        if not target:
-            return
+        if not target or LEARNED_OFF:
+            return                                    # 上の層のファイルに触らない
         revision = self._revision
         if self._write_saved(target, self.personal_data(), self._next_save_generation()):
             self.saved_revision = revision
 
     def save_in_background(self, path=None):
         target = path or self.path
-        if not target:
+        if not target or LEARNED_OFF:
             return None
         data = self.personal_data()
         generation = self._next_save_generation()

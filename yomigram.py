@@ -58,7 +58,7 @@ _FLOOR = 0.1
 
 
 def _load():
-    global _TABLE, _CTX2, _NEXT, _MISSING
+    global _TABLE, _CTX2, _MISSING
     if _TABLE is not None or _MISSING:
         return _TABLE
     try:
@@ -68,15 +68,25 @@ def _load():
         _MISSING = True
         return None
     ctx = {}
-    nxt = {}
     for g, c in _TABLE.items():
         k = g[:2]
         ctx[k] = ctx.get(k, 0) + c
-        nxt.setdefault(k, []).append((g[2], c))
-    for k in nxt:
-        nxt[k].sort(key=lambda t: (-t[1], t[0]))
-    _CTX2, _NEXT = ctx, nxt
+    _CTX2 = ctx
     return _TABLE
+
+
+def _next_table():
+    """2連 → [(次の字, 回数), …]。next_ranking だけが使うので、初めて呼ばれた時に作る（2026-11-07・解析の子の
+    メモリ: 3連 約11万の組を子ごとに約14MB 持っていた。補正の段は logp_parts・score しか使わない）。"""
+    global _NEXT
+    if _NEXT is None and _load() is not None:
+        nxt = {}
+        for g, c in _TABLE.items():
+            nxt.setdefault(g[:2], []).append((g[2], c))
+        for k in nxt:
+            nxt[k].sort(key=lambda t: (-t[1], t[0]))
+        _NEXT = nxt
+    return _NEXT
 
 
 def available():
@@ -116,6 +126,7 @@ def next_ranking(prev2):
     """
     if _load() is None or not prev2 or len(prev2) != 2:
         return []
+    _next_table()
     got = _NEXT.get(prev2)
     if got:
         return got

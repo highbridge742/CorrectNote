@@ -158,6 +158,8 @@ def draw_soon(app):
     うにさん). A 0ms timer runs before the later timers; drawing there shows
     the text as typed (the corrections still come afterwards, unchanged)."""
     if getattr(app,'_draw_edit_job',None) is not None:return
+    import ime_burst
+    if ime_burst.holding(app):return      # 確定の字の途中: 最後の字でまとめて描く
     root=getattr(app,'root',None);editor=getattr(app,'editor',None)
     if root is None or editor is None:return
     def draw():
@@ -236,7 +238,7 @@ def start_quick_readings(app):
     widget=app._quick_text
     doc=quick_document(app,widget.get('1.0','end-1c'))
     from ime_events import ResultEvents
-    events=ResultEvents(widget.winfo_id())
+    events=ResultEvents(widget.winfo_toplevel().winfo_id())      # IME の知らせは Tk のキーの入力先（窓）へ届く
     events.ranges.set_owner(doc.owner)
     app._quick_ime_result_events=events
 

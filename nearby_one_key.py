@@ -96,10 +96,78 @@ def propose(text, nearby_words):
     return out
 
 
+def _line_runs(text):
+    """text の中の漢字だけの名詞の連なり (始まり, 終わり, 語)。"""
+    import morphology
+    toks = list(morphology.tokenize(text))
+    out = []
+    i = 0
+    while i < len(toks):
+        j = i
+        while j < len(toks) and toks[j].pos == '名詞' and toks[j].surface and all(_kanji(c) for c in toks[j].surface):
+            j += 1
+        if j == i:
+            i += 1
+            continue
+        s, e = toks[i].start, toks[j - 1].end
+        out.append((s, e, text[s:e]))
+        i = j
+    return out
+
+
+def _record_dependency(text):
+    """この段の答えが上下の行の語のどこに依るかを used_keys に記録する（2026-11-06・挙動関連担当の案）。
+    依るのは、行の漢字の語が上下の行に在るか（nearby_probes）と、行の漢字の語の読み（nearby_one_key: 上下の行に
+    この読みと隣のキーの1打だけ違う読みの漢字の語が増えるか減るかした時だけ答えが変わりうる）。"""
+    try:
+        import used_keys as U
+        rec = U._ACTIVE.get()
+        if rec is None or U._IN_QUERY.get():
+            return
+        import morphology
+        for s, e, word in _line_runs(text):
+            if len(word) < 2:
+                continue
+            rec.nearby_probes.add(word)
+            r = _reading(word, morphology.tokenize)
+            if r and _rank(word) is not None:
+                rec.nearby_one_key.add(r)
+    except Exception:
+        try:
+            rec.nearby = True
+        except Exception:
+            pass
+
+
+def change_matters(readings, old_words, new_words):
+    """上下の行の語が old から new に変わった時、読み readings（_record_dependency の記録）の行のこの段の答えが
+    変わりうるか。増えた・減った漢字の語の読みが、どれかの読みと隣のキーの1打だけ違えば True。"""
+    import morphology
+    if not readings:
+        return False
+    a = {w for w in old_words or () if len(w) >= 2 and all(_kanji(c) for c in w)}
+    b = {w for w in new_words or () if len(w) >= 2 and all(_kanji(c) for c in w)}
+    for w in a ^ b:
+        rw = _reading(w, morphology.tokenize)
+        if rw and any(_one_key(r, rw) for r in readings):
+            return True
+    return False
+
+
 def repair_line(line, result, nearby_words, input_method='kana', decided=()):
-    if not isinstance(result, dict) or input_method != 'kana' or not nearby_words:
+    if not isinstance(result, dict) or input_method != 'kana':
         return result
     done = result.get('corrected') or line
+    try:
+        import os
+        import used_keys as U
+        if os.environ.get('CN_NEARBY_MARK') != '0' and isinstance(nearby_words, U.NearbyWords):
+            _record_dependency(done)
+            nearby_words = U.raw_tuple(nearby_words)
+    except Exception:
+        pass
+    if not nearby_words:
+        return result
     try:
         import morphology
         marks = propose(done, nearby_words)

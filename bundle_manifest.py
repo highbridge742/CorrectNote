@@ -157,6 +157,19 @@ ITEMS = (
     Item('tatoeba_pairs.json.gz', None,
          '語の組の表（Tatoeba の文から採った語の組）が引けず、語の組で選び分ける補正が効かなくなる',
          False),
+    # 2026-11-07〜08 に足された Tatoeba の数えの表（semantic_fit・kana_lattice_place が読む）。名簿に無く、exe に
+    # 入らないところだった（2026-11-09 の 1.18.2 の下見で見つけた）
+    Item('tatoeba_case.json.gz', None,
+         '名詞＋格助詞＋述語 の組の表（Tatoeba の例文から数えた）が引けず、述語との組で選び分ける補正と、かなの行の'
+         '語の置き方の手掛かりが細る',
+         False),
+    Item('tatoeba_no.json.gz', None,
+         '名詞＋の＋名詞 の組の表（Tatoeba の例文から数えた）が引けず、名詞どうしの組で選び分ける補正が細る',
+         False),
+    Item('tatoeba_sahen.json.gz', None,
+         '名詞＋格助詞＋サ変の名詞（する）の組の表（Tatoeba の例文から数えた）が引けず、かなで打った漢語のサ変動詞を'
+         '漢字にする補正が細る',
+         False),
     Item('NOTICE_sudachi.txt', None,
          'SudachiDict（Apache-2.0）の表示が配布物から落ちる',
          False),

@@ -171,6 +171,8 @@ DEFAULTS = {
     'recent_files': [],
     'wheel_inertia': True,
     'right_drag_inertia': True,
+    # スクロールの記録（scroll_trace・既定は入り・2026-11-07 うにさん）。デバッグメニューで切ると False（次の起動も切り）
+    'scroll_trace': True,
     'bulk_insert_text': '',
     'bulk_insert_direction': 'start',
     'bulk_insert_distance': '0',

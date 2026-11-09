@@ -66,7 +66,12 @@ def _quantity_like(tok):
         codes = semantic_class.codes(tok.surface) or ()
     except Exception:
         codes = ()
-    return any(str(c).startswith(('1.16', '1.17', '1.19')) for c in codes)
+    if any(str(c).startswith(('1.16', '1.17', '1.19')) for c in codes):
+        return True
+    # 気持ちの名詞（分類語彙表 1.30: 不満・不安・心配）は、辞書が形容動詞の語幹と書いていなくても程度の副詞を受ける
+    # （とても不満です・2026-11-08 補正担当の正しい文の試し）。CN_DEGREE_FEELING=0 で前のまま
+    import os
+    return os.environ.get('CN_DEGREE_FEELING') != '0' and any(str(c).startswith('1.30') for c in codes)
 
 
 def _no_predicate_after(toks, j, text):

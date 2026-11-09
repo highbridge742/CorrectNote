@@ -247,6 +247,21 @@ def _pure_query(args,key_steps):
     return not any(isinstance(a,str) and ' display lineend' in a for a in args)
 
 
+def _pure_query_tcl(original,key_steps):
+    """The Tcl form of _pure_query (and of forward's WHOLE_TEXT exception), for the widget's command."""
+    steps=' '.join('{%s}'%step for step in key_steps)
+    queries=' - '.join(sorted(PURE_QUERIES))
+    tags=' '.join(sorted(PURE_TAG_QUERIES))
+    return ('set kind [lindex $args 0]\n'
+            'switch -exact -- $kind {\n'
+            '    '+queries+' {set pure [expr {$args ne {'+' '.join(WHOLE_TEXT)+'}}]}\n'
+            '    index {set pure [expr {[llength $args]==2 && [lindex $args 1] ni {'+steps+'}}]}\n'
+            '    tag {set pure [expr {[llength $args]>=2 && [lindex $args 1] in {'+tags+'}}]}\n'
+            '    default {set pure 0}\n'
+            '}\n'
+            'if {$pure && ![string match {* display lineend*} $args]} {return ['+original+' {*}$args]}\n')
+
+
 # Text commands that never change the characters ('edit' is not here:
 # undo/redo do, and the rest are rare).
 READ_ONLY_COMMANDS=frozenset(('bbox','cget','compare','configure','count','debug','dlineinfo',
@@ -512,7 +527,10 @@ def observe_text(widget,on_edit=None,on_cursor=None,on_before_edit=None,track_ch
             return (1,str(error),options)
     callback=widget.register(forward)
     # register() supplies a generated Tcl command name, never document text.
+    # The pure queries (_pure_query) go straight to the native widget in Tcl, without entering Python: typing in a
+    # long tab asked 1,000 of them a key at about 28us each (2026-11-05). The test must stay the same as _pure_query.
     widget.tk.call('proc',widget._w,'args',
+        _pure_query_tcl(original,invoke._KEY_STEPS)+
         'set outcome ['+callback+' {*}$args]\n'
         'if {[lindex $outcome 0]} {\n'
         '    return -options [lindex $outcome 2] [lindex $outcome 1]\n'

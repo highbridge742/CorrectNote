@@ -34,10 +34,47 @@ def _kana(c):
     return 'ぁ' <= c <= 'ゖ' or c in 'ー゛゜'
 
 
+def _table_copy(path):
+    """kana_rules_table.py の写し。元の表の大きさと決まりの値が同じ時だけ（CN_KANA_RULES_TABLE=0 で使わない）。"""
+    if os.environ.get('CN_KANA_RULES_TABLE') == '0':
+        return None
+    try:
+        import kana_rules_table as K
+        if (K.SEED_SIZE == os.path.getsize(path) and K.HEAD_RARE == HEAD_RARE and K.TAIL_RARE == TAIL_RARE):
+            return (set(K.NO_HEAD), set(K.NO_TAIL), set(K.INSIDE), set(K.SINGLE))
+    except Exception:
+        pass
+    return None
+
+
+def write_table():
+    """kana_rules_table.py を今の表から作り直す。"""
+    global _T
+    import corrector
+    path = os.path.join(os.path.dirname(os.path.abspath(corrector.__file__)), 'seed_japanese_cost.txt.gz')
+    _T = None
+    os.environ['CN_KANA_RULES_TABLE'] = '0'
+    try:
+        T = _load()
+    finally:
+        os.environ.pop('CN_KANA_RULES_TABLE', None)
+    out = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'kana_rules_table.py')
+    with open(out, 'w', encoding='utf-8') as f:
+        f.write('"""kana_rules._load の答えの写し。作り直しは kana_rules.write_table()。"""\n')
+        f.write('SEED_SIZE = %d\nHEAD_RARE = %r\nTAIL_RARE = %r\n' % (os.path.getsize(path), HEAD_RARE, TAIL_RARE))
+        for name, v in zip(('NO_HEAD', 'NO_TAIL', 'INSIDE', 'SINGLE'), T):
+            f.write('%s = frozenset(%r)\n' % (name, sorted(v)))
+    return out
+
+
 def _load():
     global _T
     if _T is None:
         import corrector
+        _path = os.path.join(os.path.dirname(os.path.abspath(corrector.__file__)), 'seed_japanese_cost.txt.gz')
+        _T = _table_copy(_path)
+        if _T is not None:
+            return _T
         path = os.path.join(os.path.dirname(os.path.abspath(corrector.__file__)), 'seed_japanese_cost.txt.gz')
         head, tail, inside, single = collections.Counter(), collections.Counter(), set(), set()
         n = 0.0

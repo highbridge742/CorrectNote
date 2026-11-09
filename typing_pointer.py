@@ -62,7 +62,7 @@ class TypingPointer:
             return
         # The art below a pane's last line (appearance.Paper) is part of the pane.
         if getattr(pointer, '_correctnote_paper_below', False):
-            pointer = pointer.master
+            pointer = getattr(pointer, '_correctnote_paper_pane', pointer.master)
         # Hiding is limited to text panes under the pointer, never the root/menu.
         if pointer not in widgets:
             return

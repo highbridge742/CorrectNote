@@ -197,7 +197,13 @@ def is_on_reading(ch, reading):
     """
     if not reading or not is_on_shape(reading):
         return False
-    return kind_of(ch, reading) not in ('kun', 'na', 'gai')
+    kind = kind_of(ch, reading)
+    if kind == 'na' and len(reading) >= 2 and not any(k == 'on' for k in (_load() or {}).get(ch, {}).values()) \
+            and __import__('os').environ.get('CN_ONKUN_NA_ON') != '0':
+        # 音読みの印が1つも無い字で、音読みの形の読みに名乗りの印だけが付いている（了 の りょう）。表の穴なので音読みに
+        # 数える（2026-11-05: しゅうりょうじ が 終了時 にならず、かなの行の和語の見分けで戻されていた）
+        return True
+    return kind not in ('kun', 'na', 'gai')
 
 
 def kinds_of_word(text, reading_per_char):

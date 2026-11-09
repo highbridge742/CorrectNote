@@ -11,6 +11,10 @@ correction_entry.correct_line の1回ごとに、答えの dict に used_keys �
           その読みか表記がここにある行だけやり直す。
   choice  選び直しの記憶を引いたキー（元の表記・読み）。変わった記録の元の表記か読みがここにある行だけやり直す。
   recent  最近使った語を1度でも読んだか（並びの順で重みが変わるので、語ごとには分けない）。
+  nearby  上下の行の語（nearby_words）の中を1度でも読んだか（2026-11-06・挙動関連担当の案: 上下の行が変わった時、
+          読んでいない行は解き直さない）。
+  nearby_truth  上下の行の語が有るか無いかだけを見たときのその値（True/False）。見ていなければ None。中を読まずに
+          有る無しだけ見た行は、有る無しが変わった時だけ解き直せばよい。
   loan    外来語・英語の表（loanword のカタカナ・英語の語彙の表）を使った。表に入るのは表記がすべてカタカナの語と
           英語の語（読みが en: の語）だけなので、変わった語彙・記憶の表記がカタカナだけか英字を含むとき（読みが en: のとき）だけ
           やり直す（is_loan_change）。表を作り直すかの版の確かめはこれに含め、whole にはしない（2026-10-24）。
@@ -53,21 +57,28 @@ _installed = False
 
 
 class _Record:
-    __slots__ = ('vocab', 'choice', 'recent', 'whole', 'loan', 'queries')
+    __slots__ = ('vocab', 'choice', 'recent', 'whole', 'loan', 'queries', 'nearby', 'nearby_truth', 'nearby_probes',
+                 'nearby_one_key')
 
     def __init__(self):
         self.vocab, self.choice, self.recent, self.whole, self.loan = set(), set(), False, False, False
         self.queries = {}
+        self.nearby, self.nearby_truth = False, None
+        self.nearby_probes, self.nearby_one_key = set(), set()
 
     def answer(self):
         # whole なら何が変わってもやり直すので、キーは要らない。キーは控え（同じ子の2回目の解析）に当たると
         # 引かれずに減るので、whole の行で残すと同じ行の答えが回ごとに違った（2026-10-24・1.16.0 の全体の検査）
         if self.whole:
             return {'vocab': [], 'choice': [], 'recent': self.recent, 'whole': True, 'loan': self.loan,
-                    'queries': []}
+                    'queries': [], **self._nearby_answer()}
         return {'vocab': [], 'vocab_bloom': bloom(self.vocab), 'choice': sorted(self.choice),
                 'recent': self.recent, 'whole': self.whole, 'loan': self.loan,
-                'queries': sorted([k, v] for k, v in self.queries.items())}
+                'queries': sorted([k, v] for k, v in self.queries.items()), **self._nearby_answer()}
+
+    def _nearby_answer(self):
+        return {'nearby': self.nearby, 'nearby_truth': self.nearby_truth,
+                'nearby_probes': sorted(self.nearby_probes), 'nearby_one_key': sorted(self.nearby_one_key)}
 
 
 BLOOM_BITS_PER_KEY = 16
@@ -287,6 +298,94 @@ class RecentWords(tuple):
 
     def __getitem__(self, i):
         self._mark(); return tuple.__getitem__(self, i)
+
+
+class NearbyWords(tuple):
+    """上下の行の語の並び。中を読んだら（回す・含むか・番号で取る）nearby、有る無しを見たら nearby_truth を記録する。"""
+    def _mark(self):
+        rec = _ACTIVE.get()
+        if rec is not None and not _IN_QUERY.get(): rec.nearby = True
+
+    def _truth(self):
+        rec = _ACTIVE.get()
+        if rec is not None and not _IN_QUERY.get() and rec.nearby_truth is None:
+            rec.nearby_truth = tuple.__len__(self) > 0
+
+    def __iter__(self):
+        self._mark(); return tuple.__iter__(self)
+
+    def __contains__(self, x):
+        # 含むかだけの問いは、問うた語だけを記録する（その語の有る無しが変わった時だけ解き直す）
+        rec = _ACTIVE.get()
+        if rec is not None and not _IN_QUERY.get():
+            if isinstance(x, str):
+                rec.nearby_probes.add(x)
+            else:
+                rec.nearby = True
+        return tuple.__contains__(self, x)
+
+    def __getitem__(self, i):
+        self._mark(); return tuple.__getitem__(self, i)
+
+    def __add__(self, other):
+        self._mark(); return tuple.__add__(self, other)
+
+    def __radd__(self, other):
+        self._mark(); return tuple(other) + tuple(tuple.__iter__(self))
+
+    def __len__(self):
+        self._truth(); return tuple.__len__(self)
+
+    def __bool__(self):
+        self._truth(); return tuple.__len__(self) > 0
+
+
+class Surround(tuple):
+    """同じ行の語・直前の語（own）の後ろに上下の行の語を並べた材料。上下の行の語の分を読んだ時だけ nearby を記録する
+    （作るだけでは記録しない: 読み直しの材料は、表記が並んで文脈で選ぶ時にだけ使われる）。"""
+    def __new__(cls, own, nearby):
+        near = raw_tuple(nearby)
+        obj = tuple.__new__(cls, tuple(own) + near)
+        obj._own = len(tuple(own))
+        obj._near = len(near)
+        return obj
+
+    def _mark(self):
+        rec = _ACTIVE.get()
+        if self._near and rec is not None and not _IN_QUERY.get(): rec.nearby = True
+
+    def _truth(self):
+        rec = _ACTIVE.get()
+        if not self._own and rec is not None and not _IN_QUERY.get() and rec.nearby_truth is None:
+            rec.nearby_truth = self._near > 0
+
+    def __iter__(self):
+        self._mark(); return tuple.__iter__(self)
+
+    def __contains__(self, x):
+        self._mark(); return tuple.__contains__(self, x)
+
+    def __getitem__(self, i):
+        self._mark(); return tuple.__getitem__(self, i)
+
+    def __add__(self, other):
+        self._mark(); return tuple.__add__(self, other)
+
+    def __radd__(self, other):
+        self._mark(); return tuple(other) + tuple(tuple.__iter__(self))
+
+    def __len__(self):
+        self._truth(); return tuple.__len__(self)
+
+    def __bool__(self):
+        self._truth(); return tuple.__len__(self) > 0
+
+
+def raw_tuple(x):
+    """記録を付けずに中身の tuple を取る（RecentWords・NearbyWords も）。"""
+    if isinstance(x, tuple):
+        return tuple(tuple.__iter__(x))
+    return tuple(x or ())
 
 
 def start():

@@ -52,7 +52,10 @@ class RightDoubleTests(unittest.TestCase):
             label.place(x=i * 3, y=40)
         self.root.update()
         self.text.event_generate('<ButtonPress-3>', x=20, y=20, rootx=120, rooty=120, time=T + 150)
-        self.assertEqual(self.doubles, [self.text])
+        # Tk 8.6.9 loses the first press here, and the press handler finds the double. Tk 8.6.12 keeps it, and its own
+        # <Double-Button-3> comes (the app binds both to the same action). Once either way.
+        self.assertEqual(len(self.doubles), 1, self.doubles)
+        self.assertIn(self.doubles[0], (self.text, 'tk'))
 
     def test_a_slow_second_press_or_another_place_is_not_a_double(self):
         self.press(1000)

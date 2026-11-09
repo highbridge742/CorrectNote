@@ -36,7 +36,8 @@ class WindowIconTests(unittest.TestCase):
             self.assertEqual(self.icons(),(0,0),'Failed to simulate lost window icon handles')
             message=self.u.RegisterWindowMessageW(name)
             self.u.SendMessageW(self.hwnd,message,0,0)
-            deadline=time.monotonic()+.5
+            # このかたちの窓（本体の一部だけ）ではドロップの見回りだけが拾う（1秒ごと・2026-11-07）。本体では IME の見回り（150ms）も拾う
+            deadline=time.monotonic()+app.CorrectNoteApp.DROP_POLL_MS/1000+.5
             while time.monotonic()<deadline and not all(self.icons()):
                 self.root.update();time.sleep(.004)
             self.assertEqual(self.icons(),(self.a._win_icon_small,self.a._win_icon_big),name)

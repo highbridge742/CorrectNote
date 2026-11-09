@@ -89,6 +89,9 @@ def open_link(link):
         os.startfile(link.target)
 
 
+_LINK_YVIEW = __import__('os').environ.get('CN_LINK_YVIEW') == '1'
+
+
 class TextLinks:
     TAG='explicit_link'
     UNWRAPPED_TAG='literal_no_wrap'
@@ -142,8 +145,20 @@ class TextLinks:
     def cancel(self,event=None):
         self._pressed=None
 
+    def _view_y(self):
+        """Where the view is: the row at the top and how far it is moved up. yview()'s fractions also change while Tk is
+        still measuring the rows' heights (nothing moved), and a click on a link was dropped as if scrolled (2026-11-08:
+        the other pane's view was set again to the same row when the memo pane redrew). CN_LINK_YVIEW=1: as before"""
+        w=self.widget
+        if _LINK_YVIEW:return w.yview()
+        try:
+            top=w.index('@0,0');info=w.dlineinfo(top)
+            return (top,info[1] if info else None)
+        except Exception:
+            return w.yview()
+
     def view_changed(self):
-        if self._pressed and (self._pressed[3]!=self.widget.yview() or self._pressed[4]!=self.widget.xview()):
+        if self._pressed and (self._pressed[3]!=self._view_y() or self._pressed[4]!=self.widget.xview()):
             self.cancel()
 
     def changed(self,args=None):
@@ -163,7 +178,14 @@ class TextLinks:
                 # sel.first/last may cease to exist after a successful delete.
                 # Do not turn that completed edit into an observer error.
                 row=None
+        old_count=self._line_count
         self._line_count=count
+        if row is None and args and old_count is not None and count!=old_count and self._follow_rows(args,count,old_count):
+            if not self._links_enabled:
+                self._pending_lines=None;self._row_text={};self._dirty_rows=set()
+                return
+            if self._pending is None:self._pending=self.widget.after_idle(self.refresh)
+            return
         if row is None:
             self._dirty_rows=None;self._rows={};self._row_text={}
             self._pending_lines=widget.get('1.0','end-1c').split('\n')
@@ -182,6 +204,63 @@ class TextLinks:
             return
         if self._pending is None:self._pending=self.widget.after_idle(self.refresh)
 
+    def _follow_rows(self,args,count,old_count):
+        """An edit that added or removed rows (Enter, a pasted block): only its rows are looked at again.
+
+        The link and display tags move with the text in Tk; the rows kept here move by the edit's row change
+        (analysis_work's _correctnote_last_edit: the first row, the change of the row count, the last row it took
+        text from). An Enter in a 1,500-row pane went over every row each time, twice (2026-11-07, うにさん
+        「エンターを押しっぱなしにして連続で改行を入れる動作が重いです」). False: the whole text is gone over."""
+        if args[0] not in ('insert','delete','replace') or self._pending_lines is not None or self._dirty_rows is None:
+            return False
+        span=getattr(self.widget,'_correctnote_last_edit',None)
+        try:
+            first,delta,last=int(span[0]),int(span[1]),int(span[2])
+        except (TypeError,ValueError,IndexError):
+            return False
+        if first<1 or last<first or old_count+delta!=count:
+            return False
+        new_last=max(first,last+delta)
+        if new_last>count:return False
+        def moved(r):
+            if r<first:return r
+            if r<=last:return None
+            return r+delta
+        for name in ('_rows','_row_text','_unwrapped_rows'):
+            old=getattr(self,name);new={}
+            for r,value in old.items():
+                target=moved(r)
+                if target is not None:new[target]=value
+            setattr(self,name,new)
+        self._dirty_rows={target for target in map(moved,self._dirty_rows) if target is not None}
+        widget=self.widget
+        rows=range(first,new_last+1)
+        texts=[(r,widget.get(f'{r}.0',f'{r}.end')) for r in rows]
+        if self._links_enabled:widget.tag_remove(self.TAG,f'{first}.0',f'{new_last}.end')
+        widget.tag_remove(self.UNWRAPPED_TAG,f'{first}.0',f'{new_last}.end')
+        widget.tag_remove(self.ELIDED_TAG,f'{first}.0',f'{new_last}.end')
+        from literal_lines import unwrapped_only
+        ranges=[]
+        for r,text in texts:
+            self._rows.pop(r,None)
+            self._row_text[r]=text
+            self._dirty_rows.add(r)
+            if unwrapped_only(text):
+                self._unwrapped_rows[r]=text
+                ranges.extend((f'{r}.0',f'{r}.end'))
+        if ranges:widget.tag_add(self.UNWRAPPED_TAG,*ranges)
+        for r,_text in texts:
+            if r in self._unwrapped_rows:self._refresh_clipping(r)
+        return True
+
+    def _remove_all(self,tag):
+        # These tags change how rows are laid out, and Tk counts every row in a range it is told to take such a tag
+        # from, present or not: an Enter in a 3,700-row pane cost about 2 seconds of the main process (2026-11-05).
+        widget=self.widget
+        ranges=widget.tag_ranges(tag)
+        for first,last in zip(ranges[::2],ranges[1::2]):
+            widget.tag_remove(tag,first,last)
+
     def _sync_unwrapped(self,lines,row=None):
         # Tk undo/redo can issue see before idle callbacks. Apply presentation
         # tags in the completed edit notification, including nested replay.
@@ -189,8 +268,8 @@ class TextLinks:
         # import cycle. No payload decoding or extra widget listener is needed.
         from literal_lines import unwrapped_only
         widget=self.widget
-        start,end=('1.0','end') if row is None else (f'{row}.0',f'{row}.end')
-        widget.tag_remove(self.UNWRAPPED_TAG,start,end)
+        if row is None:self._remove_all(self.UNWRAPPED_TAG)
+        else:widget.tag_remove(self.UNWRAPPED_TAG,f'{row}.0',f'{row}.end')
         if row is None:self._unwrapped_rows={}
         else:self._unwrapped_rows.pop(row,None)
         ranges=[]
@@ -252,12 +331,12 @@ class TextLinks:
 
     def _refresh_clipping(self,row=None):
         widget=self.widget
-        start,end=('1.0','end') if row is None else (f'{row}.0',f'{row}.end')
-        widget.tag_remove(self.ELIDED_TAG,start,end)
+        if row is None:self._remove_all(self.ELIDED_TAG)
+        else:widget.tag_remove(self.ELIDED_TAG,f'{row}.0',f'{row}.end')
         if not self._unwrapped_rows:return
         signature,measure,unit=self._display_metrics()
         if signature!=self._clip_signature:
-            row=None;widget.tag_remove(self.ELIDED_TAG,'1.0','end')
+            row=None;self._remove_all(self.ELIDED_TAG)
         self._clip_signature=signature
         rows=self._unwrapped_rows.items() if row is None else ((row,self._unwrapped_rows[row]),) if row in self._unwrapped_rows else ()
         ranges=[]
@@ -329,7 +408,7 @@ class TextLinks:
         if self.blocked() or self._modified(event):return
         link=self._hit(event)
         if link is not None:
-            self._pressed=(link,self._generation,self.scope(),self.widget.yview(),
+            self._pressed=(link,self._generation,self.scope(),self._view_y(),
                            self.widget.xview(),event.x,event.y)
 
     def motion(self,event):
@@ -341,7 +420,7 @@ class TextLinks:
         if pressed is None or self.blocked() or self._modified(event):return
         link,generation,scope,yview,xview,x,y=pressed
         if (generation!=self._generation or scope!=self.scope()
-                or yview!=self.widget.yview() or xview!=self.widget.xview()
+                or yview!=self._view_y() or xview!=self.widget.xview()
                 or abs(x-event.x)>3 or abs(y-event.y)>3
                 or link!=self._hit(event) or self.widget.tag_ranges('sel')):
             return

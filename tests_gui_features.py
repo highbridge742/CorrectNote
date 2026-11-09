@@ -110,6 +110,42 @@ def child():
             assert a.editor.get('sel.first', 'sel.last') == '資料'
             a._close_all_tab_results(); a._close_find_dialog()
 
+            # 2026-11-07 うにさん: 検索窓を開いたまま本体で選び直して Ctrl+F → 検索欄が選んだ字になる。選択が無ければそのまま
+            from types import SimpleNamespace
+            ed = a.editor
+            def pick(first, last):
+                ed.tag_remove('sel', '1.0', 'end'); ed.tag_add('sel', first, last)
+            root.focus_get = lambda: ed           # 隠した窓は本当の焦点を持てないので、本体から押した形にする
+            try:
+                pick('2.0', '2.2'); a.open_find_dialog(False)
+                assert a._find_query.get() == '別の', a._find_query.get()
+                pick('1.4', '1.6'); a.open_find_dialog(False)
+                assert a._find_query.get() == '資料', a._find_query.get()
+                assert a._find_dialog is not None
+                ed.tag_remove('sel', '1.0', 'end'); a.open_find_dialog(False)
+                assert a._find_query.get() == '資料'
+                a._find_query.set('手で書いた'); pick('2.0', '2.2')
+                root.focus_get = lambda: a._find_entry      # 検索窓の中で押した時は、本体の選択で替えない
+                a.open_find_dialog(False)
+                assert a._find_query.get() == '手で書いた', a._find_query.get()
+                root.focus_get = lambda: ed
+                # 本体の Esc は検索窓と全タブの検索結果の窓を両方閉じる
+                a._find_query.set('資料'); a._do_find_all_tabs()
+                until(lambda: a._all_tab_search_job is None)
+                assert a._all_tab_dialog is not None and a._find_dialog is not None
+                assert a._close_find_from_main_escape(SimpleNamespace(widget=ed)) is True
+                assert a._find_dialog is None and a._all_tab_dialog is None
+                # 全タブの窓だけ残っていても閉じる
+                a.open_find_dialog(False); a._do_find_all_tabs()
+                until(lambda: a._all_tab_search_job is None)
+                a._close_find_dialog()
+                assert a._close_find_from_main_escape(SimpleNamespace(widget=ed)) is True
+                assert a._all_tab_dialog is None
+                assert a._close_find_from_main_escape(SimpleNamespace(widget=ed)) is False   # 何も開いていなければ他の Esc へ
+                ed.tag_remove('sel', '1.0', 'end')
+            finally:
+                del root.focus_get
+
             path = here / 'synthetic-source.txt'
             raw = '保存する資料\r\n次の行\n\n'.encode('cp932')
             path.write_bytes(raw)
@@ -328,12 +364,34 @@ class FeaturesApplicationTests(unittest.TestCase):
                 if entry.is_file() and (entry.suffix == '.py' or entry.name in NAMES):
                     shutil.copy2(entry, dest / entry.name)
             (dest / '.ui-features-test-isolated').touch()
+            # The choice remembered below (a.choices.remember('40','四十')) works only with the learned history
+            # on: it is off by default since 2026-11-08 (うにさん「過去に何を打ったかで補正が変わる処理を一旦無効」,
+            # CN_LEARNED_HISTORY=1 brings it back). This run keeps checking that way, in its own child only;
+            # test_choices_are_not_remembered_by_default checks the default
+            import os
             run = subprocess.run([sys.executable, '-B', '-X', 'utf8',
                 str(dest / 'tests_gui_features.py'), '--child'], cwd=dest,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                encoding='utf-8', errors='replace', timeout=300)
+                encoding='utf-8', errors='replace', timeout=300,
+                env=dict(os.environ, CN_LEARNED_HISTORY='1'))
             self.assertEqual(run.returncode, 0, run.stdout)
             self.assertIn('EDITOR_FEATURES_INTEGRATION_PASSED', run.stdout)
+
+    def test_choices_are_not_remembered_by_default(self):
+        """The default (learned history off): choosing 四十 for 40 is not remembered, 40 stays 40."""
+        import os
+        code = ('import os, sys, tempfile; sys.path.insert(0, sys.argv[1]); import last_choice;'
+                'assert last_choice.LEARNED_OFF;'
+                'c = last_choice.LastChoiceStore(os.path.join(tempfile.mkdtemp(), "c.json"));'
+                'r = c.revision(); wrote = c.remember("40", "四十");'
+                'assert wrote is False and c.revision() == r and c.lookup("40") in (None, "40"), (wrote, c.lookup("40"));'
+                'print("DEFAULT_NOT_REMEMBERED")')
+        env = {k: v for k, v in os.environ.items() if k != 'CN_LEARNED_HISTORY'}
+        run = subprocess.run([sys.executable, '-B', '-X', 'utf8', '-c', code, str(Path(__file__).resolve().parent)],
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding='utf-8', errors='replace',
+                             timeout=120, env=env)
+        self.assertEqual(run.returncode, 0, run.stdout)
+        self.assertIn('DEFAULT_NOT_REMEMBERED', run.stdout)
 
 
 if __name__ == '__main__':

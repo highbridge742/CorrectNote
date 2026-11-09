@@ -38,6 +38,7 @@ from kana_layout import same_key_characters
 # **「語＋接尾で組み立てた表記」の専用枠**（項目48-FA・設計15）。
 # ふつうの打ち間違い候補（`max_typos`）とは別に数える。
 _MAX_BUILT = 2
+_VERB_EXTRA = 6   # 活用した動詞の同じ読みの別の語を、表の4つのほかに足す数（候補の一覧の「漢字にする」）
 
 
 def _is_hiragana(ch):
@@ -337,6 +338,13 @@ def _inflected_homophones(surface, store, dict_index=None, attested=None):
             got.extend(table_surfaces_for_reading(reading))
         except Exception:
             pass
+        try:
+            # 表は読みごとに4つまで（つく: 付く・尖く・着く・突）。突く・就く のような語は同梱の読みの表から費用の順に
+            # （2026-11-05 うに「つかれているを突かれているに変換したかったが、候補に出なかった」）
+            import last_keystroke as _LK
+            got.extend(face for face, _c in sorted(_LK._seed_surfaces(reading), key=lambda r: r[1])[:12])
+        except Exception:
+            pass
         return list(dict.fromkeys(got))
     try:
         import synonyms
@@ -495,6 +503,32 @@ def build_candidates(surface, reading, store, find_readings,
                     push(s + tail, surface, 'kanji')
                     if len(out) > before:
                         n_kanji += 1
+            # 活用した動詞の同じ読みの別の語（つかれ → 突かれ・憑かれ、とられ → 撮られ）。上の表は読みごとに
+            # 4つまでで、使われやすい 付かれ・疲れ に埋まって 突く・撮る などの活用形に届かなかった（2026-11-05
+            # うに「つかれているを突かれているに変換したかったが、候補に出なかった」）。同梱の読みの表
+            # （last_keystroke の seed）から、送り仮名で終わる表記（動詞・形容詞の活用の頭）を費用の順に足す
+            try:
+                import last_keystroke as _LK
+                extra = 0
+                for k in (len(surface), len(surface) - 1):
+                    if k < 2 or extra >= _VERB_EXTRA:
+                        continue
+                    head, tail = surface[:k], surface[k:]
+                    rows = sorted(_LK._seed_surfaces(head), key=lambda r: r[1])
+                    for face, _cost in rows:
+                        if extra >= _VERB_EXTRA:
+                            break
+                        if not (len(face) >= 2 and _kan(face[0]) and _hira(face[-1])
+                                and all(_kan(c) or _hira(c) for c in face)):
+                            continue
+                        if tail and face[-1:] in 'いきしちにひみりぎじぢびぴ':
+                            continue
+                        before = len(out)
+                        push(face + tail, surface, 'kanji')
+                        if len(out) > before:
+                            extra += 1
+            except Exception:
+                pass
 
         # --- 2. 打ち間違いで届く範囲の語 ---
         # 隣接キー・脱字・押しすぎ・順序間違いをまとめて扱う探索を流用する。

@@ -555,6 +555,8 @@ def _pack(result):
 
     from copy import deepcopy
     packed['meta'] = {key: deepcopy(result[key]) for key in _RESULT_METADATA if key in result}
+    if kept_answer(result):
+        packed['x'] = 1
     return packed
 
 
@@ -575,12 +577,19 @@ def _unpack(item):
     }
 
 
+    if item.get('x'):
+        result['deferred_stages'] = list(_KEPT_STAGES)
     from copy import deepcopy
     metadata = item.get('meta') or {}
     if not isinstance(metadata, dict):
         raise ValueError('invalid analysis result metadata')
     result.update({key: deepcopy(metadata[key]) for key in _RESULT_METADATA if key in metadata})
     return result
+
+
+def _read_back(item):
+    """Says the row came from this file, and so has no record of what it used (tab_analysis.restored_without_proof)."""
+    return dict(_unpack(item), _from_file=True)
 
 
 def reusable_result(result):
@@ -590,6 +599,24 @@ def reusable_result(result):
             and result.get('analysis_status') != 'incomplete'
             # the typed row's first answer, a heavy step left out (correction_entry defer_heavy): not final
             and not result.get('deferred_stages'))
+
+
+# A row read back from this file has no record of what it used (used_keys: up to 480 KB a row, so not saved). After a
+# word has moved nobody can say whether its answer still holds, but it is still the best answer there is: it stays,
+# marked, and is read again when the hands stop (2026-11-05: such rows fell out at every save, and each restart read them again).
+_KEPT_STAGES = ('restored',)
+
+
+def kept_answer(result):
+    """A finished row kept across a move, waiting to be read again."""
+    return (isinstance(result, dict) and bool(result)
+            and tuple(result.get('deferred_stages') or ()) == _KEPT_STAGES
+            and not result.get('pending') and not result.get('analysis_error')
+            and result.get('analysis_status') != 'incomplete')
+
+
+def keep_answer(result):
+    return result if kept_answer(result) else dict(result, deferred_stages=list(_KEPT_STAGES))
 
 
 def _tab_kana(text):
@@ -661,7 +688,7 @@ def save(path, fingerprint, tabs, partial=None, generation=None):
         lines = text.split('\n')
         if len(lines) != len(results):
             continue
-        kept = [r if reusable_result(r) and r.get('original') == line else None
+        kept = [r if (reusable_result(r) or kept_answer(r)) and r.get('original') == line else None
                 for r, line in zip(results, lines)]
         if not any(r is not None for r in kept):
             continue
@@ -684,9 +711,13 @@ def save(path, fingerprint, tabs, partial=None, generation=None):
                 return False        # もっと新しい中身が、もう書かれている
             _SAVED_GENERATION[0] = generation
         try:
+            text = json.dumps(data, ensure_ascii=False)
+            import file_same
+            if file_same.same(path, text):
+                return True
             tmp = path + '.tmp'
             with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False)
+                f.write(text)
             os.replace(tmp, path)
             return True
         except Exception:
@@ -721,20 +752,20 @@ def load_all(path, fingerprint):
         if entry.get('partial'):
             try:
                 text = entry['text']
-                results = [None if x is None else _unpack(x) for x in entry['results']]
+                results = [None if x is None else _read_back(x) for x in entry['results']]
             except Exception:
                 continue
             lines = text.split('\n')
             if len(lines) != len(results) or entry.get('tab_has_kana') != _tab_kana(text):
                 continue
-            if any(r is not None and (not reusable_result(r) or r['original'] != l)
+            if any(r is not None and (not (reusable_result(r) or kept_answer(r)) or r['original'] != l)
                    for r, l in zip(results, lines)):
                 continue
             partial[text] = results
             continue
         try:
             text = entry['text']
-            results = [_unpack(x) for x in entry['results']]
+            results = [_read_back(x) for x in entry['results']]
         except Exception:
             continue
         if any(not reusable_result(r) for r in results):

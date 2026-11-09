@@ -34,7 +34,9 @@ def child():
     def settled(after):
         until(lambda:len(sent)>after and getattr(a,'_quick_job',None) is None
               and getattr(a,'_quick_after_id',None) is None
-              and getattr(a,'_quick_units_text',None)==a._quick_text.get('1.0','end-1c'))
+              and getattr(a,'_quick_units_text',None)==a._quick_text.get('1.0','end-1c')
+              # a light answer (2026-11-05) is not the row's answer yet: the hands have stopped, so wait for it
+              and not any(r and r.get('deferred_stages') for r in a._quick_results))
         assert all(r is None or r['analysis_status']=='complete' for r in a._quick_results)
     try:
         with patch.object(app,'GlobalHotkeys',return_value=Mock()),\
@@ -49,14 +51,14 @@ def child():
             text.insert('1.0','資料を保存しました。\n本を読む。\n橋を渡る。');a._on_quick_change();settled(0)
             first=deepcopy(a._quick_results);count=len(sent)
             text.replace('2.0','2.end','予定を確認します。');a._on_quick_change();settled(count)
-            assert sorted(sent[-1].get('reuse',{}))==[0,2],sent[-1]
+            assert sorted(sent[count].get('reuse',{}))==[0,2],sent[count]
             assert a._quick_results[0]==first[0] and a._quick_results[2]==first[2]
             count=len(sent)
             text.replace('2.0','2.end','別の文');text.replace('2.0','2.end','予定を確認します。')
             a._on_quick_change();settled(count)
-            assert sorted(sent[-1].get('reuse',{}))==[0,2],sent[-1]
+            assert sorted(sent[count].get('reuse',{}))==[0,2],sent[count]
             count=len(sent);text.insert('2.0','記録を残します。\n');a._on_quick_change();settled(count)
-            assert sorted(sent[-1].get('reuse',{}))==[0],sent[-1]
+            assert sorted(sent[count].get('reuse',{}))==[0],sent[count]
             assert [r['original'] for r in a._quick_results]==text.get('1.0','end-1c').split('\n')
             count=len(sent);a.settings.set('quick_autofix',True)
             text.replace('2.0','2.end','寒ぃ日だ。');a._on_quick_change();settled(count)

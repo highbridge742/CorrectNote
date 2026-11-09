@@ -127,6 +127,13 @@ _EXTRA_FUNCS = frozenset((
     # 「直接つなげない」の外に出す。まず会議から・ほぼ全部）
     'まず', 'ほぼ', 'ごく', 'おそらく', 'ようやく', 'いったん',
     'たしかに', 'まさに', 'もともと',
+    # する の文語の形（何をすべきか・せざるを得ない・2026-11-07 例文 Tatoeba の正しい文で紫）
+    'すべき', 'すべきだ', 'すべきか', 'すべきで', 'せざる', 'せざるを', 'せざるをえない', 'せざるをえなかった',
+    'するべき', 'するべきだ', 'するべきか', 'するべきで',
+    # 話し言葉の決まった言い方（ごめんね・そしたら・もせずに・によらず・するなよ・どうするんだ・しっぱなし: 2026-11-07
+    # 例文 Tatoeba の正しい文で紫）
+    'ごめんね', 'ごめんなさい', 'そしたら', 'せずに', 'もせずに', 'によらず', 'によらない', 'じゃだめ', 'だめだ',
+    'だめです', 'するなよ', 'やめなよ', 'なよ', 'どうするんだ', 'どうしよう', 'っぱなし', 'しっぱなし', 'やるべき',
 ))
 
 # **1字の語幹を許す基本動詞**（なる・ある・いる・おる・でる・みる・ねる）。
@@ -259,6 +266,11 @@ _PIECES = {
         # **`進展の`** にしていた（初期で実測）。
         ('んの', 'END'), ('んのか', 'END'), ('んだ', 'END'),
         ('んです', 'END'), ('んですか', 'END'),
+        # ているんだろう → てんだろ（残ってんだろ）・て＋やる（殴ってやる・泊めてやるよ。や は1字の語幹の白名簿に
+        # 無いので、て の後ろの補助動詞としてだけ読む）・て＋みな＋よ（してみなよ）。2026-11-07 例文 Tatoeba の正しい文
+        ('んだろ', 'END'), ('んだろう', 'END'),
+        ('やる', 'END'), ('やろう', 'END'), ('やった', 'TA'), ('やって', 'TE'), ('やれ', 'E'), ('やり', 'R'),
+        ('やら', 'MZ'), ('みなよ', 'END'), ('みな', 'END'),
     ),
     'TA': (
         ('ら', 'END'), ('り', 'END'),
@@ -280,8 +292,17 @@ _PIECES = {
         # これが無いと する・いる の後ろの んだ が説明できず、1打違いの別のかな（やだ）に直していた（うに 2026-11-02）
         ('んだ', 'END'), ('んだっ', 'TSU'), ('んです', 'END'), ('んでした', 'END'),
         ('んだろう', 'END'), ('んでしょう', 'END'),
+        # 終止形＋べき（行くべきだ・話すべきか・するべきで・2026-11-07）
+        ('べき', 'Bw'), ('べきだ', 'END'), ('べきか', 'END'), ('べきで', 'TE'),
     ),
 }
+_POS_BASIC_VERB = __import__('os').environ.get('CN_POS_BASIC_VERB') != '0'
+# 連体形＋よう（するような・するようだ・あるように）と、準体の ん＋だい（何をしていたんだい）。
+# 形式名詞 よう は語の表の引き方では する の後ろに付かなかった（2026-11-07 例文 Tatoeba の正しい文）。CN_POS_YOU_DAI=0 で前のまま
+if __import__('os').environ.get('CN_POS_YOU_DAI') != '0':
+    _PIECES['END'] += (('よう', 'Bf'), ('ような', 'Bf'), ('ように', 'Bf'), ('ようだ', 'END'), ('ようです', 'END'),
+                       ('んだい', 'END'), ('のかい', 'END'))
+    _PIECES['TA'] += (('んだい', 'END'), ('のかい', 'END'))
 
 # 48-WK: て/でしまうの縮約は、しまうと同じワ行五段の活用を保つ。
 # 無声の音便には「ちゃ」、有声の音便には「じゃ」を接続する。
@@ -297,6 +318,22 @@ _PIECES['N'] += _shimau_contraction_pieces('じゃ')
 _PIECES['R'] = tuple(dict.fromkeys(
     _PIECES['R'] + _shimau_contraction_pieces('ちゃ')
     + _shimau_contraction_pieces('じゃ')))
+
+# ては・では の縮まった形（見ちゃだめ・遊んじゃだめ・入っちゃだめです）。は まで含むので、格助詞の後ろと同じ K に入る
+# （2026-11-05 うに「縮まった形が抜けていたなら同じようなパターンがあるかもしれない」: ちゃ＋いけない は立つのに
+# ちゃ＋だめ が説明できず紫）。CN_POS_CHA_WA=0 で前のまま
+if __import__('os').environ.get('CN_POS_CHA_WA') != '0':
+    # 格助詞の後ろの K と違い、終助詞・助動詞（わ・ね・だ…）は直に付かない（ちゃわます は立たない）。後ろは次の文節だけ
+    _PIECES['TSU'] += (('ちゃ', 'KC'),)
+    _PIECES['N'] += (('じゃ', 'KC'),)
+    _PIECES['R'] = tuple(dict.fromkeys(_PIECES['R'] + (('ちゃ', 'KC'),)))
+# なければ・なくては の縮まった形（行かなきゃだめ・やらなくちゃいけない・高けりゃ）。ば・は まで含むので K に入る。
+# CN_POS_NAKYA=0 で前のまま（2026-11-05 うに「縮まった形が抜けていたなら同じようなパターンがあるかもしれない」）
+if __import__('os').environ.get('CN_POS_NAKYA') != '0':
+    _PIECES['IST'] += (('きゃ', 'K'), ('くちゃ', 'K'), ('くっちゃ', 'K'), ('けりゃ', 'K'))
+# ていく → てく の打ち消し・命令・連用（置いてかないで・持ってけ・走ってきます は前から）。CN_POS_TEKU=0 で前のまま
+if __import__('os').environ.get('CN_POS_TEKU') != '0':
+    _PIECES['TE'] += (('かな', 'IST'), ('かなかった', 'TA'), ('かなけれ', 'E'), ('け', 'END'))
 
 # ます・た・て … は連用形にも一段語幹にも付く
 _PIECES['E'] = _PIECES['E'] + _PIECES['R']
@@ -340,6 +377,7 @@ _PIECES['END'] = _PIECES['END'] + tuple(
 _K_INDUCING = frozenset('がをにへとではも')
 _BLOCKED_AFTER_CASE = frozenset('がをにへで')
 _PIECES['K'] = _PIECES['END']
+_PIECES['KC'] = ()
 
 # 状態からの ε 遷移（字を消費しない）
 _EPS = {
@@ -350,10 +388,11 @@ _EPS = {
     'SOU': ('END',),
     'END': ('Bf',),        # 連体形＋形式名詞（するもの・るとき）
     'K': ('Bk',),          # 格助詞の直後の文節（もう1つ格助詞は置けない・48-RZ）
+    'KC': ('Bk',),         # ては・では の縮まった ちゃ・じゃ の直後の文節（だめ・いけない）
     'Ev': ('Bn',),         # 終止の直後（stems_only だけが作る状態・48-TH''''）
 }
 
-_ACCEPT = frozenset(('Bf', 'Bw', 'END', 'TA', 'TE', 'R', 'E', 'K', 'Bk', 'Ev'))
+_ACCEPT = frozenset(('Bf', 'Bw', 'END', 'TA', 'TE', 'R', 'E', 'K', 'KC', 'Bk', 'Ev'))
 
 # ★ **stems_only では、用言の END を「終止」と「接続」に分ける**（項目48-TH''''・
 # 2026-09-06）。今までの END は 終止（やめ**る**・やめ**た**・ひど**い**・し**ます**）
@@ -499,7 +538,68 @@ def is_functional_noun(token, dictionary_alternative=False):
                for pos,form,base,reading in dictionary_inflections(token[0]) or ())
 
 
-def explain_kana_run(run, after_kanji=False, before_kanji=None,
+# 話し言葉の縮まった形を、元の形に戻して読み直す（じゃない＝ではない・らんない＝られない）。元のままで説明が
+# 付かないときだけ試す（2026-11-06 うに「縮まった形が抜けていたなら同じようなパターンがあるかもしれない」:
+# きれいじゃない・出かけらんなかった・わかんない が正しい文なのに紫）。CN_POS_COLLOQ_RETRY=0 で前のまま
+_COLLOQ_RETRY = (('じゃな', 'ではな'), ('じゃあ', 'では'), ('らんな', 'られな'), ('んない', 'らない'), ('んなかった', 'らなかった'),
+                 ('ってて', 'っていて'), ('んでて', 'んでいて'), ('いてて', 'いていて'), ('いでて', 'いでいて'))
+
+
+# 数＋助数詞（いちじかん・なんじごろ・にじゅっぷん・さんかいめ）は、語の表に1語ずつは載らないが普通の語。
+# 語と語は直接つなげない決まりのため、かなの行で いち＋じかん が説明できず、正しい「一時間遅らせて」「何時頃」の
+# 逆読み（いちじかんおくらせて・なんじごろかえって）に紫が付いていた（2026-11-07・PC の本物の IME の道）。
+# CN_POS_NUMERAL=0 で前のまま
+_NUMERAL_WORDS = __import__('os').environ.get('CN_POS_NUMERAL') != '0'
+_NUM_HEADS = ('いち', 'いっ', 'に', 'さん', 'よん', 'よ', 'し', 'ご', 'ろく', 'ろっ', 'なな', 'しち', 'はち', 'はっ',
+              'きゅう', 'く', 'じゅう', 'じゅっ', 'じっ', 'ひゃく', 'ひゃっ', 'せん', 'まん', 'なん', 'すう', 'なん')
+_NUM_COUNTERS = ('じかん', 'じ', 'ふん', 'ぷん', 'びょう', 'にち', 'かげつ', 'ねん', 'ねんかん', 'かい', 'かいめ', 'ど',
+                 'ばん', 'ばんめ', 'まい', 'にん', 'こ', 'ほん', 'ぽん', 'ぼん', 'さつ', 'だい', 'けん', 'げん', 'さい',
+                 'しゅうかん', 'つき', 'ぶ', 'ぱい', 'はい', 'ばい', 'えん', 'ばい', 'かしょ', 'しゅるい')
+_NUM_TAILS = ('', 'ごろ', 'かん', 'め', 'はん')
+
+
+_NUM_HEADS_LONG_FIRST = tuple(sorted(_NUM_HEADS, key=len, reverse=True))
+_NUM_FIRST = frozenset(h[0] for h in _NUM_HEADS if h)
+
+
+@__import__('functools').lru_cache(maxsize=65536)
+def _numeral_counter(frag):
+    """frag が 数（の読み、いくつ並んでもよい）＋助数詞（＋ごろ・かん・め・はん）か。
+    （同じ断片を何度も聞くので覚えておく・頭の字が数の読みの頭でなければすぐ False・答えは同じ 2026-11-07）"""
+    if len(frag) < 3 or frag[0] not in _NUM_FIRST:
+        return False
+    for tail in _NUM_TAILS:
+        if tail and not frag.endswith(tail):
+            continue
+        body = frag[:len(frag) - len(tail)] if tail else frag
+        for counter in _NUM_COUNTERS:
+            if body.endswith(counter) and len(body) > len(counter) and _numeral_reading(body[:-len(counter)]):
+                return True
+    return False
+
+
+@__import__('functools').lru_cache(maxsize=65536)
+def _numeral_reading(s):
+    if not s:
+        return False
+    for head in _NUM_HEADS_LONG_FIRST:
+        if s.startswith(head) and (len(s) == len(head) or _numeral_reading(s[len(head):])):
+            return True
+    return False
+
+
+def explain_kana_run(run, *args, **kw):
+    if _explain_kana_run(run, *args, **kw):
+        return True
+    if not run or __import__('os').environ.get('CN_POS_COLLOQ_RETRY') == '0':
+        return False
+    alt = run
+    for a, b in _COLLOQ_RETRY:
+        alt = alt.replace(a, b)
+    return alt != run and _explain_kana_run(alt, *args, **kw)
+
+
+def _explain_kana_run(run, after_kanji=False, before_kanji=None,
                      kanji_stem='', is_word=None, bare_head=False,
                      no_words=False, stems_only=False, initial_state=None):
     """
@@ -569,6 +669,13 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
             def __contains__(self, frag):
                 return frag in _tbl_words or bool(is_word(frag))
         words = _W()
+    if _NUMERAL_WORDS:
+        base_words = words
+
+        class _Num(object):
+            def __contains__(self, frag):
+                return frag in base_words or _numeral_counter(frag)
+        words = _Num()
     nouns = words               # 名詞の部品として引く表（48-TH）
     if no_words or stems_only:
         class _NoWords(object):
@@ -817,6 +924,12 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
                             if run.startswith(piece,j):
                                 stack.append((j+len(piece),
                                     _stems_target('R',piece,state) if stems_only else state))
+                    # 辞書の動詞の終止・連体形（する・くる・ある）は、その形で文節を閉じる（するような・するんだ・
+                    # びっくりするでしょ）。1字の語幹の推定（干る）とは違い、辞書に在る活用の形だけ。CN_POS_BASIC_VERB=0 で前のまま
+                    if (not stems_only and _POS_BASIC_VERB and len(stem) >= 2
+                            and any(pos.startswith('動詞,自立,') and form=='基本形' and rd==stem
+                                    for pos,form,base,rd in dictionary_inflections(stem) or ())):
+                        stack.append((j,'END'))
                 # イ形容詞は文節の頭から（動詞の語幹の直後には立たない
                 # ——`入れ|ちいさい` を許すと的を取りこぼす・実測）
                 # **stems_only では、活用形が2つ表に在る語だけを用言と読む**
@@ -856,7 +969,12 @@ def explain_kana_run(run, after_kanji=False, before_kanji=None,
                 if stem == 'し':
                     stack.append((j, 'R'))
                 _onbin_only = (ln < 2 and stem not in _BASIC_STEMS_1)
-                if _onbin_only and run[j] not in 'っん':
+                # イ音便（ひいた・きいた・しいて: 引く・聞く・敷く の く→い）も音便。い の直後が た・て・だ・で のときだけ
+                # （2026-11-06 正しい文 風邪をひいたので が紫）。CN_POS_I_ONBIN=0 で前のまま
+                if _onbin_only and not (run[j] in 'っん' or (
+                        run[j] == 'い' and run[j + 1:j + 2] in ('た', 'て', 'だ', 'で')
+                        and ((stem + 'く') in words or (stem + 'ぐ') in words)
+                        and __import__('os').environ.get('CN_POS_I_ONBIN') != '0')):
                     continue
                 c2 = run[j]
                 for u, row in _GODAN_ROW.items():
@@ -2572,6 +2690,20 @@ def _ideograph_at(line, k):
     return 0 <= k < len(line) and ('\u4e00' <= line[k] <= '\u9fff' or line[k] in '々〆')
 
 
+_MENTION_EDGE = frozenset(' 　「」『』"“”（）()［］[]【】・、。，．,.:：;；/／')
+
+
+def _lone_kana_mention(line, a, b):
+    """line[a:b] のかな1字が、前後どちらも語に付いていない（行の端・空白・括弧・区切りに挟まれた）1字か。
+    打ち違いの切れ端は前か後ろの語に付いて出る（にぱ家族・こ連絡）。前後とも語から離れた1字は、字そのものを
+    書いたメモ（(ゅ と と の順が逆)・「ゃ」）と見て紫を付けない（2026-11-09 手分けA）。CN_POS_ODD_LONE_MENTION=0 で前のまま"""
+    if __import__('os').environ.get('CN_POS_ODD_LONE_MENTION') == '0':
+        return False
+    left = line[a - 1:a] if a > 0 else ''
+    right = line[b:b + 1]
+    return (left == '' or left in _MENTION_EDGE) and (right == '' or right in _MENTION_EDGE)
+
+
 def _impossible_connection_spans(line):
     """
     **いまの日本語の文では起こらない品詞のつながり**（2026-10-23・補正C）。
@@ -2625,7 +2757,10 @@ def _impossible_connection_spans(line):
         p = ts[i - 1] if i else None
         if p is None or p.end != t.start:
             continue
-        if not _anchored_kana(i):
+        if not _anchored_kana(i) and not (
+                p.pos == '助詞' and p.pos_sub == '接続助詞' and p.surface in ('て', 'で')
+                and any(not _is_hira(c) and c not in 'ー。、，．,.!?！？' for u in ts[max(0, i - 4):i] for c in u.surface)):
+            # て・で の後ろは、前の用言（確認し｜て）の漢字が支え（2026-11-05）
             continue
         nx = ts[i + 1] if i + 1 < len(ts) else None
         a, b = p.start, t.end
@@ -2640,7 +2775,10 @@ def _impossible_connection_spans(line):
                 and p.pos == '動詞' and p.infl_form == '仮定形' and p.surface[-1:] in 'えけげせぜてでねへべぺめれ'):
             # 辞書に無い可能動詞（沿え|る・沿え|れば）を、解析が 五段の仮定形＋文語の り と読んだ形（2026-10-30）
             continue
-        if t.pos == '助動詞' and t.base_form in ('り', 'つ', 'けり'):
+        if (t.pos == '助動詞' and t.base_form in ('り', 'つ', 'けり')
+                and not (all(_is_hira(c) for c in p.surface + t.surface) and (p.surface + t.surface) in _load_tables()[0]
+                         and __import__('os').environ.get('CN_POS_ODD_JOINED_WORD') != '0')):
+            # 2つをつなぐと表の語になるかな（い｜つ＝いつ: 学校はいつ終わりますか・2026-11-07 例文 Tatoeba）は見ない
             pass
         elif t.pos == '助動詞' and t.base_form in ('る', 'らる') and p.pos == '名詞':
             pass
@@ -2662,6 +2800,17 @@ def _impossible_connection_spans(line):
                 and (nx.pos_sub or '').startswith('自立')):
             # 連体の な の後にすぐ用言（お世話＋な＋なっ・一覧＋な＋まとめ）。な は体言に続く（2026-10-30）
             a, b = p.start, nx.end
+        elif (t.pos == '助動詞' and t.base_form in ('う', 'よう') and p.pos in ('動詞', '形容詞')
+              and p.infl_form == '基本形' and __import__('os').environ.get('CN_POS_ODD_BASE_U') != '0'):
+            # 意志・推量の う・よう が用言の言い切りの形に直に付く（読む＋う・食べる＋よう）。う は未然ウ接続の形
+            # （読も・食べよ）に付く（2026-11-05 挙動関連担当の作った例「本を読むう。」に紫が無かった）
+            pass
+        elif (t.pos == '助詞' and t.pos_sub == '副助詞' and t.surface in ('くらい', 'ぐらい', 'ほど')
+              and p.pos == '助詞' and p.pos_sub == '接続助詞' and p.surface in ('て', 'で')
+              and __import__('os').environ.get('CN_POS_ODD_TE_KURAI') != '0'):
+            # 接続助詞の て・で に程度の副助詞が直に付く（して＋くらい）。補助の動詞（ください・くれる）の打ち違いの跡
+            # （2026-11-05 挙動関連担当の作った例: してくらさい が してくらいさ に直っていた）
+            pass
         elif t.pos == '助動詞' and t.base_form == 'き' and p.pos == '名詞':
             # 文語の過去 き が名詞に直に付く（精算＋き）（2026-10-30）
             pass
@@ -2677,7 +2826,8 @@ def _impossible_connection_spans(line):
         elif (t.pos == '名詞' and t.pos_sub == '一般' and len(t.surface) == 1 and _is_hira(t.surface)
                 and t.surface not in 'ゐゑ'
                 and not (line[t.start - 1:t.start] in ('「', '『', '"', '“', '（', '(', '・')
-                         and line[t.end:t.end + 1] in ('」', '』', '"', '”', '）', ')', '・'))):
+                         and line[t.end:t.end + 1] in ('」', '』', '"', '”', '）', ')', '・'))
+                and not _lone_kana_mention(line, t.start, t.end)):
             # かな1字が普通の名詞と読まれた（にぱ家族・こ連絡・食べす に）。1字のかなの名詞は、いまの文では
             # ほぼ漢字で書く（目・木・絵）ので、打ち違いの切れ端（2026-10-30）
             a, b = t.start, t.end
@@ -2719,11 +2869,30 @@ def _impossible_connection_spans(line):
                 and (nx is None or line[t.end:].strip(' 　') in ('', '。', '．', '!', '！', '?', '？'))):
             # 言い切った後に は で文が終わる（寝ますは）。ありますは、… のように続くのは話し言葉にある
             pass
+        elif (p.pos == '接頭詞' and p.surface in ('お', 'ご', '御') and t.pos == '動詞'
+                and nx is not None and nx.start == t.end and nx.surface in ('て', 'で', 'た', 'だ')
+                and nx.pos in ('助詞', '助動詞')):
+            # 敬いの お・ご が動詞のて形・た形に直に付く（お＋据え＋て）。お は名詞か、動詞の連用形＋ください・になる・
+            # する に付く（お待ちください・お書きになる）。て・た が続くのは1打違いの跡（作った例・2026-11-04）
+            b = nx.end
         else:
             continue
         if not overlaps(a, b, protected_ranges(line)):
             out.append((a, b))
     return tuple(out)
+
+
+_PERSON_TAILS = ('たち', 'ども', 'さま', 'さん', 'ちゃん', 'くん', 'ら')
+
+
+
+def _one_token(s):
+    """解析で1語になるか（彼ら）。"""
+    try:
+        from morphology import tokenize
+        return len(list(tokenize(s))) == 1
+    except Exception:
+        return False
 
 
 def odd_kana_spans(line, dict_index=None, store=None, preserve_unknown_source=True):
@@ -2882,6 +3051,39 @@ def odd_kana_spans(line, dict_index=None, store=None, preserve_unknown_source=Tr
                            or _is_word(stem + run[:p]))
                     and explain_kana_run(run[p + 2:], is_word=_is_word)):
                 ok = True
+        if (not ok and stem and _is_kanji(prev)
+                and __import__('os').environ.get('CN_PG_OKURI_HEAD') != '0'):
+            # 漢字＋送り仮名1〜2字でちょうど語（残｜りわずかな・終｜わりの）。残りのかなが
+            # かな単独で説明できれば説明が付く（例文 Tatoeba の正しい文 今年も残りわずか の
+            # り に紫が付き、2打違いの この へ替わっていた・2026-11-07）。CN_PG_OKURI_HEAD=0
+            for _p in (1, 2):
+                _rest = run[_p:]
+                if len(_rest) < 2:
+                    break
+                _head = stem + run[:_p]
+                if _head in _load_tables()[0] or _is_word(_head):
+                    try:
+                        if explain_kana_run(_rest, before_kanji=before, is_word=_is_word):
+                            ok = True
+                            break
+                    except Exception:
+                        pass
+        if (not ok and stem and run.startswith(_PERSON_TAILS)
+                and __import__('os').environ.get('CN_PG_PERSON_TAIL') != '0'):
+            # 漢字・片仮名の語＋人の接尾（彼｜らは・労働者｜たちには・スミス｜さんに）。接尾を除いた残りが説明できれば
+            # 説明が付く（例文 Tatoeba の正しい文 彼らはその計画に に紫が付いていた・2026-11-07）。CN_PG_PERSON_TAIL=0
+            for _t in _PERSON_TAILS:
+                if run.startswith(_t) and (_t in ('さん', 'さま', 'ちゃん', 'くん') or _is_word(stem + _t)
+                                           or _is_word(stem[-1:] + _t) or _one_token(stem[-1:] + _t)):
+                    # たち・ども・ら は 彼ら・者たち のように語になる時だけ（午後｜らかです は打ち違い）
+                    _rest = run[len(_t):]
+                    try:
+                        if not _rest or explain_kana_run(_rest, before_kanji=before, is_word=_is_word):
+                            ok = True
+                    except Exception:
+                        pass
+                    if ok:
+                        break
         if not ok and dict_index is not None:
             # かなで書いただけの、世の中に在る語（にゅうりょく）
             try:

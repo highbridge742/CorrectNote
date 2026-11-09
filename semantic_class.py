@@ -44,13 +44,57 @@ def _class_words():
     """分類語彙表の全体表（synonyms.load_table・wlsp_synonyms.json.gz）から類ごとに 見出し → 分類番号 を引く。
     {'体': {語: '番号|番号'}, '用': …, '相': …}。表が無ければ空。
     番号の組は1本の文字列で持つ（frozenset の山は 約25MB。文字列なら数分の1・答えは同じ・2026-10-30）。"""
+    return _built()[0]
+
+
+def _build():
     from synonyms import load_table
     t = load_table()
     out = {}
     for word, entries in t.words():
         for e in entries:
             out.setdefault(e[0], {}).setdefault(word, set()).add(e[1])
-    return {k: {w: '|'.join(sorted(c)) for w, c in d.items()} for k, d in out.items()}
+    classes = {k: {w: '|'.join(sorted(c)) for w, c in d.items()} for k, d in out.items()}
+    words = classes.get('体', {})
+    by_reading = {}
+    for face in words:
+        reads = t.readings(face)
+        for read in reads[:1]:
+            by_reading[read] = by_reading[read] + '\t' + face if read in by_reading else face
+    return classes, by_reading
+
+
+@lru_cache(maxsize=1)
+def _built():
+    """(_class_words の答え, 読み → '見出し\t見出し…')。作るのに子の起動ごと（最初の1行）約0.3秒（雲）かかるので、
+    出来上がりを控え（compact_tables._pickled・cn_semantic_class.cache.pickle）に置き、元の表のファイルと
+    この作り方（_build の中身）が同じ間はそれを読む（約0.04秒・2026-11-07）。中身は作り直したものと同じ。"""
+    try:
+        import hashlib, marshal, sys
+        import compact_tables, synonyms
+        code = hashlib.sha1(marshal.dumps(_build.__code__) + marshal.dumps(_compacted.__code__)).hexdigest()
+        stamp = ('semantic_class', synonyms._table_stamp(os.path.join(synonyms._HERE, synonyms.TABLE)),
+                 sys.version_info[:2], code)
+    except Exception:
+        return _build()
+    # 表が読めず空だったときは控えない（次に読めた時に作り直す）
+    got = compact_tables._pickled('cn_semantic_class.cache.pickle', stamp,
+                                  lambda: (lambda built: _compacted(built) if built[0] else None)(_build()))
+    return got if got is not None else _build()
+
+
+def _compacted(built):
+    """(類 → {語: 番号}, 読み → 見出し) の中の dict を、同じ鍵・同じ値の詰めた形（compact_tables.CompactStrings、
+    get・bool・並び順が同じ）にする（2026-11-07・解析の子のメモリ: 子1つ約17MB → 数MB、写像の控えなら子どうしで共有）。
+    詰められない物（NUL を含む等）はそのまま。"""
+    import compact_tables
+    def small(table):
+        try:
+            return compact_tables.CompactStrings.of(table) if table else table
+        except Exception:
+            return table
+    classes, by_reading = built
+    return {k: small(d) for k, d in classes.items()}, small(by_reading)
 
 
 @lru_cache(maxsize=_cache_size(4096))
@@ -61,15 +105,8 @@ def _code_set(joined):
 @lru_cache(maxsize=1)
 def _data():
     """(体の語 → 番号の文字列, 読み → '見出し\t見出し…')。読みは表の1つ目の読み。"""
-    from synonyms import load_table
-    t = load_table()
-    words = _class_words().get('体', {})
-    by_reading = {}
-    for face in words:
-        reads = t.readings(face)
-        for read in reads[:1]:
-            by_reading[read] = by_reading[read] + '\t' + face if read in by_reading else face
-    return words, by_reading
+    classes, by_reading = _built()
+    return classes.get('体', {}), by_reading
 
 
 def available():

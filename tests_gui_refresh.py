@@ -270,6 +270,11 @@ def child():
                     for width,index in ((900,13),(430,13),(300,15),(430,0),(600,8)):
                         a.session.active=index;viewport.place(x=16,y=40,width=width,height=29)
                         a._refresh_tab_bar();root.update_idletasks()
+                        # 帯の幅がまだ決まっていない時は 15ms ごとに見直す（_reveal_active_tab の TAB_REVEAL_RETRY_MS）。
+                        # 本物のアプリと同じく、その見直しが済むまで回す
+                        end_=time.monotonic()+1.0
+                        while getattr(a,'_tab_reveal_job',None) is not None and time.monotonic()<end_:
+                            root.update();time.sleep(0.005)
                         frame=a._tab_widgets[index]['frame'];left=viewport.canvasx(0)
                         assert left-2<=frame.winfo_x(),(width,index,left,frame.winfo_x())
                         assert frame.winfo_x()+frame.winfo_width()<=left+width+2,(width,index,left,frame.winfo_x(),frame.winfo_width())

@@ -105,6 +105,9 @@ class BackgroundDisplayTests(unittest.TestCase):
     def test_dead_worker_retries_once_then_preserves_finished_rows(self):
         original=tests_background_ownership.BackgroundOwnershipTests();original.setUp()
         a=original.a;state=original.state(1);a._bg=state;a._bg_texts=[]
+        # 裏のタブに別の子がある段（高）。中（2026-10-20 から既定）は子が1つで、表のタブが求めを出している間は
+        # 裏が待つ（_bg_step_once の shares_worker の門）ので、ここの子の落ち方の道まで来ない
+        a.settings['memory_usage']='high'
         a._async_request=('foreground request',7)
         a._async_background_request=('old background request',8)
         with patch.object(analysis_async,'background_step',side_effect=analysis_async.WorkerExitedError('exited')), \
@@ -124,6 +127,9 @@ class BackgroundDisplayTests(unittest.TestCase):
     def test_engine_error_is_reported_without_retrying_the_bad_row(self):
         original=tests_background_ownership.BackgroundOwnershipTests();original.setUp()
         a=original.a;state=original.state(1);a._bg=state;a._bg_texts=[]
+        # 裏のタブに別の子がある段（高）。中（2026-10-20 から既定）は子が1つで、表のタブが求めを出している間は
+        # 裏が待つ（_bg_step_once の shares_worker の門）ので、ここの子の落ち方の道まで来ない
+        a.settings['memory_usage']='high'
         a._async_request=('foreground request',7)
         a._async_background_request=('old background request',8)
         with patch.object(analysis_async,'background_step',side_effect=RuntimeError('engine failure')), \

@@ -6,6 +6,7 @@ import pickle
 import time
 import traceback
 import analysis_context
+import shared_rows
 import memory_usage
 import analysis_work_app as input_work
 from analysis_worker import Worker,WorkerExitedError,snapshot,state_key
@@ -162,6 +163,13 @@ def cancel_foreground_request(app):
     _cancel_request(app,False)
 
 
+def _shown_light(app,i,line):
+    # 手が止まった後の解き直し（重い段まで）: もう軽い答えが出ているので、途中の紫は要らない
+    results=getattr(app,'line_results',None) or ()
+    current=results[i] if 0<=i<len(results) else None
+    return bool(current and current.get('original')==line and not current.get('pending'))
+
+
 def _poll(app, scope, background=False):
     worker_name,_,request_name=_worker_fields(background,app)
     pending=getattr(app,request_name,None)
@@ -174,6 +182,14 @@ def _poll(app, scope, background=False):
         # no answer will come for this id. Ask again when the child is idle.
         setattr(app,request_name,None);return False,None
     result=worker.poll(pending[1])
+    if not background and scope[0]=='line' and not scope[5]:
+        # 途中の紫（early_marks）: 答えの前は仮に塗り、答えが来たら外す（答えの紫で描き直す）
+        import early_marks
+        take=getattr(worker,'take_partial',None)
+        parts=take(pending[1]) if take is not None else ()
+        if not isinstance(parts,(list,tuple)):parts=()
+        if result is not None:early_marks.clear_memo(app,scope[4])
+        elif parts and not _shown_light(app,scope[4],parts[-1].get('line')):early_marks.memo(app,scope[4],parts[-1])
     if result is not None:
         setattr(app,request_name,None)
         if not background:memory_usage.queue_release(app, 'foreground')
@@ -305,6 +321,96 @@ def _unit_values(app,result,value):
     remember(app,value.get('navigation'))
 
 
+def typed_rows(app):
+    """打った文（確定した行）の列。打った順で、軽い答えと重い段のやり直しが済むまで残る（2026-11-07 うにさん「新しく
+    書いた文は次々にキューを追加していくイメージ」）。"""
+    order=getattr(app,'_typed_order',None)
+    return order if isinstance(order,list) else []
+
+
+def _typed_done(app,i):
+    """最後の答えが出た打った行を列から外す（後の学習の解き直しなどは裏の扱い）。"""
+    order=typed_rows(app)
+    if i in order:order.remove(i)
+
+
+def background_waits(app,i):
+    """打った行ではない行（見えている範囲・下の先読み・学習の後の解き直し）を、今は子に頼まないか。
+
+    打った行の列に済んでいない行がある間・変換中（入力途中の解析に当てる）・最後に打ってから待ち（NEIGHBOR_DEFER_MS・
+    1.2秒）の間は頼まない（2026-11-07 うにさん「待ちの1.2秒というのは裏の文に取り掛かる待ち時間だけになる」）。"""
+    if not getattr(app,'TYPED_QUEUE',False):return False
+    order=typed_rows(app)
+    if i in order:return False
+    results=getattr(app,'line_results',None) or ()
+    for row in order:
+        r=results[row] if 0<=row<len(results) else None
+        if r is None or r.get('pending') or r.get('deferred_stages'):
+            app._typed_queue_busy_at=time.monotonic()
+            return True
+    try:
+        import ime_watch
+        if ime_watch.composition_live(app.editor.winfo_id()):return True
+    except Exception:
+        pass
+    # 待つのは、列が空になってから（最後に列が埋まっていた時）と、最後に打ってから
+    wait=getattr(app,'NEIGHBOR_DEFER_MS',0)/1000.0
+    now=time.monotonic()
+    for stamp in (getattr(app,'_typed_queue_busy_at',None),getattr(app,'_last_edit_at',None)):
+        if stamp and now-stamp<wait:return True
+    return False
+
+
+def finish_typed_inflight(app):
+    """子が今解いている打った行（打った行の列の行）を、新しい打鍵で打ち切らない（2026-11-07 うにさん「もしこの順序が
+    入れ替わることで解きかけを捨てていたら、順序を守る」）。
+
+    その行の字が変わっていなければ答えを待ち（'wait'）、届いたら今の段取りのままその行に入れる（'done'）。打った行で
+    ない・その行を打ち直した・段取りが古い時は None（今までどおり新しい段取りが打ち切る）。"""
+    if not getattr(app,'TYPED_QUEUE',False):return None
+    pending=getattr(app,'_async_request',None)
+    try:
+        scope=pending[0]
+    except (TypeError,IndexError):
+        return None
+    if not (isinstance(scope,tuple) and len(scope)>=6 and scope[0]=='line' and not scope[5]):return None
+    i=scope[4]
+    if i not in typed_rows(app):return None
+    if scope[1]!=getattr(app,'_analyze_work',None) or scope[3]!=getattr(app,'_analyze_text',None):return None
+    prev=getattr(app,'_prev_lines',None) or []
+    if not 0<=i<len(prev):return None
+    try:
+        now=app.editor_source_text().split(chr(10))
+    except Exception:
+        return None
+    head=0
+    while head<len(now) and head<len(prev) and now[head]==prev[head]:head+=1
+    tail=0
+    while tail<len(now)-head and tail<len(prev)-head and now[len(now)-1-tail]==prev[len(prev)-1-tail]:tail+=1
+    if not (i<head or i>=len(prev)-tail):return None       # その行そのものを打ち直した: 新しい段取りで
+    try:
+        present,value=_poll(app,scope)
+    except Exception:
+        return None
+    if not present:return None
+    if value is None:return 'wait'
+    try:
+        if value.get('prepared') is not None:
+            prepared=value['prepared'];_save_context(app,app._analyze_text,prepared)
+            app._analyze_ctx=prepared['context'];app._attested_surfaces=prepared['attested']
+            app._line_words_cache=dict(prepared['words'])
+        app.line_results[i]=analysis_context.completed(value)
+        _unit_values(app,value['result'],value)
+        if value['result'].get('deferred_stages'):
+            arm=getattr(app,'_arm_heavy_redo',None)
+            if arm is not None:arm()
+        else:
+            _typed_done(app,i)
+    except Exception:
+        return None
+    return 'done'
+
+
 def line_step(app,count):
     if plans_waiting(app):return    # a moment: the rows on screen get their sizes first
     if input_work.token(app)!=getattr(app,'_analyze_work',None):return
@@ -342,6 +448,8 @@ def line_step(app,count):
                 and key+(False,) in getattr(app,'_suspect_units_cache',{})):
             app._analyze_pos+=1;continue
         scope=('line',app._analyze_work,app._analyze_dependencies,app._analyze_text,i,units_only)
+        if not units_only and getattr(app,'TYPED_QUEUE',False) and i in typed_rows(app):
+            app._typed_queue_busy_at=time.monotonic()      # 列の行を解いている（裏はこの時から1.2秒待つ）
         if not units_only and helper_done(app,i):
             # The other child has this row (high・2026-10-30): finished, or still computing it; the pass waits
             # for that one before it ends (helper_busy)
@@ -349,9 +457,13 @@ def line_step(app,count):
         try:
             present,value=_poll(app,scope)
             if not present:
+                if not units_only and background_waits(app,i):return   # 打った行の列が先（2026-11-07 うにさん）
                 task=line_task(app,i,res,units_only)
                 import ime_speculation
                 value=None if units_only else ime_speculation.take(app,i,task)
+                if value is None and not units_only:
+                    # the same row with the same inputs is already finished elsewhere (shared_rows, 2026-11-08)
+                    value=shared_rows.take_for(app,task,app._analyze_ctx,getattr(app,'_attested_surfaces',{}))
                 if value is None:
                     if ime_speculation.waiting(app):return   # the composed row first
                     _request(app,task,scope)
@@ -365,12 +477,19 @@ def line_step(app,count):
                 app._analyze_ctx=prepared['context'];app._attested_surfaces=prepared['attested']
                 app._line_words_cache=dict(prepared['words'])
             app.line_results[i]=analysis_context.completed(value)
+            shared_rows.remember(app,app.line_results[i],value,app._analyze_ctx,app._analyze_dependencies)
             _unit_values(app,value['result'],value)
             reinput=getattr(app,'_reinput',None)
             if reinput is not None:reinput.on_answer(value['result'])
+            if not value['result'].get('deferred_stages'):
+                _typed_done(app,i)
             if value['result'].get('deferred_stages'):
                 arm=getattr(app,'_arm_heavy_redo',None)
                 if arm is not None:arm()
+                # hands already still: this row's heavy redo is the next request, before the rows still to be read
+                # (2026-11-07, the order 今打った分 → 見えている範囲: the next row went to the child first and the redo waited for it)
+                now=getattr(app,'_heavy_redo_next',None)
+                if now is not None:now(pos,i)
         except Exception as error:
             if _retry_foreground_exit(app,error):return
             _error(app)
@@ -416,7 +535,7 @@ def background_step(app,st):
     if st['ctx'] is not None:
         while st['pos'] < len(st['lines']):
             i=st['pos']
-            if not display_pending(st['results'][i],st['units'],st['suspect_units']):
+            if i in st.get('skip',()) or not display_pending(st['results'][i],st['units'],st['suspect_units']):
                 st['pos']+=1
             elif literal_only(st['lines'][i]):
                 result=literal_result(st['lines'][i])
@@ -441,14 +560,17 @@ def background_step(app,st):
             from context_vec import build_nearby_words
             words=st['words'];lines=st['lines']
             nearby=build_nearby_words(len(lines),i,lambda k:words.get(lines[k],[]) if 0<=k<len(lines) else [])
-            _request(app,dict(kind='units' if units_only else 'line',line=lines[i],result=st['results'][i],
+            task=dict(kind='units' if units_only else 'line',line=lines[i],result=st['results'][i],
                 context=st['ctx'],input_method=(app.settings.get('input_method') or 'kana'),
                 keyboard=keyboard_layout.spec(app.settings),
                 nearby=nearby,attested=st['attested'],
                 recent=app.recent_words.words() if getattr(app,'recent_words',None) is not None else (),
                 readings=_background_readings(st,i),calculations=_background_readings(st,i,'calculations'),
                 tab_has_kana=None if units_only else _tab_has_kana(st['text']),
-                previous_line=None if units_only else analysis_context.previous_line_of(lines,i)),scope,background=True)
+                previous_line=None if units_only else analysis_context.previous_line_of(lines,i))
+            # the same row with the same inputs is already finished elsewhere (shared_rows, 2026-11-08)
+            value=None if units_only else shared_rows.take_for(app,task,st['ctx'],st['attested'])
+            if value is None:_request(app,task,scope,background=True)
     if value is None:return
     if st['ctx'] is None:
         _save_context(app,st['text'],value)
@@ -458,6 +580,7 @@ def background_step(app,st):
         st.setdefault('units',{});st.setdefault('suspect_units',{})
     else:
         res=analysis_context.completed(value);st['results'][st['pos']]=res;st['pos']+=1
+        if not units_only:shared_rows.remember(app,res,value,st['ctx'],scope[2])
         key=(res['original'],res['corrected'])
         st['units'][key]=value['corrected_units']
         st['suspect_units'][key+(False,)]=value['original_units']
@@ -483,6 +606,13 @@ def close(app,keep_prewarmed=False):
     app._async_helper_request=None
     for worker_name,state_name,request_name in (_worker_fields(False),_worker_fields(True),_worker_fields(True,app)):
         worker=getattr(app,worker_name,None)
+        if (keep_prewarmed and worker_name=='_correction_worker' and worker is not None
+                and (getattr(app,request_name,None) or ((None,),))[0][0]=='plans' and worker.process.is_alive()):
+            # Only the sizes of the rows on screen were asked (boundary_colors, before the first-run setup began):
+            # that answer is let go (boundary_colors asks again or works them out) and the next request sends the
+            # finished stores; the prewarmed child stays (2026-11-08: it was closed and started again)
+            _cancel_request(app,False)
+            setattr(app,state_name,None)
         # Initial dictionary import changes stores in the parent. A worker
         # with no snapshot or document request can finish its public-table
         # warmup safely and receive the completed stores afterwards.
@@ -550,6 +680,7 @@ def keep_rows(app,worker):
 
 
 def _packed_for(app,lines):
+    if not getattr(app,'_packed_rows',()):return None
     current=frozenset(lines)
     for kept,blob in getattr(app,'_packed_rows',()):
         if _same_tab(current,kept):return blob

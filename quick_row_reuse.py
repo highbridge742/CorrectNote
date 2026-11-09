@@ -2,10 +2,26 @@
 # CorrectNote — Copyright (C) 2026 Takahashi Yuu; GPL-3.0-or-later.
 """Reuse only still-live completed Quick rows. No text history or disk cache."""
 from copy import deepcopy
+from tab_context import tab_has_kana
+
+
+def _continues(previous,line):
+    # 1行上で答えが変わるのは、行頭の付属語が前の行から続く時だけ（correction_entry の previous_line）
+    from correction_entry import _continuation_prefix
+    return _continuation_prefix(previous,line)
+
+
+def _kana_matters(task,index):
+    # 文書にかながあるかで変わるのは、半角のまま打った部分の補正だけ（tab_context）。その字の無い行は見ない
+    if not any(ord(c)<0x100 or 0xFF61<=ord(c)<=0xFF9F for c in task['lines'][index]):return None
+    return any(tab_has_kana(line) for line in task['lines'])
 
 
 def row_key(task,index):
-    return (task['lines'][index],task['input_method'],task.get('keyboard'),
+    # メモ欄と同じ入口は、1行上の行と文書にかながあるかも見る
+    return (task['lines'][index],_continues(task['lines'][index-1],task['lines'][index]) if index else None,
+            _kana_matters(task,index),
+            task['input_method'],task.get('keyboard'),
             tuple(task.get('readings',{}).get(index,())),
             tuple(task.get('calculations',{}).get(index,())))
 
@@ -13,7 +29,8 @@ def row_key(task,index):
 def completed_row(value,line):
     return (isinstance(value,dict) and value.get('original')==line
             and value.get('analysis_status')=='complete'
-            and not value.get('pending') and not value.get('analysis_error'))
+            and not value.get('pending') and not value.get('analysis_error')
+            and not value.get('deferred_stages'))     # 重い段を後回しにした答えは本当の答えではない
 
 
 def remember(app,scope,task,value):

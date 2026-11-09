@@ -5880,7 +5880,13 @@ def reading_evidence(target, tokenize, dictionary, limit=32):
             # The exact parent round trip also proves this complete
             # word-aligned range. Retain native readings, but do not invent
             # character guesses for an already attested source sequence.
-            confirmed_first=True
+            # 1字の漢字の語（名＝めい／な）の読みは IME の逆引きの推測で、変換し直して元に戻っても
+            # 打った読みの証拠にならない。そのときは字ごとの読みの探しも残す（2026-11-07、CN_MARK_PROOF_LONE_KANJI=0 で前のまま）
+            import os as _os
+            lone_kanji=any(b-a==1 and '一'<=text[a]<='鿿' for a,b,_r,_k in exact[1]
+                           if 0<=a<len(text))
+            if not lone_kanji or _os.environ.get('CN_MARK_PROOF_LONE_KANJI')=='0':
+                confirmed_first=True
     # The IME's exact first-conversion round trip is a direct source
     # hypothesis for an already proved anomaly, including lexical errors.
     # A failed round trip remains a weaker source hypothesis only for
@@ -6837,6 +6843,30 @@ def _late_shift_candidate_complete(target,surface,reading):
                for cut in range(1,len(surface)))
 
 
+def _replaces_proper_noun(target, surface):
+    """target の原文の範囲に、辞書の読みを持つ固有名詞の語がまるごと入っていて、surface ではその語が消え、
+    同じ所に固有名詞が無いか（読みが同じ表記の選び直しは除く）。"""
+    from morphology import tokenize as _tok
+    src = getattr(target, 'source', '') or ''
+    a, b = target.start, target.end
+    names = [t for t in _tok(src) if a <= t.start and t.end <= b and t.pos == '名詞'
+             and (t.pos_sub or '').startswith('固有名詞') and t.has_reading and len(t.surface) >= 2
+             and any('一' <= c <= '鿿' for c in t.surface)]
+    if not names:
+        return False
+    new = src[:a] + surface + src[b:]
+    toks = list(_tok(new))
+    for t in names:
+        if t.surface in surface:
+            continue
+        same = [u for u in toks if u.start < a + len(surface) and a < u.end and u.pos == '名詞'
+                and (u.pos_sub or '').startswith('固有名詞')]
+        reading_same = any(u.has_reading and u.reading == t.reading for u in same)
+        if not reading_same:
+            return True
+    return False
+
+
 def validate(target, surface, engine, tokenize, store, dictionary, decisions=None,
              expected_reading=None, companions=(), source_reading=None):
     """同じ原文範囲への候補。直接再構築・通常置換のいずれからも呼ぶ。"""
@@ -6845,6 +6875,12 @@ def validate(target, surface, engine, tokenize, store, dictionary, decisions=Non
     import oddness
     if surface is None or surface == target.text:
         return False, 'unchanged'
+    # 2026-11-07: 原文の辞書に在る固有名詞（地名・人名・組織名: 横浜）を、固有名詞でない別の読みの語やかなに替えない
+    # （雲で IME の判定を記録で開いたとき 横浜→よこしま に崩した。名前は直さない: うに 11-05 keep names の続き）。
+    # CN_KEEP_PROPER=0 で前のまま
+    import os as _os
+    if _os.environ.get('CN_KEEP_PROPER')!='0' and _replaces_proper_noun(target, surface):
+        return False, 'kept_proper_noun'
     # 2026-10-16: a line-initial case particle before a complete predicate
     # (になります・にします) can continue the previous line. Only a repair
     # that reads the particle into a word (のひっています → 残っています)
@@ -9315,6 +9351,15 @@ def _common_katakana_word(text):
 
 
 ONE_KEY_COST = 1.0   # 1打の戻し（隣のキー・巻き込み・抜け・入れ替わり）
+# 抜け（2.8）や小さい字の抜け（抜け＋シフト）は値は高いが打ち違いは1打。2打以上の比べは打った数で見る（2026-11-07）
+_NEARER_KEY_COUNT = __import__('os').environ.get('CN_NEARER_KEY_COUNT','1')!='0'
+
+
+def _repair_key_count(repair):
+    """戻しの打ち違いの数。シフトだけの段（同じ所の小さい字へ）は前の段と同じ1打に数える。"""
+    steps=repair.get('steps') or ()
+    if not steps:return 1
+    return sum(1 for step in steps if (step.get('operation') if isinstance(step,dict) else getattr(step,'operation',None))!='shift') or 1
 TWO_KEY_COST = 2.0
 
 
@@ -9849,14 +9894,16 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
             if (target.start==target.context_start and target.end==target.context_end
                     and any(mark[0]=='IME逆読み' for mark in target.anomalies)):
                 try:
-                    from ime_language import JapaneseIME
-                    with JapaneseIME() as ime:
-                        first=ime.convert(repair.reading) if ime.available else None
+                    # 本物の IME が無ければ打った記録と辞書の代わり（ime_spelling.first_ime・2026-11-07）
+                    from ime_spelling import first_ime
+                    with first_ime() as ime:
+                        first=ime.convert(repair.reading) if ime is not None and ime.available else None
                         if first:
                             if first not in surfaces:surfaces.insert(0,first)
                             from ime_homophone import positive_predicate_alternatives
                             for alternate,source_object,proof in positive_predicate_alternatives(
-                                    target.text,first,repair.reading,tokenize,ime,supplied=surfaces):
+                                    target.text,first,repair.reading,tokenize,ime,supplied=surfaces,
+                                    dict_index=dictionary):
                                 if alternate not in surfaces:surfaces.append(alternate)
                                 homophone_positive[alternate]=(source_object,proof)
                 except (ImportError,OSError,AttributeError):pass
@@ -10304,6 +10351,7 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
     # 1打の誤字は1打の戻しで読める。1打の戻しで辞書の語になる形が在る（意味の裏付けが無いだけで外れた）のに、
     # 2打以上離れた語（かわっさた → 分かった・因幸 → 再生）を選ぶ所は、決めずに紫に残す（2026-11-01 B）
     if (ordered and near_one_key and ordered[0]['repair'].get('cost',0)>=TWO_KEY_COST
+            and not (_NEARER_KEY_COUNT and _repair_key_count(ordered[0]['repair'])<=1)
             and not any(row['repair'].get('cost',0)<=ONE_KEY_COST for row in ordered)):
         diagnostic['status']='unresolved_nearer_key'
         return None,diagnostic

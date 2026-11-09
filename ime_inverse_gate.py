@@ -5,6 +5,7 @@ The IME's own reverse reading and first conversion provide the primary clue.
 TSF search candidates can corroborate a source produced by a different IME
 choice. Absence from either interface does not prove that the source is sound.
 """
+import os
 import re
 
 from itertools import chain
@@ -131,6 +132,15 @@ def _written_nominal_group(field, group, tokenize):
             and all(t[5] and any(':'.join(x for x in pos.split(',') if x!='*')==t[1]
                                 and rd==t[2] for pos,form,base,rd
                                 in dictionary_inflections(t[0]) or ()) for t in group)):
+        return True
+    if (len(group)==1 and group[0][1] in ('名詞:一般','名詞:サ変接続')
+            and os.environ.get('CN_GATE_RENYOU_NOUN')!='0'
+            and any('一'<=c<='鿿' for c in face) and 'ぁ'<=face[-1]<='ゖ'
+            and any(pos.startswith('動詞,自立,') and form=='連用形' and base[:-1]==face[:-1]
+                    for pos,form,base,rd in dictionary_inflections(face) or ())):
+        # 動詞の連用形がそのまま名詞になった語（色付き・色付く の連用形）は、書いたとおりの名詞として読める。
+        # 辞書には動詞の連用形としてだけ在り、名詞の読みの組が無いので、名詞の証しに落ちて行全体が紫になっていた
+        # （2026-11-09 うに 誤判定の行の 色付き）。CN_GATE_RENYOU_NOUN=0 で前のまま
         return True
     if len(group)==1:
         head=group[0]
@@ -359,6 +369,41 @@ def _reading_with_written_units(field, reading, morph, tokenize, single_nouns=Tr
     return ''.join(out)
 
 
+def _odd_clause_display(surface,reading,morph,edge,dictionary,store,tokenize):
+    """field の表記 surface のうち、原文の語の辞書の読みと復元した読み（morph の語ごとの読み）が食い違う語と、その後ろの
+    助詞・助動詞までの範囲 (lo, hi)（surface の位置）。食い違う語が無い・狭まらないなら None（今のまま行の範囲）。"""
+    if not morph or not morph[1] or morph[0]!=reading:
+        return None
+    from morphology import tokenize as native_tokenize
+    try:
+        from inflected_lexicon import dictionary_readings
+    except Exception:
+        dictionary_readings=lambda text:()
+    def hira(text):
+        return ''.join(chr(ord(c)-0x60) if 'ァ'<=c<='ヶ' else c for c in text)
+    hit=[]
+    for w in morph[1]:
+        a,b,c,d=w[:4]
+        face=surface[a:b]
+        if not any('一'<=ch<='鿿' for ch in face):
+            continue
+        typed=hira(reading[c:d])
+        toks=list(native_tokenize(face))
+        joined=''.join(hira(t.reading) for t in toks) if toks and all(t.has_reading and t.reading for t in toks) else None
+        if typed!=joined and typed not in {hira(r) for r in dictionary_readings(face)}:
+            hit.append((a,b))
+    if not hit:
+        return None
+    lo,hi=min(x for x,y in hit),max(y for x,y in hit)
+    for t in tokenize(surface):
+        if t[3]==hi and t[1].split(':')[0] in ('助詞','助動詞'):
+            hi=t[4]
+    lo=max(lo,edge)
+    if hi<=lo or (lo<=edge and hi>=len(surface)):
+        return None
+    return lo,hi
+
+
 def anomalous_source_fields(line, tokenize, store, dictionary, source_marks=(), display_ranges_out=None):
     """Yield original field ranges with an independently odd inverse reading."""
     if not line or dictionary is None:
@@ -376,7 +421,7 @@ def anomalous_source_fields(line, tokenize, store, dictionary, source_marks=(), 
     import kanji_guess
     from analysis_work import occurrence_readings
     from ime_candidates import SearchCandidates
-    from ime_language import JapaneseIME
+    from ime_spelling import GateIME as JapaneseIME  # 本物の IME が無ければ記録と辞書（2026-11-07）
     from pos_grammar import odd_kana_spans,prolonged_quotative
 
     fields = []
@@ -845,6 +890,12 @@ def anomalous_source_fields(line, tokenize, store, dictionary, source_marks=(), 
                     if reading in alias_scopes:
                         lo,hi=alias_scopes[reading]
                         display_ranges[start+edge,end]=(start+lo,start+hi)
+                    elif _os.environ.get('CN_GATE_NARROW')!='0':
+                        # 紫の幅は、復元した読みの異様な所に掛かる文節だけ（直しの範囲は今のまま・2026-11-07 補正担当
+                        # 「紫の幅を、原文と復元した読みが食い違う文節だけに」）
+                        narrow=_odd_clause_display(surface,reading,morph,edge,dictionary,store,tokenize)
+                        if narrow is not None:
+                            display_ranges[start+edge,end]=(start+narrow[0],start+narrow[1])
                     break
     result=tuple(found)
     if cache is not None and aliases_complete:
@@ -862,7 +913,7 @@ def first_roundtrip(surface):
     if not surface:return None
     cache=_CORRECTION_CACHE.get();key=('candidate_first_roundtrip',surface)
     if cache is not None and key in cache:return cache[key]
-    from ime_language import JapaneseIME
+    from ime_spelling import GateIME as JapaneseIME  # 本物の IME が無ければ記録と辞書（2026-11-07）
     with JapaneseIME() as ime:
         if not ime.available:return None
         reading=ime.phonetic(surface)
@@ -888,7 +939,7 @@ def _exact_context_morph(surface):
     if cache is not None and key in cache:
         morph=cache[key]
     else:
-        from ime_language import JapaneseIME
+        from ime_spelling import GateIME as JapaneseIME  # 本物の IME が無ければ記録と辞書（2026-11-07）
         with JapaneseIME() as ime:
             morph=(cache.get(('morph',surface)) if cache is not None else None)
             if morph is None and ime.available:
@@ -913,7 +964,7 @@ def attested_context_reading(surface,start,end):
     if not 0<=start<end<=len(surface):return None
     cache=_CORRECTION_CACHE.get();key=('attested_context_reading',surface,start,end)
     if cache is not None and key in cache:return cache[key]
-    from ime_language import JapaneseIME
+    from ime_spelling import GateIME as JapaneseIME  # 本物の IME が無ければ記録と辞書（2026-11-07）
     from morphology import dictionary_inflections
     result=None
     with JapaneseIME() as ime:
@@ -952,7 +1003,7 @@ def native_context_readings(surface,start,end,*,mark_keys=False):
     if mark_keys:key+=('mark_keys',)
     if cache is not None and key in cache:return cache[key]
     from morphology import dictionary_inflections
-    from ime_language import JapaneseIME
+    from ime_spelling import GateIME as JapaneseIME  # 本物の IME が無ければ記録と辞書（2026-11-07）
     from contextual_repair import _search_step
     reading,words=morph;variants={}
     for a,b,c,d,_,_ in words:
@@ -1005,7 +1056,7 @@ def inverse_context_input_aliases(surface,start,end):
     if not 0<=start<end<=len(surface):return ()
     cache=_CORRECTION_CACHE.get();key=('inverse_context_input_aliases',surface,start,end)
     if cache is not None and key in cache:return cache[key]
-    from ime_language import JapaneseIME
+    from ime_spelling import GateIME as JapaneseIME  # 本物の IME が無ければ記録と辞書（2026-11-07）
     from contextual_repair import _search_step
     found=[];complete=True
     with JapaneseIME() as ime:
@@ -1089,7 +1140,7 @@ def _exact_mark_context_morph(surface):
     if cache is not None and key in cache:
         morph=cache[key]
     else:
-        from ime_language import JapaneseIME
+        from ime_spelling import GateIME as JapaneseIME  # 本物の IME が無ければ記録と辞書（2026-11-07）
         morph=None
         with JapaneseIME() as ime:
             reverse=cache.get(('morph',surface)) if cache is not None else None

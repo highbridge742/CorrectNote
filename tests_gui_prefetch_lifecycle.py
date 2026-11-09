@@ -17,13 +17,13 @@ def child():
            '\n'.join('明日の予定を確認します。' for _ in range(120)),
            '最後のメモです。']
     if os.environ.get('CORRECTNOTE_PREFETCH_IME_EDITS'):
-        texts=['先頭の文です。\n'+'\n'.join('資料を確認します。' for _ in range(40))+'\nすきにん\t\n終端の文です。',
+        texts=['先頭の文です。\n'+'\n'.join('資料を確認します。' for _ in range(40))+'\n会議の死霊\t\n終端の文です。',
                '\n'.join('次の資料を読みます。' for _ in range(18)),
                '\n'.join('別の予定を確認します。' for _ in range(24))]
     if os.environ.get('CORRECTNOTE_PREFETCH_SEARCH'):
         texts=['先頭の文です。\n'+'\n'.join('資料を確認します。' for _ in range(20))
                +'\n検索対象です。\n'+'\n'.join('資料を確認します。' for _ in range(20))
-               +'\nすきにん\t\n終端の文です。',
+               +'\n会議の死霊\t\n終端の文です。',
                '\n'.join('次の資料を読みます。' for _ in range(18)),
                '\n'.join('別の予定を確認します。' for _ in range(24))]
     if os.environ.get('CORRECTNOTE_PREFETCH_LARGE'):
@@ -34,7 +34,10 @@ def child():
     if os.environ.get('CORRECTNOTE_PREFETCH_ORDER'):
         texts[2]='次に開く資料を確認します。'
     Path('session.json').write_text(json.dumps(dict(version=1,active=0,tabs=[new_tab(text=t) for t in texts]),ensure_ascii=False),encoding='utf-8')
-    Path('settings.json').write_text(json.dumps(dict(layout='split',input_method='kana',input_method_auto=False)),encoding='utf-8')
+    # 裏の子が落ちる試し（PREFETCH_RESTART）は、裏のタブに別の子（_prefetch_worker）を持つ段＝高で。中（2026-10-20 から
+    # 既定）は子が1つで、裏の子そのものが無い
+    tier=dict(memory_usage='high') if os.environ.get('CORRECTNOTE_PREFETCH_RESTART') else {}
+    Path('settings.json').write_text(json.dumps(dict(layout='split',input_method='kana',input_method_auto=False,**tier)),encoding='utf-8')
     root=tk.Tk();root.withdraw();a=None;errors=[];calls=[];terminated=[];started=time.monotonic()
     root.report_callback_exception=lambda *exc:errors.append(''.join(traceback.format_exception(*exc)))
     initial_revision=[None]
@@ -141,7 +144,7 @@ def child():
                 a._analyze();until(done)
                 a.bookmarks.clear();a.bookmarks.update((5,18,35))
                 def colored():
-                    position=a.editor.search('すきにん','1.0')
+                    position=a.editor.search('死霊','1.0')
                     assert position and 'suspect' in a.editor.tag_names(position),('Trailing color lost',position)
                 colored();before=len(calls)
                 a._current_pattern=lambda:app.searchlib.build_pattern('検索対象')
@@ -177,11 +180,13 @@ def child():
                 user=C.WinDLL('user32')
                 user.SendMessageW.argtypes=[W.HWND,W.UINT,C.c_size_t,C.c_ssize_t]
                 user.SendMessageW.restype=C.c_ssize_t
+                # IME の知らせは Tk のキーの入力先（root の窓）へ届く（ime_events.ResultEvents が見る窓・2026-11-05 実機）
+                ime_hwnd=a.root.winfo_id()
                 def event(surface='橋',reading='ﾊｼ'):
                     with patch.object(ime_watch,'read_composition',return_value=dict(result=surface,result_reading=reading)):
-                        user.SendMessageW(a.editor.winfo_id(),ime_events.WM_IME_COMPOSITION,0,0xA00)
+                        user.SendMessageW(ime_hwnd,ime_events.WM_IME_COMPOSITION,0,0xA00)
                 def colored():
-                    position=a.editor.search('すきにん','1.0')
+                    position=a.editor.search('死霊','1.0')
                     assert position,'Unedited trailing source disappeared'
                     assert 'suspect' in a.editor.tag_names(position),('Trailing color disappeared',position,a.editor.tag_names(position))
                 a.bookmarks.clear();a.bookmarks.update((5,18,35));expected=set(a.bookmarks)
@@ -190,10 +195,10 @@ def child():
                     before=len(calls)
                     for operation,line in (('insert',2),('delete',9),('insert',9),('delete',2)):
                         if operation=='insert':
-                            user.SendMessageW(a.editor.winfo_id(),ime_events.WM_IME_STARTCOMPOSITION,0,0)
+                            user.SendMessageW(ime_hwnd,ime_events.WM_IME_STARTCOMPOSITION,0,0)
                             a.editor.insert(f'{line}.0','追記した行です。')
                             event('追記した行です。','ﾂｲｷｼﾀｷﾞｮｳﾃﾞｽ')
-                            user.SendMessageW(a.editor.winfo_id(),ime_events.WM_IME_ENDCOMPOSITION,0,0)
+                            user.SendMessageW(ime_hwnd,ime_events.WM_IME_ENDCOMPOSITION,0,0)
                             a.editor.insert(f'{line}.8','\n')
                             a._drain_ime_result_events()
                             at=len(a.editor.get('1.0',f'{line}.0'))
@@ -225,8 +230,9 @@ def child():
             if os.environ.get('CORRECTNOTE_PREFETCH_RESTART'):
                 assert len(terminated)==1,terminated
                 old_pid,owner,first=terminated[0]
-                assert a._prefetch_worker.process.pid!=old_pid
-                assert a._prefetch_worker.process.is_alive()
+                # 新しい子が続きを解いた。全タブを解き終えたら裏の子は閉じる（memory_usage.release_prefetch・2026-10-30）
+                worker=a._prefetch_worker
+                assert worker is None or (worker.process.pid!=old_pid and worker.process.is_alive()),worker
                 index=next(i for i,tab in enumerate(a.session.tabs) if work.owner_for_tab(a,tab)==owner)
                 saved=tab_analysis.completed(a,a.session.tabs[index]['text'],owner)
                 assert saved['results'][0]==first

@@ -30,6 +30,11 @@ from array import array
 from bisect import bisect_left, bisect_right
 from itertools import islice
 
+try:
+    import mapped_tables
+except Exception:   # 写像の控えが無い時は pickle の控え
+    mapped_tables = None
+
 ENV = 'CN_COMPACT_TABLES'
 FILE_NAME = 'seed_japanese_compact.bin.gz'
 # The bundled file (gzip bytes) and the cost source it is derived from.
@@ -115,8 +120,11 @@ class _Keys:
             position = blob.find(needle + sep, starts[first] - 1, starts[last])
         else:
             position = blob.find(needle + sep, starts[first] - 1)
-            if position < 0 and blob.endswith(needle) and len(blob) - len(needle) >= starts[first] - 1:
-                position = len(blob) - len(needle)
+            if position < 0 and blob.endswith(needle):
+                # rfind は末尾の一致（len(blob) - len(needle)）と同じ所。写像した blob（バイトで数える）でも合う
+                tail = blob.rfind(needle)
+                if tail >= starts[first] - 1:
+                    position = tail
         if position < 0:
             return -1
         return bisect_left(starts, position + 1, first, last)
@@ -542,11 +550,127 @@ class CompactTuples:
             yield tuple(key.split(self._SEP))
 
 
+# 詰めた形の控え（2026-11-07・解析の子の起動）。語の一覧（words_from_seed）と費用の表（load_cost_tables）は、
+# 子を作るたびに同梱の gz を展開して位置の並びを作り直していた（雲で 0.18秒・0.25秒、どの子も最初の1行・簡易入力の
+# 最初の1字で払う）。出来上がった形を pickle でデータの場所（synonyms の控えと同じ所）に置き、元のファイル（大きさ・
+# 更新時刻）と形の版が同じならそれを読む（0.01秒・0.04秒）。中身は作り直したものと同じ物なので答えは同じ。
+# 置けない・読めないときは今までどおり作る。CN_TABLE_PICKLE=0 で前の形。
+TABLE_PICKLE_ENV = 'CN_TABLE_PICKLE'
+_PICKLE_FORMAT = 1
+
+
+def _pickle_folder():
+    try:
+        import reading_lattice
+        return os.path.dirname(reading_lattice.default_cache_path())
+    except Exception:
+        return None
+
+
+def _file_stamp(path):
+    st = os.stat(path)
+    return (os.path.basename(path), st.st_size, st.st_mtime_ns)
+
+
+def _shape():
+    return tuple((cls.__name__, tuple(cls.__slots__)) for cls in
+                 (_Keys, CompactWords, CompactPairs, CompactCosts)) + (_Keys._BLOCK,)
+
+
+# 写像の控え（2026-11-07・子どうしで表の頁を共有、mapped_tables）。名前に stamp の印を入れる: Windows では
+# 写像中のファイルを置き換えられないので、形が変わったら別の名前に書き、古いのは消せる時に消す。
+def _mapped_path(path, stamp):
+    if not path or mapped_tables is None or not mapped_tables.enabled():
+        return None
+    import hashlib
+    mark = hashlib.sha1(repr((mapped_tables._MAGIC, stamp)).encode('utf-8')).hexdigest()[:12]
+    return '%s.%s.mapped' % (path, mark)
+
+
+def _drop_old_mapped(path, keep):
+    folder, base = os.path.split(path)
+    try:
+        names = os.listdir(folder)
+    except Exception:
+        return
+    for name in names:
+        full = os.path.join(folder, name)
+        if name.startswith(base + '.') and name.endswith('.mapped') and full != keep:
+            try:
+                os.remove(full)   # 他の子が写像している間は消せない（次の時に消える）
+            except Exception:
+                pass
+
+
+def _pickled(name, stamp, build):
+    """build() の答えを、stamp が同じ間は控えから返す（build が None を返したときは控えない）。"""
+    if os.environ.get(TABLE_PICKLE_ENV) == '0':
+        return build()
+    import pickle
+    folder = _pickle_folder()
+    path = os.path.join(folder, name) if folder else None
+    try:
+        stamp = (_PICKLE_FORMAT, _shape()) + tuple(stamp)
+    except Exception:
+        return build()
+    mapped = _mapped_path(path, stamp)
+    if mapped:
+        ok, value = mapped_tables.read(mapped, stamp)
+        if ok:
+            return value
+    value = None
+    if path and os.path.exists(path):
+        try:
+            with open(path, 'rb') as stream:
+                saved, value = pickle.load(stream)
+            if saved != stamp:
+                value = None
+        except Exception:
+            value = None
+    kept = value is not None
+    if not kept:
+        value = build()
+    if value is not None and mapped and mapped_tables.write(mapped, stamp, value):
+        # 写像の形に置けたら、それを読んで返す（この子も表の中身をファイルの頁で持つ）。pickle の控えは要らない
+        _drop_old_mapped(path, mapped)
+        ok, got = mapped_tables.read(mapped, stamp)
+        if ok:
+            if kept:
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+            return got
+    if kept:
+        return value
+    if value is not None and path:
+        tmp = '%s.%d.tmp' % (path, os.getpid())   # 解析の子が2つ同時に書くことがある
+        try:
+            with open(tmp, 'wb') as stream:
+                pickle.dump((stamp, value), stream, protocol=4)
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+    return value
+
+
 def words_from_seed(path):
     """word_table.read_word_sets for a sorted, fully marked seed list.
 
     Returns (wide, narrow) as one shared CompactWords, or None when the
     source is not of that shape (the caller then reads it as before)."""
+    try:
+        stamp = ('words', _file_stamp(path))
+    except OSError:
+        return _words_from_seed(path)
+    return _pickled('cn_words_%s.cache.pickle' % os.path.basename(path).split('.')[0], stamp,
+                    lambda: _words_from_seed(path))
+
+
+def _words_from_seed(path):
     with gzip.open(path, 'rt', encoding='utf-8') as source:
         text = source.read()
     text = text.rstrip('\n')
@@ -590,6 +714,14 @@ _CONTAINERS = {'list': list, 'tuple': tuple}
 
 def load_cost_tables(source_path, compact_path):
     """(readings, costs, surfaces) compact, or None when the files differ."""
+    try:
+        stamp = ('cost', FILE_SHA256, SOURCE_SHA256, _file_stamp(source_path), _file_stamp(compact_path))
+    except OSError:
+        return _load_cost_tables(source_path, compact_path)
+    return _pickled('cn_cost_tables.cache.pickle', stamp, lambda: _load_cost_tables(source_path, compact_path))
+
+
+def _load_cost_tables(source_path, compact_path):
     try:
         if FILE_SHA256 is None or _sha256(compact_path) != FILE_SHA256:
             return None

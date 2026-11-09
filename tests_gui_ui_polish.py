@@ -70,8 +70,13 @@ def child():
      for row in (3,4,5):
       assert not a.editor.get(f'{row}.0',f'{row}.end').strip()
       assert a._line_analysis_display_state(row)=='done'
-     assert a._line_analysis_state(6)=='pending'
-     assert a._line_analysis_display_state(6) is None
+     # Row 6 is the edit's neighbour: read again (pending) only while neighbours are redone (NEARBY_REDO, off since
+     # 2026-11-07); otherwise it keeps its answer until the plan is made (_unplanned_row_source, 2026-11-01)
+     if app._nearby_redo(a):
+      assert a._line_analysis_state(6)=='pending'
+      assert a._line_analysis_display_state(6) is None
+     else:
+      assert a._line_analysis_state(6)=='done'
      a.editor.delete('3.0','4.0')
     a._analyze_if_changed();complete()
    a.editor.edit_reset()

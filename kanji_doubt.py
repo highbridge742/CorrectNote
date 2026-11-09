@@ -25,6 +25,7 @@ DOUBT_GAIN = 0
 _NAME_MARKS = ('さん', 'ちゃん', 'くん', '君', '氏', '様', 'さま', '先生', '殿', '選手', '社長', '部長', '課長',
                '市', '町', '村', '県', '区', '郡', '駅', '線', '川', '山', '島', '通り')
 MAX_FACES = 12
+COMMON_RANK = 450
 
 
 @lru_cache(maxsize=1)
@@ -63,6 +64,15 @@ def suspects(text, store=None):
         after = text[t.end:]
         if t.pos_sub == '固有名詞' or any(after.startswith(m) for m in _NAME_MARKS):
             continue
+        # 常用外でも、ふつうの文によく出る語（嘘・噂・誰: 身近さの段 COMMON_RANK 以下）は疑わない。隣とつないだ窓で
+        # 別の語（もう嘘 → もうそう 妄想）に届いても、元の語が身近なら打ち違いの根拠にならない（2026-11-09）
+        if os.environ.get('CN_KD_COMMON_WORD') != '0':
+            try:
+                import ime_reconvert as _R
+                if _R._rank(t.surface) <= COMMON_RANK:
+                    continue
+            except Exception:
+                pass
         # 常用外でも、ふだん使う語と判定された語（鞄: kango_tier 層1）は疑わない
         try:
             import kango_tier

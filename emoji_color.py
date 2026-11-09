@@ -34,6 +34,7 @@ EMOJI = re.compile(
     + _MODS + '*)*')
 
 POLL_MS = 90
+QUIET_POLL_MS = 1000
 # Variation selectors drawn as letters of their own. Tk 8.6.9 gives U+FE0F
 # (and U+FE0E) a width of its own (18px at 10pt) and draws a BMP base such as
 # ❤ with its text glyph, so ❤ + U+FE0F took two characters' room (2026-10-15 うにさん
@@ -402,7 +403,7 @@ class EmojiOverlay:
                 observers[name].insert(0, self._before_redraw)
             # A new emoji (typed, pasted, Win+.) and rows a jump brings in are
             # hidden before Tk draws them.
-            observers.setdefault('changed', []).insert(0, lambda args=None: self._hide_glyphs())
+            observers.setdefault('changed', []).insert(0, lambda args=None: self._after_edit(args))
             for name in ('viewed', 'scrolled'):
                 observers.setdefault(name, []).insert(0, self._hide_glyphs)
             observers.setdefault('changed', []).append(lambda args=None: self.schedule())
@@ -438,9 +439,23 @@ class EmojiOverlay:
         finally:
             self._flush = False
         try:
-            self.poll = self.w.after(POLL_MS, self._tick)
+            # With no emoji in the pane, the edits themselves bring the check (changed -> schedule): a slow look is
+            # enough (2026-11-05: two panes woke the idle process 22 times a second for nothing)
+            self.poll = self.w.after(QUIET_POLL_MS if self._nothing_to_show() else POLL_MS, self._tick)
         except Exception:
             self.poll = None
+
+    def _after_edit(self, args=None):
+        """An edit that brings no emoji into a pane with none has nothing to tag (8 ms a key in a long tab, 2026-11-05)."""
+        whole = getattr(self.w, '_correctnote_whole_text', None)
+        seen = self._emoji_seen
+        if (whole is not None and seen is not None and not seen[1] and seen[0] == whole.get('changes', 0) - 1
+                and args and args[0] in ('insert', 'delete', 'replace')
+                and not self.shown and not self._skipped and not (self._hidden is not None and self._hidden[2])
+                and not EMOJI.search(''.join(str(a) for a in args[2:]))):
+            self._emoji_seen = (whole['changes'], False)
+            return
+        self._hide_glyphs()
 
     def _nothing_to_show(self):
         """No emoji anywhere in the pane, and none shown or tagged: the poll has nothing to do.
@@ -803,7 +818,7 @@ class EmojiOverlay:
         above and below, so Tk draws its own glyph in the background colour
         (HIDE_TAG). Rows that scroll in are tagged already; a jump is tagged
         before Tk draws (called from the pane's yview/see and edits)."""
-        if self.stopped or self._failed:
+        if self.stopped or self._failed or self._nothing_to_show():
             return
         w = self.w
         call = self._call

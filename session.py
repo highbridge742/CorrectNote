@@ -268,6 +268,10 @@ class SessionStore:
             # of saving is no longer kept (nothing read it; times are not recorded).
             if getattr(self, '_last_written', None) == (path, text) and os.path.exists(path):
                 return True
+            import file_same
+            if file_same.same(path, text):
+                self._last_written = (path, text)
+                return True
             tmp = path + '.tmp'
             with open(tmp, 'w', encoding='utf-8') as f:
                 f.write(text)

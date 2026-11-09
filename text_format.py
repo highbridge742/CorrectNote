@@ -414,13 +414,14 @@ class TextFormat:
                 self._button_job = None
 
     def refresh_buttons(self):
+        import quiet_config
         self._button_job = None
         palette = getattr(self.app, '_format_button_palette', None)
         for key, button in self._buttons.items():
             try:
                 on = self.active(key)
                 colors = palette(on) if palette is not None else {}
-                button.configure(relief='sunken' if on else 'flat', **colors)
+                quiet_config.configure(button, relief='sunken' if on else 'flat', **colors)
             except tk.TclError:
                 pass
 
