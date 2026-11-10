@@ -1084,6 +1084,18 @@ def _pick(seen, margin=MARGIN):
     further = getattr(seen, 'further', ())
     ranked = sorted(seen.items(), key=lambda x: x[1][0])
     best, (cost, ok) = ranked[0]
+    if not ok and os.environ.get('CN_PICK_SAME_READING_OK') != '0':
+        # 一番が紫の残る形（稀な語の置き違い: 来襲）でも、同じ読みで紫の残らない形（来週）が在れば、打った読みは同じで
+        # 表記の選び違いだけなので、それを一番とする（2026-11-10 1.18.2 ローマ字の画面: 同じ読みの2つが並んで紫のままだった）
+        try:
+            want = _line_reading(best)
+            alt = [x for x in ranked[1:] if x[1][1] and want is not None and _line_reading(x[0]) == want]
+        except Exception:
+            alt = []
+        if alt:
+            ranked = [alt[0]] + [x for x in ranked if x is not alt[0]
+                                 and not (not x[1][1] and _line_reading(x[0]) == want)]
+            best, (cost, ok) = ranked[0]
     if not ok:
         return None
     rivals = [x for x in ranked[1:] if not (best not in further and x[0] in further)]
@@ -1100,6 +1112,11 @@ def _pick(seen, margin=MARGIN):
             for x in same:
                 if kanji(x[0]) > kanji(best):
                     best, cost = x[0], x[1][0]
+                elif (kanji(x[0]) == kanji(best) and x[1][0] - cost < margin
+                      and os.environ.get('CN_PICK_COMMON_FACE') != '0' and _commoner_face(x[0], best)):
+                    # 同じ読みで漢字の数も同じ表記が並ぶ（来襲／来週）なら、身近な語の表記（打った読みは同じで、選び違いは
+                    # IME の候補の順）。2026-11-10 1.18.2 ローマ字の画面: PC で 来襲 を採っていた。CN_PICK_COMMON_FACE=0 で前のまま
+                    best, cost = x[0], x[1][0]
         except Exception:
             pass
     if rivals and rivals[0][1][0] - cost < margin:
@@ -1115,6 +1132,26 @@ def _pick(seen, margin=MARGIN):
         if rest and rest[0][1][0] - cost < margin:
             return None
     return best, cost
+
+
+def _commoner_face(x, y):
+    """同じ読みの2つの行 x・y の違う所の語で、x の語のほうが身近（ime_reconvert._rank が小さい）か。"""
+    try:
+        import ime_reconvert as R
+        from morphology import tokenize
+    except Exception:
+        return False
+    ops = [o for o in difflib.SequenceMatcher(None, y, x, autojunk=False).get_opcodes() if o[0] != 'equal']
+    if not ops:
+        return False
+
+    def rank(text, a, b):
+        rs = [R._rank(t.surface) for t in tokenize(text)
+              if t.start < max(b, a + 1) and a < t.end and any(_kanji(c) for c in t.surface)]
+        return max(rs) if rs else None
+    rx = rank(x, ops[0][3], ops[-1][4])
+    ry = rank(y, ops[0][1], ops[-1][2])
+    return rx is not None and ry is not None and rx < ry
 
 
 PARTICLE_SIDE_MIN = 5   # 決める助詞の組（名詞＋助詞・助詞＋述語）がこれだけ例文に在ること
@@ -2273,6 +2310,10 @@ def _common_kana_verbs(text):
                 run.append(u)
                 continue
             break
+        if (os.environ.get('CN_KANA_VERB_SPLIT_SMALL') != '0' and e < len(text) and text[e] in 'ゃゅょぁぃぅぇぉゎ'):
+            # 用言の直後が小書きのかな（ひり｜ゅ）なら、拗音を2つに切った読み違いで、書くつもりのかなの用言ではない
+            # （2026-11-10 1.18.2 ローマ字の画面: おひりゅ の ひり を身近な用言と見て直しを止めていた）
+            continue
         if e - t.start >= 2 and _kana_run_clean(text, t.start, e) and _verb_run_sound(run):
             out.append((t.start, e))
     return out
@@ -2797,6 +2838,31 @@ def _romaji_token_readings(toks, limit=4, need_letters=True):
     return [r for r in out if not need_letters or any('a' <= c <= 'z' for c in r)]
 
 
+def _fixes_other_odd(cur, text, fx, s, e, spans):
+    """補正し直しで読みが替わった所が、戻した所 [s, e) の外で、元の行のほかの紫（もう1つの打ち違い: おひりゅ と パス板）
+    の上かその隣だけなら、重ねた別の直しではなく、行に2つ在る打ち違いのもう1つが直った形として数える。CN_ROMAJI_OTHER_ODD_FIX=0
+    で前のまま（2026-11-10 うに 1.18.2 のローマ字の画面）。"""
+    if os.environ.get('CN_ROMAJI_OTHER_ODD_FIX') == '0':
+        return False
+    shift = len(text) - len(cur)
+    tail = e + shift
+    ops = [o for o in difflib.SequenceMatcher(None, text, fx, autojunk=False).get_opcodes() if o[0] != 'equal']
+    if not ops:
+        return False
+    for _tag, i1, i2, _j1, _j2 in ops:
+        if i1 < tail and s < max(i2, i1 + 1):
+            return False
+        if i2 <= s:
+            x1, x2 = i1, i2
+        elif i1 >= tail:
+            x1, x2 = i1 - shift, i2 - shift
+        else:
+            return False
+        if not any(sp[0] <= x2 and x1 <= sp[1] for sp in spans):
+            return False
+    return True
+
+
 ROMAJI_ROUNDS = 3   # 1行の中の打ち違いを1か所ずつ直す回数（前半と後半に1つずつの行: うにさん 11-03 のメール例）
 
 
@@ -2888,10 +2954,18 @@ def _romaji_repair_once(line, result, run, store, dict_index, context_vec=None, 
         seen = _Seen()
         drops = set()
         for text, (c, s, e, drop) in ranked[:TOP]:
+            # 紫の残らない形が出て、次の候補の置いた時点の費用がそれより MARGIN 以上重いなら、残りは補正し直さない
+            # （_judge の CN_JUDGE_BREAK と同じ考え: うに 11-07「有力な候補がでたらそこで Break」。PC で1行22秒・
+            # 8秒の上限で打ち切られて直らなかった 2026-11-10）。CN_ROMAJI_JUDGE_BREAK=0 で前のまま
+            if os.environ.get('CN_ROMAJI_JUDGE_BREAK') != '0' and seen:
+                oks = [v[0] for v in seen.values() if v[1]]
+                if oks and c >= min(oks) + MARGIN:
+                    break
             want = _line_reading(text) if os.environ.get('CN_ROMAJI_SAME_READING') != '0' else None
             for fx, v in _judge(cur, s, e, [text], run, other, True).items():
                 # 補正し直しで読みまで替わった形（1打の戻しの上に別の直しが重なった: あたrさひい→おもねっらしい）は見ない
-                if want is not None and fx != text and _line_reading(fx) != want:
+                if (want is not None and fx != text and _line_reading(fx) != want
+                        and not _fixes_other_odd(cur, text, fx, s, e, spans)):
                     continue
                 if fx not in seen or v[0] < seen[fx][0]:
                     seen[fx] = v

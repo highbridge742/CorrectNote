@@ -15058,6 +15058,16 @@ class CorrectNoteApp:
         partial = (getattr(self, '_analysis_partial', None) or {}).get(key)
         if not partial:
             return None, ()
+        # 控えを読んだときの入力方式・配列（state_key の7番）から変わっていたら使わない（2026-11-10 うにさん
+        # 「チェックを外し…かな入力に変え、ローマ字入力に戻したら補正されました」: 起動時に読んだ途中までの
+        # 控えは、入力方式を変えても捨てられず、前の方式の答えが1回だけ出た）。CN_PARTIAL_IM=0 で前の形
+        if os.environ.get('CN_PARTIAL_IM') != '0':
+            try:
+                then = getattr(self, '_analysis_partial_state', None)
+                if then is None or then[7] != analysis_async.state_key(self)[7]:
+                    return None, ()
+            except Exception:
+                return None, ()
         owner = input_work.owner(self)
         if (tab_analysis._readings(self, owner) or tab_analysis._calculations(self, owner)
                 or key in getattr(self, '_analysis_stale', ())):

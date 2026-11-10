@@ -465,6 +465,158 @@ def _aux_verb_keep(line, result):
     return out
 
 
+_ROMAJI_TRACE = None
+
+
+def _letters_mean_romaji(line):
+    """かな・漢字に挟まれた半角の小文字1〜2字があるか（ローマ字で打った字の残り）。うに 2026-11-10 01:39Z「かな入力時、
+    文中に現れたアルファベット1文字が、ローマ字入力によって母音と子音による隣接キーのタイプミスと考えられる場合は、
+    補正する」、01:51Z「2字も入れる」（お非ry）。直すかどうかはローマ字の段（隣のキー・巻き込み）が決め、説明が付かなければ直さない。"""
+    import os
+    import re
+    global _ROMAJI_TRACE
+    if os.environ.get('CN_LETTER_MEANS_ROMAJI') == '0' or not line:
+        return False
+    if _ROMAJI_TRACE is None:
+        _ROMAJI_TRACE = re.compile(r'[ぁ-ゖ一-鿿々][a-z]{1,2}[ぁ-ゖ一-鿿々]')
+    return bool(_ROMAJI_TRACE.search(line))
+
+
+# 1行の補正の中で、corrector._convert_odd_kana_run（紫のかなの並びを漢字にする）の同じ呼び出しの答えを使い回す。
+# 1打戻した行を corrector に通し直す所（last_keystroke._after_mark の retry・紫の読み直しの run）で、似た塊の
+# 読みの候補を何千回も同じ形で変換し直していた（2026-11-10 うに「36秒掛かった対応は？」: かな入力の1行が PC で36秒、
+# 挙動関連担当の記録で _convert_odd_kana_run 2.6万回）。引数と、行の中で変わらない store・dict_index が同じなら答えも
+# 同じなので、答えは変えない。corrector は名詞索引の固定のファイルなので外から包む。CN_ODD_RUN_MEMO=0 で前のまま
+import contextvars as _memo_cv
+import os
+_ODD_RUN_MEMO = _memo_cv.ContextVar('cn_odd_run_memo', default=None)
+_ODD_RUN_RAW = getattr(corrector._convert_odd_kana_run, '_cn_raw', corrector._convert_odd_kana_run)
+
+
+def _odd_run_key(a, k):
+    def norm(v):
+        if callable(v):
+            return ('fn', getattr(v, '__module__', ''), getattr(v, '__qualname__', ''))
+        if isinstance(v, (list, set, frozenset)):
+            return ('seq', tuple(sorted(map(repr, v))) if isinstance(v, (set, frozenset)) else tuple(map(repr, v)))
+        hash(v)
+        return v
+    store_ = a[1] if len(a) > 1 else k.get('store')
+    di = a[2] if len(a) > 2 else k.get('dict_index')
+    rest = tuple(norm(v) for v in a[3:])
+    kw = tuple(sorted((n, norm(v)) for n, v in k.items() if n not in ('store', 'dict_index')))
+    return (a[0] if a else k.get('text'), id(store_), id(di), rest, kw)
+
+
+REOPEN_VARIANT_CAP = 2000   # 紫の塊の受け皿で、手の変種を変換して試す数の上限（1回の _reopen_odd_chunk ごと）
+_REOPEN_COUNT = _memo_cv.ContextVar('cn_reopen_variant_count', default=None)
+
+
+def _reopen_odd_chunk_capped(*a, **k):
+    """corrector._reopen_odd_chunk の受け皿（読み×手の変種を1つずつ変換して最初に通った形を採る）が、語彙の多い PC で
+    1つの塊に1万を超える変種を変換して全部通らず、かな入力の1行が36秒だった（2026-11-10 うに「36秒掛かった対応は？」・
+    挙動関連担当の記録: 変種の変換 2.6万回・11.6秒、変種ごとの表引き 4.3秒）。変種は読みに近い順・手の費用の安い順に
+    並んでいるので、REOPEN_VARIANT_CAP を越えた遠い変種は試さない。CN_REOPEN_VARIANT_CAP=0 で上限なし（前のまま）。"""
+    tok = _REOPEN_COUNT.set([0])
+    try:
+        return _REOPEN_RAW(*a, **k)
+    finally:
+        _REOPEN_COUNT.reset(tok)
+
+
+def _variant_capped(k):
+    cnt = _REOPEN_COUNT.get()
+    if cnt is None or not k.get('short_head') or 'born' not in k:
+        return False
+    try:
+        cap = int(os.environ.get('CN_REOPEN_VARIANT_CAP', REOPEN_VARIANT_CAP))
+    except ValueError:
+        cap = REOPEN_VARIANT_CAP
+    if cap <= 0:
+        return False
+    cnt[0] += 1
+    return cnt[0] > cap
+
+
+def _convert_odd_kana_run_memo(*a, **k):
+    if _variant_capped(k):
+        return None
+    memo = _ODD_RUN_MEMO.get()
+    if memo is None:
+        return _ODD_RUN_RAW(*a, **k)
+    try:
+        key = _odd_run_key(a, k)
+    except Exception:
+        return _ODD_RUN_RAW(*a, **k)
+    if key in memo:
+        return memo[key]
+    got = _ODD_RUN_RAW(*a, **k)
+    if got is None or isinstance(got, (str, tuple)):
+        memo[key] = got
+    return got
+
+
+_convert_odd_kana_run_memo._cn_raw = _ODD_RUN_RAW
+corrector._convert_odd_kana_run = _convert_odd_kana_run_memo
+_REOPEN_RAW = getattr(corrector._reopen_odd_chunk, '_cn_raw', corrector._reopen_odd_chunk)
+_reopen_odd_chunk_capped._cn_raw = _REOPEN_RAW
+corrector._reopen_odd_chunk = _reopen_odd_chunk_capped
+
+
+# 同じく1行の中で contextual_repair.lexical_omission_repairs（読みに1打を足して辞書の語になる形を全部作る）の答えを
+# 使い回す。1打戻した行を何度も通し直すので、同じ読みで何百回も呼ばれていた（2026-11-10 挙動関連担当の記録:
+# 500回・4.8秒）。答えは読み・辞書・引数と ゛゜ の打ち違いの切り替えで決まるので、行の中では変わらない。
+# CN_ODD_RUN_MEMO=0 で前のまま
+import contextual_repair as _cr_mod
+_LOR_RAW = getattr(_cr_mod.lexical_omission_repairs, '_cn_raw', _cr_mod.lexical_omission_repairs)
+
+
+def _lexical_omission_memo(reading, dictionary, include_shift=False, nominal_compound=False, native_tails=()):
+    memo = _ODD_RUN_MEMO.get()
+    if memo is None:
+        return _LOR_RAW(reading, dictionary, include_shift, nominal_compound, native_tails)
+    try:
+        import kana_layout as _kl
+        key = ('lor', reading, id(dictionary), bool(include_shift), bool(nominal_compound),
+               tuple(native_tails or ()), bool(_kl.mark_slip_enabled()))
+        hash(key)
+    except Exception:
+        return _LOR_RAW(reading, dictionary, include_shift, nominal_compound, native_tails)
+    if key not in memo:
+        memo[key] = _LOR_RAW(reading, dictionary, include_shift, nominal_compound, native_tails)
+    return memo[key]
+
+
+_lexical_omission_memo._cn_raw = _LOR_RAW
+_cr_mod.lexical_omission_repairs = _lexical_omission_memo
+
+
+# 1打戻した行の通し直し（last_keystroke の retry・contextual_repair.SLIP_REVERTED が立つ間）では、corrector の
+# 紫の塊の読み直しが語彙の似た読みを2手まで探す（vocabulary.find_known_readings_flex max_edits=2）のを1手までにする。
+# 戻した行の上に2打の滑りを重ねない（last_keystroke.retry の注記と同じ考え）。語彙の多い PC では1行の通し直しで
+# 塊を何千通りにも読み替えて全部変換し直し、かな入力の1行が36秒だった（2026-11-10 うに「36秒掛かった対応は？」・
+# 挙動関連担当の記録 _convert_odd_kana_run 3.6万回）。corrector は固定のファイルなので、corrector が関数の中で
+# 読む vocabulary の名前を包む。CN_RETRY_ONE_EDIT=0 で前のまま
+import vocabulary as _vocab_mod
+_FKR_RAW = getattr(_vocab_mod.find_known_readings_flex, '_cn_raw', _vocab_mod.find_known_readings_flex)
+
+
+def _fkr_retry_one_edit(typed, store, max_dist=1.6, max_edits=2, beam_width=600, input_method=None):
+    if max_edits > 1 and os.environ.get('CN_RETRY_ONE_EDIT') != '0':
+        try:
+            import contextual_repair as _cr
+            if _cr.SLIP_REVERTED.get():
+                max_edits = 1
+        except Exception:
+            pass
+    return _FKR_RAW(typed, store, max_dist=max_dist, max_edits=max_edits, beam_width=beam_width,
+                    input_method=input_method)
+
+
+_fkr_retry_one_edit._cn_raw = _FKR_RAW
+_vocab_mod.find_known_readings_flex = _fkr_retry_one_edit
+
+
 def correct_line(line, store, context_vocab=None, decisions=None,
                  input_method='kana', context_vec=None, dict_index=None,
                  nearby_words=(), recent_words=(), occurrence_readings=(), occurrence_calculations=(),
@@ -504,11 +656,21 @@ def correct_line(line, store, context_vocab=None, decisions=None,
             etoken = _lk_e.EARLY_ODD.set((line, on_early_odd, []))
         except Exception:
             etoken = None
+    # かな入力の設定でも、かな・漢字の間に半角の英字が1〜2字挟まった行（らいsひゅ・冷蔵kもに）は、ローマ字で打って
+    # 変換に残った字の跡（かなのキーでは英字は出ない）なので、その行はローマ字入力として見る（2026-11-10 うに
+    # 「ローマ字入力が通らなくなっていました」: IME の自動判定で設定が かな のとき、ローマ字の打ち違いが直らなかった）。
+    # CN_LETTER_MEANS_ROMAJI=0 で前のまま
+    if input_method == 'kana' and _letters_mean_romaji(line):
+        input_method = 'romaji'
+    mtoken = _ODD_RUN_MEMO.set({}) if (_ODD_RUN_MEMO.get() is None
+                                       and os.environ.get('CN_ODD_RUN_MEMO') != '0') else None
     try:
         return _correct_line_entry(line, store, context_vocab, decisions, input_method, context_vec, dict_index,
                                    nearby_words, recent_words, occurrence_readings, occurrence_calculations,
                                    occurrence_strokes, tab_has_kana, previous_line, defer_heavy)
     finally:
+        if mtoken is not None:
+            _ODD_RUN_MEMO.reset(mtoken)
         if etoken is not None:
             _lk_e.EARLY_ODD.reset(etoken)
 
@@ -5965,6 +6127,13 @@ def _dropped_vowel_letter(line, result, out, input_method):
             # 母音の抜けた2字の子音（しまshた の sh・ch・ts・ky…）も、ローマ字の1かなの頭だけが残った脱字の跡
             for m in re.finditer(r'(?<![A-Za-z])(?:sh|ch|ts|[kgsztdnhbpmr]y)(?![A-Za-z])', before):
                 if lo - 1 <= m.start() <= hi and not _letter_swap_resolves(before, m.start(), m.end()):
+                    # 直しが打鍵の数を増やさない（非ry → 昼: hiry → hiru の y は u の隣のキーの打ち違い）なら、母音を
+                    # 打ち落とした跡ではなく隣のキーの1打（うに 2026-11-10 01:39Z「母音と子音による隣接キーのタイプミス」）。
+                    # CN_DROPPED_DIGRAPH_SAME_KEYS=0 で前のまま
+                    if (os.environ.get('CN_DROPPED_DIGRAPH_SAME_KEYS') != '0'
+                            and m.group()[-1] == 'y'
+                            and not _vowel_added(before, after, m.start(), m.group())):
+                        continue
                     return True
         for m in re.finditer(r'(?<![A-Za-z])[b-df-hj-mp-tv-z](?![A-Za-z])', before):
             i = m.start()
@@ -6119,6 +6288,7 @@ def _letter_near_strokes(text, i, same_only=False):
 def _vowel_added(before, after, i, c):
     """before[i] の英字の所の直しが、打鍵の数を増やしているか（h → へ: 1打 → 2打。母音を足した直し）。
     亜m → ま のような入れ替えは打鍵の数が同じなので当たらない。漢字は1字ずつの読みで数える。"""
+    import os
     try:
         import kana_keep
         import last_keystroke as LK
@@ -6132,7 +6302,19 @@ def _vowel_added(before, after, i, c):
                 if 'ァ' <= ch <= 'ヶ':
                     ch = chr(ord(ch) - 0x60)
                 if '一' <= ch <= '鿿':
-                    ch = kana_keep._reading(ch) or ''
+                    # 漢字は読みのうち一番短い打ち方で数える（庫 は くら でなく こ: 冷蔵kも → 冷蔵庫 は打鍵を増やしていない。
+                    # 2026-11-10 うに「ローマ字入力が通らなくなっていました」）。CN_VOWEL_ADDED_SHORT=0 で前のまま
+                    rds = [kana_keep._reading(ch) or '']
+                    if os.environ.get('CN_VOWEL_ADDED_SHORT') != '0':
+                        try:
+                            import odd_respell as _OR
+                            rds += list(_OR._one_kanji_readings(ch) or ())
+                        except Exception:
+                            pass
+                    rds = [r for r in rds if r and all('ぁ' <= x <= 'ゖ' for x in r)]
+                    if rds:
+                        k += min(len(LK._kana_run_to_romaji(r) or '') for r in rds)
+                    continue
                 if ch and all('ぁ' <= x <= 'ゖ' for x in ch):
                     k += len(LK._kana_run_to_romaji(ch) or '')
             return k
@@ -6374,6 +6556,19 @@ def _respell_ime_face(line, result, out):
         return out
     if not face or face == fixed:
         return out
+    if os.environ.get('CN_RESPELL_IME_RARE_FACE') != '0':
+        # IME の表記が、読み直しで選んだ漢字の語より珍しい別の漢字の語（来週 → 来襲）なら、その所は替えない。読みは同じで、
+        # IME の変換の順は学習（試験の確定）で変わる（2026-11-10 1.18.2 ローマ字の画面・挙動関連担当の覗き:
+        # この PC の IME は らいしゅう を 来襲 と変換）。ほかの所の替え（下さい → ください）はそのまま
+        parts = []
+        for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, fixed, face, autojunk=False).get_opcodes():
+            if tag != 'equal' and _ime_face_rarer(fixed, fixed[:i1] + face[j1:j2] + fixed[i2:]):
+                parts.append(fixed[i1:i2])
+            else:
+                parts.append(face[j1:j2])
+        face = ''.join(parts)
+        if face == fixed:
+            return out
     new = dict(out)
     ops = [o for o in difflib.SequenceMatcher(None, line, face, autojunk=False).get_opcodes() if o[0] != 'equal']
     new['corrected'] = face
@@ -6390,6 +6585,28 @@ def _respell_ime_face(line, result, out):
                     d[1] = d[1].replace(piece, face[o[3]:o[4]], 1)
     new['details'] = det
     return new
+
+
+def _ime_face_rarer(fixed, face):
+    """face の替わった所の漢字の語が一般の文章で珍しく（odd_respell.COMMON_NEW より後ろ）、fixed の同じ所の漢字の語の
+    ほうが身近か。"""
+    try:
+        import odd_respell as _OR
+        import ime_reconvert as R
+        from morphology import tokenize
+    except Exception:
+        return False
+    ops = [o for o in difflib.SequenceMatcher(None, fixed, face, autojunk=False).get_opcodes() if o[0] != 'equal']
+    if not ops:
+        return False
+
+    def rank(text, a, b):
+        rs = [R._rank(t.surface) for t in tokenize(text)
+              if t.start < max(b, a + 1) and a < t.end and any('一' <= c <= '鿿' for c in t.surface)]
+        return max(rs) if rs else None
+    rf = rank(face, ops[0][3], ops[-1][4])
+    rx = rank(fixed, ops[0][1], ops[-1][2])
+    return rf is not None and rx is not None and rf > _OR.COMMON_NEW and rx < rf
 
 
 def _keep_kanji_face(line, result, out):
