@@ -2024,7 +2024,7 @@ def _choose_dropped(done, a, b, rds, run, store, dict_index, context_vec, other_
     return got[0]
 
 
-def _choose_shifted(done, a, b, rds, run, store, dict_index, context_vec, other_odd=(), typed=False):
+def _choose_shifted(done, a, b, rds, run, store, dict_index, context_vec, other_odd=(), typed=False, beat=None):
     """紫の所の読みの、同じ手の続く2〜4打を同じ向きに1列戻した形（hand_shift・手の位置のずれ）だけで見る。
     決め方は1打と同じ（GAIN・MARGIN・紫が残らない）。2026-11-06 隣キーの巻き込みのサンプル文の試験。"""
     import morphology, hand_shift
@@ -2078,6 +2078,11 @@ def _choose_shifted(done, a, b, rds, run, store, dict_index, context_vec, other_
         pre.sort(key=lambda x: x[0])
     need = min(GAIN, GAIN_SHARE * base)
     if not pre or base - pre[0][0] < min(SCREEN, need):
+        return None
+    if beat is not None and pre[0][0] >= beat and os.environ.get('CN_SHIFT_BEAT') != '0':
+        # 1打の戻しの答え（紫なし）が、ずれの戻しのどの候補より軽いなら、ずれの側は補正し直さない（比べても1打が残る。
+        # 補正し直しの時間で読み直しの時間切れに掛かり、1打の答えまで捨てていた: 1.18.3 の CI・挙動関連担当の切り分け）。
+        # CN_SHIFT_BEAT=0 で前のまま
         return None
     texts = list(dict.fromkeys(t for _c, t, _r in pre[:TOP]))
     rep_of = {}
@@ -3004,10 +3009,12 @@ def _repair_line(line, result, run, store, dict_index, context_vec=None, decided
                     # ものそは 全体）
                     shifted = None
                     # 打った読みの並び（前後の語まで）で決まらなければ、狭い並び・かなの並びでも見る
+                    import morphology as _mo
+                    c1 = _mo.path_cost(fixed)
                     for sa, sb, srds, sta, stb in _shift_spans(field, a, b, rds, fa, fb, dict_index):
                         _SHIFT_LAST[0] = None
                         shifted = _choose_shifted(field, sa, sb, srds, run, store, dict_index, context_vec, others,
-                                                  _typed_run(field, sta, stb) is not None)
+                                                  _typed_run(field, sta, stb) is not None, beat=c1)
                         if shifted is not None:
                             break
                     import morphology as _mo

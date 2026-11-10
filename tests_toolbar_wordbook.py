@@ -425,11 +425,25 @@ r.after(30,tick);r.mainloop()
                 assert 0 < new_gap <= old_gap * .35 + 1, (old_gap, new_gap)
                 assert new_gap >= old_gap * .15, (old_gap, new_gap)
                 left_geometry = win.geometry()
+                # 窓の位置がそろうまで待つ（2026-11-10・CI の build-windows で (730, 916) と落ち、この PC では
+                # 1.18.2 でも毎回ちがう値で落ちた）。root.geometry で本体の窓を動かしても、Windows が新しい位置を
+                # 返すのは少しあと。単語帳も open の後に _hold_place が 50ms ごとに6回（約0.3秒）置き直して
+                # 落ち着く（word_book._place）。動かした直後・開いた直後に測ると、動く前の位置や置き直す前の位置を
+                # 測ってしまう。最大1秒まで、そろうのを待ってから測る（期待値は変えない）
+                def settle(predicate, seconds=1.0):
+                    end = time.monotonic() + seconds
+                    while time.monotonic() < end:
+                        root.update_idletasks(); root.update()
+                        if predicate(): return
+                        time.sleep(.02)
                 book.close(); root.geometry('+%d+%d' % (area[0], area[1] + 70)); root.update()
+                settle(lambda: (root.winfo_x(), root.winfo_y()) == (area[0], area[1] + 70))
                 book.open(); root.update()
                 win = book.window
-                book_right = win.winfo_x() + win.winfo_width() + 2 * max(0, win.winfo_rootx() - win.winfo_x())
-                app_right = root.winfo_x() + root.winfo_width() + 2 * max(0, root.winfo_rootx() - root.winfo_x())
+                edges = lambda: (win.winfo_x() + win.winfo_width() + 2 * max(0, win.winfo_rootx() - win.winfo_x()),
+                                 root.winfo_x() + root.winfo_width() + 2 * max(0, root.winfo_rootx() - root.winfo_x()))
+                settle(lambda: abs(edges()[0] - min(edges()[1], area[2])) <= 2)
+                book_right, app_right = edges()
                 assert abs(book_right - min(app_right, area[2])) <= 2, (book_right, app_right, win.geometry())
                 assert win.winfo_x() > a.editor.winfo_rootx(), (win.geometry(), a.editor.winfo_rootx())
                 right_geometry = win.geometry(); book.close()
