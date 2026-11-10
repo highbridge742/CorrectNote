@@ -147,3 +147,4 @@ cn_*.cache.pickle.*
 # 本人の語彙と使用の記録（2026-11-04 の確認で ignore に無かった）
 vocabulary_personal.json
 usage_counts.json
+respell_rank_stats.json

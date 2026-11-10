@@ -336,6 +336,8 @@ DEFAULTS = {
     'debug_timings': {},
     # デバッグメニューの既定の版（上の DEBUG_TIMINGS_DEFAULTS_VERSION）
     'debug_timings_defaults': DEBUG_TIMINGS_DEFAULTS_VERSION,
+    # デバッグメニュー「候補の何回目で採ったかを集計」（respell_stats・2026-11-10 うにさん「デフォルトはオフ」）
+    'debug_respell_stats': False,
 }
 
 # 古い設定ファイルからの読み替え。

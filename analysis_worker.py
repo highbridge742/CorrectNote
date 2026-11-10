@@ -954,8 +954,48 @@ def _take_usage():
         return None
 
 
+def respell_setting():
+    """In the main process: the respell debug values to send with each request (odd_respell's switches in this
+    process, set by the debug menu): (rank stats on, attempt limit). None while odd_respell is not loaded here."""
+    module=sys.modules.get('odd_respell')
+    if module is None:return None
+    return (bool(getattr(module,'RANK_STATS_ON',False)),int(getattr(module,'ATTEMPT_LIMIT',0) or 0))
+
+
+def _apply_respell(setting):
+    """In the child: take the main process's respell debug values (2026-11-10 うにさん: rank stats, attempt limit)."""
+    if setting is None and 'odd_respell' not in sys.modules:return
+    try:
+        import odd_respell
+        # 本体に値が無い頼み（本体で odd_respell を読んでいない）は、この子の odd_respell の既定のまま
+        # （上限を 0＝上限なしへ落とさない。2026-11-10 既定を 6 にした時）
+        if not hasattr(odd_respell,'_CN_DEFAULT_LIMIT'):
+            odd_respell._CN_DEFAULT_LIMIT=int(getattr(odd_respell,'ATTEMPT_LIMIT',0) or 0)
+        on,limit=setting if setting is not None else (False,odd_respell._CN_DEFAULT_LIMIT)
+        odd_respell.set_rank_stats(on)
+        odd_respell.set_attempt_limit(limit)
+    except Exception:
+        pass
+
+
+def _take_respell():
+    module=sys.modules.get('odd_respell')
+    take=getattr(module,'take_rank_stats',None)
+    if take is None:return None
+    try:return take()
+    except Exception:return None
+
+
 def merge_usage(result):
     """In the main process: add a child's numbers once (the answer no longer carries them)."""
+    if isinstance(result,dict) and 'respell' in result:
+        stats=result.pop('respell')
+        if stats:
+            try:
+                import respell_stats
+                respell_stats.merge(stats)
+            except Exception:
+                pass
     if isinstance(result,dict) and 'usage' in result:
         usage=result.pop('usage')
         if usage:
@@ -1071,6 +1111,7 @@ def _serve_requests(inbox,outbox,connection_owner,pause_flag=None):
             # The store is built: the message's copy of the vocabulary need not stay until the next request (18 MB)
             pending_state=None;request.pop('state',None)
             if request['task']['kind']=='cancel':continue
+            _apply_respell(request.get('respell'))
             _EARLY['sink']=(outbox,request['id']);_EARLY['sent']=True
             if request['task']['kind'] in ('quick','quick_prepare','line','units','prepare','warmup','candidates','plans','synonyms','explain_pos','explain_reason','odd_run'):
                 # Preserve the next request/state while the old read-only
@@ -1094,6 +1135,10 @@ def _serve_requests(inbox,outbox,connection_owner,pause_flag=None):
                     # （2026-11-07 うにさん「軽い答えではカウントしない」）。やり直しの要らない行は、この答えで1回
                     usage=None
                 result=dict(result,usage=usage)
+            if isinstance(result,dict):
+                # 候補の何回目を採ったかの集計（odd_respell・デバッグ・既定オフ）。オフなら何も無い
+                stats=_take_respell()
+                if stats:result=dict(result,respell=stats)
             outbox.put((request['id'],result,None))
         except SupersededAnalysis:
             # A warmup that ran to its end is not kept (only the last check saw the newer request)
@@ -1179,7 +1224,7 @@ class Worker:
     def submit(self,task,state=None):
         if self.closed:raise RuntimeError('Analysis worker is closed')
         self.serial+=1
-        self.inbox.put_nowait(dict(id=self.serial,task=task,state=state,usage=True))
+        self.inbox.put_nowait(dict(id=self.serial,task=task,state=state,usage=True,respell=respell_setting()))
         return self.serial
     def poll(self,request_id):
         while True:

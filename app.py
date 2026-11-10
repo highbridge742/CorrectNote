@@ -412,7 +412,7 @@ APP_TITLE = 'CorrectNote'
 # 「判断に迷った箇所」から**「不自然な文字列」**へ入れ替え（既定オン・
 # 補正が入った範囲には付けない）、**かな書きのアルファベット読みを
 # 英字に直す**（`エフ2 → F2`）、スクロール後の反映（項目48-IZ〜）。
-APP_VERSION = '1.18.2'
+APP_VERSION = '1.18.3'
 
 # 控え（session.json・ime_readings）と語彙の自動保存の間合い（2026-10-20 うにさんの決定で5分）。
 # 以前は打つ手が止まって1.5秒ごとに丸ごと書き直していた。最初の変更から5分後にまとめて1回
@@ -1007,6 +1007,9 @@ IME_READINGS_FILE = os.path.join(app_dir(), 'ime_readings.json')
 # 入れておいて。やや長期的に見ます」）。段の名前と数だけ（文・語・読み・時刻は無い）。ENGINE_STAMP が
 # 変わったら 0 から数え直す
 USAGE_COUNTS_FILE = os.path.join(app_dir(), 'usage_counts.json')
+# 紫の所の読み直しで、候補の何回目を採ったかの集計（respell_stats・デバッグ・既定オフ・2026-11-10 うにさん）。
+# 8回目以降で採った行は元の行と採った行も入る（最大200件）ので、個人ファイル（公開しない）
+RESPELL_STATS_FILE = os.path.join(app_dir(), 'respell_rank_stats.json')
 
 
 def debug_tools_on():
@@ -2227,6 +2230,7 @@ class CorrectNoteApp:
         self.ime_readings = IMEReadings(IME_READINGS_FILE).load()
         self._ime_pairs_dirty = False    # 新しい対を覚えたか（下記）
         self._load_usage_counts()
+        self._load_respell_stats()
         # 見張りの控え。**Windows 以外では使われない**が、
         # 「在るのに空」と「そもそも無い」を分けないで済むよう、
         # ここで作っておく（`_ime_reading_tick` が素直に書ける）。
@@ -3549,6 +3553,34 @@ class CorrectNoteApp:
         except Exception:
             pass
         self._save_usage_counts()
+        self._save_respell_stats()
+
+    def _load_respell_stats(self):
+        """候補の何回目で採ったかの集計（デバッグ・2026-11-10 うにさん・既定オフ）。前に書いた分を読み、設定が
+        オンなら本体の odd_respell の集計を入れる（子へは頼むたびに analysis_worker.respell_setting で渡る）。"""
+        self._respell_saved = None
+        try:
+            import respell_stats
+            respell_stats.load(RESPELL_STATS_FILE)
+            self._respell_saved = respell_stats.snapshot()
+            if self.settings.get(respell_stats.SETTING):
+                import odd_respell
+                odd_respell.set_rank_stats(True)
+        except Exception:
+            pass
+
+    def _save_respell_stats(self):
+        """本体で数えた分も足して、変わっていれば書く（消したあとは消す）。"""
+        try:
+            import respell_stats
+            respell_stats.take_local()
+            now = respell_stats.snapshot()
+            if now == getattr(self, '_respell_saved', None):
+                return
+            respell_stats.save(RESPELL_STATS_FILE)
+            self._respell_saved = now
+        except Exception:
+            pass
 
     def _load_usage_counts(self):
         """前に書いた数を足し込む（ENGINE_STAMP が違えば読まない＝0 から）。うにさんが 2026-10-24 に「長期的に数える」と

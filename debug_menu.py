@@ -83,13 +83,26 @@ ITEMS = (
     # 手動のバックアップ（2026-10-23 うにさん「n の既定は5、範囲は0〜20。0なら項目を灰色に」）
     ('backup_manual_keep', '手動のバックアップを、1タブにつき残す数',
      'app', 'BACKUP_MANUAL_KEEP', '件', 0, '0 はファイルメニューの「手動でバックアップを作成」を灰色にする'),
+    # 紫の所の読み直しで候補を補正に通す回数の上限（2026-11-10 うにさん「11回という回数をパラメータに出す」）。
+    # 本体の odd_respell.ATTEMPT_LIMIT に当て、解析の子へは頼むたびに渡す（analysis_worker.respell_setting）。
+    # これだけは補正の答えが変わりうる（少なくすると、後ろの候補を試さない）
+    ('respell_attempts', '紫の所の読み直し：候補を補正に通す回数の上限',
+     'odd_respell', 'ATTEMPT_LIMIT', '回', 0,
+     '0 は上限なし。少なくすると速くなるが、後ろの候補で直る行は直らなくなる（答えが変わる）。'
+     '既定の 6 は 2026-11-10 うにさんの指定'),
 )
+# 持ち主に `<名前>_MAX` が無い項目の上限（既定が 0＝上限なしの項目は、既定を上限にできない）
+_MAX = {'respell_attempts': 30}
+# コードの定数ではなく、ここで決める既定（2026-11-10 うにさん「6で進めて」）。この項目は、保存に無くても
+# いつも当てる（apply）。持ち主の定数の既定が別の値でも、本体と子へ渡る値（analysis_worker.respell_setting）は
+# いつもこの値か保存した値になる
+_DEFAULT = {'respell_attempts': 6}
 KEYS = tuple(item[0] for item in ITEMS)
 # 窓の見出し（その鍵の項目の前に出す・2026-10-18 うにさん）。2つ目からは前に1行あける。
 # 打鍵から計算を始めるまで・下準備と打った行を見に行く間隔（1ms／5ms）の4項目は、
 # うにさんの指定で窓から外した（コードの値はそのまま）。
 SECTIONS = (('ime_quiet', '【解析】'), ('tab_wheel_step', '【タブ移動】'), ('copy_emphasis', '【表示】'),
-            ('backup_keep', '【保存】'))
+            ('backup_keep', '【保存】'), ('respell_attempts', '【紫の所の読み直し】'))
 _BY_KEY = {item[0]: item for item in ITEMS}
 _ORIGINAL = {}   # 書き換えたモジュールの定数の、書き換える前の値
 
@@ -111,6 +124,8 @@ def _owner(owner, app=None):
 def default(key, app=None):
     """コードに書いてある値（窓の値は、クラスの定数を見る）。"""
     _, _, owner, name, _, _, _ = _BY_KEY[key]
+    if key in _DEFAULT:
+        return _DEFAULT[key]
     if key in _ORIGINAL:
         return _ORIGINAL[key]
     return int(getattr(_owner(owner, app), name))
@@ -123,6 +138,8 @@ def minimum(key):
 def maximum(key, app=None):
     """スライダーの上限。持ち主に `<名前>_MAX` があればそれ、無ければ既定。"""
     _, _, owner, name, _, _, _ = _BY_KEY[key]
+    if key in _MAX:
+        return _MAX[key]
     high = getattr(_owner(owner, app), name + '_MAX', None)
     return default(key, app) if high is None else int(high)
 
@@ -175,6 +192,14 @@ def apply(app, saved=None):
             else:
                 app.__dict__.pop(name, None)
             continue
+        if key in _DEFAULT:
+            # 既定をここで決める項目は、保存に無くても当てる（持ち主の定数の既定と食い違わないように）
+            module = _owner(owner)
+            _ORIGINAL.setdefault(key, int(getattr(module, name)))
+            setattr(module, name, saved.get(key, _DEFAULT[key]))
+            continue
+        if key not in saved and key not in _ORIGINAL:
+            continue        # 変えていない項目のモジュールは読み込まない（起動を重くしない）
         module = _owner(owner)
         if key in saved:
             _ORIGINAL.setdefault(key, int(getattr(module, name)))
@@ -234,6 +259,18 @@ def open_window(app, colors=None):
     # 補正の段の使われ方（usage_counts・2026-10-24）
     tk.Button(dlg, text='補正の段の使われ方…', command=lambda: open_usage_window(app, colors)).pack(
         anchor='w', padx=12, pady=(0, 6))
+    # 候補の何回目で採ったかの集計（2026-11-10 うにさん「チェックボックスを用意。デフォルトはオフ」）
+    import respell_stats
+    rank_on = tk.BooleanVar(master=dlg, value=bool(app.settings.get(respell_stats.SETTING)))
+    rank_row = tk.Frame(dlg, bg=bg)
+    rank_row.pack(anchor='w', padx=12, pady=(0, 6))
+    tk.Checkbutton(rank_row, text='候補の何回目で採ったかを集計（8回目以降で採った行は元の行も残す）',
+                   variable=rank_on, command=lambda: choose_rank_stats(app, rank_on.get()),
+                   bg=bg, fg=ink, selectcolor=panel, activebackground=bg,
+                   font=('Yu Gothic UI', 9)).pack(side='left')
+    tk.Button(rank_row, text='集計を見る…', command=lambda: open_rank_window(app, colors)).pack(
+        side='left', padx=(8, 0))
+    dlg._rank_on = rank_on
     # 解析の記録（項目48-LO・メモリの中の最新40件）。2026-11-09 うにさん「再解析のデバッグは一旦外したまま……一旦外して」：
     # 窓のボタンは CN_DEBUG_TOOLS=1 の時だけ出す（記録そのものはメモリの中だけで、そのまま取っている）
     import os as _os_trace
@@ -438,6 +475,71 @@ def open_trace_window(app, colors=None):
     text.see('end')
     text.configure(state='disabled')
     dlg._trace_text = text
+    return dlg
+
+
+def choose_rank_stats(app, on):
+    """集計のオン・オフ（設定に残す。本体の odd_respell に当て、子へは頼むたびに渡る）。"""
+    import respell_stats
+    app.settings.set(respell_stats.SETTING, bool(on))
+    try:
+        app.settings.save()
+    except Exception:
+        pass
+    import odd_respell
+    odd_respell.set_rank_stats(bool(on))
+
+
+def open_rank_window(app, colors=None):
+    """候補の何回目で採ったか（rank・tried の表と、8回目以降の行の一覧）を見る窓。「消す」で集計を空にする。"""
+    import respell_stats
+    colors = dict(colors or {})
+    bg = colors.get('bg', '#f6f4ee')
+    ink = colors.get('ink', '#1c2b2d')
+    panel = colors.get('panel', bg)
+    old = getattr(app, '_rank_window', None)
+    if old is not None:
+        try:
+            if old.winfo_exists():
+                old.destroy()
+        except tk.TclError:
+            pass
+    dlg = tk.Toplevel(app.root)
+    app._rank_window = dlg
+    dlg.title('候補の何回目で採ったか')
+    dlg.configure(bg=bg)
+    place = getattr(app, '_place_dialog', None)
+    if place is not None:
+        place(dlg, 760, 560)
+    foot = tk.Frame(dlg, bg=bg)
+    foot.pack(side='bottom', fill='x', padx=12, pady=(4, 10))
+    bar = tk.Scrollbar(dlg)
+    bar.pack(side='right', fill='y')
+    text = tk.Text(dlg, bg=panel, fg=ink, relief='flat', wrap='none', font=('Consolas', 9),
+                   yscrollcommand=bar.set)
+    bar.configure(command=text.yview)
+    text.pack(side='left', fill='both', expand=True)
+
+    def show():
+        respell_stats.take_local()
+        text.configure(state='normal')
+        text.delete('1.0', 'end')
+        text.insert('1.0', respell_stats.text())
+        text.configure(state='disabled')
+
+    def wipe():
+        respell_stats.take_local()
+        respell_stats.clear()
+        save = getattr(app, '_save_respell_stats', None)
+        if save is not None:
+            save()
+        show()
+    tk.Button(foot, text='更新', command=show).pack(side='left')
+    tk.Button(foot, text='集計を消す', command=wipe).pack(side='left', padx=(8, 0))
+    tk.Button(foot, text='閉じる', command=dlg.destroy).pack(side='right')
+    show()
+    dlg._rank_text = text
+    dlg._rank_wipe = wipe
     return dlg
 
 

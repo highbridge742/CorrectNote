@@ -483,6 +483,19 @@ def _stray_mark_repair(line, result, run, store, dict_index, context_vec, decide
                     if r and r not in tried:
                         tried.add(r)
                         reps.append(r)
+            if os.environ.get('CN_HAND_SHIFT') != '0' and os.environ.get('CN_STRAY_SHIFT') != '0':
+                # ゛ を1打に数えた手の位置のずれ（いん゛み → てがみ: 左手が右へ1列、゛ と み はそのまま）も
+                # 同じ場で比べる（2026-11-10 全体評価・うに 08:09Z）。CN_STRAY_SHIFT=0 で前のまま
+                try:
+                    import hand_shift
+                    for rd in rds:
+                        if rd and len(rd) <= MAX_READ:
+                            for r in hand_shift.kana_repairs(rd):
+                                if r and r not in tried:
+                                    tried.add(r)
+                                    reps.append(r)
+                except Exception:
+                    pass
             try:
                 placed = _placed(line, s, e, reps, store, dict_index, context_vec)
             except Exception:
@@ -791,6 +804,15 @@ def _line_reading_alts(text, cap=32):
             opts = [_hira(t.surface)]
         elif t.has_reading:
             opts = [_hira(t.reading)]
+            if os.environ.get('CN_FIXED_TYPED_READ') != '0':
+                # その表記を打った読みの記録（手数 → てすう）も候補にする。解析の読み（てかず）だけだと、直していない語で
+                # 打った読みから離れたと数えていた（2026-11-10 手のずれ 襟数と → 折り返し）。CN_FIXED_TYPED_READ=0 で前のまま
+                try:
+                    from kanji_guess import ime_readings_for
+                    opts += [r for r in (_hira(x) for x in (ime_readings_for(t.surface) or ()))
+                             if r and _is_hira(r) and r not in opts]
+                except Exception:
+                    pass
             if len(t.surface) == 1:
                 try:
                     from kanji_onkun import readings_of
@@ -1018,6 +1040,15 @@ def _rare_new_noun(done, fixed):
         if not any(x < t.end and t.start < max(y, x + 1) for x, y in spans):
             continue
         if ime_reconvert._rank(t.surface) > COMMON_NEW:
+            # 文章では仮名書きが多く頻度は低くても、身近な語と判定済みの名詞（物差し: 普段はものさし と書く）は稀な語ではない
+            # （うに 11-10 手のずれ ねりさし→ものさし）。CN_RARE_EVERYDAY=0 で前のまま
+            if os.environ.get('CN_RARE_EVERYDAY') != '0' and _IN_SHIFT[0]:
+                try:
+                    import kango_tier
+                    if kango_tier.known_usage_tier(t.surface) == 1:
+                        continue
+                except Exception:
+                    pass
             return True
     return False
 
@@ -1608,7 +1639,30 @@ def _far_from_typed(done, fixed, limit=1):
     if os.environ.get('CN_FIXED_ONE_KANJI') != '0':
         strip = lambda x: ''.join(c for c in x if not (c.isspace() or c in '。、，．,.！？!?「」『』'))
         gots += [strip(x) for x in _line_reading_alts(fixed) if strip(x) != got]
-    return min(_key_distance(_keys(t), _keys(g)) for t in (alts or [typed]) for g in gots) > limit
+    if min(_key_distance(_keys(t), _keys(g)) for t in (alts or [typed]) for g in gots) <= limit:
+        return False
+    if os.environ.get('CN_FAR_MID') != '0':
+        # 直していない前後の語の読み（お手数 → おてかず）が打った読み（おてすう）と違うだけで離れたと数えないよう、
+        # 替わった所だけ（襟数と → 折り返し）を、その所を打った読みの記録と比べる（2026-11-10 手のずれ）。CN_FAR_MID=0 で前のまま
+        try:
+            from kanji_guess import ime_readings_for
+            p = 0
+            while p < min(len(done), len(fixed)) and done[p] == fixed[p]:
+                p += 1
+            q = 0
+            while q < min(len(done), len(fixed)) - p and done[-1 - q] == fixed[-1 - q]:
+                q += 1
+            md, mf = done[p:len(done) - q], fixed[p:len(fixed) - q]
+            if md and mf:
+                tr = [_hira(x) for x in (ime_readings_for(md) or ())]
+                if not tr and all(_is_hira(c) or c in '゛゜ー' for c in md):
+                    tr = [md]
+                fr = _line_reading_alts(mf) if not all(_is_hira(c) for c in mf) else [mf]
+                if tr and fr and min(_key_distance(_keys(t), _keys(g)) for t in tr for g in fr) <= limit:
+                    return False
+        except Exception:
+            pass
+    return True
 
 
 def _mark_replaced(done, fixed):
@@ -1977,6 +2031,12 @@ def _choose_shifted(done, a, b, rds, run, store, dict_index, context_vec, other_
     base = morphology.path_cost(done)
     if base is None or _dict_compound_kana(done, a, b):
         return None
+    raw = done[a:b]
+    if os.environ.get('CN_SHIFT_RAW_MARK') != '0' and raw and raw not in rds \
+            and any(c in '゛゜' for c in raw) and all(_is_hira(c) or c in '゛゜' for c in raw):
+        # 浮いた ゛゜ は1つのキー（うに 11-09）。片付けた後の読み（いがみ）でなく、゛ を1打に残した打った形
+        # （いん゛み → てがみ: 左手が右へ1列）にもずれの戻しを当てる（2026-11-10 全体評価）。CN_SHIFT_RAW_MARK=0 で前のまま
+        rds = [raw] + list(rds)
     tried = set(rds)
     reps, src = [], {}
     for rd in rds:
@@ -1988,21 +2048,83 @@ def _choose_shifted(done, a, b, rds, run, store, dict_index, context_vec, other_
                 reps.append(r)
                 src[r] = rd
     pre = _placed(done, a, b, reps, store, dict_index, context_vec, src, tried)
+    if os.environ.get('CN_SHIFT_TRIM') != '0':
+        # 前後の語を足して広げた読み（ですが＋えりすうと＋お）は、字のままの平仮名の前後（ですが・お）を外し、替わった所
+        # （襟数と → おりかえし）だけに漢字を置き直した形も比べる。広げた読み全体に置くと、前後の助詞まで置き直そうと
+        # して漢字に届かない（2026-11-10 全体評価の reject_trace）。CN_SHIFT_TRIM=0 で前のまま
+        groups = {}
+        for r in reps:
+            rd = src.get(r) or ''
+            if not rd:
+                continue
+            p = 0
+            while p < min(len(r), len(rd), b - a) and r[p] == rd[p] and done[a + p] == rd[p]:
+                p += 1
+            q = 0
+            while q < min(len(r), len(rd), b - a) - p and r[len(r) - 1 - q] == rd[len(rd) - 1 - q] \
+                    and done[b - 1 - q] == rd[len(rd) - 1 - q]:
+                q += 1
+            if p or q:
+                groups.setdefault((p, q), []).append(r)
+        for (p, q), rs in groups.items():
+            inner = [r[p:len(r) - q] for r in rs]
+            sub = {r[p:len(r) - q]: src[r][p:len(src[r]) - q] for r in rs}
+            try:
+                got = _placed(done, a + p, b - q, inner, store, dict_index, context_vec, sub,
+                              {x[p:len(x) - q] for x in tried})
+            except Exception:
+                got = []
+            pre.extend(got)
+        pre.sort(key=lambda x: x[0])
     need = min(GAIN, GAIN_SHARE * base)
     if not pre or base - pre[0][0] < min(SCREEN, need):
         return None
     texts = list(dict.fromkeys(t for _c, t, _r in pre[:TOP]))
-    seen = _judge(done, a, b, texts, run, other_odd, typed)
+    rep_of = {}
+    for _c, t, r in pre[:TOP]:
+        # どのずれの戻しか: 元の読みから替えた所（位置と替えた字）。読みの違う2つの元（出: で／しゅつ）でも同じずれは同じ
+        rd0 = src.get(r)
+        key = r
+        if rd0:
+            key = tuple((i1, i2, r[j1:j2]) for tag, i1, i2, j1, j2 in
+                        __import__('difflib').SequenceMatcher(None, rd0, r, autojunk=False).get_opcodes() if tag != 'equal')
+        rep_of.setdefault(t, key)
+    came = {}     # 補正し直した行 → 戻した読み（どのずれの戻しから来たか）
+
+    def run_noted(text, _run=run):
+        g = _run(text)
+        if isinstance(g, dict):
+            came.setdefault(g.get('corrected') or text, set()).add(rep_of.get(text, text))
+        return g
+    _IN_SHIFT[0] = True
+    try:
+        seen = _judge(done, a, b, texts, run_noted, other_odd, typed)
+    finally:
+        _IN_SHIFT[0] = False
     # 補正し直しがさらに別の所を直した形（ずれの戻し＋もう1打の直し: おらよに → おらに）は、打った形から遠いので競わせない
     for t in list(seen.further):
         seen.pop(t, None)
+    _SHIFT_LAST[0] = (done, dict(seen), need, base)
     got = _pick(seen, MARGIN)
+    if got is None and os.environ.get('CN_SHIFT_SAME_GROUP') != '0':
+        # 並ぶ形がどれも同じずれの戻し（てがみ）から来て、補正し直しが別の所の表記だけ分けた形（手紙を出した／
+        # 手紙をでした）なら、打った形を多く残す形を採る（2026-11-10 いん゛み）。CN_SHIFT_SAME_GROUP=0 で前のまま
+        oks = sorted((c, t) for t, (c, ok) in seen.items() if ok)
+        if oks:
+            close = {t: seen[t] for c, t in oks if c - oks[0][0] < MARGIN}
+            if len(close) >= 2 and _shift_rivals(close, came, base, 0) == 1:
+                def changed(t):
+                    return sum(max(i2 - i1, j2 - j1) for tag, i1, i2, j1, j2 in
+                               __import__('difflib').SequenceMatcher(None, done, t, autojunk=False).get_opcodes()
+                               if tag != 'equal')
+                t = min(close, key=lambda t: (changed(t), close[t][0]))
+                got = (t, close[t][0])
     if got is None or base - got[1] < need:
         return None
     # ずれの戻し方が2つ以上どれも紫なしに語になる（れら→りに・らく→せま の 分かりにくかった／分かれ狭かった）なら、
     # どちらのずれか決まらない。費用の差で選ばず紫のまま（2026-11-06 巻き込みの試し）。CN_SHIFT_RIVAL=0 で前のまま
     if __import__('os').environ.get('CN_SHIFT_RIVAL') != '0' and \
-            sum(1 for _t, (c, ok) in seen.items() if ok and base - c >= need) >= 2:
+            _shift_rivals(seen, came, base, need) >= 2:
         return None
     # 漢字に変換されていた所を、ずれの戻しで平仮名だけに替える形（読んで → わなで）は採らない。ずれた打鍵を IME が
     # 漢字にしたなら、打つつもりの読みも IME は漢字に変換するはずで、戻した形が平仮名のまま残るのは打ったつもりの
@@ -2013,11 +2135,180 @@ def _choose_shifted(done, a, b, rds, run, store, dict_index, context_vec, other_
             if tag != 'equal' and any(_kanji(c) for c in done[i1:i2]) and got[0][j1:j2] \
                     and not any(_kanji(c) for c in got[0][j1:j2]):
                 return None
+    if os.environ.get('CN_SHIFT_KEEP_COMMON') != '0' and _shift_replaces_common_word(done, got[0]):
+        return None
     _SHIFT_USED[0] = hand_shift.MAX_RUN     # 打った形からの遠さの許し（ずれた打鍵の数まで）
     return got[0]
 
 
 _SHIFT_USED = [0]
+_IN_SHIFT = [False]   # ずれの戻しを比べている間だけ True（身近な名詞を稀な語としない決まりはここだけ・無柄化→無縁 を避ける）
+
+
+def _shift_rivals(seen, came, base, need):
+    """紫なしに語になる形の、元のずれの戻し（読み）の数。同じ戻し（てがみ）から補正し直しで表記だけ分かれた形
+    （手紙を出した／手紙をでした）は1つと数える（2026-11-10 いん゛み）。CN_SHIFT_RIVAL_BY_READ=0 なら形の数。"""
+    oks = [t for t, (c, ok) in seen.items() if ok and base - c >= need]
+    if os.environ.get('CN_SHIFT_RIVAL_BY_READ') == '0':
+        return len(oks)
+    groups = []
+    for t in oks:
+        src = came.get(t) or {t}
+        for g in groups:
+            if g & src:
+                g |= src
+                break
+        else:
+            groups.append(set(src))
+    return len(groups)
+
+
+_STOP = '。、，．,.！？!?「」『』（）() 　\t'
+
+
+def _typed_window(field, fa, fb, side=3, limit=14, whole_word=True):
+    """IME が漢字にした所の手のずれを見る並び: 紫の所に掛かる漢字・片仮名の語（打った読みの記録 ime_readings_for）と、
+    前後の語1つずつ（平仮名は字のまま・近い side 字まで、漢字の語は記録の読み）をつないだ読み。
+    ずれた読みを IME が 漢字の語＋後ろのかな に割った形（襟数｜と＝えりすうと → おりかえし）でも、ずれた打鍵の全体に届く
+    （2026-11-10 全体評価の reject_trace）。(a, b, [読み], a, b)。記録が無ければ None。CN_SHIFT_TYPED_WINDOW=0 で見ない。"""
+    try:
+        from kanji_guess import ime_readings_for
+    except Exception:
+        return None
+    lo, hi = fa, fb
+    while lo > 0 and field[lo - 1] not in _STOP:
+        lo -= 1
+    while hi < len(field) and field[hi] not in _STOP:
+        hi += 1
+    runs = []          # [(開始, 終わり, 平仮名か)]
+    i = lo
+    while i < hi:
+        h = _is_hira(field[i]) or field[i] in '゛゜ー'
+        j = i
+        while j < hi and (_is_hira(field[j]) or field[j] in '゛゜ー') == h:
+            j += 1
+        runs.append((i, j, h))
+        i = j
+    core = [k for k, (x, y, _h) in enumerate(runs) if x < fb and fa < y]
+    if not core or all(runs[k][2] for k in core):
+        return None
+
+    def read(k):
+        x, y, h = runs[k]
+        if h:
+            return _hira(field[x:y])
+        got = [_hira(r) for r in (ime_readings_for(field[x:y]) or ()) if r]
+        got = [r for r in got if r and all(_is_hira(c) or c in 'ー゛゜' for c in r)]
+        return got[0] if got else None
+    parts = []
+    for k in range(core[0], core[-1] + 1):
+        r = read(k)
+        if r is None:
+            return None
+        parts.append(r)
+    a, b = runs[core[0]][0], runs[core[-1]][1]
+    reading = ''.join(parts)
+    k = core[0] - 1
+    if k >= 0:
+        x, y, h = runs[k]
+        word = None
+        if whole_word and h and k >= 1 and not runs[k - 1][2] and os.environ.get('CN_SHIFT_WINDOW_WORD') != '0':
+            # 前の平仮名が漢字の語の送り仮名（燃｜え）なら、語ごと（打った読みの記録 もえ）入れる。送り仮名だけを足すと
+            # ずれた打鍵の頭（も）に届かず、後ろだけ置いた途中の直し（燃え少し）になる（2026-11-10 全体評価の束）
+            got = [_hira(r) for r in (ime_readings_for(field[runs[k - 1][0]:y]) or ()) if r]
+            got = [r for r in got if r and all(_is_hira(c) or c in 'ー゛゜' for c in r)]
+            if got and len(got[0]) + len(reading) <= limit:
+                word = (runs[k - 1][0], got[0])
+        if word:
+            reading, a = word[1] + reading, word[0]
+        elif h:
+            x = max(x, y - side)
+            reading, a = _hira(field[x:y]) + reading, x
+        else:
+            r = read(k)
+            if r and len(r) + len(reading) <= limit:
+                reading, a = r + reading, x
+    k = core[-1] + 1
+    if k < len(runs):
+        x, y, h = runs[k]
+        if h:
+            y = min(y, x + side)
+            reading, b = reading + _hira(field[x:y]), y
+        else:
+            r = read(k)
+            if r and len(r) + len(reading) <= limit:
+                reading, b = reading + r, y
+    if len(reading) > limit or len(reading) > MAX_READ:
+        return None
+    return a, b, [reading], a, b
+
+
+def _shift_replaces_common_word(done, fixed):
+    """ずれの戻しが替える所が、IME が漢字にした身近な1語（顔を｜書く の 書く）だけなら True。手の位置のずれで打った読みは
+    IME が珍しい字の並び（策尾・口枷・襟数）にするもので、身近な語にまとまった所は打つつもりの語（うに 2026-11-10
+    55行目: 顔を書く → 顔を好き）。CN_SHIFT_KEEP_COMMON=0 で前のまま。"""
+    try:
+        import ime_reconvert
+        from morphology import tokenize
+        ops = [o for o in difflib.SequenceMatcher(None, done, fixed, autojunk=False).get_opcodes() if o[0] != 'equal']
+        if not ops:
+            return False
+        a, b = ops[0][1], max(ops[-1][2], ops[0][1] + 1)
+        toks = [t for t in tokenize(done) if t.start < b and a < t.end]
+        if len(toks) != 1:
+            return False
+        t = toks[0]
+        if not any(_kanji(c) for c in t.surface) or t.pos in ('記号',):
+            return False
+        return ime_reconvert._rank(t.surface) <= COMMON_NEW
+    except Exception:
+        return False
+
+
+def _shift_spans(field, a, b, rds, fa, fb, dict_index, typed_window=True, most=3):
+    """手のずれを見る所の候補（前から順に試す・多くて most 個）。各 (a, b, 読み, 並びの頭, 並びの終わり)。
+    1) IME が漢字にした字があれば、紫の所（か、その所を含む打った読みの所 a, b）の漢字の語の打った読みに前後の語を
+       つないだ並び（_typed_window）。前の送り仮名の語を語ごと入れた形（燃え｜髪は → もえかみは）、入れない形の順。
+    2) 紫の所を含むかなの並び全体（浮いた ゛゜ も1打として並びに入れる）。広げられなければ元の所。"""
+    def kana(c):
+        return 'ぁ' <= c <= 'ゖ' or (c in '゛゜' and os.environ.get('CN_SHIFT_RAW_MARK') != '0')
+    out = []
+
+    def add(sp):
+        if sp is not None and (sp[0], sp[1], tuple(sp[2])) not in [(x[0], x[1], tuple(x[2])) for x in out]:
+            out.append(sp)
+    if typed_window and os.environ.get('CN_SHIFT_TYPED_WINDOW') != '0':
+        lo, hi = (min(fa, a), max(fb, b)) if os.environ.get('CN_SHIFT_WINDOW_AB') != '0' else (fa, fb)
+        if any(not kana(c) for c in field[lo:hi]):
+            tries = [(lo, hi)] + ([(fa, fb)] if (lo, hi) != (fa, fb) else [])
+            # 広い所の語のどれかに記録が無ければ（終｜わ の 終）、紫に近い漢字の語から1つずつ見る
+            pos = [x for x in range(lo, hi) if not kana(field[x]) and (x == lo or kana(field[x - 1]))]
+            tries += [(x, x + 1) for x in sorted(pos, key=lambda x: min(abs(x - fa), abs(x - fb)))]
+            for x, y in tries:
+                if any(not kana(c) for c in field[x:y]):
+                    w1 = _typed_window(field, x, y)
+                    if w1 is not None:
+                        add(w1)
+                        add(_typed_window(field, x, y, whole_word=False))
+                        break
+    ra, rb = fa, fb
+    while ra > 0 and kana(field[ra - 1]):
+        ra -= 1
+    while rb < len(field) and kana(field[rb]):
+        rb += 1
+    sp2 = None
+    if (ra, rb) != (fa, fb) and rb - ra <= 12:
+        sp2 = _span_reading(field, ra, rb, dict_index=dict_index)
+    add((sp2[0], sp2[1], sp2[2], ra, rb) if sp2 is not None else (a, b, rds, fa, fb))
+    return out[:most]
+
+
+def _shift_span(field, a, b, rds, fa, fb, dict_index, typed_window=True):
+    """_shift_spans の一番目。"""
+    return _shift_spans(field, a, b, rds, fa, fb, dict_index, typed_window)[0]
+
+
+_SHIFT_LAST = [None]   # 最後の _choose_shifted の (行, {形: (費用, 紫なし)}, need, base)。1打の戻しと比べる所が読む
 
 
 def _pick_by_frame(done, a, b, seen, margin):
@@ -2201,15 +2492,107 @@ import threading as _threading
 _LINE_MEMO = _threading.local()
 
 
+# 紫の所の読み直しで、候補の行を補正に通す回数の上限（1回の repair_line ごと）。0 は上限なし（前のまま）。
+# うに 2026-11-10 03:20Z「11回という回数をパラメータに出す」。アプリはデバッグメニューの値を set_attempt_limit で渡す。
+# 切り替え CN_RESPELL_ATTEMPTS（数）でも上書きできる
+ATTEMPT_LIMIT = 0
+
+# 何回目の候補を採ったかの集計（うに 2026-11-10 03:20Z デバッグ機能。既定はオフ）。オンの間だけ数え、
+# RANK_LATE 回目以降で採った行は原文も残す（うにの指定）。数はメモリに足し、take_rank_stats() で呼び手が受け取る
+RANK_STATS_ON = False
+RANK_LATE = 8
+RANK_SAMPLES_MAX = 200   # 原文を残す数の上限（古いものから捨てる）
+_RANK_COUNTS = {}        # 何回目 → 採った数（'?' は採った行が通した候補と一致しない形）
+_RANK_TRIED = {}         # 通した回数 → 行の数（その行で何回通したか）
+_RANK_SAMPLES = []       # [(何回目, 通した回数, 元の行, 採った行)]
+
+
+def set_attempt_limit(n):
+    global ATTEMPT_LIMIT
+    try:
+        ATTEMPT_LIMIT = max(0, int(n))
+    except (TypeError, ValueError):
+        ATTEMPT_LIMIT = 0
+
+
+def set_rank_stats(on):
+    global RANK_STATS_ON
+    RANK_STATS_ON = bool(on)
+
+
+def take_rank_stats():
+    """集計を渡して手元を空にする。何も無ければ None。{'rank': {n: 数}, 'tried': {n: 数}, 'late': [[n, 回数, 元, 採った]]}"""
+    if not (_RANK_COUNTS or _RANK_TRIED or _RANK_SAMPLES):
+        return None
+    out = {'rank': dict(_RANK_COUNTS), 'tried': dict(_RANK_TRIED), 'late': [list(x) for x in _RANK_SAMPLES]}
+    _RANK_COUNTS.clear()
+    _RANK_TRIED.clear()
+    del _RANK_SAMPLES[:]
+    return out
+
+
+def _attempt_limit():
+    v = os.environ.get('CN_RESPELL_ATTEMPTS')
+    if v is not None:
+        try:
+            return max(0, int(v))
+        except ValueError:
+            pass
+    return ATTEMPT_LIMIT
+
+
+def _counting_run(run, book, limit):
+    """run を包み、通した順に番号を付ける（book['order']: 補正の答えの行 → 初めて出た番号）。limit を越えたら通さない。"""
+    def counted(text, *a, **k):
+        if limit and book['n'] >= limit:
+            return None
+        book['n'] += 1
+        g = run(text, *a, **k)
+        if isinstance(g, dict):
+            book['order'].setdefault(g.get('corrected') or text, book['n'])
+            book['order'].setdefault(text, book['n'])
+        return g
+    return counted
+
+
+def _note_rank(line, result, out, book):
+    before = (result.get('corrected') if isinstance(result, dict) else None) or line
+    after = (out.get('corrected') if isinstance(out, dict) else None) or before
+    if not book['n']:
+        return
+    _RANK_TRIED[book['n']] = _RANK_TRIED.get(book['n'], 0) + 1
+    if after == before:
+        return
+    rank = book['order'].get(after, '?')
+    _RANK_COUNTS[rank] = _RANK_COUNTS.get(rank, 0) + 1
+    if rank == '?' or rank >= RANK_LATE:
+        _RANK_SAMPLES.append((rank, book['n'], line, after))
+        del _RANK_SAMPLES[:-RANK_SAMPLES_MAX]
+
+
 def repair_line(line, result, run, store, dict_index, context_vec=None, decided=(), input_method='kana'):
     """結合用・半角・空白＋結合の ゛゜ を ゛゜ 1字にしてから見る。直さなかった所の字は元のまま返す。"""
     outer = getattr(_LINE_MEMO, 'lattice', None)
     if outer is None and os.environ.get('CN_RESPELL_LINE_MEMO') != '0':
         _LINE_MEMO.lattice = {}
+    book = {'n': 0, 'order': {}}
+    limit = _attempt_limit()
+    depth = getattr(_LINE_MEMO, 'rank_depth', 0)
+    if limit or RANK_STATS_ON:
+        run = _counting_run(run, book, limit)
+    _LINE_MEMO.rank_depth = depth + 1
     try:
         out = _repair_line_norm(line, result, run, store, dict_index, context_vec, decided, input_method)
-        return _lone_kanji_noun_guard(result, _kana_verb_guard(result, _homophone_guard(result, out, line), line), line)
+        out = _lone_kanji_noun_guard(result, _kana_verb_guard(result, _homophone_guard(result, out, line), line), line)
+        if RANK_STATS_ON and depth == 0:
+            # 候補の行を補正に通す中で呼ばれた読み直し（入れ子）は数えない。数えるのは打った行の読み直しだけ
+            try:
+                _note_rank(line, result, out, book)
+            except Exception:
+                pass
+        return out
     finally:
+        _LINE_MEMO.rank_depth = depth
         if outer is None:
             _LINE_MEMO.lattice = None
 
@@ -2391,6 +2774,10 @@ def _kana_verb_guard(result, out, line):
     verbs = [v for v in _common_kana_verbs(before) if v[0] < b and a < v[1]]
     if not verbs:
         return out
+    if os.environ.get('CN_SHIFT_PASS_VERB_GUARD') != '0' and _shift_explained(before, after, ops):
+        # 替えた所が手の位置のずれ（同じ手の続く打鍵が揃って隣のキー）で説明できるなら、かなの用言に見えた所
+        # （ねり｜さし の ねり）も打ち違いの一部（うに 11-10 08:09Z ねりさし→ものさし）。CN_SHIFT_PASS_VERB_GUARD=0 で前のまま
+        return out
     kept = dict(result)
     for key in ('odd_spans', 'unsure_spans'):
         if result.get(key):
@@ -2398,6 +2785,47 @@ def _kana_verb_guard(result, out, line):
     if result.get('odd_reasons'):
         kept['odd_reasons'] = [r for r in result['odd_reasons'] if not any(r[0] < e and s < r[1] for s, e in verbs)]
     return kept
+
+
+def _breaks_kana_verb(line, fixed, shift_ok=False):
+    """line → fixed の直しが、かなで書いた身近な用言（_common_kana_verbs）を替えるか（_kana_verb_guard が採らない形）。
+    shift_ok: 手の位置のずれで説明できる直しは替えるとしない（_kana_verb_guard と同じ）。"""
+    try:
+        ops = [o for o in difflib.SequenceMatcher(None, line, fixed, autojunk=False).get_opcodes() if o[0] != 'equal']
+        if not ops:
+            return False
+        a, b = ops[0][1], max(ops[-1][2], ops[0][1] + 1)
+        if not any(v[0] < b and a < v[1] for v in _common_kana_verbs(line)):
+            return False
+        if shift_ok and os.environ.get('CN_SHIFT_PASS_VERB_GUARD') != '0' and _shift_explained(line, fixed, ops):
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _shift_explained(before, after, ops):
+    """before → after の替えた所（かなだけ）が、手の位置のずれ1つで説明できるか（hand_shift・hand_shift_wide）。"""
+    try:
+        import hand_shift
+    except Exception:
+        return False
+    if len(ops) != 1 or ops[0][0] != 'replace':
+        return False
+    _t, i1, i2, j1, j2 = ops[0]
+    x, y = before[i1:i2], after[j1:j2]
+    if not x or not y or len(x) != len(y) or not all('ぁ' <= c <= 'ゖ' for c in x + y):
+        return False
+    try:
+        if hand_shift.kana_explains(x, y):
+            return True
+    except Exception:
+        pass
+    try:
+        import hand_shift_wide
+        return y in set(hand_shift_wide.shifted_readings(x))
+    except Exception:
+        return False
 
 
 def _homophone_guard(result, out, line):
@@ -2564,6 +2992,48 @@ def _repair_line(line, result, run, store, dict_index, context_vec=None, decided
             _SHIFT_USED[0] = 0
             fixed = _choose(field, a, b, rds, run, store, dict_index, context_vec, others,
                             _typed_run(field, fa, fb) is not None)
+            if fixed is not None and os.environ.get('CN_HAND_SHIFT') != '0' \
+                    and os.environ.get('CN_SHIFT_COMPETE') != '0':
+                # 1打の戻しが決まっても、手の位置のずれ（片手が横に1キーずれて同じ向きに続けて打ち違う）を戻した形も
+                # 同じ場で比べ、はっきり自然（MARGIN 以上軽い）ならそちら（うに 2026-11-10 08:09Z「ホームポジションの
+                # ずれによる連続ミス」: 1打の戻し ものそば が先に採られて、ずれの戻しを見ていなかった）。
+                # 並ぶなら1打のまま（打った形に近い）。CN_SHIFT_COMPETE=0 で前のまま
+                try:
+                    two_used = _TWO_USED[0]
+                    # ずれは続けての打鍵に出るので、紫の所を含むかなの並び全体の読みで見る（紫が は の1字だけでも
+                    # ものそは 全体）
+                    shifted = None
+                    # 打った読みの並び（前後の語まで）で決まらなければ、狭い並び・かなの並びでも見る
+                    for sa, sb, srds, sta, stb in _shift_spans(field, a, b, rds, fa, fb, dict_index):
+                        _SHIFT_LAST[0] = None
+                        shifted = _choose_shifted(field, sa, sb, srds, run, store, dict_index, context_vec, others,
+                                                  _typed_run(field, sta, stb) is not None)
+                        if shifted is not None:
+                            break
+                    import morphology as _mo
+                    c1 = _mo.path_cost(fixed)
+                    if shifted is None and _SHIFT_LAST[0] and _SHIFT_LAST[0][0] == field and c1 is not None:
+                        # ずれの戻しだけで比べると、紫の残る二番（もの引き）と並んで決めなかった形でも、1打の戻しより
+                        # はっきり自然で、ずれの形の中で一番軽く、紫の残らない形がそれ1つなら、それを1打の戻しと比べる
+                        _d, sseen, sneed, sbase = _SHIFT_LAST[0]
+                        oks = [(c, t) for t, (c, ok) in sseen.items() if ok and sbase - c >= sneed]
+                        if len(oks) == 1 and oks[0][0] == min(c for c, _ok in sseen.values()) \
+                                and not _deconverted(field, oks[0][1]):
+                            shifted = oks[0][1]
+                            _SHIFT_USED[0] = __import__('hand_shift').MAX_RUN
+                    c2 = _mo.path_cost(shifted) if shifted else None
+                    if shifted and shifted != fixed and c1 is not None and c2 is not None and (
+                            c2 + MARGIN <= c1 or (c2 < c1 and os.environ.get('CN_SHIFT_OVER_VERB_FIX') != '0'
+                                                   and _breaks_kana_verb(field, fixed))):
+                        # 1打の戻しが、かなで書いた身近な用言（ねり｜さし の ねり → 寝る）を替える形なら、後ろの守り
+                        # （_kana_verb_guard）で採られずに紫だけが外れる。ずれの戻しの方が軽ければそちら（2026-11-10
+                        # 挙動関連担当の PC の跡: 寝るさし／物差し）。CN_SHIFT_OVER_VERB_FIX=0 で前のまま
+                        fixed = shifted
+                    else:
+                        _SHIFT_USED[0] = 0
+                        _TWO_USED[0] = two_used
+                except Exception:
+                    _SHIFT_USED[0] = 0
             # 頭を外して見た紫は、並び全体へ広げ直さない（外した頭へ戻って打ち違いを探してしまう: 質問めのーる → めのへる）
             if fixed is None and os.environ.get('CN_RESPELL_WHOLE_RUN') != '0' and not shrunk:
                 # 紫がかなの並びの一部（「さい｜でいか」の でいか）だけなら、並び全体（括弧・記号・漢字で切れる所まで）の
@@ -2587,8 +3057,16 @@ def _repair_line(line, result, run, store, dict_index, context_vec=None, decided
                                         _typed_run(field, fa, fb) is not None)
             if fixed is None and os.environ.get('CN_HAND_SHIFT') != '0':
                 # 1打の戻しで決まらない紫は、手の位置のずれ（同じ手の続く2〜4打が揃って隣のキー）を戻す形も見る
-                fixed = _choose_shifted(field, a, b, rds, run, store, dict_index, context_vec, others,
-                                        _typed_run(field, fa, fb) is not None)
+                if os.environ.get('CN_SHIFT_COMPETE') != '0':
+                    # ずれは続けての打鍵に出るので、1打と比べる所と同じく紫を含むかなの並び全体で見る（いん゛み の い）
+                    spans = _shift_spans(field, a, b, rds, fa, fb, dict_index)
+                else:
+                    spans = [(a, b, rds, fa, fb)]
+                for sa, sb, srds, sta, stb in spans:
+                    fixed = _choose_shifted(field, sa, sb, srds, run, store, dict_index, context_vec, others,
+                                            _typed_run(field, sta, stb) is not None)
+                    if fixed is not None:
+                        break
         except Exception:
             fixed = None
         if fixed and (_leftover_piece(field, fixed, a, b) or _bad_join(field, fixed) or _deconverted(field, fixed)
@@ -3032,3 +3510,4 @@ def _cur_to_fixed(allops, k):
         if i1 <= k < i2 or (k == i2 and tag == 'equal'):
             return j1 + (k - i1 if tag == 'equal' else 0)
     return allops[-1][4] if allops else k
+

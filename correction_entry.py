@@ -1829,6 +1829,11 @@ def _far_typed_guard(line, result, occurrence_readings=()):
             dn = min(odd_respell._key_distance(n, K(pre + t + post)) for t in typs for n in news)
             do = min(odd_respell._key_distance(whole_old, K(pre + t + post)) for t in typed)
             if dn >= FAR_TYPED_KEYS and dn > do:
+                if os.environ.get('CN_FAR_TYPED_SHIFT') != '0' and os.environ.get('CN_HAND_SHIFT') != '0' \
+                        and _shift_wide_explains(line, only):
+                    # 手の位置のずれ（片手が揃って隣のキーへ: えりすうと → おりかえし）で説明の付く直しは、打った読みから
+                    # 離れていても打ち違いの戻し（2026-11-10 手のずれ・全体評価の束）。CN_FAR_TYPED_SHIFT=0 で前のまま
+                    continue
                 far.append((i1, max(i2, i1 + 1)))
     except Exception:
         return result
@@ -6376,6 +6381,36 @@ def _letter_swap_resolves(text, i, j):
     return False
 
 
+def _shift_wide_explains(before, after):
+    """before → after の替わった所（前後の同じ字を外した所）を、その所を打った読みの記録（無ければ平仮名の字のまま）から
+    手の位置のずれの戻し（hand_shift.kana_repairs、hand_shift_wide を含む）で作れるか。CN_FAR_SHIFT_WIDE=0 で見ない。"""
+    try:
+        import odd_respell as _o, hand_shift
+        from kanji_guess import ime_readings_for
+    except Exception:
+        return False
+    p = 0
+    while p < min(len(before), len(after)) and before[p] == after[p]:
+        p += 1
+    q = 0
+    while q < min(len(before), len(after)) - p and before[-1 - q] == after[-1 - q]:
+        q += 1
+    md, mf = before[p:len(before) - q], after[p:len(after) - q]
+    if not md or not mf:
+        return False
+    tr = [_o._hira(x) for x in (ime_readings_for(md) or ())]
+    if not tr and all(_o._is_hira(c) or c in '゛゜' for c in md):
+        tr = [md]
+    fr = [mf] if all(_o._is_hira(c) for c in mf) else (_o._line_reading_alts(mf) or [])
+    for t in tr:
+        if not t or len(t) > 12:
+            continue
+        got = set(hand_shift.kana_repairs(t, limit=2000))
+        if any(f in got for f in fr):
+            return True
+    return False
+
+
 def _far_kana_respell(line, result, out, input_method):
     """かな入力の紫の所の読み直しが、行の読みを3打以上替える直しか（読むう→消す: よむう→けす は3打。1つの所の
     打ち違いの戻しではなく別の語への置き換え）。採らずに紫のまま（2026-11-05 挙動関連担当の PC の測り: 生成ファイルの
@@ -6399,6 +6434,10 @@ def _far_kana_respell(line, result, out, input_method):
             # 置き換えではなく1つの所の打ち違いの戻し（hand_shift・2026-11-06）
             import hand_shift
             if hand_shift.kana_explains(rb, ra):
+                return False
+            if os.environ.get('CN_FAR_SHIFT_WIDE') != '0' and _shift_wide_explains(before, after):
+                # 手の位置のずれ（人さし指の境目越し・間に他の手の打鍵を挟む: hand_shift_wide）で替わった所だけが説明できる
+                # 直し（襟数と → 折り返し: えりすうと → おりかえし）も、1つの所の打ち違いの戻し（2026-11-10 全体評価の束）
                 return False
         return True
     except Exception:
@@ -8135,5 +8174,41 @@ except Exception:
 try:
     import used_keys as _used_keys_mod
     _used_keys_mod.install()
+except Exception:
+    pass
+
+
+# 同じ1行の中で、同じ「2か所打ち違いの組」の探索をやり直さない（2026-11-10 全体評価 A2・pair_search_memo.py。速さだけで
+# 答えは変えない）。CN_PAIR_SEARCH_MEMO=0 で前のまま
+try:
+    import pair_search_memo as _pair_search_memo
+    _pair_search_memo.install()
+except Exception:
+    pass
+
+
+# ホームポジションのずれ（片手が横に1キーずれて同じ向きに続けて打ち違う）の候補を広げる（2026-11-10 全体評価・
+# hand_shift_wide.py、うに 08:09Z「ホームポジションのずれによる連続ミス」）。CN_HAND_SHIFT_WIDE=0 で前のまま
+try:
+    import hand_shift_wide as _hand_shift_wide
+    _hand_shift_wide.install()
+except Exception:
+    pass
+
+
+# ホームポジションのずれ（片手が横に1キーずれて同じ向きに続けて打ち違う）を keyslip_window の1キーの戻しの候補にも足す
+# （2026-11-10 全体評価・hand_shift_window.py、うに 08:09Z）。CN_HAND_SHIFT_WINDOW=0 で前のまま
+try:
+    import hand_shift_window as _hand_shift_window
+    _hand_shift_window.install()
+except Exception:
+    pass
+
+
+# 読み直しの候補を、補正に通す前に行の並びの費用で絞る（どうせ採られない候補を先に落とす・答えは同じ。2026-11-10 全体評価・
+# pass_screen.py）。CN_PASS_SCREEN=0 で前のまま
+try:
+    import pass_screen as _pass_screen
+    _pass_screen.install()
 except Exception:
     pass
