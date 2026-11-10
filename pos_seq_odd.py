@@ -104,7 +104,8 @@ def spots(line):
             out.append((p.start, t.end, f'「{p.surface}」のすぐ後ろに「{t.surface}」は続きません'))
         elif (t.surface == 'を' and t.pos == '助詞' and p.pos == '動詞' and (p.pos_sub or '').startswith('自立')
               and getattr(p, 'infl_form', '') == '基本形' and os.environ.get('CN_POS_SEQ_VO') != '0'
-              and not (i + 1 < len(toks) and toks[i + 1].base_form in ('得る', '得'))):
+              and not (i + 1 < len(toks) and toks[i + 1].base_form in ('得る', '得'))
+              and not _names_command(toks, i)):
             # (m) 自立の動詞の終止形のすぐ後ろの を（の を挟まない: 行く｜を｜出した。〜するを得ない は除く）
             out.append((p.start, t.end, f'「{p.surface}」のすぐ後ろに「を」は続きません'))
         elif (t.surface in ('ください', '下さい') and t.pos == '動詞' and p.pos == '助詞'
@@ -189,6 +190,20 @@ def spots(line):
                     and not any(a <= k < b for a, b, _ in out):
                 out.append((k, k + 1, f'「{c}」の前に「{o}」がありません'))
     return out
+
+
+# 操作の名前（メニューの項目・ボタン）を選ぶ・押す動詞。動詞の終止形＋を の後ろにこれが来る（消すを選ぶ・
+# 保存するをクリック）なら、動詞は項目の名前として書かれている
+_PICK_VERBS = ('選ぶ', '押す', '選択', 'クリック', 'タップ', '実行', '指定', 'チェック')
+
+
+def _names_command(toks, i):
+    """toks[i] の を の後ろが、項目を選ぶ・押す動詞（選びます・押す・クリックする）なら True（2026-11-09 うに 誤判定:
+    右クリックして消すを選びます の 消す を 外科 にしていた）。CN_POS_SEQ_VO_COMMAND=0 で前のまま。"""
+    if os.environ.get('CN_POS_SEQ_VO_COMMAND') == '0' or i + 1 >= len(toks):
+        return False
+    n = toks[i + 1]
+    return (n.base_form or n.surface) in _PICK_VERBS or n.surface in _PICK_VERBS
 
 
 def _in_world_kana_word(line, a, b, dict_index):
