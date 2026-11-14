@@ -1,6 +1,6 @@
 <h1>CorrectNote 説明書</h1>
 <p class="muted">バージョン 1.18.3</p>
-<p class="store-badge"><a href="https://apps.microsoft.com/detail/9NJZGX71LHTZ?referrer=appbadge&amp;mode=direct"><img src="https://get.microsoft.com/images/ja%20dark.svg" width="200" alt="Microsoft Store から入手"></a></p>
+<p class="store-badge"><a href="https://apps.microsoft.com/detail/9NJZGX71LHTZ?referrer=appbadge&amp;mode=direct"><img src="https://get.microsoft.com/images/ja%20dark.svg" width="200" alt="Microsoft Store から入手"></a> <a href="https://github.com/highbridge742/CorrectNote/releases/latest/download/CorrectNote.exe"><img src="assets/readme_manual/manual-091.svg" width="200" alt="GitHub から最新版を直接ダウンロード"></a></p>
 
 
 <a name="intro"></a>
