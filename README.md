@@ -80,9 +80,11 @@
 <section>
 <hr class="section-rule">
 <h2>画面の見かた</h2>
-<p class="sec-intro">CorrectNote には、書き方の異なる2つの画面レイアウトがあります。ツールバーの
+<p class="sec-intro">CorrectNote には、書き方の異なる2つの画面レイアウトがあります。
+  ツールバーの
 <span class="kbd">左右に並べる</span> と <span class="kbd">1つにまとめる</span> のボタンで、いつでも切り替えられます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-002.png"><img src="assets/readme_manual/manual-002.png" width="502" height="103" alt="赤枠で囲んだ「左右に並べる」「1つにまとめる」ボタンは、画面右上にあります。"></a><figcaption>画面右上のボタンで、レイアウトを切り替えます。</figcaption></figure>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-002.png"><img src="assets/readme_manual/manual-002.png" width="502" height="103" alt="赤枠で囲んだ「左右に並べる」「1つにまとめる」ボタンは、画面右上にあります。"></a>
+  <figcaption>画面右上のボタンで、レイアウトを切り替えます。</figcaption></figure>
 
 <p>文章の補正は入力に合わせて進みます。日本語を変換している途中の文字は書き換えません。</p>
 <p>行番号の右端にある薄い茶色の線は、補正の確認がまだ済んでいない行の目印です。確認が済むと消えます。</p>
