@@ -90,19 +90,10 @@
 
 <h3><span class="dot"></span>左右に並べるレイアウト（既定）</h3>
 <p>左に自分が打った文章、右にその補正結果を表示します。両者は常に見比べられる状態にあります。</p>
-<div class="mock">
-<div class="bar"><div class="dots"><span></span><span></span><span></span></div>CorrectNote</div>
-<div class="body">
-<div class="pane">
-<div class="ptitle">メモ（入力）</div>
-文字入力を<mark class="s">性格</mark>に反映する
-</div>
-<div class="pane">
-<div class="ptitle">補正結果</div>
-文字入力を<b>正確</b>に反映する
-</div>
-</div>
-</div>
+<table>
+<tr><th>メモ（入力）</th><th>補正結果</th></tr>
+<tr><td>文字入力を<mark>性格</mark>に反映する</td><td>文字入力を<b>正確</b>に反映する</td></tr>
+</table>
 <ul>
 <li><b>左（メモ欄）</b> ― 打った内容がそのまま残ります。色の付いた箇所に、補正の候補があります。</li>
 <li><b>右（補正欄）</b> ― 自動的に直った結果を表示します。単語をクリックすると、
@@ -114,26 +105,16 @@
 入力欄と補正欄をひとつにまとめ、画面を広く使えるようにしたレイアウトです。
 確定した単語を右クリックで再変換できます。
 </p>
-<div class="mock">
-<div class="bar"><div class="dots"><span></span><span></span><span></span></div>CorrectNote ― 1つにまとめる</div>
-<div class="body">
-<div class="pane" style="flex:1">
-<div class="ptitle">メモ</div>
-文字入力を<mark class="s">性格</mark>に反映する
-</div>
-</div>
-</div>
+<table>
+<tr><th>メモ</th></tr>
+<tr><td>文字入力を<mark>性格</mark>に反映する</td></tr>
+</table>
 
 
 <p>文字入力時、マウスポインターを隠します。上部メニューなどにある場合は表示したままです。マウスを動かす・ドラッグする・別のアプリへ切り替えると表示が戻り、次の文字入力で再び隠れます。</p>
 
 <h3><span class="dot"></span>色の意味</h3>
-<div class="swatch-row">
-<span class="swatch"><i style="background:#f8cdc1;border-color:#e9c9c3"></i>補正の候補がある箇所</span>
-<span class="swatch"><i style="background:#e6cbf3"></i>不自然な文字列</span>
-<span class="swatch"><i style="background:#e9eff1"></i>マウスが乗っている語（選び直せる合図）</span>
-<span class="swatch"><i style="background:#ffe9a8"></i>検索で見つかった箇所</span>
-</div>
+<p><img src="assets/readme_manual/manual-089.svg" width="914" height="52" alt="色の意味。薄い赤＝補正の候補がある箇所、紫＝不自然な文字列、薄い灰色＝マウスが乗っている語（選び直せる合図）、黄色＝検索で見つかった箇所。"></p>
 
 <h3><span class="dot"></span>紫 ― 不自然な文字列</h3>
 <p>
@@ -211,6 +192,7 @@
 <li><b>Slackなどに送る文章を先に整える。</b> 簡易入力の中では <span class="kbd">Enter</span> が改行になるので、送信を気にせず複数行の下書きを書けます。Escで閉じると、初期設定では下書きが元の送信欄へ自動で貼り付けられます。</li>
 
 </ul>
+<p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 </section>
 
 <a name="quick-selected-text"></a>
@@ -218,7 +200,7 @@
 <hr class="section-rule">
 <h2>選択した文字を簡易入力へ取り込む</h2>
 <p>本体のメモや補正結果、別のアプリで選択した文字を、簡易入力の下書きへ取り込めます。ブラウザで見つけた文章や、チャット履歴の文字を使いたいときも、文字を取り込めます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-006.gif"><img src="assets/readme_manual/manual-006.gif" width="1066" height="560" alt="ブラウザのページで文字を選び、Ctrl+Insertで簡易入力を開くと、選んだ文字が入っている様子。"></a>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-006.gif"><img src="assets/readme_manual/manual-006.gif" width="1066" height="560" alt="ブラウザのページで文字を選び、Ctrl+Insertで簡易入力を開くと、選んだ文字が入っている様子。"></a></figure>
   
 <p>Excelのセルなど表の文字は、列の間をタブ、行の間を改行で区切って取り込みます。</p>
 
@@ -233,74 +215,41 @@
 
 <p class="sec-intro">入力した文章の誤字や誤変換を自動的に直します。</p>
 
-<figure class="guide-shot"><a href="assets/readme_manual/manual-007.svg"><img src="assets/readme_manual/manual-007.svg" width="960" height="255" alt="入力文の自動補正と未解決箇所の紫表示"></a>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-007.svg"><img src="assets/readme_manual/manual-007.svg" width="960" height="255" alt="入力文の自動補正と未解決箇所の紫表示"></a></figure>
 
 <p>補正先を決められない不自然な箇所は、元の文字を残して紫で示します。</p>
 
 </section>
 
 
-
 <a name="pick"></a>
 <section>
 <hr class="section-rule">
 <h2>単語を拾って引用する</h2>
-<p class="sec-intro">
-メモの中で、以前に書いた単語をもう一度使いたいときに、探して打ち直す手間を省く機能です。
-</p>
+<p class="sec-intro">メモの中の単語を、クリックで拾って入力できます。</p>
 
 <a name="guide-quote"></a>
 <article class="picture-guide">
 <h3>カーソルを置き、本文をクリック／ドラッグして引用する</h3>
-<p>本文にある文字を、別の場所へコピーして差し込めます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-008.gif"><img src="assets/readme_manual/manual-008.gif" width="1064" height="347" alt="「クリックして引用」を押し、「会議の資料」をドラッグすると、3行目の「引用：」の後ろに入る様子。"></a><figcaption>「クリックして引用」を押してから本文をドラッグすると、カーソルの位置へ写ります。</figcaption></figure>
-<ol class="steps picture-steps">
-<li><h4>差し込み先にカーソルを置きます</h4><p>先に、文字を入れたい場所を決めます。例では3行目の「引用：」の直後です。</p>
-</li>
-<li><h4>「クリックして引用」を押します</h4><p>ボタンを押すと引用モードになり、本文の上に操作案内が出ます。選択していない状態のF1やInsertでも始められます。</p>
-</li>
-<li><h4>拾いたい文字を選びます</h4><p>単語ならクリックします。複数の文字をまとめて拾う場合は、左ボタンを押したまま範囲をドラッグします。</p>
-</li>
-<li><h4>マウスボタンを離します</h4><p>選んだ文字が、最初に指定した差し込み先へコピーされ、引用モードが終わります。元の文章は残ります。</p>
-</li>
-</ol>
-<p class="guide-note">中断するときはEscを押します。何も選ばずに Enter を押したときも引用モードを終え、そのまま改行します。別タブの文字も拾えます。文字を選択した状態のF1は通常のコピーになるので、引用を始める場合は先に選択を解除してください。</p>
+<p>文字を入れたい場所にカーソルを置き、<b>クリックして引用</b> を押します。<BR>
+  拾いたい単語をクリックするか、範囲をドラッグすると、カーソルの位置に入ります。<BR>
+  選択していないときの <span class="kbd">F1</span> でも始められます。やめるときは <span class="kbd">Esc</span> を押します。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-008.gif"><img src="assets/readme_manual/manual-008.gif" width="1064" height="347" alt="「クリックして引用」を押し、「会議の資料」をドラッグすると、3行目の「引用：」の後ろに入る様子。"></a><figcaption>拾った文字がカーソルの位置に入ります。</figcaption></figure>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
-<p>
-<span class="kbd">=</span>（全角では<span class="kbd">Shift</span>+<span class="kbd">-</span>）
-キーからも同じモードに入れます。まず「＝」がその場に打たれ、
-そのまま文字を入力すると引用を解除し、「＝」の文字が残ります。矢印キーでの移動・範囲選択は続けられます。
-単語を引用できたときだけ、その「＝」は消えて引用した語に置き換わります。
-</p>
-<h3><span class="dot"></span>行番号を入力して引用する</h3>
-<p>
-選択なしの <span class="kbd">Ctrl</span>+<span class="kbd">C</span> または
-<span class="kbd">クリックして引用</span> で引用モードに入り、行番号を数字だけで入力して
-<span class="kbd">Enter</span> を押すと、その行の本文を差し込みます。入力した行番号は引用文に置き換わります。<b>-1</b>は1行前、<b>+1</b>は1行後、符号の後の数値で相対行を指定できます。折り返しではなく改行で区切った行を数えます。簡易入力では開始時の本体カーソル行を基準にします。範囲外なら入力を残してモードを続けます。
-</p>
-<h3><span class="dot"></span>数式を入力して計算する</h3>
-<p>
-選択なしで <span class="kbd">Ctrl</span>+<span class="kbd">C</span> を押すか、
-<span class="kbd">クリックして引用</span> ボタンを押してから数式を入力し、
-<span class="kbd">Enter</span> で確定すると引用モードが終わります。イコールは不要です。
-四則演算・小数・括弧と全角の数字や記号を使えます。
-符号付き整数だけは相対行番号です。計算には <b>40+0</b> や <b>-1+2</b> のように数値の後ろへ演算子を入れてください。計算を続ける場合も <b>+3*1</b> のように数値の後ろに演算子を付けてください。
-</p>
-<p>
-メモ欄には式の原文を残し、補正欄には半角の計算結果を表示します。
-統合表示では自動補正オプションに従って結果を表示します。
-簡易入力での選択なしコピーも利用でき、そのウィンドウの自動補正オプションに従います。
-式が未完成なら、入力を続けてからEnterで確定できます。
-入力中の式は、確定または取消しまで自動で書き換えません。
-</p>
 
+<h3><span class="dot"></span>行番号を入力して引用する</h3>
+<p>引用モードで行番号を入力して <span class="kbd">Enter</span> を押すと、その行の本文が入ります。<BR>
+  <b>-1</b> は1行前、<b>+1</b> は1行後です。</p>
+
+<h3><span class="dot"></span>数式を入力して計算する</h3>
+<p>引用モードで数式を入力して <span class="kbd">Enter</span> を押すと、補正欄に計算結果を表示します。<BR>
+  符号で始まる数字（+1 など）は、行番号として扱います。</p>
 </section>
 
 <a name="bracket"></a>
 <section>
 <hr class="section-rule">
 <h2>括弧で括る</h2>
-<p>F2を続けて押すと、表示設定で有効にした括弧の種類を順番に切り替えます。変換候補を表示している間は、Microsoft IME が F2 を「文字編集」に使うため、括弧は付きません。そのときは <span class="kbd">Ctrl</span>+<span class="kbd">F2</span> を押すか、Enter で確定してすぐ F2 を押してください。<span class="kbd">Ctrl</span>+<span class="kbd">F2</span> は直前の変換を括弧で囲みます（変換中なら確定してから囲み、カーソルを動かしたあとでも、最後に確定した文字が残っていれば囲みます）。<span class="kbd">Alt</span>+<span class="kbd">F2</span> は選択に関係なくカーソル位置に空の括弧を置きます。どちらも押すたびに括弧の種類が変わります。</p>
 <p class="sec-intro">ツールバーのボタンで、文字を括弧で囲めます。</p>
 <table class="keys">
 <tr><th>ボタン</th><th>括弧の種類</th></tr>
@@ -310,35 +259,15 @@
 <tr><td class="k">【】</td><td>すみ付き括弧</td></tr>
 <tr><td class="k">“”</td><td>ダブルクォーテーション</td></tr>
 </table>
-<p>
-範囲を選択してから押すと、選んだ文字の頭と末尾をその括弧で囲みます。
-何も選んでいないときは、カーソルの位置に括弧だけが差し込まれ、
-カーソルは開き括弧のすぐ後ろに残るので、そのまま中身を書き始められます。
-</p>
-<p>
-<span class="kbd">F2</span>を続けて押すと、直前の括弧を置き換えながら
-（）→「」→『』→【】→“”→（）の順に切り替わります。
-選択範囲の中またはすぐ外に対応する括弧があれば差し替えます。F2で両端と指定の括弧が同じなら次の種類へ進みます。
-括弧ボタンは指定の種類へ差し替え、同じボタンを押しても括弧を取り除きません。
-<span class="kbd">Esc</span>で直前の括弧操作を取りやめ、差し替え前の括弧へ戻します。
-ほかの場所のクリック、上下キー、タブ移動の後はその括弧が確定します。
-</p>
+<p>範囲を選択して押すと、選んだ文字を括弧で囲みます。<BR>
+  選択していないときは、カーソルの位置に括弧を入れます。</p>
+<p><span class="kbd">F2</span> を続けて押すと、括弧の種類が（）→「」→『』→【】→“” の順に変わります。<BR>
+  <span class="kbd">Esc</span> で括弧を取り消します。<BR>
+  変換中の文字を括るときは <span class="kbd">Ctrl</span>+<span class="kbd">F2</span> を押します。</p>
 <a name="guide-bracket"></a>
 <article class="picture-guide">
 <h3>選択範囲をボタン／F2で括る</h3>
-<p>選んだ文字を、ボタンやF2で括弧に包みます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-009.gif"><img src="assets/readme_manual/manual-009.gif" width="1064" height="347" alt="「資料」を選び、「」ボタン、F2、F2、Escの順に押す様子。"></a><figcaption>「」ボタンで括り、F2で種類を切り替え、Escで括る前に戻します。</figcaption></figure>
-<ol class="steps picture-steps">
-<li><h4>括りたい文字を選択します</h4><p>本文をドラッグし、括弧に入れたい部分を選びます。</p>
-</li>
-<li><h4>使いたい括弧のボタンを押します</h4><p>一括挿入の右にある（）・「」・『』・【】・“”から選びます。例では「」を押します。</p>
-</li>
-<li><h4>F2で種類を切り替えられます</h4><p>続けてF2を押すたびに括弧の種類が変わります。既存の括弧を重ねるのではなく、種類を差し替えます。</p>
-</li>
-<li><h4>取りやめるときはEscを押します</h4><p>ほかの場所をクリックする前など、括弧操作を続けている間ならEscで元へ戻せます。</p>
-</li>
-</ol>
-<p class="guide-note">文字を選んでいない場合は、空の括弧をカーソル位置へ入れます。そのまま括弧の中に入力できます。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-009.gif"><img src="assets/readme_manual/manual-009.gif" width="1064" height="347" alt="「資料」を選び、「」ボタン、F2、F2、Escの順に押す様子。"></a><figcaption>「」ボタンで括り、F2で種類を変え、Escで戻します。</figcaption></figure>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 </section>
 
@@ -348,74 +277,39 @@
 <h2>箇条書き・選択範囲の文字種</h2><a name="guide-list"></a>
 <article class="picture-guide">
 <h3>本文の文字をクリック／ドラッグして1行ずつ並べる</h3>
-<p>本文から拾った文字を、1行ずつ順番に並べます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-010.gif"><img src="assets/readme_manual/manual-010.gif" width="1064" height="347" alt="「箇条書き」を押し、「資料の確認」と「予定の共有」をドラッグして1行ずつ並べ、Escで終える様子。"></a><figcaption>拾った文字が、見出しの下に1行ずつ並びます。</figcaption></figure>
-<ol class="steps picture-steps">
-<li><h4>並べ始める位置を決めます</h4><p>見出しなど、一覧を作りたい場所の行にカーソルを置きます。</p>
-</li>
-<li><h4>「箇条書き」を押します</h4><p>上部の「箇条書き」ボタンで開始します。本文の上に操作案内が表示されます。</p>
-</li>
-<li><h4>最初の文字を拾います</h4><p>単語をクリックするか、範囲をドラッグして離します。カーソル行の下に空白行を1行挟んで、拾った文字を写します。</p>
-</li>
-<li><h4>続けて拾い、Escで終了します</h4><p>次の文字も同じ操作で拾うと、その下の行に追加します。並べ終えたらEscを押します。通常の文字入力でもモードを終了できます。</p>
-
-</li>
-<li><h4>簡易入力から送った文字も並べられます</h4><p>簡易入力から送った文字に背景色が付いている場合は、「箇条書き」を押すと、その背景の区切りごとに文字を抜き出して改行します。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-011.svg"><img src="assets/readme_manual/manual-011.svg" width="1000" height="270" alt="操作イメージ：簡易入力から送った2つの範囲に背景色が付いた状態。"></a><figcaption>背景色が付いた部分は、簡易入力から本文へ送った文字です。</figcaption></figure>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-012.svg"><img src="assets/readme_manual/manual-012.svg" width="1000" height="330" alt="操作イメージ：「箇条書き」で背景色の範囲を元の位置から移し、別々の行に並べた例。"></a><figcaption>「箇条書き」で、背景色の範囲を元の文から抜き出して1行ずつ並べます。</figcaption></figure></li>
-</ol>
-<p class="guide-note">クリックやドラッグで拾うときは元の文字が残ります。簡易入力の背景色から並べる場合は、その部分を元の場所から移します。</p>
+<p><b>箇条書き</b> を押して、本文の単語をクリックするか、範囲をドラッグします。<BR>
+  拾った文字が、カーソル行の下に1行ずつ並びます。<BR>
+  <span class="kbd">Esc</span> で終わります。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-010.gif"><img src="assets/readme_manual/manual-010.gif" width="1064" height="347" alt="「箇条書き」を押し、「資料の確認」と「予定の共有」をドラッグして1行ずつ並べ、Escで終える様子。"></a><figcaption>拾った文字が1行ずつ並びます。</figcaption></figure>
+<p>簡易入力から送った文字に背景色が付いているときは、<b>箇条書き</b> を押すと、色の付いた部分を1行ずつ並べます。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-011.svg"><img src="assets/readme_manual/manual-011.svg" width="1000" height="270" alt="操作イメージ：簡易入力から送った2つの範囲に背景色が付いた状態。"></a><figcaption>背景色の部分は、簡易入力から送った文字です。</figcaption></figure>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-012.svg"><img src="assets/readme_manual/manual-012.svg" width="1000" height="330" alt="操作イメージ：「箇条書き」で背景色の範囲を元の位置から移し、別々の行に並べた例。"></a><figcaption>「箇条書き」で1行ずつ並べた例です。</figcaption></figure>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 
-<p>括弧ボタン群の左の<b>箇条書き</b>を押し、単語をクリックするか範囲をドラッグします。
-開始時のカーソル行の下に空白行を1行挟み、拾った文字を写します。モードは継続し、次に拾った文字は次の行へ追加します。
-<span class="kbd">Esc</span>または文字入力で解除します。別タブで拾った場合も開始したタブへ戻して写します。</p>
-<p>簡易入力から送った文字に背景色が付いている場合は、背景の区切りごとにその部分だけを元の文から抜き出し、
-カーソル行の下に空白行を挟んで1行ずつ並べます。この操作の後はモードを終了します。
-並べた最後の行のすぐ次の行に別の文字があるときは、間に空白行を1行入れて区切ります。
-改行を含む項目は、前後に空白行を1行ずつ入れて区切ります。空白行が2行続くことはありません。</p>
-<p>メモ欄・簡易入力の選択範囲は、<span class="kbd">F6</span>でひらがな、<span class="kbd">F7</span>でカタカナ、
-<span class="kbd">F8</span>で半角、<span class="kbd">F9</span>でJISかな配列の英数字キー列へ変換できます。
-漢字もひらがなやカタカナへ変換できます。F8では半角カタカナになります。変換できない文字はそのまま残ります。取り消しはCtrl+Zです。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-013.gif"><img src="assets/readme_manual/manual-013.gif" width="1064" height="347" alt="確定済みの「資料を確認」と「明日の予定」を選んでF6を押し、「しりょうをかくにん」「あしたのよてい」とひらがなになる様子。"></a><figcaption>確定済みの文字も、選んでF6を押すとひらがなになります。</figcaption></figure>
-
+<h3><span class="dot"></span>選択範囲の文字種を変える</h3>
+<p>選択範囲を <span class="kbd">F6</span> でひらがな、<span class="kbd">F7</span> でカタカナ、<span class="kbd">F8</span> で半角に変えます。<BR>
+  <span class="kbd">F9</span> は JISかな配列の英数字キー列に変えます。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-013.gif"><img src="assets/readme_manual/manual-013.gif" width="1064" height="347" alt="確定済みの「資料を確認」と「明日の予定」を選んでF6を押し、「しりょうをかくにん」「あしたのよてい」とひらがなになる様子。"></a><figcaption>確定済みの文字も、F6でひらがなになります。</figcaption></figure>
 </section>
 
 <a name="wordbook"></a>
 <section>
 <hr class="section-rule">
 <h2>単語帳</h2>
-<p>単語帳に登録した語をクリックすると、直前に使っていた入力欄へ自動で貼り付けます。よく使う単語をすぐ入力できます。</p>
-<p>単語帳ウィンドウの追加を押してから単語をクリック、または範囲をドラッグすると、その文字列を登録できます。</p>
-<p><b>編集 → 単語帳セットを切り替える</b>からセット1〜4を選べます。
-<b>現在の単語帳をリセットする</b>では、表示されたセット番号を確認してから消去します。
-選択していないセットは消えません。</p>
-<p>登録内容、選択中のセット、幅、表示状態を保存し、次回起動時に復元します。
-<span class="kbd">Ctrl+Alt+Insert</span> または <span class="kbd">Ctrl+Alt+Shift+-</span> を押すと、別のアプリを使っている最中でも単語帳を開いたり閉じたりできます。編集メニューの「単語帳を開く／閉じる」からも同じように開閉できます。いま文字を打っているアプリの入力欄はそのままなので、開いて語を押せば、その欄へ貼り付けられます。このショートカットキーは、編集メニューの「単語帳ホットキー有効化」で使うかどうかを切り替えられます（初期状態はオン）。
-上部の色が付いた帯をドラッグすると、単語帳を移動できます。右端の「－」は最小化ボタンです。単語帳は本体と別に最小化できます。簡易入力と同じく、タスクバーやAlt+Tabから独立して切り替えられます。本体の単語帳ボタンでも戻せます。貼り付け後は直前のウィンドウへ戻りますが、そのウィンドウが閉じられた場合や既に別のウィンドウへ切り替えた場合は移動しません。</p>
-<p>単語帳の語を押したときに、その語をクリップボードにも残すかどうかは、編集メニューの「単語帳を押したら、クリップボードに入れる」で切り替えます（初期状態はオン）。オフのときも貼り付けは行います。CorrectNote の中の欄へは直接入れ、ほかのアプリへ貼り付けるときだけ約1秒クリップボードを使って、その後は元の内容に戻します。</p>
-<h3><span class="dot"></span>並べ替える</h3>
-<p>登録した語を<b>左ボタンで押したまま上下に少し動かす</b>と、並べ替えになります。入る位置に線が出て、ボタンを離した位置へ移ります。<span class="kbd">Esc</span> を押すか、一覧の外で離すと元の並びのままです。並べ替えたときは貼り付けません。</p>
-<p>語を右クリックして「ひとつ上と入れ替え」を選ぶと、1つ上の語と入れ替わります（いちばん上の語では選べません）。並び順は保存され、次回起動時も同じ順で表示されます。</p>
+<p class="sec-intro">よく使う単語を登録しておき、クリックで入力欄に貼り付けます。</p>
+<p>単語帳の <b>追加</b> を押してから、本文の単語をクリックするか、範囲をドラッグすると登録できます。<BR>
+  登録した語をクリックすると、直前に使っていた入力欄へ貼り付けます。</p>
+<p><span class="kbd">Ctrl+Alt+Insert</span> または <span class="kbd">Ctrl+Alt+Shift+-</span> で、別のアプリを使っている最中でも単語帳を開閉できます。</p>
+<p>語を押したまま上下に動かすと、並べ替えられます。<BR>
+  語を消すときは、右クリックして「消す」を選びます。<BR>
+  <b>編集 → 単語帳セットを切り替える</b> で、4つのセットを使い分けられます。</p>
 <figure class="guide-shot"><a href="assets/readme_manual/manual-014.png"><img src="assets/readme_manual/manual-014.png" width="256" height="177" alt="単語帳の語をドラッグして並べ替えている画面。入る位置に線が出ています。"></a><figcaption>押したまま動かすと、入る位置に線が出ます。</figcaption></figure>
 <a name="guide-wordbook"></a>
 <article class="picture-guide">
 <h3>文字を登録し、クリックで貼り付ける</h3>
-<p>よく使う文字を登録しておき、ボタンをクリックすると直前の入力欄へ自動で貼り付けます。</p>
-<ol class="steps picture-steps">
-<li><h4>「単語帳」を押します</h4><p>「簡易入力」の右側にあるボタンから開きます。単語帳は本体と別のウィンドウです。</p>
-
-</li>
-<li><h4>「追加」を押し、登録する範囲を選びます</h4><p>単語帳の「追加」を押してから、本体の単語をクリックするか、文字をドラッグして離します。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-015.gif"><img src="assets/readme_manual/manual-015.gif" width="1074" height="347" alt="単語帳の「追加」を押し、本文の「会議の資料」をドラッグして登録する様子。"></a><figcaption>「追加」を押してから本文をドラッグすると、その文字が単語帳に入ります。</figcaption></figure></li>
-<li><h4>登録した語をクリックします</h4><p>文字が単語帳のボタンになります。そのボタンを押すと、直前に使っていた入力欄へ貼り付けられます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-016.gif"><img src="assets/readme_manual/manual-016.gif" width="1074" height="347" alt="「貼り付け先：」の後ろにカーソルを置き、単語帳の「会議の資料」をクリックして入れる様子。"></a><figcaption>単語帳の語をクリックすると、直前の入力欄のカーソル位置へ入ります。</figcaption></figure></li>
-<li><h4>貼り付け結果を確認します</h4><p>直前に使っていた入力欄へ戻り、登録した語が入力されます。</p>
-</li>
-<li><h4>移動や最小化もできます</h4><p>上部の少し色が違う帯を左ドラッグすると移動します。右上の「－」で最小化できます。タスクバーやAlt+Tab、本体の単語帳ボタンから戻せます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-017.png"><img src="assets/readme_manual/manual-017.png" width="200" height="160" alt="上の帯が移動用、右上の「－」が最小化用です。"></a><figcaption>上の帯が移動用、右上の「－」が最小化用です。</figcaption></figure></li>
-</ol>
-<p class="guide-note">登録内容はアプリを閉じても残ります。語を消すときは、そのボタンを右クリックして「消す」を選びます。「編集 → 単語帳セットを切り替える」から、4セットを使い分けられます。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-015.gif"><img src="assets/readme_manual/manual-015.gif" width="1074" height="347" alt="単語帳の「追加」を押し、本文の「会議の資料」をドラッグして登録する様子。"></a><figcaption>「追加」を押してから本文をドラッグすると、単語帳に入ります。</figcaption></figure>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-016.gif"><img src="assets/readme_manual/manual-016.gif" width="1074" height="347" alt="「貼り付け先：」の後ろにカーソルを置き、単語帳の「会議の資料」をクリックして入れる様子。"></a><figcaption>単語帳の語をクリックすると、カーソルの位置に入ります。</figcaption></figure>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-017.png"><img src="assets/readme_manual/manual-017.png" width="200" height="160" alt="上の帯が移動用、右上の「－」が最小化用です。"></a><figcaption>上の帯で移動、右上の「－」で最小化します。</figcaption></figure>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 </section>
 
@@ -426,23 +320,15 @@
 <a name="guide-bulk"></a>
 <article class="picture-guide">
 <h3>複数行の指定位置に同じ文字を入れる</h3>
-<p>選択した各行の指定位置に、同じ文字列をまとめて入れます。</p>
-<ol class="steps picture-steps">
-<li><h4>挿入する範囲を選びます</h4><p>対象の文字をドラッグして選択します。行の途中から選んだ場合は、その行の選択部分の先頭と末尾を基準に数えます。選択外の文字は基準に含めません。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-018.png"><img src="assets/readme_manual/manual-018.png" width="1064" height="492" alt="1行目の「前置き：」と3行目の「：後置き」は選択外です。"></a><figcaption>1行目の「前置き：」と3行目の「：後置き」は選択外です。</figcaption></figure></li>
-<li><h4>「一括挿入」を開いて指定します</h4><p>単語帳の右の「一括挿入」を押します。「先頭から」または「末尾から」を選び、数値と挿入する文字列を入力します。数値は直接入力・上下ボタン・右の▼から変更できます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-019.png"><img src="assets/readme_manual/manual-019.png" width="341" height="247" alt="先頭から2文字後へ「【確認】」を入れる指定です。"></a><figcaption>先頭から2文字後へ「【確認】」を入れる指定です。</figcaption></figure>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-020.png"><img src="assets/readme_manual/manual-020.png" width="1064" height="492" alt="ウィンドウを操作している間も本文の選択範囲が見え、縦線が文字間の挿入位置を示します。"></a><figcaption>ウィンドウを操作している間も本文の選択範囲が見え、縦線が文字間の挿入位置を示します。</figcaption></figure></li>
-<li><h4>縦線を見ながら位置を調整します</h4><p>数値を変えると縦線も動きます。例では0に変更し、各行の選択部分の先頭へ挿入する位置にしています。末尾から0なら、各選択部分の末尾です。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-021.png"><img src="assets/readme_manual/manual-021.png" width="341" height="247" alt="先頭から0文字後へ変更しました。"></a><figcaption>先頭から0文字後へ変更しました。</figcaption></figure>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-022.png"><img src="assets/readme_manual/manual-022.png" width="1064" height="492" alt="縦線が各行の選択部分の先頭へ移りました。"></a><figcaption>縦線が各行の選択部分の先頭へ移りました。</figcaption></figure></li>
-<li><h4>左側の「実行」を押します</h4><p>各行の縦線の位置に同じ文字が入ります。位置が文字数を超える場合は、先頭指定なら末尾へ、末尾指定なら先頭へ入れます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-023.png"><img src="assets/readme_manual/manual-023.png" width="1064" height="492" alt="3行それぞれの選択部分の先頭へ「【確認】」が入りました。"></a><figcaption>3行それぞれの選択部分の先頭へ「【確認】」が入りました。</figcaption></figure>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-024.png"><img src="assets/readme_manual/manual-024.png" width="341" height="247" alt="実行した行数を確認できます。"></a><figcaption>実行した行数を確認できます。</figcaption></figure></li>
-<li><h4>必要なら「実行を戻す」、終わったら「閉じる」を押します</h4><p>中央の「実行を戻す」で直前の一括挿入を取り消します。右の「閉じる」、または本体・一括挿入ウィンドウでEscを押すと閉じます。文字列と位置指定は次回起動にも残ります。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-025.png"><img src="assets/readme_manual/manual-025.png" width="1064" height="492" alt="直前の実行を戻した状態です。元の選択範囲も戻ります。"></a><figcaption>直前の実行を戻した状態です。元の選択範囲も戻ります。</figcaption></figure></li>
-</ol>
-<p class="guide-note">続けて行った一括挿入は順に戻せます。途中で別の本文編集やタブ切替をした場合は、「実行を戻す」の対象外になります。</p>
+<p>選択した各行の同じ位置に、同じ文字をまとめて入れます。</p>
+<p>範囲を選択して <b>一括挿入</b> を押します。<BR>
+  「先頭から」か「末尾から」を選び、文字数と入れる文字を入力します。<BR>
+  本文の縦線で入る位置を確かめて、<b>実行</b> を押します。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-018.png"><img src="assets/readme_manual/manual-018.png" width="1064" height="492" alt="1行目の「前置き：」と3行目の「：後置き」は選択外です。"></a><figcaption>入れたい行を選択します。</figcaption></figure>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-021.png"><img src="assets/readme_manual/manual-021.png" width="341" height="247" alt="先頭から0文字後へ変更しました。"></a><figcaption>入れる位置と文字を指定します。</figcaption></figure>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-022.png"><img src="assets/readme_manual/manual-022.png" width="1064" height="492" alt="縦線が各行の選択部分の先頭へ移りました。"></a><figcaption>縦線が入る位置を示します。</figcaption></figure>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-023.png"><img src="assets/readme_manual/manual-023.png" width="1064" height="492" alt="3行それぞれの選択部分の先頭へ「【確認】」が入りました。"></a><figcaption>各行に「【確認】」が入りました。</figcaption></figure>
+<p><b>実行を戻す</b> で、直前の一括挿入を取り消します。<span class="kbd">Esc</span> で閉じます。</p>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 </section>
 
@@ -450,101 +336,47 @@
 <section>
 <hr class="section-rule">
 <h2>行をまるごと選ぶ</h2>
-<p>
-行番号を<b>クリック</b>すると、その行がまるごと選択されます。
-そのまま上下に<b>ドラッグ</b>すれば、複数の行をまとめて選べます。
-選んだあとは、コピー・削除・括弧で括るなど、通常の選択範囲と同じように扱えます。
-</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-026.gif"><img src="assets/readme_manual/manual-026.gif" width="1064" height="347" alt="行番号の2行目から4行目までドラッグして選び、続けてShift＋スペースとShift＋↑で選ぶ様子。"></a><figcaption>行番号のドラッグで行をまとめて選び、Shift＋スペースとShift＋上下キーでも選べます。</figcaption></figure>
-<p>
-本文欄・補正欄・行番号の選択でも、本文を含む通常の複数行選択では、上下端の空白だけの行を自動で選択範囲から外します。
-途中の空行、本文行の字下げ・行末の空白は残ります。範囲全体が空白だけの行なら、その選択を保ちます。
-すでに選択範囲がある状態でShiftを使って広げたり縮めたりする場合も、空白行を含む範囲を保ちます。
-</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-027.gif"><img src="assets/readme_manual/manual-027.gif" width="1064" height="347" alt="2行目の空白行から5行目の空白行までドラッグし、離すと上下の空白行が選択から外れる様子。"></a><figcaption>空白行から空白行までドラッグしても、離すと本文の行だけが選ばれます。</figcaption></figure>
-<h3><span class="dot"></span>キーボードだけで選ぶ・印を付ける</h3>
-<p>
-<b>Shift+スペース</b>は、何も選んでいないときは、カーソルのある<b>行の中身</b>を選びます。
-行番号のクリックと違って<b>末尾の改行を含みません</b>ので、そのまま別の行へ貼り直せます。
-行の途中までを選んでいるとき（ドラッグや Shift+上下キーで選んだとき）は、選択が掛かっている<b>行の全体</b>まで広げます。
-行の全体が選ばれているときに押すと、その範囲を<b>書式付きでコピー</b>します。つまり、1回目で行の全体を選び、もう一度押すとコピーします。編集メニューの「行を選択　Shift+Space」からも選べます。
-Shiftを押したまま上下キーを押すと、最初の行を起点に行単位で選択を広げたり縮めたりできます。
-</p>
+<p>行番号をクリックすると、その行を選択します。<BR>
+  上下にドラッグすると、複数の行を選べます。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-026.gif"><img src="assets/readme_manual/manual-026.gif" width="1064" height="347" alt="行番号の2行目から4行目までドラッグして選び、続けてShift＋スペースとShift＋↑で選ぶ様子。"></a><figcaption>行番号のドラッグで、行をまとめて選べます。</figcaption></figure>
+<p>選択の上下の端にある空白行は、自動で選択から外します。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-027.gif"><img src="assets/readme_manual/manual-027.gif" width="1064" height="347" alt="2行目の空白行から5行目の空白行までドラッグし、離すと上下の空白行が選択から外れる様子。"></a><figcaption>離すと本文の行だけが選ばれます。</figcaption></figure>
+<h3><span class="dot"></span>キーボードで選ぶ</h3>
+<p><b>Shift+スペース</b> で、カーソルのある行を選びます。もう一度押すとコピーします。<BR>
+  <b>Ctrl+スペース</b> で、その行にブックマークを付け外しします。</p>
 <figure class="guide-shot"><a href="assets/readme_manual/manual-028.gif"><img src="assets/readme_manual/manual-028.gif" width="1064" height="347" alt="1行目でShift+スペースを押して行を選び、もう一度押してコピーし、3行目の「貼り付け先：」の後ろでF4を押して貼り付ける様子。"></a><figcaption>Shift+スペースで行を選び、もう一度押すとコピーします。</figcaption></figure>
-<p>
-<b>Ctrl+スペース</b>で、その行の<b>ブックマークを付け外し</b>できます。
-複数の行を選んでいるときはまとめて扱い、<b>すべてに付いていれば外し、そうでなければすべてに付けます</b>。
-</p>
-<div class="callout tip">
-<div class="icon">🔖</div>
-<div><p>行番号を<b>ダブルクリック</b>しても、選択ではなくブックマークになります（詳しくは「編集の基本機能」）。</p></div>
-</div>
 <h3><span class="dot"></span>行番号を右クリックしてスクロールする</h3>
-<p>
-行番号を<b>右クリック</b>してメニューの<b>「この行が上に来る位置にスクロール」</b>を選ぶと、その行が画面の一番上に来ます。
-<b>「この行が中央に来る位置にスクロール」</b>なら画面の中央に来ます。どちらもカーソルは動きません。
-同じメニューから、その行にルーラーやブックマークも入れられます。
-</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-029.gif"><img src="assets/readme_manual/manual-029.gif" width="1064" height="527" alt="画面の下のほうにある9行目の行番号を右クリックし、「この行が上に来る位置にスクロール」を選ぶと、9行目が画面の一番上に来る様子。"></a><figcaption>下のほうにある9行目が、画面の一番上に来ます。</figcaption></figure>
+<p>行番号を右クリックして <b>この行が上に来る位置にスクロール</b> を選ぶと、その行が画面の一番上に来ます。<BR>
+  同じメニューで、中央に来る位置も選べます。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-029.gif"><img src="assets/readme_manual/manual-029.gif" width="1064" height="527" alt="画面の下のほうにある9行目の行番号を右クリックし、「この行が上に来る位置にスクロール」を選ぶと、9行目が画面の一番上に来る様子。"></a><figcaption>9行目が画面の一番上に来ます。</figcaption></figure>
 </section>
 
 <a name="dragscroll"></a>
 <section>
 <hr class="section-rule">
 <h2>余白のドラッグでスクロール</h2>
-<p class="sec-intro">文字の書かれていない余白を右クリックしたままドラッグすると、画面がスクロールします。スクロールバーまでマウスを運ばずに、読みたい場所へ手早く移動できます。</p>
-
-<p>
-本文の上で左ドラッグした場合は、これまでどおり文字の選択になります。
-タッチ画面では、1本指でなぞってスクロールできます。
-</p>
+<p class="sec-intro">文字のない余白を右クリックしたまま上下に動かすと、画面がスクロールします。<BR>
+  タッチ画面では、1本指でなぞってスクロールできます。</p>
 <a name="guide-right-scroll"></a>
 <article class="picture-guide">
 <h3>右クリックしたままドラッグしてスクロールする</h3>
-<p>右ボタンを押したままマウスを上下に動かすと、本文をつかむようにスクロールできます。ここでは本文の右側の余白を使って説明します。</p>
-<ol class="steps picture-steps">
-<li><h4>本文の右側の余白で右ボタンを押す</h4><p>文字が書かれていない右側の余白にマウスを置き、右ボタンを押したままにします。まだ離さず、次の手順へ進みます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-030.png"><img src="assets/readme_manual/manual-030.png" width="1064" height="492" alt="12行目付近を表示した、スクロール前の画面です。"></a><figcaption>12行目付近を表示した、スクロール前の画面です。</figcaption></figure></li>
-<li><h4>押したまま上か下へ動かす</h4><p>下の行を読みたいときはマウスを上へ、前の行へ戻りたいときは下へ動かします。本文の文字は編集されず、表示位置だけが動きます。つかんでいる間はマウスポインターが隠れます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-031.png"><img src="assets/readme_manual/manual-031.png" width="1064" height="492" alt="上へドラッグして、15行目以降が見えるようになった画面です。"></a><figcaption>上へドラッグして、15行目以降が見えるようになった画面です。</figcaption></figure></li>
-<li><h4>読みたい位置で右ボタンを離す</h4><p>読みたい位置まで移動したら、マウスの動きを止めてから右ボタンを離します。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-032.png"><img src="assets/readme_manual/manual-032.png" width="1064" height="492" alt="右ボタンを離した後の画面です。本文の内容は変わっていません。"></a><figcaption>右ボタンを離した後の画面です。本文の内容は変わっていません。</figcaption></figure></li>
-</ol>
-<p class="guide-note">通常の左ドラッグで文字を選択する操作は、これまでどおり使用できます。</p><p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-030.png"><img src="assets/readme_manual/manual-030.png" width="1064" height="492" alt="12行目付近を表示した、スクロール前の画面です。"></a><figcaption>スクロール前の画面です。</figcaption></figure>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-031.png"><img src="assets/readme_manual/manual-031.png" width="1064" height="492" alt="上へドラッグして、15行目以降が見えるようになった画面です。"></a><figcaption>上へドラッグすると、下の行が見えます。</figcaption></figure>
+<p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 </section>
 
 <a name="overview"></a>
 <section>
 <hr class="section-rule">
 <h2>縮小表示 ― 右ダブルクリック</h2>
-<p class="sec-intro">長いメモの中で、目当ての場所へ一気に飛ぶための機能です。</p>
-<p>
-メモ欄（または補正結果欄）で<b>右ボタンをダブルクリックし、2回目を押したまま保つ</b>と、
-文字が一時的にとても小さくなり、行間も詰まって、<b>広い範囲が一度に見えます</b>。
-そのまま<b>マウスを上下に動かすとスクロール</b>します。
-</p>
-<p><a href="#guide-overview">画像付きの操作手順へ</a></p>
-<div class="callout tip">
-<div class="icon">🔍</div>
-<div><p>右ボタンを<b>1回だけ</b>押して離した場合は、これまでどおり候補の一覧が開きます。
-押したままドラッグすればスクロールです（<a href="#dragscroll">余白のドラッグでスクロール</a>）。</p></div>
-</div>
+<p class="sec-intro">長いメモの中で、目当ての場所へすぐに移れます。</p>
+<p>右ボタンをダブルクリックし、2回目を押したままにすると、文字が小さくなり広い範囲が見えます。<BR>
+  そのまま上下に動かすとスクロールし、離すと元の大きさに戻ります。</p>
 <a name="guide-overview"></a>
 <article class="picture-guide">
 <h3>右ボタンを2回押し、2回目を押したまま動かす</h3>
-<p>長い文章の中から移動先を探すときに、一時的に文字を小さくします。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-033.gif"><img src="assets/readme_manual/manual-033.gif" width="1102" height="347" alt="本文の上で右ボタンを2回押し、押したまま下へ動かして離す様子。"></a><figcaption>押したまま動かすと縮小したまま移動し、離すと元の大きさに戻ります。</figcaption></figure>
-<ol class="steps picture-steps">
-<li><h4>本文の上にマウスを置きます</h4><p>右ボタンを素早く2回押し、2回目は離さずに押したままにします。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-034.png"><img src="assets/readme_manual/manual-034.png" width="1064" height="492" alt="通常の文字の大きさでは、一部の行だけが見えています。"></a><figcaption>通常の文字の大きさでは、一部の行だけが見えています。</figcaption></figure></li>
-<li><h4>押したまま全体を見渡します</h4><p>文字と行間が小さくなります。四角い枠は、ボタンを離した後に表示される範囲の目印です。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-035.png"><img src="assets/readme_manual/manual-035.png" width="1064" height="492" alt="縮小中は、多くの行を一度に見渡せます。"></a><figcaption>縮小中は、多くの行を一度に見渡せます。</figcaption></figure></li>
-<li><h4>上下に動かして移動先を探します</h4><p>右ボタンを押したまま、マウスを上下に動かします。目的の行が枠に入る位置まで移動します。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-036.png"><img src="assets/readme_manual/manual-036.png" width="1064" height="492" alt="縮小したまま、文章の後ろの方へ移動した画面です。"></a><figcaption>縮小したまま、文章の後ろの方へ移動した画面です。</figcaption></figure></li>
-<li><h4>右ボタンを離します</h4><p>文字が元の大きさへ戻り、縮小中に見ていた位置から読めます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-037.png"><img src="assets/readme_manual/manual-037.png" width="1064" height="492" alt="移動先で通常の大きさに戻りました。"></a><figcaption>移動先で通常の大きさに戻りました。</figcaption></figure></li>
-</ol>
-<p class="guide-note">右クリック1回だけでは縮小しません。「2回目を押したまま」にするのがポイントです。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-033.gif"><img src="assets/readme_manual/manual-033.gif" width="1102" height="347" alt="本文の上で右ボタンを2回押し、押したまま下へ動かして離す様子。"></a><figcaption>押したまま動かし、離すと元の大きさに戻ります。</figcaption></figure>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-035.png"><img src="assets/readme_manual/manual-035.png" width="1064" height="492" alt="縮小中は、多くの行を一度に見渡せます。"></a><figcaption>縮小中は、多くの行を見渡せます。</figcaption></figure>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 </section>
 
@@ -554,11 +386,7 @@ Shiftを押したまま上下キーを押すと、最初の行を起点に行単
 <h2>編集の基本機能</h2>
 
 <h3><span class="dot"></span>タブで複数のメモを開く</h3>
-<p>
-＋ボタンで新しいタブを開き、複数のメモを並行して扱えます。
-タブは<b>ドラッグして並べ替え</b>られます。
-</p>
-<p>タブの移動には、次のキーが使えます。上下の段はそれぞれ同じ動きなので、打ちやすいほうを使ってください。</p>
+<p>＋ボタンで新しいタブを開きます。タブはドラッグで並べ替えられます。</p>
 <table class="keys">
 <tr><th>キー</th><th>動作</th></tr>
 <tr><td class="k"><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">Tab</span></span> /
@@ -568,189 +396,97 @@ Shiftを押したまま上下キーを押すと、最初の行を起点に行単
 <tr><td class="k"><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">T</span></span></td><td>新しいタブを開く</td></tr>
 <tr><td class="k"><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">W</span></span></td><td>いまのタブを閉じる</td></tr>
 </table>
-<p>
-最後のタブで <span class="kbd">Ctrl</span>+<span class="kbd">Tab</span> を押すと先頭のタブへ戻ります
-（逆向きも同じように回ります）。
-</p>
-<p>タブを右クリックすると出る一覧の<b>先頭のタブに移動</b>で、いちばん左のタブに切り替えます。タブがたくさんあって左端が隠れているときも、タブの並びを左端まで送って見せます。タブの並び順は変わりません。先頭のタブを開いているときは選べません。</p>
-<p>同じ一覧の<b>別のウィンドウで表示する</b>を選ぶと、そのタブを新しいウィンドウでも開きます。元のウィンドウのタブはそのまま残り、どちらで書いても、もう片方にすぐ反映されます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-038.png"><img src="assets/readme_manual/manual-038.png" width="1064" height="492" alt="3つ目のタブを右クリックし、一覧に「先頭のタブに移動」が出ている画面。"></a><figcaption>タブの右クリックの一覧から「先頭のタブに移動」を選びます。</figcaption></figure>
-
-<h3><span class="dot"></span>自動保存と続きから再開</h3>
-<p>
-書いた内容はタブごとに自動的に控えられます。保存せずにそのままアプリを閉じても、次に開いたときにタブごと復元され、続きから再開できます。
-自動の控えは5分ごとに行い、アプリやタブを閉じるときはすぐに控えます。
-Windows の再起動やシャットダウンのときに、まだ控えていない変更があれば、CorrectNote が再起動を一瞬止めて控え、自分で閉じます。
-このとき Windows の「このアプリが再起動を妨げています」の画面に CorrectNote の名前と「終了前に自動保存を実行しました。」が出ることがありますが、ボタンを押さなくてもそのまま先へ進みます。
-ファイルとして保存した場合は、そのファイルとの結び付きも記憶されます。
-</p>
-
-<h3><span class="dot"></span>バックアップ</h3>
-<p>
-保存のたびに（ファイルへの保存と、自動の控えのとき）、内容が変わったタブのバックアップを作ります。
-朝4時をまたぐまでは同じ1つを上書きし、またいだら新しいバックアップにします。1つのタブにつき5つまで残し、それを超えると古いものから消します。
-ファイルメニューの「手動でバックアップを作成（最大5個）」を押すと、いま開いているタブのバックアップをその場で作れます（毎日のものとは別に、5つまで残します）。
-</p>
-<p>
-タブを右クリックすると、一覧の下にそのタブのバックアップが新しい順に並びます（手動のものには「（手動）」と付きます）。
-選ぶと別のウィンドウで中身を見られます。このウィンドウでは文字を選んでコピーでき、専用の検索欄で探せます。検索欄の「×」で欄を空にして強調も消し、探したあとの Esc では強調だけを消します。「このバックアップを削除する」で、そのバックアップを消せます。このウィンドウは Esc では閉じず、<span class="kbd">Ctrl</span>+<span class="kbd">W</span> で閉じます（前にあるバックアップのウィンドウだけが閉じます）。
-</p>
-
-<h3><span class="dot"></span>コピーした範囲の表示</h3>
-<p>
-コピーした範囲を白い枠で囲み、フォントサイズを大きくして強調します。
-<span class="kbd">Esc</span> を押すか、タブを切り替えたり、スクロールしたりすると元に戻ります。
-</p>
-
-<h3><span class="dot"></span>文字コードと改行</h3>
-<p>
-開いたファイルのUTF-8・Shift_JIS（CP932）・BOM付きUTF-16と、改行形式を保持して保存します。
-混在する改行や読み込んだ末尾の改行も保持し、編集欄の表示用空行は書き出しません。
-「ファイル → このタブの文字コード」で次回保存の文字コードを変更できます。
-その文字コードで表せない文字がある場合は理由を表示し、元のファイルを保ちます。
-</p>
-
+<p>タブを右クリックすると、<b>先頭のタブに移動</b> や <b>別のウィンドウで表示する</b> を選べます。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-038.png"><img src="assets/readme_manual/manual-038.png" width="1064" height="492" alt="3つ目のタブを右クリックし、一覧に「先頭のタブに移動」が出ている画面。"></a><figcaption>タブを右クリックした一覧です。</figcaption></figure>
 
 <a name="guide-autosave"></a>
-<article class="picture-guide">
-<h3>保存せずに閉じても次回続きを開く</h3>
-<p>名前を付けて保存していないメモも、次にCorrectNoteを開いたときに続きから使えます。</p>
-<p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
+<h3><span class="dot"></span>自動保存</h3>
+<p>書いた内容は、タブごとに自動で保存します。<BR>
+  保存せずに閉じても、次に開いたときに続きから書けます。</p>
+
+<h3><span class="dot"></span>バックアップ</h3>
+<p>内容が変わったタブのバックアップを、1日に1つ作ります。1つのタブにつき5つまで残します。<BR>
+  タブを右クリックすると、バックアップの一覧が出ます。選ぶと中身を見られます。<BR>
+  <b>ファイル → 手動でバックアップを作成</b> で、その場で作ることもできます。</p>
+
+<h3><span class="dot"></span>コピーした範囲の表示</h3>
+<p>コピーした範囲を白い枠で囲み、文字を大きくして示します。</p>
+
+<h3><span class="dot"></span>文字コードと改行</h3>
+<p>開いたファイルの文字コード（UTF-8・Shift_JIS・UTF-16）と改行の形のまま保存します。<BR>
+  <b>ファイル → このタブの文字コード</b> で変えられます。</p>
 </section>
+
 <a name="wheel-tabs"></a>
 <section>
 <hr class="section-rule">
 <h2>ホイールでタブを往復する</h2>
-<p>
-タブの上でホイールを回すと、下回転で右のタブへ、上回転で左のタブへ移動します。端まで来ると反対端へ戻ります。
-<b>右ボタンを押したままホイールを回す</b>と、本文や行番号欄にポインターがあるときも同じ操作ができます。
-</p>
-<p>
-右ボタンを離さなくても、<b>最後のタブ移動から0.3秒以上間を空けて逆に回す</b>と、逆方向へ移動できます。
-切り替わった直後のごく短い逆回転は、意図しない跳ね戻りを防ぐため無視します。
-ホイールでタブ移動した後に右ボタンを離しても、候補一覧やタブメニューは開きません。
-</p>
-
-
+<p>タブの上でホイールを回すと、隣のタブへ移ります。下へ回すと右、上へ回すと左です。<BR>
+  本文の上では、右ボタンを押したままホイールを回します。</p>
 <a name="guide-tabs"></a>
 <article class="picture-guide">
 <h3>ホイールで別のタブへ切り替える</h3>
-<p>タブの見出しの上でマウスホイールを回し、別のメモへ切り替えます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-039.gif"><img src="assets/readme_manual/manual-039.gif" width="900" height="372" alt="ホイールで次のタブへ、逆回転で前のタブへ移動する様子"></a><figcaption>下へ回すと次のタブへ、上へ回すと前のタブへ移ります。</figcaption></figure><ol class="steps picture-steps">
-<li><h4>タブの上にマウスを置きます</h4><p>画面上部の「無題」やファイル名が並ぶ帯にマウスを移します。本文の上では通常のスクロールになります。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-040.png"><img src="assets/readme_manual/manual-040.png" width="1064" height="492" alt="左端のタブにある、最初のメモを表示しています。"></a><figcaption>左端のタブにある、最初のメモを表示しています。</figcaption></figure></li>
-<li><h4>下へ回すと右のタブへ移ります</h4><p>ホイールを下向きに1段回すと、次のタブを表示します。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-041.png"><img src="assets/readme_manual/manual-041.png" width="1064" height="492" alt="中央のタブと、二つ目のメモへ切り替わりました。"></a><figcaption>中央のタブと、二つ目のメモへ切り替わりました。</figcaption></figure></li>
-<li><h4>上へ回すと左のタブへ戻ります</h4><p>ホイールを上向きに回すと、前のタブへ移ります。端まで来ると反対の端へ回ります。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-040.png"><img src="assets/readme_manual/manual-040.png" width="1064" height="492" alt="最初のメモに戻りました。"></a><figcaption>最初のメモに戻りました。</figcaption></figure></li>
-</ol>
-<p class="guide-note">本文や行番号の上でも、右ボタンを押したままホイールを回すとタブ移動になります。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-039.gif"><img src="assets/readme_manual/manual-039.gif" width="900" height="372" alt="ホイールで次のタブへ、逆回転で前のタブへ移動する様子"></a><figcaption>下へ回すと次のタブへ、上へ回すと前のタブへ移ります。</figcaption></figure>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 </section>
+
 <a name="search-replace"></a>
 <section>
 <hr class="section-rule">
 <h2>検索と置換</h2>
-<p>
-<span class="kbd">Ctrl+F</span> で検索、<span class="kbd">Ctrl+H</span> で置換のダイアログを開きます。
-検索にヒットした文字列は、一時的にフォントサイズを大きくして強調します。
-</p>
-<p>
-「タブを挿入」「改行を挿入」ボタンは、検索欄にタブや改行を入れます。
-タブは薄い四角、改行は↵で表示します。
-</p>
-<p>
-検索ウィンドウのボタンは3行に並んでいます。1行目は「次を検索」「前を検索」（置換のときは「置換」「すべて置換」も）、
-2行目は「全タブ検索 (Alt+I)」、3行目は「元の行に戻る」です。
-</p>
-<p>
-大文字と小文字の区別などの4つのチェックは、「▾ 検索の条件」の見出しの下にあります。見出しを押すと畳めます。
-最初は開いていて、畳んだ形はアプリを閉じるまで覚えています。
-</p>
-<p>
-「全タブ検索」で、全てのタブ（補正前）から検索して一覧に出します。
-ダブルクリックまたはEnterで該当箇所へ移動します。結果のウィンドウの高さは、見つかった件数に合わせて変わります。
-文字列を選んで <span class="kbd">Alt+I</span> を押すと、検索ウィンドウを開いていなくても、選んだ文字列で全タブ検索をします（日本語入力がオンのままでも使えます）。
-</p>
+<p><span class="kbd">Ctrl+F</span> で検索、<span class="kbd">Ctrl+H</span> で置換を開きます。<BR>
+  見つかった文字は、大きく表示して示します。</p>
+<p><b>全タブ検索</b> で、すべてのタブから探して一覧にします。<BR>
+  文字を選んで <span class="kbd">Alt+I</span> を押しても、全タブ検索ができます。</p>
 <a name="guide-search-return"></a>
 <article class="picture-guide">
 <h3>Ctrl＋Fで検索し、検索前の位置へ戻る</h3>
-<p>検索で別の場所へ移動しても、検索を始める前のカーソル位置へ戻れます。</p>
-<ol class="steps picture-steps">
-<li><h4>続きを書きたい場所にカーソルを置きます</h4><p>ここでは1行目の末尾から検索を始めます。Ctrl+Fを押して検索ウィンドウを開きます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-084.png"><img src="assets/readme_manual/manual-084.png" width="1050" height="752" alt="戻り先となる、検索前のカーソル位置です。"></a><figcaption>戻り先となる、検索前のカーソル位置です。</figcaption></figure></li>
-<li><h4>探す文字を入力します</h4><p>「検索する文字列」に文字を入れ、「次を検索」を押します。例では「会議」を探します。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-085.png"><img src="assets/readme_manual/manual-085.png" width="272" height="416" alt="検索する文字列を入力した画面です。"></a><figcaption>検索する文字列を入力した画面です。</figcaption></figure></li>
-<li><h4>見つかった場所を確認します</h4><p>本文が検索結果のある行へ移動します。検索を続けても、同じ検索文字列であれば最初の戻り先を覚えています。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-086.png"><img src="assets/readme_manual/manual-086.png" width="1050" height="752" alt="本文の「会議」が見つかり、その位置へ移りました。"></a><figcaption>本文の「会議」が見つかり、その位置へ移りました。</figcaption></figure>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-087.png"><img src="assets/readme_manual/manual-087.png" width="272" height="416" alt="「元の行に戻る」は、検索ウィンドウのいちばん下の行にあります。"></a><figcaption>「元の行に戻る」は、検索ウィンドウのいちばん下の行にあります。</figcaption></figure></li>
-<li><h4>「元の行に戻る」を押します</h4><p>検索前のタブ・カーソル位置に戻ります。検索ウィンドウを閉じれば、そのまま続きを書けます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-084.png"><img src="assets/readme_manual/manual-084.png" width="1050" height="752" alt="最初の1行目の末尾へ戻りました。"></a><figcaption>最初の1行目の末尾へ戻りました。</figcaption></figure>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-088.png"><img src="assets/readme_manual/manual-088.png" width="272" height="416" alt="検索ウィンドウにも、元の行に戻ったことが表示されます。"></a><figcaption>検索ウィンドウにも、元の行に戻ったことが表示されます。</figcaption></figure></li>
-</ol>
-<p class="guide-note">検索する文字列を変えると、戻り先も新しい検索の開始位置に切り替わります。戻り先のタブを閉じた場合は戻れません。</p>
+<p>検索で移動した後、<b>元の行に戻る</b> を押すと、検索前のカーソル位置へ戻ります。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-086.png"><img src="assets/readme_manual/manual-086.png" width="1050" height="752" alt="本文の「会議」が見つかり、その位置へ移りました。"></a><figcaption>「会議」が見つかった位置へ移りました。</figcaption></figure>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-087.png"><img src="assets/readme_manual/manual-087.png" width="272" height="416" alt="「元の行に戻る」は、検索ウィンドウのいちばん下の行にあります。"></a><figcaption>「元の行に戻る」は、検索ウィンドウのいちばん下にあります。</figcaption></figure>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 </section>
+
 <a name="goto"></a>
 <section>
 <hr class="section-rule">
 <h2>Ctrl＋G ― 行へ移る・文字を探す</h2>
-<p class="sec-intro">行番号か文字を入れて Enter を押すだけで、その場所へカーソルを移します。表計算ソフトの「ジャンプ」に近い使い方です。</p>
-<ol class="steps">
-<li><b>Ctrl＋G を押します。</b><p>CorrectNote のウィンドウが前に出ているときに押すと、ウィンドウの中に1行の入力欄が出ます。別のアプリを使っているときは反応しません。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-048.png"><img src="assets/readme_manual/manual-048.png" width="1064" height="492" alt="Ctrl＋Gで出た入力欄に「公園」と入れた画面。"></a><figcaption>入力欄に行番号か、探したい文字を入れます。</figcaption></figure></li>
-<li><b>行番号か文字を入れ、Enter を押します。</b><p><b>数字</b>なら、その行へ移ります（全角の数字も使えます）。最終行より大きい数字は最終行へ、0 は1行目へ移ります。</p><p><b>文字</b>なら、同じタブの中でカーソルの位置から下へ探し、見つかった文字の末尾にカーソルを置きます。最終行まで見つからないときは、1行目からカーソルの位置までも探します。英字の大文字と小文字は区別しません。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-049.png"><img src="assets/readme_manual/manual-049.png" width="1064" height="492" alt="11行目の「公園」の末尾にカーソルが移った画面。"></a><figcaption>「公園」の末尾にカーソルが移りました。</figcaption></figure></li>
-</ol>
-<p>見つからないときは、確認のウィンドウは出さずに、ウィンドウの下の欄に「見つかりません」と表示するだけです。入力が空欄のまま Enter を押したときは何もしません。<span class="kbd">Esc</span> を押すか、入力欄の外をクリックすると閉じます。</p>
-<p class="guide-note">次に Ctrl＋G を押すと、前に入れた文字が選ばれた状態で出ます。そのまま Enter を押すと、次に見つかる場所へ移ります。カーソルを動かすだけなので、本文は変わりません。</p>
+<p class="sec-intro"><span class="kbd">Ctrl+G</span> で入力欄を出し、行番号か文字を入れて <span class="kbd">Enter</span> を押すと、その場所へ移ります。<BR>
+  <span class="kbd">Esc</span> で閉じます。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-048.png"><img src="assets/readme_manual/manual-048.png" width="1064" height="492" alt="Ctrl＋Gで出た入力欄に「公園」と入れた画面。"></a><figcaption>行番号か、探したい文字を入れます。</figcaption></figure>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-049.png"><img src="assets/readme_manual/manual-049.png" width="1064" height="492" alt="11行目の「公園」の末尾にカーソルが移った画面。"></a><figcaption>「公園」の末尾にカーソルが移りました。</figcaption></figure>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p>
 </section>
+
 <a name="bookmarks"></a>
 <section>
 <hr class="section-rule">
 <h2>ブックマーク</h2>
-<p>
-行番号をダブルクリックすると、その行にブックマークを付けられます。
-ツールバーの <span class="kbd">▲前のブックマーク</span> <span class="kbd">▼次のブックマーク</span> で、
-付けた場所を順番にたどり、移動先を中央に表示します。その後のホイールやスクロールバー操作では通常の表示に戻り、1行目まで戻せます。長い文章の目印として使えます。
-</p>
-
-
+<p>行番号をダブルクリックすると、その行にブックマークを付けます。<BR>
+  <span class="kbd">Break</span> や <span class="kbd">Ctrl+Space</span> でも付け外しできます。<BR>
+  <b>▲前のブックマーク</b> <b>▼次のブックマーク</b> または <span class="kbd">Alt+↑</span> <span class="kbd">Alt+↓</span> で、付けた行へ移ります。</p>
 <a name="guide-bookmarks"></a>
 <article class="picture-guide">
 <h3>行番号のダブルクリックで登録し、ボタン／Alt＋上下で移動</h3>
-<p>後で戻りたい行に目印を付け、ボタンやキーで順にたどります。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-050.gif"><img src="assets/readme_manual/manual-050.gif" width="900" height="372" alt="ブックマークを付けて次・前の目印へ移動する様子"></a><figcaption>目印を登録した後、次・前のブックマークへ移動します。</figcaption></figure><ol class="steps picture-steps">
-<li><h4>目印を付けたい行へ移動します</h4><p>本文をクリックして、その行にカーソルを置きます。例では4行目に付けます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-051.png"><img src="assets/readme_manual/manual-051.png" width="1064" height="492" alt="4行目を選んだ状態です。"></a><figcaption>4行目を選んだ状態です。</figcaption></figure></li>
-<li><h4>Breakキーで追加します</h4><p>Breakキーを押すと、行番号の左に青い目印が付きます。行番号のダブルクリックやCtrl+Spaceでも切り替えられます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-052.png"><img src="assets/readme_manual/manual-052.png" width="1064" height="492" alt="4行目の行番号の左にブックマークが付きました。"></a><figcaption>4行目の行番号の左にブックマークが付きました。</figcaption></figure></li>
-<li><h4>次のブックマークへ進みます</h4><p>別の行にも同じように追加します。「▼次のブックマーク」またはAlt+↓で、次の目印へ移動します。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-053.png"><img src="assets/readme_manual/manual-053.png" width="1064" height="492" alt="次の目印がある20行目を中央付近に表示しています。"></a><figcaption>次の目印がある20行目を中央付近に表示しています。</figcaption></figure></li>
-<li><h4>前のブックマークへ戻ります</h4><p>「▲前のブックマーク」またはAlt+↑で前の目印へ戻ります。消すときは、その行でもう一度Breakキーを押します。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-054.png"><img src="assets/readme_manual/manual-054.png" width="1064" height="492" alt="前の目印がある4行目へ戻りました。"></a><figcaption>前の目印がある4行目へ戻りました。</figcaption></figure></li>
-</ol>
-<p class="guide-note">移動後にホイールやスクロールバーを動かすと、通常どおりスクロールできます。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-050.gif"><img src="assets/readme_manual/manual-050.gif" width="900" height="372" alt="ブックマークを付けて次・前の目印へ移動する様子"></a><figcaption>次・前のブックマークへ移ります。</figcaption></figure>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 </section>
+
 <a name="keyboard-layout"></a>
 <section>
 <hr class="section-rule">
 <h2>キーボードの配列と形</h2>
-<p class="sec-intro">お使いのキーボードの配列と形を選べます。<a href="#autofix">自動補正</a>がキーの押し間違いを探すときに、どのキーが隣り合っているかの判断に使います。表示メニューの <b>キーボードの配列と形</b> から選びます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-055.png"><img src="assets/readme_manual/manual-055.png" width="1002" height="564" alt="表示メニューの「キーボードの配列と形」を開いた画面。"></a><figcaption>表示メニューの「キーボードの配列と形」。英字の配列・かなの配列・形を1つずつ選びます。</figcaption></figure>
+<p class="sec-intro">お使いのキーボードの配列と形を選べます。<BR>
+  <a href="#autofix">自動補正</a>が、キーの押し間違いを探すときに使います。<BR>
+  <b>表示 → キーボードの配列と形</b> から選びます。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-055.png"><img src="assets/readme_manual/manual-055.png" width="1002" height="564" alt="表示メニューの「キーボードの配列と形」を開いた画面。"></a><figcaption>英字の配列・かなの配列・形を選びます。</figcaption></figure>
 <table class="keys">
 <tr><th>組</th><th>選べるもの</th><th>効く入力</th></tr>
 <tr><td>英字の配列</td><td>QWERTY（日本語配列・JIS）・QWERTY（英語配列・US）・Dvorak・Colemak・Colemak-DH・Workman・Eucalyn・AZERTY（フランス語）・QWERTZ（ドイツ語）・その他（段を文字で指定）</td><td>ローマ字入力・英語</td></tr>
 <tr><td>かなの配列</td><td>JISかな（標準）・親指シフト（NICOLA）・新JIS配列</td><td>かな入力</td></tr>
 <tr><td>形</td><td>標準（段が少しずつずれている）・左右に分割（段ずれあり）・格子（縦横まっすぐに並ぶ）・左右に分割・格子</td><td>ローマ字入力・かな入力・英語</td></tr>
 </table>
-<p>初期状態は QWERTY（日本語配列・JIS）・JISかな（標準）・標準です。普段のキーボードであれば変える必要はありません。</p>
-<p>形の「左右に分割」は、左右の手の間で離れているキーを隣として扱いません。「格子」は、段のずれがないキーボードの縦横の並びで隣を決めます。</p>
-<p>「その他（段を文字で指定）…」を選ぶと、キーの並びを1段ずつ入力する欄が開きます。段ごとの文字を左から順に書き、段の間を <code class="inline">|</code> で区切ります（例：<code class="inline">qwertyuiop|asdfghjkl|zxcvbnm</code>）。読めない並びのときは、元の配列に戻ります。</p>
-<p>配列や形を変えると、開いているメモの補正をやり直します。設定は次回の起動にも引き継がれます。</p>
-<p class="guide-note">かなの配列は、表示メニューで「かな入力」を選んでいるときに使われます。ローマ字入力のときは、英字の配列と形で隣を決めます。</p>
+<p>普段のキーボードであれば、変える必要はありません。</p>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p>
 </section>
 
@@ -758,13 +494,10 @@ Windows の再起動やシャットダウンのときに、まだ控えていな
 <section>
 <hr class="section-rule">
 <h2>Undo／Redoの表示</h2>
-<p>元に戻した後や、やり直した後の文字を、色で確かめられます。</p>
-<h3><span class="dot"></span>Undo後の下線</h3>
-<p><span class="kbd">Ctrl+Z</span> で戻した後は、次にもう一度Undoすると消える文字列に、色付きの下線を付けます。削除を戻すだけなど、次に消える文字がない場合は下線を付けません。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-056.png"><img src="assets/readme_manual/manual-056.png" alt="次に取り消すと消える「大切な」を、オレンジ色の下線で示します。" width="1064" height="492"></a><figcaption>次に取り消すと消える「大切な」を、オレンジ色の下線で示します。</figcaption></figure>
-<h3><span class="dot"></span>Redo後の下線</h3>
-<p>Redoで復元した文字列には色付きの下線を付けます。次に編集すると下線は消えます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-057.png"><img src="assets/readme_manual/manual-057.png" alt="やり直しで戻った入力「新しい」を、オレンジ色の下線で示します。" width="1064" height="492"></a><figcaption>やり直しで戻った入力「新しい」を、オレンジ色の下線で示します。</figcaption></figure>
+<p><span class="kbd">Ctrl+Z</span> で戻した後は、次に戻すと消える文字に下線を付けます。<BR>
+  やり直した後は、戻った文字に下線を付けます。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-056.png"><img src="assets/readme_manual/manual-056.png" alt="次に取り消すと消える「大切な」を、オレンジ色の下線で示します。" width="1064" height="492"></a><figcaption>次に取り消すと消える「大切な」に下線が付きます。</figcaption></figure>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-057.png"><img src="assets/readme_manual/manual-057.png" alt="やり直しで戻った入力「新しい」を、オレンジ色の下線で示します。" width="1064" height="492"></a><figcaption>やり直しで戻った「新しい」に下線が付きます。</figcaption></figure>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p>
 </section>
 
@@ -772,12 +505,9 @@ Windows の再起動やシャットダウンのときに、まだ控えていな
 <section>
 <hr class="section-rule">
 <h2>ルーラーで行に目印を置く</h2>
-<p>上部の横線ボタン（─）を押すと、カーソルのある行に横線を置けます。長い文章を読むときや、離れた行を見比べるときの目印になります。</p>
-<ol class="steps"><li><b>目印を置く行へカーソルを移し、横線ボタンを押します。</b><p>別の行へ移動して押すと、その行にも追加できます。</p></li><li><b>解除するときは、その行で同じボタンを押します。</b><p>ほかの行に置いた横線は残ります。</p></li></ol>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-058.png"><img src="assets/readme_manual/manual-058.png" alt="2行目と4行目にルーラーを置いた例。別の行へ追加しても、先に置いた横線は残ります。" width="1064" height="492"></a><figcaption>2行目と4行目にルーラーを置いた例。別の行へ追加しても、先に置いた横線は残ります。</figcaption></figure>
-<p>カーソルを別の行へ動かしても、横線は置いた行に残ります。折り返された長い行では、その行の最後の表示行の下に引きます。横線はタブごとに保存され、再起動後も残ります。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-059.png"><img src="assets/readme_manual/manual-059.png" alt="カーソルを1行目へ動かしても、ルーラーは2行目と4行目に固定されたままです。" width="1064" height="492"></a><figcaption>カーソルを1行目へ動かしても、ルーラーは2行目と4行目に固定されたままです。</figcaption></figure>
-<p class="guide-note">最終行の二重線は、ルーラーとは別の目印です。キーでカーソルを動かした直後は、入力位置の縦線が一瞬オレンジ色になります。</p>
+<p>上部の横線ボタン（─）を押すと、カーソルのある行に横線を置きます。<BR>
+  同じ行でもう一度押すと消えます。横線は再起動後も残ります。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-058.png"><img src="assets/readme_manual/manual-058.png" alt="2行目と4行目にルーラーを置いた例。別の行へ追加しても、先に置いた横線は残ります。" width="1064" height="492"></a><figcaption>2行目と4行目にルーラーを置いた例です。</figcaption></figure>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p>
 </section>
 
@@ -785,117 +515,71 @@ Windows の再起動やシャットダウンのときに、まだ控えていな
 <section>
 <hr class="section-rule">
 <h2>ボタンの表示と並べ替え</h2>
-<p>上部メニューの <b>ボタン → 表示と並べ替え…</b> から、使うボタンと並び順を選べます。</p> <h3><span class="dot"></span>書式ボタン（B・I・U・S）</h3> <p>ルーラーボタンの右に、メモ帳と同じ1文字の書式ボタンがあります。左からボールド（B）、斜体（I）、下線（U）、取り消し線（S）です。初期状態で表示されるのはボールドだけで、ほかの3つはボタンメニューで表示できます。文字を選択して押すとその範囲の書式をオン・オフし、選択せずに押すとこれから入力する文字に使います。ショートカットキーはボールドが<span class="kbd">Ctrl</span>+<span class="kbd">B</span>と<span class="kbd">Ctrl</span>+<span class="kbd">2</span>、斜体が<span class="kbd">Ctrl</span>+<span class="kbd">I</span>と<span class="kbd">Ctrl</span>+<span class="kbd">3</span>、下線が<span class="kbd">Ctrl</span>+<span class="kbd">U</span>と<span class="kbd">Ctrl</span>+<span class="kbd">4</span>、取り消し線が<span class="kbd">Ctrl</span>+<span class="kbd">5</span>です。書式は表示だけに使い、補正欄（左右に並べた右側）の同じ文字にも付きます。補正で書き換わった語は、その語全体に付きます。書式はタブごとに控えられて次回起動後も残ります。保存するテキストファイルには書式は入りません。書式の付いた範囲をコピー（Ctrl+C・Ctrl+X・Ctrl+Insert・Shift+Delete・メニュー）すると、Excel・Word・Windows のメモ帳などへ書式ごと貼り付けられます。付くのはボールド・斜体・下線・取り消し線だけで、フォント・大きさ・色は貼り付け先のものになります。メモ帳は下線に対応していないので、下線は文字だけが貼り付けられます。CorrectNote の中で貼り直すと、ボールド・斜体・下線・取り消し線もそのまま戻ります。貼り付けた先の周りの書式は受け継ぎません。簡易入力の欄へは文字だけが貼り付けられます。</p>
-<h3><span class="dot"></span>使うボタンを表示する</h3>
-<p>一覧の左端のチェックをクリックして、表示・非表示を切り替えます。項目を選んで右側のチェックを使うこともできます。「左右に並べる／1つにまとめる」は、1つのチェックで両方のボタンをまとめて切り替えます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-060.png"><img src="assets/readme_manual/manual-060.png" alt="最新のボタン一覧で「単語帳」の表示をオフにした設定例。" width="297" height="420"></a><figcaption>現在の項目一覧から「単語帳」の表示をオフにした例です。</figcaption></figure>
-<h3><span class="dot"></span>順番を変える</h3>
-<p>動かしたい項目を選び、<b>上へ</b>・<b>下へ</b> を押します。表示と順番の設定は、次回の起動にも引き継がれます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-061.png"><img src="assets/readme_manual/manual-061.png" alt="最新のボタン一覧で「ルーラー」を「簡易入力」の前へ移動した設定例。" width="297" height="420"></a><figcaption>「ルーラー」を選び、「上へ」を数回押して「簡易入力」の前へ移動した例です。</figcaption></figure>
-<p class="guide-note">ウィンドウを小さく使うときは、使うボタンだけを表示し、「1つにまとめる」レイアウトにすると本文を広く使えます。</p>
+<p><b>ボタン → 表示と並べ替え…</b> から、表示するボタンと並び順を選べます。<BR>
+  左端のチェックで表示を切り替え、<b>上へ</b>・<b>下へ</b> で順番を変えます。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-060.png"><img src="assets/readme_manual/manual-060.png" alt="最新のボタン一覧で「単語帳」の表示をオフにした設定例。" width="297" height="420"></a><figcaption>「単語帳」の表示をオフにした例です。</figcaption></figure>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-061.png"><img src="assets/readme_manual/manual-061.png" alt="最新のボタン一覧で「ルーラー」を「簡易入力」の前へ移動した設定例。" width="297" height="420"></a><figcaption>「ルーラー」を「簡易入力」の前へ移した例です。</figcaption></figure>
+<h3><span class="dot"></span>書式ボタン（B・I・U・S）</h3>
+<p>選んだ文字を、ボールド・斜体・下線・取り消し線にします。初期状態で表示されるのはボールドだけです。<BR>
+  書式ごとコピーすると、Excel や Word にもそのまま貼り付けられます。<BR>
+  保存するテキストファイルには、書式は入りません。</p>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p>
 </section>
-
-
 
 <a name="display"></a>
 <section>
 <hr class="section-rule">
 <h2>表示の設定</h2>
 <h3><span class="dot"></span>フォント</h3>
-<p>
-「フォント → 種類・サイズを選択」で本文・補正欄・簡易入力の字を変更できます。
-サイズはメニューから直接選ぶこともできます。「初期設定に戻す」でYu Mincho・10ポイントに戻ります。
-サイズだけを変更して「適用」「OK」を押すこともできます。ダイアログの「初期設定」はその場で反映します。設定は次回起動にも引き継がれ、俯瞰表示を終えると選んだ大きさへ戻ります。
-</p>
-<p>
-「フォント → 品詞ごとのサイズ倍率と文字色」で、品詞別に本文と補正欄の文字サイズと文字色を設定できます。
-</p>
-<p>
-倍率の初期値は名詞・動詞・形容詞・副詞・助動詞が1.1倍、数詞が1.2倍で、名詞（サ変）などその他の品詞は1.0倍です。「倍率を初期値」でこの設定に戻り、「すべて1倍」で全品詞を同じ大きさにできます。基準サイズに倍率を掛けた結果に小数点以下がある場合は切り上げます。
-</p>
+<p><b>フォント → 種類・サイズを選択</b> で、文字の種類と大きさを変えます。<BR>
+  <b>フォント → 品詞ごとのサイズ倍率と文字色</b> で、品詞ごとに文字の大きさと色を変えられます。</p>
 <figure class="guide-shot">
 <a href="assets/readme_manual/manual-062.svg"><img src="assets/readme_manual/manual-062.svg" width="960" height="340" alt="品詞ごとのサイズ倍率の初期値。名詞・動詞・形容詞・副詞・助動詞は1.1倍、数詞は1.2倍、名詞（サ変）などその他は1.0倍。"></a>
 <figcaption>品詞ごとのサイズ倍率（初期値）</figcaption>
 </figure>
-<p>
-文字色の初期値は、ライトモードでは名詞が青緑（濃い）、数詞が緑（やや濃い）、英字と記号がグレー（やや濃い）です。ダークモードでは名詞が緑（ごく明るい）、数詞が緑（とても明るい）、英字と記号がグレー（明るい）で、名詞（サ変）などその他は色を変えません。「色を初期値」でこの設定に戻り、「色をすべて変えない」で全品詞を欄の文字色のままにできます。
-</p>
 <figure class="guide-shot">
 <a href="assets/readme_manual/manual-063.svg"><img src="assets/readme_manual/manual-063.svg" width="1000" height="420" alt="ライトモードとダークモードにおける品詞ごとの文字色の初期値。名詞（サ変）などその他の品詞は欄の文字色のまま。"></a>
-<figcaption>品詞ごとの文字色（ライト／ダークモードの初期値）</figcaption>
+<figcaption>品詞ごとの文字色（初期値）</figcaption>
 </figure>
-<p>
-「OK」「×」「Esc」はそのまま閉じ、「キャンセル」は画面を開いた時の倍率と色に戻して閉じます。
-</p>
 <h3><span class="dot"></span>ダークモード</h3>
-<p>
-表示メニューの <span class="kbd">ダークモード</span> で切り替えられます。
-ほかの配色や絵の装飾は<a href="#appearance">外見</a>で選べます。
-設定は自動的に保存され、次にアプリを開いたときも同じ状態で始まります。
-</p>
+<p><b>表示 → ダークモード</b> で切り替えます。ほかの配色は<a href="#appearance">外見</a>で選べます。</p>
 <a name="memory-usage"></a>
 <h3><span class="dot"></span>メモリ使用量</h3>
-<p>「このアプリについて → メモリ使用量」で、低（解析は遅い）・中・高（速い）の3つから選べます。既定は中で、普段はそのまま使えます。高はメモリを多く使うかわりに、補正やタブの切り替えの待ち時間が短くなります。低は待機中のメモリを減らしますが、次の補正や、まだ補正していないタブを開くときの待ち時間が長くなります。補正の内容は同じです。設定は次回起動にも引き継がれます。</p>
+<p><b>このアプリについて → メモリ使用量</b> で、低・中・高から選べます。既定は中です。<BR>
+  高はメモリを多く使うかわりに、補正の待ち時間が短くなります。補正の内容は変わりません。</p>
 <h3><span class="dot"></span>ホットキーの個別設定</h3>
-<p>
-簡易入力ウィンドウを呼び出す2つのホットキー（<span class="kbd">Ctrl+Insert</span> /
-<span class="kbd">Ctrl+Shift+-</span>）は、編集メニューの「簡易入力ホットキー有効化（Insert）」と「簡易入力ホットキー有効化（-）」で、それぞれ個別にオン・オフを切り替えられます。
-単語帳を開くホットキーは、その下の「単語帳ホットキー有効化」で切り替えます。
-チェックの項目を押してもメニューは閉じないので、続けて切り替えられます。
-反応しないときは、同じ編集メニューの「簡易入力ウィンドウを開く」の下にある <span class="kbd">ホットキーの状態を確認…</span> で、
-実際に登録できているかを確かめられます。
-</p>
+<p>簡易入力と単語帳のホットキーは、編集メニューでそれぞれオン・オフできます。<BR>
+  反応しないときは、<b>ホットキーの状態を確認…</b> で確かめられます。</p>
 <a name="guide-whitespace"></a>
 <article class="picture-guide">
 <h3>表示メニューで空白の目印を表示する</h3>
-<p>半角スペース・全角スペース・タブを、目印で区別できます。</p>
-<ol class="steps picture-steps">
-<li><h4>空白を含む文章を用意します</h4><p>通常の表示では、空いている場所がスペースなのかタブなのか分かりにくいことがあります。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-064.png"><img src="assets/readme_manual/manual-064.png" width="1064" height="492" alt="半角空白、全角空白、タブが入った例です。"></a><figcaption>半角空白、全角空白、タブが入った例です。</figcaption></figure></li>
-<li><h4>「表示」メニューで空白の表示をオンにします</h4><p>「見えない空白（半角・全角・タブ）を表示」を選びます。本文中の空白に印が付き、タブは幅のある背景で分かります。同じ項目をもう一度選ぶと印が消えます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-065.png"><img src="assets/readme_manual/manual-065.png" width="1064" height="492" alt="空白に目印が付きました。本文の文字そのものは変わりません。"></a><figcaption>空白に目印が付きました。本文の文字そのものは変わりません。</figcaption></figure></li>
-</ol>
-<p class="guide-note">目印は画面表示だけです。コピーした文章や保存するファイルに印の文字を付け足すことはありません。</p>
+<p><b>表示 → 見えない空白（半角・全角・タブ）を表示</b> で、空白に印を付けます。<BR>
+  印は画面だけで、保存するファイルには入りません。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-065.png"><img src="assets/readme_manual/manual-065.png" width="1064" height="492" alt="空白に目印が付きました。本文の文字そのものは変わりません。"></a><figcaption>空白に目印が付きました。</figcaption></figure>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 <a name="guide-typing-pointer"></a>
 <article class="picture-guide">
 <h3>本文に入力するとポインターが隠れる</h3>
-<p>文字を入力するとマウスポインターが非表示になります。</p>
-<ol class="steps picture-steps">
-<li><h4>本文の入力位置を決める</h4><p>本文をクリックして、文字を入れたい位置に縦線を置きます。マウスポインターは本文の上に置いたままにします。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-066.png"><img src="assets/readme_manual/manual-066.png" width="1064" height="492" alt="2行目の末尾を入力位置にした画面です。"></a><figcaption>2行目の末尾を入力位置にした画面です。</figcaption></figure></li>
-<li><h4>文字を入力する</h4><p>そのまま文字を入力します。本文の上のマウスポインターが隠れ、文字と入力位置の縦線が見やすくなります。日本語の変換中も、入力が進むとポインターを隠します。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-067.png"><img src="assets/readme_manual/manual-067.png" width="1064" height="492" alt="末尾に「あ」を入力した画面です。入力位置の縦線はそのまま表示されます。"></a><figcaption>末尾に「あ」を入力した画面です。入力位置の縦線はそのまま表示されます。</figcaption></figure></li>
-<li><h4>マウスを少し動かす</h4><p>マウスを動かすとポインターが戻ります。クリックやホイール操作、別のウィンドウへの切り替えでも戻るため、そのまま次の操作ができます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-067.png"><img src="assets/readme_manual/manual-067.png" width="1064" height="492" alt="文字はそのままに、マウス操作へ戻った画面です。"></a><figcaption>文字はそのままに、マウス操作へ戻った画面です。</figcaption></figure></li>
-</ol>
-<p class="guide-note">マウスがメニューや別アプリの上にあるときは、そちらのポインターを隠しません。</p><p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
+<p>文字を入力すると、マウスポインターを隠します。マウスを動かすと戻ります。</p>
+<p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 </section>
-
-
 
 <a name="appearance"></a>
 <section>
 <hr class="section-rule">
 <h2>外見 ― 配色と装飾</h2>
-<p class="sec-intro">アプリ全体の色合いと、本文の裏に敷く薄い絵を選べます。上部メニューの <b>このアプリについて → 外見</b> から切り替えます。メニューの項目にマウスを乗せると、その配色や装飾が一時的に画面へ反映されるので、選ぶ前に見た目を確かめられます。クリックすると確定し、選ばずにメニューを閉じると元に戻ります。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-068.png"><img src="assets/readme_manual/manual-068.png" width="1002" height="354" alt="「このアプリについて → 外見」を開いた画面。"></a><figcaption>このアプリについて → 外見 から、配色・装飾・装飾の濃さを選びます。</figcaption></figure>
+<p class="sec-intro">アプリの色合いと、本文の裏に敷く薄い絵を選べます。<BR>
+  <b>このアプリについて → 外見</b> から選びます。項目にマウスを乗せると、試しに表示されます。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-068.png"><img src="assets/readme_manual/manual-068.png" width="1002" height="354" alt="「このアプリについて → 外見」を開いた画面。"></a><figcaption>配色・装飾・装飾の濃さを選びます。</figcaption></figure>
 <table class="keys">
 <tr><th>項目</th><th>選べるもの</th></tr>
 <tr><td>配色</td><td>標準（ライト）・抹茶・空 ／ 標準（ダーク）・夜・炭</td></tr>
 <tr><td>装飾</td><td>なし ／ 和文様・原稿・星空・桜・草木・墨と和紙・扇と帯・いきもの・波</td></tr>
 <tr><td>装飾の濃さ</td><td>薄い・普通・濃い</td></tr>
 </table>
-<h3><span class="dot"></span>配色</h3>
-<p>画面全体（ボタン・メニュー・本文と補正欄・行番号）の色を切り替えます。メニューの区切り線より上がライト系、下がダーク系です。初期状態は「標準（ライト）」です。</p>
-<h3><span class="dot"></span>装飾</h3>
-<p>装飾を選ぶと、メモ欄と補正欄の文字の裏に絵を薄く敷きます。絵は欄の右下に寄せて置き、文字は絵の上に重なります。スクロールしても絵は欄に対して動かず、便箋のように見えます。行番号の欄にも、同じ装飾の模様が薄く入ります。絵の濃さは「装飾の濃さ」（薄い・普通・濃い）で変えられます。絵は欄の枠のところでちょうど切れます。初期状態は装飾「波」・濃さ「薄い」です。絵を消したいときは装飾で「なし」を選びます。</p>
 <figure class="guide-shot"><a href="assets/readme_manual/manual-069.png"><img src="assets/readme_manual/manual-069.png" width="1002" height="437" alt="配色「抹茶」と装飾「桜」の画面。"></a><figcaption>配色「抹茶」＋装飾「桜」（濃さ：普通）</figcaption></figure>
 <figure class="guide-shot"><a href="assets/readme_manual/manual-070.png"><img src="assets/readme_manual/manual-070.png" width="1002" height="437" alt="配色「夜」と装飾「星空」の画面。"></a><figcaption>配色「夜」＋装飾「星空」（濃さ：普通）</figcaption></figure>
 <figure class="guide-shot"><a href="assets/readme_manual/manual-071.png"><img src="assets/readme_manual/manual-071.png" width="1002" height="437" alt="配色「空」と装飾「波」の画面。"></a><figcaption>配色「空」＋装飾「波」（濃さ：普通）</figcaption></figure>
-<p>表示メニューの <span class="kbd">ダークモード</span> は、ライト系とダーク系で最後に選んだ配色どうしを切り替えます。配色・装飾・濃さの設定は次回の起動にも引き継がれます。</p>
-<p class="guide-note">絵は表示だけです。本文や保存するファイルには何も加わりません。ウィンドウの大きさを変えている間は絵が前の位置に残り、止めると右下へ戻ります。</p>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p>
 </section>
 
@@ -906,27 +590,17 @@ Windows の再起動やシャットダウンのときに、まだ控えていな
 <a name="guide-cursor"></a>
 <article class="picture-guide">
 <h3>Ctrl＋左右キーで日本語向けにカーソル移動</h3>
-<p>1文字ずつではなく、日本語の区切りを使ってカーソルを動かします。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-072.gif"><img src="assets/readme_manual/manual-072.gif" width="1064" height="347" alt="Ctrlを押したまま→を3回、←を1回押してカーソルが区切りごとに動く様子。Ctrlを押している間は止まる場所に下線が出ます。"></a><figcaption>Ctrlを押している間は、止まる場所に灰色の下線が出ます。</figcaption></figure>
-<ol class="steps picture-steps">
-<li><h4>本文にカーソルを置きます</h4><p>例では「私は、資料を確認します。」の先頭に置いています。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-073.png"><img src="assets/readme_manual/manual-073.png" width="1064" height="492" alt="先頭から移動を始めます。"></a><figcaption>先頭から移動を始めます。</figcaption></figure></li>
-<li><h4>Ctrlを押しながら→を押します</h4><p>助詞や句読点などの区切りへ進みます。この例では「私は、」の後ろへ移ります。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-074.png"><img src="assets/readme_manual/manual-074.png" width="1064" height="492" alt="「私は、｜資料を確認します。」の位置です。縦棒は説明上の目印です。"></a><figcaption>「私は、｜資料を確認します。」の位置です。縦棒は説明上の目印です。</figcaption></figure></li>
-<li><h4>もう一度→で次の区切りへ進みます</h4><p>Ctrlを押したまま→を押すと、次は「資料を」の後ろへ進みます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-075.png"><img src="assets/readme_manual/manual-075.png" width="1064" height="492" alt="「私は、資料を｜確認します。」の位置です。"></a><figcaption>「私は、資料を｜確認します。」の位置です。</figcaption></figure></li>
-<li><h4>Ctrl＋←で前の区切りへ戻ります</h4><p>反対向きも同じように使えます。Shiftも一緒に押すと、移動した範囲を選択できます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-074.png"><img src="assets/readme_manual/manual-074.png" width="1064" height="492" alt="「私は、」の後ろへ戻りました。"></a><figcaption>「私は、」の後ろへ戻りました。</figcaption></figure></li>
-</ol>
-<p class="guide-note">区切りは文章によって変わります。空白・タブや括弧の前後も移動先になります。</p>
-<p>Ctrlキーを押している間、Ctrl＋左右キーで止まる場所には、カーソルのある行だけ文字の下に灰色の下線が出ます（Ctrlを離すと消え、行の終わりには出ません。色はライトモードとダークモードで変わります）。文字色は変わりません。「にも」「では」のように助詞が続くところは、続きの終わりで1回だけ止まります。入力欄・補正結果・簡易入力で使えます。補正結果では、入力欄でカーソルのある行に印が出ます。「表示」メニューの「Ctrl＋左右キーで止まる場所を小さな印で示す」でオン・オフを、「カーソルがある行にだけ印を表示する」をオフにすると、すべての行に印が出ます。初期状態はどちらもオン（カーソルのある行だけに印）です。設定は次回の起動にも引き継がれます。</p>
+<p>Ctrl＋左右キーで、助詞や句読点などの区切りごとにカーソルを動かします。<BR>
+  Ctrlを押している間は、止まる場所に灰色の下線が出ます。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-072.gif"><img src="assets/readme_manual/manual-072.gif" width="1064" height="347" alt="Ctrlを押したまま→を3回、←を1回押してカーソルが区切りごとに動く様子。Ctrlを押している間は止まる場所に下線が出ます。"></a><figcaption>Ctrlを押している間は、止まる場所に下線が出ます。</figcaption></figure>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p>
 </article>
 <a name="guide-cursor-vertical"></a>
 <article class="picture-guide">
 <h3>Ctrl＋上下キーで本文のまとまりを移動</h3>
-<p>入力欄・補正結果・簡易入力で、Ctrl＋↓は空白行で区切られた本文のまとまりの末尾へ、Ctrl＋↑は先頭へ移動します。まとまりの端から押すと、次／前のまとまりの端へ移ります。カーソルが空白だけの行にある場合は、次／前の本文行へ移動します。Ctrl＋Shift＋↓／↑では同じ移動先まで範囲を選択できます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-076.svg"><img src="assets/readme_manual/manual-076.svg" width="960" height="320" alt="Ctrl上下キーで本文まとまりの先頭と末尾へ移動する図"></a><figcaption>Ctrl＋↑／↓は空白行で区切られた本文のまとまりの先頭／末尾へ移動します。</figcaption></figure><p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
+<p>Ctrl＋上下キーで、空白行で区切られたまとまりの先頭・末尾へ移ります。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-076.svg"><img src="assets/readme_manual/manual-076.svg" width="960" height="320" alt="Ctrl上下キーで本文まとまりの先頭と末尾へ移動する図"></a><figcaption>Ctrl＋↑／↓で、まとまりの先頭／末尾へ移ります。</figcaption></figure>
+<p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 </section>
 
 <a name="edit-shortcuts"></a>
@@ -936,52 +610,23 @@ Windows の再起動やシャットダウンのときに、まだ控えていな
 <a name="guide-capslock"></a>
 <article class="picture-guide">
 <h3>CapsLockで文字を削除</h3>
-<p>CapsLockをBackSpaceと同じように使い、カーソルの手前を消せます。</p>
-<ol class="steps picture-steps">
-<li><h4>消す文字の後ろにカーソルを置きます</h4><p>例では「資料です。」の句点の直後に置きます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-077.png"><img src="assets/readme_manual/manual-077.png" width="1064" height="492" alt="カーソルのすぐ手前の「。」を消します。"></a><figcaption>カーソルのすぐ手前の「。」を消します。</figcaption></figure></li>
-<li><h4>CapsLockを押します</h4><p>カーソルの手前の1文字が消えます。範囲を選択している場合は、その範囲を削除します。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-078.png"><img src="assets/readme_manual/manual-078.png" width="1064" height="492" alt="句点が消え、「資料です」になりました。"></a><figcaption>句点が消え、「資料です」になりました。</figcaption></figure></li>
-</ol>
-<p class="guide-note">「編集」メニューのCapsLockをBackSpaceとして使う設定がオンのときに使えます。オフにすると通常のCapsLockの動作に戻ります。</p>
+<p>CapsLock を BackSpace と同じように使えます。編集メニューでオン・オフできます。</p>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 <a name="guide-copy"></a>
 <article class="picture-guide">
 <h3>F1でコピー</h3>
-<p>選んだ文字をF1でコピーできます。元の文字は残ります。</p>
-<ol class="steps picture-steps">
-<li><h4>コピーする文字を選択します</h4><p>左ドラッグなどで、コピーしたい部分を選びます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-079.png"><img src="assets/readme_manual/manual-079.png" width="1064" height="492" alt="「会議の資料」を選択しています。"></a><figcaption>「会議の資料」を選択しています。</figcaption></figure></li>
-<li><h4>F1を押します</h4><p>選択した文字がクリップボードへコピーされます。本文の表示は変わりません。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-080.png"><img src="assets/readme_manual/manual-080.png" width="1064" height="492" alt="F1を押しても、元の文字と選択範囲は残ります。"></a><figcaption>F1を押しても、元の文字と選択範囲は残ります。</figcaption></figure></li>
-<li><h4>別の位置へ貼り付けます</h4><p>貼り付け先にカーソルを移し、F4またはCtrl+Vを押します。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-081.png"><img src="assets/readme_manual/manual-081.png" width="1064" height="492" alt="コピーした文字を2行目へ貼り付けました。"></a><figcaption>コピーした文字を2行目へ貼り付けました。</figcaption></figure></li>
-</ol>
-<p class="guide-note">選択がない状態のF1は引用モードになります。通常のコピーをしたい場合は、先に文字を選択してください。</p>
+<p>選んだ文字を F1 でコピーします。選択していないときは、引用モードになります。</p>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 <a name="guide-enter"></a>
 <article class="picture-guide">
 <h3>F3でエンター</h3>
-<p>本文でF3を押すと、Enterと同じように改行できます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-082.gif"><img src="assets/readme_manual/manual-082.gif" width="1064" height="347" alt="「会議の資料」の後ろでF3を押し、行が分かれる様子。"></a><figcaption>F3を押すと、カーソルの位置で改行します。</figcaption></figure>
-<ol class="steps picture-steps">
-<li><h4>改行したい位置にカーソルを置きます</h4><p>ここでは「会議の資料」と「を確認します。」の間です。</p>
-</li>
-<li><h4>F3を押します</h4><p>カーソル位置に改行が入り、後ろの文字が次の行へ移ります。</p>
-</li>
-</ol>
-<p class="guide-note">IMEで変換している間は、まず変換の確定操作が優先されます。</p>
+<p>F3 で、Enter と同じように改行します。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-082.gif"><img src="assets/readme_manual/manual-082.gif" width="1064" height="347" alt="「会議の資料」の後ろでF3を押し、行が分かれる様子。"></a><figcaption>カーソルの位置で改行します。</figcaption></figure>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 <a name="guide-paste"></a>
 <article class="picture-guide">
 <h3>F4でペースト</h3>
-<p>クリップボードにコピーした文字を、カーソル位置へ貼り付けます。</p>
-<ol class="steps picture-steps">
-<li><h4>文字をコピーし、貼り付け先へ移ります</h4><p>F1やCtrl+Cでコピーした後、貼り付け先をクリックします。例では「貼り付け先：」の直後です。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-083.png"><img src="assets/readme_manual/manual-083.png" width="1064" height="492" alt="コピー済みの文字を入れる位置にカーソルを置きました。"></a><figcaption>コピー済みの文字を入れる位置にカーソルを置きました。</figcaption></figure></li>
-<li><h4>F4を押します</h4><p>Ctrl+Vと同じように、コピーした文字が入ります。選択範囲がある場合は、その範囲を置き換えます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-081.png"><img src="assets/readme_manual/manual-081.png" width="1064" height="492" alt="「会議の資料」がカーソル位置へ入りました。"></a><figcaption>「会議の資料」がカーソル位置へ入りました。</figcaption></figure></li>
-</ol>
+<p>F4 で、Ctrl+V と同じように貼り付けます。</p>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 </section>
 
@@ -990,26 +635,15 @@ Windows の再起動やシャットダウンのときに、まだ控えていな
 <hr class="section-rule">
 <h2>よくある質問</h2>
 
-<h3><span class="dot"></span>正しく書いた語が直されてしまいます</h3>
-<p>正しく書いた語が別の表記に変わってしまったときは、その語をクリックするか <span class="kbd">F5</span> を押し、候補一覧から使いたい表記を選び直してください（再変換）。</p>
-
-<h3><span class="dot"></span>同音異義語がうまく直りません</h3>
-<p>
-同音異義語は、意図した漢字に変換されないことがあります。
-意図した表記と違うときは、入力済みの単語をクリックするか <span class="kbd">F5</span> を押し、候補一覧から選んでください（<a href="#choose">再変換</a>）。
-</p>
+<h3><span class="dot"></span>意図と違う表記に直されてしまいます</h3>
+<p>その語をクリックするか <span class="kbd">F5</span> を押し、候補から選び直してください（<a href="#choose">再変換</a>）。</p>
 
 <h3><span class="dot"></span>入力した内容は外部に送信されますか</h3>
-<p>
-いいえ。CorrectNote は通信を行いません。判断に使う辞書・語彙・学習内容は、すべてお使いの端末の中だけに保存されます。
-</p>
+<p>いいえ。CorrectNote は通信を行いません。辞書や学習した内容は、すべてパソコンの中に保存されます。</p>
 
 <h3><span class="dot"></span>簡易入力のショートカットキーが反応しません</h3>
-<p>
-編集メニューの<span class="kbd">ホットキーの状態を確認…</span>で、登録できているかを確認してください。
-他のアプリが同じキーの組み合わせを既に使っている場合は登録が失敗します。
-CorrectNote起動時に登録を試みます。
-</p>
+<p>編集メニューの <b>ホットキーの状態を確認…</b> で確かめてください。<BR>
+  ほかのアプリが同じキーを使っていると、登録できません。</p>
 </section>
 
 <a name="shortcuts"></a>
@@ -1018,58 +652,54 @@ CorrectNote起動時に登録を試みます。
 <h2>ショートカット一覧</h2>
 <table class="keys">
 <tr><th>キー</th><th>動作</th></tr>
-<tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">N</span><br><span class="kbd">Ctrl</span>+<span class="kbd">T</span></td><td>新規（新しいタブを開く）</td></tr>
+<tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">N</span><br><span class="kbd">Ctrl</span>+<span class="kbd">T</span></td><td>新しいタブを開く</td></tr>
 <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">W</span></td><td>いまのタブを閉じる</td></tr>
 <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">O</span></td><td>開く</td></tr>
 <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">S</span></td><td>保存</td></tr>
 <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">F</span></td><td>検索</td></tr>
 <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">H</span></td><td>置換</td></tr>
 <tr class="key-rule"><td colspan="2"></td></tr>
-<tr><td class="k">余白を右ドラッグ</td><td>画面のスクロール</td></tr>
-<tr><td class="k">選択して <span class="kbd">スペース</span></td><td>選択した範囲をひらがなに戻して編集する（<a href="#guide-reinput">再入力変換</a>）</td></tr>
-<tr><td class="k"><span class="kbd">Ctrl</span> を素早く2回</td><td>カーソルがある単語をひらがなに戻して編集する</td></tr>
-<tr><td class="k"><span class="kbd">Shift</span>+<span class="kbd">Space</span></td><td>行全体を選択する<br>2回実行すると行全体をコピーする</td></tr>
-<tr><td class="k"><span class="kbd">Shift</span>+<span class="kbd">Home</span><br><span class="kbd">Shift</span>+<span class="kbd">End</span></td><td>カーソルから行頭 / 行末までを選択する<br>2回実行すると選択範囲をコピーする</td></tr>
+<tr><td class="k">余白を右ドラッグ</td><td>スクロール</td></tr>
+<tr><td class="k">選択して <span class="kbd">スペース</span></td><td>選択範囲をひらがなに戻して編集する（<a href="#guide-reinput">再入力変換</a>）</td></tr>
+<tr><td class="k"><span class="kbd">Ctrl</span> を素早く2回</td><td>カーソルのある単語をひらがなに戻して編集する</td></tr>
+<tr><td class="k"><span class="kbd">Shift</span>+<span class="kbd">Space</span></td><td>行を選択する<br>2回押すとコピーする</td></tr>
+<tr><td class="k"><span class="kbd">Shift</span>+<span class="kbd">Home</span><br><span class="kbd">Shift</span>+<span class="kbd">End</span></td><td>行頭 / 行末までを選択する<br>2回押すとコピーする</td></tr>
 <tr class="key-rule"><td colspan="2"></td></tr>
-<tr><td class="k"><span class="kbd">F1</span></td><td>選択中にF1を押すと選択範囲をコピーする<br>選択せずF1を押すと引用モードを開始（<a href="#pick">詳しく</a>）</td></tr>
-<tr><td class="k"><span class="kbd">F2</span></td><td>選択中にF2を押すと選択範囲を括弧で括る<br>選択せずF2を押すと、文字入力直後なら入力した範囲を括弧で括り、<br>入力直後でなければカーソル位置に括弧を挿入する<br>連続して実行すると、括弧の種類が切り替わる（）→「」→『』→【】→“”</td></tr>
-<tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">F2</span></td><td>直前の変換を括弧で囲む（変換中なら確定してから）。続けて押すと種類を切り替え</td></tr>
-<tr><td class="k"><span class="kbd">Alt</span>+<span class="kbd">F2</span></td><td>カーソル位置に空の括弧を置く（選択は無視）。続けて押すと種類を切り替え</td></tr>
-<tr><td class="k"><span class="kbd">F3</span></td><td>選択中にF3を押すと、選択範囲をブラウザで検索する<br>選択せずF3を押すと改行を挿入する（Enterと同じ動作）</td></tr>
-<tr><td class="k"><span class="kbd">F4</span></td><td>貼り付け（変換中なら先に確定）</td></tr>
-<tr><td class="k"><span class="kbd">F5</span></td><td>選択中にF5を押すと選択範囲に再変換を実行する<br>選択せずF5を押すとカーソル位置の単語に再変換を実行する<br>再変換は、打ち間違えや類語の候補を並べて表示する（<a href="#choose">詳しく</a>）<br>連続して実行すると、再変換の範囲が左の単語に切り替わる</td></tr>
+<tr><td class="k"><span class="kbd">F1</span></td><td>選択範囲をコピーする<br>選択していないときは引用モード（<a href="#pick">詳しく</a>）</td></tr>
+<tr><td class="k"><span class="kbd">F2</span></td><td>選択範囲を括弧で括る<br>選択していないときは括弧を入れる<br>続けて押すと括弧の種類が変わる</td></tr>
+<tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">F2</span></td><td>直前の変換を括弧で括る</td></tr>
+<tr><td class="k"><span class="kbd">Alt</span>+<span class="kbd">F2</span></td><td>カーソル位置に空の括弧を入れる</td></tr>
+<tr><td class="k"><span class="kbd">F3</span></td><td>改行する<br>選択中はブラウザで検索する</td></tr>
+<tr><td class="k"><span class="kbd">F4</span></td><td>貼り付け</td></tr>
+<tr><td class="k"><span class="kbd">F5</span></td><td>カーソル位置の語を再変換する（<a href="#choose">詳しく</a>）<br>続けて押すと左の語へ移る</td></tr>
 <tr><td class="k"><span class="kbd">F5</span> のあと <span class="kbd">←</span> <span class="kbd">→</span></td><td>再変換の対象の語を前後に移す</td></tr>
 <tr><td class="k"><span class="kbd">F6</span><br><span class="kbd">F7</span></td><td>選択範囲をひらがな / カタカナへ変換</td></tr>
 <tr><td class="k"><span class="kbd">F8</span><br><span class="kbd">F9</span></td><td>選択範囲を半角 / JISかな配列の英数字キー列へ変換</td></tr>
-<tr><td class="k"><span class="kbd">CapsLock</span></td><td>カーソルの左の文字を消す（BackSpaceと同じ動作）</td></tr>
-<tr><td class="k">右クリックしながら左クリック</td><td>選択中に実行すると、選択範囲をコピーする<br>選択せず実行すると、ペーストする</td></tr>
+<tr><td class="k"><span class="kbd">CapsLock</span></td><td>カーソルの左の文字を消す</td></tr>
+<tr><td class="k">右クリックしながら左クリック</td><td>選択範囲をコピーする<br>選択していないときは貼り付け</td></tr>
 <tr class="key-rule"><td colspan="2"></td></tr>
-<tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">G</span></td><td>行番号の行へ移る／文字を探してその末尾へ移る（<a href="#goto">詳しく</a>）</td></tr>
-<tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">←</span><br><span class="kbd">Ctrl</span>+<span class="kbd">→</span></td><td>カーソルを区切り位置まで移動する<br>区切りは接続詞・助詞の後、開き括弧の前・閉じ括弧の後、空白の前後<br>Shiftも押すと同じ位置まで選択する</td></tr>
-<tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">↑</span><br><span class="kbd">Ctrl</span>+<span class="kbd">↓</span></td><td>文章のまとまりの先頭／末尾へ移動<br>Ctrl＋Shift＋↑／↓では同じ位置まで選択する</td></tr>
-<tr><td class="k">右ダブルクリック（押したまま）</td><td>俯瞰 ― 字を小さくして見渡す（離すと元に戻る）</td></tr>
-<tr><td class="k">行番号を右クリック</td><td>その行を画面の上や中央へスクロール（<a href="#lineselect">詳しく</a>）</td></tr>
-<tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">Home</span></td><td>1行目に移動する<br>2回実行すると移動前の行に戻る</td></tr>
-<tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">End</span></td><td>最終行に移動する<br>2回実行すると移動前の行に戻る</td></tr>
+<tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">G</span></td><td>行へ移る／文字を探す（<a href="#goto">詳しく</a>）</td></tr>
+<tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">←</span><br><span class="kbd">Ctrl</span>+<span class="kbd">→</span></td><td>区切りごとにカーソルを移動する<br>Shiftも押すと選択する</td></tr>
+<tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">↑</span><br><span class="kbd">Ctrl</span>+<span class="kbd">↓</span></td><td>まとまりの先頭／末尾へ移動する<br>Shiftも押すと選択する</td></tr>
+<tr><td class="k">右ダブルクリック（押したまま）</td><td>縮小表示（離すと元に戻る）</td></tr>
+<tr><td class="k">行番号を右クリック</td><td>その行を画面の上や中央へスクロール・ルーラーやブックマークを入れる（<a href="#lineselect">詳しく</a>）</td></tr>
+<tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">Home</span></td><td>1行目に移動する<br>2回押すと元の行に戻る</td></tr>
+<tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">End</span></td><td>最終行に移動する<br>2回押すと元の行に戻る</td></tr>
 <tr class="key-rule"><td colspan="2"></td></tr>
-<tr><td class="k"><span class="kbd">Break</span><br><span class="kbd">Ctrl</span>+<span class="kbd">Space</span></td><td>ブックマークの作成／解除</td></tr>
-<tr><td class="k">行番号ダブルクリック</td><td>ブックマークの作成／解除</td></tr>
+<tr><td class="k"><span class="kbd">Break</span><br><span class="kbd">Ctrl</span>+<span class="kbd">Space</span><br>行番号ダブルクリック</td><td>ブックマークの付け外し</td></tr>
 <tr><td class="k"><span class="kbd">Alt</span>+<span class="kbd">↑</span><br><span class="kbd">Alt</span>+<span class="kbd">↓</span></td><td>前 / 次のブックマークへ移動</td></tr>
-<tr><td class="k">行番号を右クリック</td><td>その行にルーラーやブックマークを入れる</td></tr>
 <tr class="key-rule"><td colspan="2"></td></tr>
-<tr><td class="k"><span class="kbd">Insert</span></td><td>引用モードの切り替え。編集メニューで切替可能（初期値オン）（<a href="#pick">詳しく</a>）</td></tr>
-<tr><td class="k"><span class="kbd">=</span>（全角時 <span class="kbd">Shift</span>+<span class="kbd">-</span>）</td><td>引用モードの切り替え（メモ欄限定）</td></tr>
-<tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">C</span>（選択なし）</td><td>引用モードに入る（選択があるときは通常のコピー）</td></tr>
+<tr><td class="k"><span class="kbd">Insert</span></td><td>引用モードの切り替え（<a href="#pick">詳しく</a>）</td></tr>
+<tr><td class="k"><span class="kbd">=</span>（全角時 <span class="kbd">Shift</span>+<span class="kbd">-</span>）</td><td>引用モードの切り替え（メモ欄だけ）</td></tr>
+<tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">C</span>（選択なし）</td><td>引用モードに入る</td></tr>
 <tr class="key-rule"><td colspan="2"></td></tr>
-<tr><td class="k"><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">Insert</span></span><br><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">Shift</span>+<span class="kbd">-</span></span></td><td>簡易入力ウィンドウを開く<br>別ウィンドウがアクティブの時でも有効<br>小型のウィンドウが開き、メモを取ったり下書きを整えることができる（<a href="#quick">詳しく</a>）</td></tr>
-<tr class="key-rule"><td colspan="2"></td></tr>
-<tr><td class="k"><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">Alt</span>+<span class="kbd">Insert</span></span><br><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">Alt</span>+<span class="kbd">Shift</span>+<span class="kbd">-</span></span></td><td>単語帳を開く・閉じる<br>別ウィンドウがアクティブの時でも有効<br>クリックすると文字を入力欄にペーストすることができる（<a href="#wordbook">詳しく</a>）</td></tr>
+<tr><td class="k"><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">Insert</span></span><br><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">Shift</span>+<span class="kbd">-</span></span></td><td>簡易入力ウィンドウを開く<br>別のアプリを使っている最中でも使える（<a href="#quick">詳しく</a>）</td></tr>
+<tr><td class="k"><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">Alt</span>+<span class="kbd">Insert</span></span><br><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">Alt</span>+<span class="kbd">Shift</span>+<span class="kbd">-</span></span></td><td>単語帳を開く・閉じる<br>別のアプリを使っている最中でも使える（<a href="#wordbook">詳しく</a>）</td></tr>
 <tr class="key-rule"><td colspan="2"></td></tr>
 <tr><td class="k"><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">Tab</span></span><br><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">PageDown</span></span></td><td>次のタブへ</td></tr>
 <tr><td class="k"><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">Shift</span>+<span class="kbd">Tab</span></span><br><span class="combo"><span class="kbd">Ctrl</span>+<span class="kbd">PageUp</span></span></td><td>前のタブへ</td></tr>
 <tr><td class="k">タブ上の右クリック</td><td>タブメニュー</td></tr>
-<tr><td class="k">タブ上でホイール</td><td>隣のタブへ移動</td></tr>
-<tr><td class="k">余白を右クリックしながらホイール</td><td>隣のタブへ移動</td></tr>
+<tr><td class="k">タブ上でホイール<br>右クリックしながらホイール</td><td>隣のタブへ移動</td></tr>
 <tr class="key-rule"><td colspan="2"></td></tr>
 <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">B</span><br><span class="kbd">Ctrl</span>+<span class="kbd">2</span></td><td>ボールドのオン・オフ</td></tr>
 <tr><td class="k"><span class="kbd">Ctrl</span>+<span class="kbd">I</span><br><span class="kbd">Ctrl</span>+<span class="kbd">3</span></td><td>斜体のオン・オフ</td></tr>
@@ -1112,18 +742,18 @@ CorrectNote起動時に登録を試みます。
 
 ### exe をそのまま使う
 
-[Releases](../../releases) から `CorrectNote.exe` をダウンロードして、好きなフォルダに置いて実行するだけです。Python のインストールは不要です。語彙などのデータファイルは exe と同じフォルダに自動で作られます。
+[Releases](../../releases) から `CorrectNote.exe` をダウンロードして、好きなフォルダに置いて実行します。Python のインストールは不要です。
 
 ### ソースから実行する
 
-Python 3.9 以降と tkinter(通常は Python に同梱)が必要です。
+Python 3.9 以降と tkinter（通常は Python に同梱）が必要です。
 
 ```
 pip install janome
 py app.py
 ```
 
-janome は必須です(無いと補正の主力の守りが働かず、精度が大きく落ちます)。`py check_janome.py` で確認できます。
+janome は必須です。`py check_janome.py` で確認できます。
 
 ### 自分でビルドする
 
@@ -1131,7 +761,7 @@ janome は必須です(無いと補正の主力の守りが働かず、精度が
 build_exe.bat
 ```
 
-をダブルクリックすると、現在のソースから `dist\CorrectNote.exe` を作ります。ローカルのPython 3.9を優先し、別のPythonを使うときは `CORRECTNOTE_PYTHON` に `python.exe` のパスを指定します。PyInstallerとjanomeは事前にそのPythonへ入れてください。ビルド後はEXE内の版・補正コード・同梱語彙を現行ソースと照合し、不一致なら失敗を表示します。GitHub Actionsにもタグからの自動ビルド・公開があります。公開時は操作・起動・保存・単語帳の検査とEXEのソース・同梱物照合を公開条件とし、補正精度の不一致は別の診断として報告します。補正全体の合格を示すものではありません。
+をダブルクリックすると、`dist\CorrectNote.exe` を作ります。PyInstaller と janome を先に入れてください。別の Python を使うときは、`CORRECTNOTE_PYTHON` に `python.exe` のパスを指定します。
 
 ## テスト
 
@@ -1139,11 +769,11 @@ build_exe.bat
 py tests_mock.py
 ```
 
-janomeの無い環境用のモックテストです。janomeがある環境では未測定として終了します。実辞書・Windows画面の検査は `python ci_smoke_test.py` で実行します。モックの合格と補正全体の合格は別で、未解決の不一致が残っています。Windowsの公開条件は `python release_checks.py` で確認できます。GitHub Actionsの補正モック結果は専用ログと要約に残ります。実辞書の全体診断はActionsの手動実行で追加できます。
+janome の無い環境用のテストです。実辞書・Windows 画面の検査は `python ci_smoke_test.py`、公開前の確認は `python release_checks.py` で行います。
 
 ## ライセンス
 
-GNU General Public License v3.0([LICENSE](LICENSE))で公開しています。
+GNU General Public License v3.0（[LICENSE](LICENSE)）で公開しています。
 
 このソフトウェアを改変・組み込みして配布する場合、GPL の定めにより、その配布物のソースコードも同じライセンスで公開する必要があります。
 
