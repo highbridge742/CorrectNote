@@ -45,7 +45,6 @@
 <li><a href="#choose">再変換 ― 候補から選び直す</a><ul><li><a href="#guide-reinput">再入力変換 ― 確定した語の読みを直して変換する</a></li></ul></li>
 <li><a href="#quick">簡易入力ウィンドウ</a><ul><li><a href="#guide-quick">簡易入力ウィンドウで下書きし、Escで閉じて元の欄へ自動で貼り付ける</a></li></ul></li>
 <li><a href="#quick-selected-text">選択した文字を簡易入力へ取り込む</a></li>
-<li><a href="#autofix">自動補正</a></li>
 <li><a href="#pick">単語を拾って引用する</a><ul><li><a href="#guide-quote">カーソルを置き、本文をクリック／ドラッグして引用する</a></li></ul></li>
 <li><a href="#bracket">括弧で括る</a><ul><li><a href="#guide-bracket">選択範囲をボタン／F2で括る</a></li></ul></li>
 <li><a href="#listmode">箇条書き・選択範囲の文字種</a><ul><li><a href="#guide-list">本文の文字をクリック／ドラッグして1行ずつ並べる</a></li></ul></li>
@@ -55,7 +54,7 @@
 <li><a href="#dragscroll">余白のドラッグでスクロール</a><ul><li><a href="#guide-right-scroll">右クリックしたままドラッグしてスクロールする</a></li></ul></li>
 <li><a href="#overview">縮小表示 ― 右ダブルクリック</a><ul><li><a href="#guide-overview">右ボタンを2回押し、2回目を押したまま動かす</a></li></ul></li>
 </ol>
-<ol class="toc-column" start="14">
+<ol class="toc-column" start="13">
 <li><a href="#edit">編集の基本機能</a><ul><li><a href="#guide-autosave">保存せずに閉じても次回続きを開く</a></li></ul></li>
 <li><a href="#wheel-tabs">ホイールでタブを往復する</a><ul><li><a href="#guide-tabs">ホイールで別のタブへ切り替える</a></li></ul></li>
 <li><a href="#search-replace">検索と置換</a><ul><li><a href="#guide-search-return">Ctrl＋Fで検索し、検索前の位置へ戻る</a></li></ul></li>
@@ -69,7 +68,6 @@
 <li><a href="#appearance">外見 ― 配色と装飾</a></li>
 <li><a href="#ctrl-navigation">Ctrlキーによるカーソル移動</a><ul><li><a href="#guide-cursor">Ctrl＋左右キーで日本語向けにカーソル移動</a></li><li><a href="#guide-cursor-vertical">Ctrl＋上下キーで本文のまとまりを移動</a></li></ul></li>
 <li><a href="#edit-shortcuts">編集のショートカット</a><ul><li><a href="#guide-capslock">CapsLockで文字を削除</a></li><li><a href="#guide-copy">F1でコピー</a></li><li><a href="#guide-enter">F3でエンター</a></li><li><a href="#guide-paste">F4でペースト</a></li></ul></li>
-<li><a href="#faq">よくある質問</a></li>
 <li><a href="#shortcuts">ショートカット一覧</a></li>
 <li><a href="#credits">ライセンスと出典</a></li>
 </ol>
@@ -195,19 +193,6 @@
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p>
 </section>
 
-
-<a name="autofix"></a>
-<section>
-<hr class="section-rule">
-<h2>自動補正</h2>
-
-<p class="sec-intro">入力した文章の誤字や誤変換を自動的に直します。</p>
-
-<figure class="guide-shot"><a href="assets/readme_manual/manual-007.svg"><img src="assets/readme_manual/manual-007.svg" width="960" height="255" alt="入力文の自動補正と未解決箇所の紫表示"></a></figure>
-
-<p>補正先を決められない不自然な箇所は、元の文字を残して紫で示します。</p>
-
-</section>
 
 
 <a name="pick"></a>
@@ -360,8 +345,7 @@
 <a name="guide-right-scroll"></a>
 <article class="picture-guide">
 <h3>右クリックしたままドラッグしてスクロールする</h3>
-
-
+<figure class="guide-shot"><a href="assets/readme_manual/manual-090.gif"><img src="assets/readme_manual/manual-090.gif" width="1064" height="492" alt="本文の右側の余白で右ボタンを押したまま上下に動かし、画面がスクロールする様子。"></a></figure>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 </section>
 
@@ -481,7 +465,7 @@
 <hr class="section-rule">
 <h2>キーボードの配列と形</h2>
 <p class="sec-intro">お使いのキーボードの配列と形を選べます。<BR>
-  <a href="#autofix">自動補正</a>が、キーの押し間違いを探すときに使います。<BR>
+  自動補正が、キーの押し間違いを探すときに使います。<BR>
   <b>表示 → キーボードの配列と形</b> から選びます。</p>
 <figure class="guide-shot"><a href="assets/readme_manual/manual-055.png"><img src="assets/readme_manual/manual-055.png" width="1002" height="564" alt="表示メニューの「キーボードの配列と形」を開いた画面。"></a><figcaption>英字の配列・かなの配列・形を選びます。</figcaption></figure>
 <table class="keys">
@@ -632,22 +616,6 @@
 <h3>F4でペースト</h3>
 <p>F4 で、Ctrl+V と同じように貼り付けます。</p>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
-</section>
-
-<a name="faq"></a>
-<section>
-<hr class="section-rule">
-<h2>よくある質問</h2>
-
-<h3><span class="dot"></span>意図と違う表記に直されてしまいます</h3>
-<p>その語をクリックするか <span class="kbd">F5</span> を押し、候補から選び直してください（<a href="#choose">再変換</a>）。</p>
-
-<h3><span class="dot"></span>入力した内容は外部に送信されますか</h3>
-<p>いいえ。CorrectNote は通信を行いません。辞書や学習した内容は、すべてパソコンの中に保存されます。</p>
-
-<h3><span class="dot"></span>簡易入力のショートカットキーが反応しません</h3>
-<p>編集メニューの <b>ホットキーの状態を確認…</b> で確かめてください。<BR>
-  ほかのアプリが同じキーを使っていると、登録できません。</p>
 </section>
 
 <a name="shortcuts"></a>
