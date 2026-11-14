@@ -81,11 +81,11 @@
 <hr class="section-rule">
 <h2>画面の見かた</h2>
 <p class="sec-intro">CorrectNote には、2つの画面レイアウトがあります。<br>
-  <span class="kbd">左右に並べる</span> と <span class="kbd">1つにまとめる</span> のボタンで、いつでも切り替えられます。</p>
+  <b>左右に並べる</b> と <b>1つにまとめる</b> のボタンで、いつでも切り替えられます。</p>
 <figure class="guide-shot"><a href="assets/readme_manual/manual-002.png"><img src="assets/readme_manual/manual-002.png" width="502" height="103" alt="赤枠で囲んだ「左右に並べる」「1つにまとめる」ボタンは、画面右上にあります。"></a><br>
-  <figcaption>画面右上のボタンで、レイアウトを切り替えます。</figcaption></figure>
+  <figcaption>ウインドウ右上のボタンからレイアウトを切り替えます。</figcaption></figure>
 
-<p>文章の補正は入力に合わせて進みます。日本語を変換している途中の文字は書き換えません。</p>
+<p>文章の補正は入力に合わせて進みます。</p>
 <p>行番号に表示される茶色の縦線は、補正中の行を表します。確認が済むと縦線が消えます。</p>
 
 <h3><span class="dot"></span>左右に並べるレイアウト（既定）</h3>
@@ -149,28 +149,23 @@
 <section>
 <hr class="section-rule">
 <h2>再変換 ― 候補から選び直す</h2>
-<p class="sec-intro">確定済みの単語を、いつでも再変換できます。自動で直らなかった語や、直った語をさらに別の表記に変えたいときも、同じ操作で選び直せます。</p>
+<p class="sec-intro">確定済みの単語を再変換できます。</p>
 
-<p>別の表記に変えたいときは、一覧に表示される候補から選べます。
-入力欄・補正欄・簡易入力で利用でき、候補を選ぶと必要な語の範囲をまとめて変更します。
-一覧を開いた後にその行を編集した場合は、候補を開き直してください。</p>
-
-<h3><span class="dot"></span>F5 でスムーズに直す</h3>
+<h3><span class="dot"></span>F5</h3>
 <p>
-メモ欄で <span class="kbd">F5</span> を押すと、カーソルのすぐ前の語の候補が開きます。
-一覧を開いたまま <span class="kbd">F5</span> を押すたびに、対象がひとつ左の語へ移っていくので、
-少し前に書いた語も手を止めずにたどって直せます。いま対象になっている語には色が付きます。
-行の先頭まで来たら、前の行の末尾の語へ続けて遡ります。
-簡易入力ウィンドウの中でも同じように使えます。
-漢字の変換中（候補を表示している間）に押したときは、先に変換を確定してから候補を開きます。
-</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-003.gif"><img src="assets/readme_manual/manual-003.gif" width="1064" height="527" alt="「会議の資料と見出しを確認します。」の末尾でF5を押すたび、候補を開く対象の語が「します」「確認」「見出し」「資料」と左へ移り、Escで閉じる様子。"></a><figcaption>F5を押すたびに、候補を開く対象の語が左へ移ります。候補のある語では、その場で一覧が開きます。</figcaption></figure>
+メモ欄で <span class="kbd">F5</span> を押すと、カーソルのすぐ前の語の候補が開きます。<BR>
+一覧を開いたまま <span class="kbd">F5</span> を押すたびに、対象がひとつ左の語へ移っていくので、<BR>
+少し前に書いた語も手を止めずにたどって直せます。いま対象になっている語には色が付きます。<BR>
+行の先頭まで来たら、前の行の末尾の語へ続けて遡ります。<BR>
 
-<h3><span class="dot"></span>左右キーで対象の語を選び直す</h3>
+</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-003.gif"><img src="assets/readme_manual/manual-003.gif" width="1064" height="527" alt="「会議の資料と見出しを確認します。」の末尾でF5を押すたび、候補を開く対象の語が「します」「確認」「見出し」「資料」と左へ移り、Escで閉じる様子。"></a><figcaption>その場で一覧が開きます。</figcaption></figure>
+
+<h3><span class="dot"></span>左右キーで対象を変更</h3>
 <p>
 候補の一覧が開いているあいだ、<span class="kbd">←</span>
-<span class="kbd">→</span> キーで<b>対象の語を前後に移せます</b>。
-上下キーは候補を選ぶために使います。
+<span class="kbd">→</span> キーで<b>対象の語を前後に移せます</b>。<BR>
+上下キーで候補を選び、エンターまたはスペースで決定します。
 </p>
 
 <h3><span class="dot"></span>範囲選択で選ぶ</h3>
@@ -187,7 +182,8 @@
 <article class="picture-guide">
 <h3>再入力変換 ― 確定した語の読みを直して変換する</h3>
 <p>選択範囲をひらがなに戻し、キーボードで編集を加えてから変換できます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-004.gif"><img src="assets/readme_manual/manual-004.gif" width="1102" height="427" alt="「市役所で手続きをします。」の「市役所」でCtrlを素早く2回押して「しやくしょ」に開き、「し」を「く」に直してスペースで変換し、「区役所」にして確定する様子。"></a><figcaption>「し」を「く」に直して変換すると、「市役所」が「区役所」になります。</figcaption></figure>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-004.gif"><img src="assets/readme_manual/manual-004.gif" width="1102" height="427" alt="「市役所で手続きをします。」の「市役所」でCtrlを素早く2回押して「しやくしょ」に開き、「し」を「く」に直してスペースで変換し、「区役所」にして確定する様子。"></a></figure>
+  
 <p>F5キーを通さず、範囲を選択してスペースキーを押すだけでも再入力変換を開始できます。</p>
 <p class="guide-note">範囲の外へカーソルを出すと、再入力変換は終わります。<br>字を変えていなければ元の字に戻り、字を変えていれば変換して終わります。</p>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
@@ -197,95 +193,49 @@
 <section>
 <hr class="section-rule">
 <h2>簡易入力ウィンドウ</h2>
-<p class="sec-intro">別のアプリを使っている最中でも、補正付きの下書きをすぐに書ける小さなウィンドウです。CorrectNoteを開いておき、<span class="kbd">Ctrl+Insert</span> または <span class="kbd">Ctrl+Shift+-</span> で呼び出します。簡易入力はほかのウィンドウより手前に表示されます。</p>
-<p>簡易入力のウィンドウが開いたまま、ほかのウィンドウの後ろに隠れているときにショートカットキーを押すと、簡易入力が前に出て、入力欄にカーソルが入ります。簡易入力が前に出ているときに押すと、最小化します。</p>
+<p class="sec-intro">別のアプリを使っている最中でも、下書きをすぐに書ける小さなウィンドウです。<BR>
+  CorrectNoteを開いておき、<span class="kbd">Ctrl+Insert</span> または <span class="kbd">Ctrl+Shift+-</span> で呼び出します。<BR>
+  簡易入力はほかのウィンドウより手前に表示されます。</p>
+  
 <a name="guide-quick"></a>
 <article class="picture-guide">
 <h3>簡易入力ウィンドウで下書きし、Escで閉じて元の欄へ自動で貼り付ける</h3>
-<p>別アプリの入力欄にカーソルを置いてCtrl+Insertで簡易入力ウィンドウを開き、下書きします。Escで閉じると、初期設定では開く前に使っていた入力欄へ自動で貼り付けられます。本体から開いた場合は、カーソル位置に挿入されます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-005.gif"><img src="assets/readme_manual/manual-005.gif" width="1256" height="590" alt="チャット画面風の説明用イメージ。入力欄と簡易入力ウィンドウを同じ画面に表示し、呼び出し、下書き、Escで閉じて貼り付ける流れを示します。簡易入力ウィンドウは背景画面の約3分の1幅です。"></a><figcaption>チャット画面風のイメージです。簡易入力ウィンドウは背景画面と同じ縮尺で約3分の1幅です。図のCtrl+Vは、自動貼り付けをオフにした場合の操作です。初期設定ではEscで閉じると、元の入力欄へ自動で貼り付けられます。</figcaption></figure>
-<ol class="steps picture-steps">
-<li><h4>貼り付け先の入力欄を選びます</h4><p>別アプリでは、文章を入れたい欄にカーソルを置いてからCtrl+Insertを押します。本体で使うときは、本文の挿入位置にカーソルを置いて「簡易入力」を押します。</p></li>
-<li><h4>簡易入力ウィンドウで下書きします</h4><p>普通の入力欄と同じように入力できます。Enterで改行でき、文字の長さに合わせてウィンドウの大きさが変わります。</p></li>
-<li><h4>Escで閉じ、元の入力欄へ貼り付けます</h4><p>別アプリから開いた場合は、初期設定で元の入力欄へ自動貼り付けされます。自動貼り付けをオフにした場合は、戻った欄でCtrl+Vを押します。本体から開いた場合は、文章が挿入位置に入ります。</p></li>
-</ol>
+<p>Escで簡易入力ウィンドウを閉じます。<BR>
+  閉じると、開く前に使っていたウィンドウの入力欄へ内容をペーストします。</p>
+  
+<figure class="guide-shot"><a href="assets/readme_manual/manual-005.gif"><img src="assets/readme_manual/manual-005.gif" width="1256" height="590" alt="チャット画面風の説明用イメージ。入力欄と簡易入力ウィンドウを同じ画面に表示し、呼び出し、下書き、Escで閉じて貼り付ける流れを示します。簡易入力ウィンドウは背景画面の約3分の1幅です。"></a><figcaption>チャット画面風のイメージです。</figcaption></figure>
 
-<p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 <h3><span class="dot"></span>こんなときに使えます</h3>
 <ul>
 <li><b>思いつきをすぐにメモする。</b>作業中に浮かんだことを簡易入力へ書き、<span class="kbd">Esc</span> で閉じると本体のメモへ残せます。</li>
 <li><b>Slackなどに送る文章を先に整える。</b> 簡易入力の中では <span class="kbd">Enter</span> が改行になるので、送信を気にせず複数行の下書きを書けます。Escで閉じると、初期設定では下書きが元の送信欄へ自動で貼り付けられます。</li>
 
 </ul>
-
-
-
-
-
-<h3><span class="dot"></span>簡易入力でも引用など利用可能</h3>
-<p>
-ウィンドウの中でも <span class="kbd">F1</span> または選択なしの <span class="kbd">Ctrl</span>+<span class="kbd">C</span> で
-引用モードに入り、本体のメモ欄にある語をクリックして拾えます（範囲をドラッグして選ぶこともできます）。
-<span class="kbd">F5</span> での再変換・遡りも本体と同じように使えます。
-選んだ後も、同じ語の候補を開いて選び直せます。
-</p>
-<p>
-<span class="kbd">F2</span> で括弧を挿入し、続けて押すと括弧の種類を切り替えます。
-選択範囲や <span class="kbd">F5</span> で選んだ語を囲む操作、修飾キーとの組合せも本体と共通です。
-IME変換中は確定した文字を囲みます。直後の <span class="kbd">Esc</span> で括弧を取り消し、
-もう一度押すと簡易入力を閉じます。
-</p>
-
-
 </section>
 
 <a name="quick-selected-text"></a>
 <section>
 <hr class="section-rule">
 <h2>選択した文字を簡易入力へ取り込む</h2>
-<p>本体のメモや補正結果、別のアプリで選択した文字を、簡易入力の下書きへ取り込めます。ブラウザーのページで見つけた文章やチャット履歴の文字を使いたいときも、次の手順で呼び出します。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-006.gif"><img src="assets/readme_manual/manual-006.gif" width="1066" height="560" alt="ブラウザのページで文字を選び、Ctrl+Insertで簡易入力を開くと、選んだ文字が入っている様子。"></a><figcaption>ブラウザで選んだ文字が、開いた簡易入力に入ります。</figcaption></figure><ol class="steps">
-<li><b>取り込みたい文字を選択します。</b><p>本体ではメモ欄か補正結果、別のアプリではそのページや入力欄で文字を選択したままにします。</p></li>
-<li><b>簡易入力を呼び出します。</b><p>本体では「簡易入力」ボタンを押します。別のアプリでは、<span class="kbd">Ctrl+Insert</span> または <span class="kbd">Ctrl+Shift+-</span> を押します。呼び出しキーは「編集」メニューで個別にオン・オフを切り替えられます。</p></li>
-<li><b>取り込んだ文字を確かめて編集します。</b><p>選択文字は簡易入力のカーソル位置に追加されます。以前の下書きは残り、取り込んだ分は1回のUndoで戻せます。</p></li>
-</ol>
+<p>本体のメモや補正結果、別のアプリで選択した文字を、簡易入力の下書きへ取り込めます。ブラウザで見つけた文章や、チャット履歴の文字を使いたいときも、文字を取り込めます。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-006.gif"><img src="assets/readme_manual/manual-006.gif" width="1066" height="560" alt="ブラウザのページで文字を選び、Ctrl+Insertで簡易入力を開くと、選んだ文字が入っている様子。"></a>
+  
 <p>Excelのセルなど表の文字は、列の間をタブ、行の間を改行で区切って取り込みます。</p>
-
 
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p>
 </section>
+
 
 <a name="autofix"></a>
 <section>
 <hr class="section-rule">
 <h2>自動補正</h2>
-<p>補正には未解決の不一致があります。直らない入力、意図と異なる変換、漢字表記まで完成しない場合があるため、補正後の本文を確認してください。</p>
-<p class="sec-intro">入力した文章の誤字や誤変換を自動的に直します。「左右に並べる」レイアウトでは、右の補正欄で結果を確認できます。</p>
 
-<table class="keys">
-<tr><th>誤りの種類</th><th>説明・例</th></tr>
-<tr><td>キーの押し間違い</td><td>例：荷物を起きて → 荷物を置いて</td></tr>
-<tr><td>濁点・半濁点の付け忘れ／余分</td><td>「゛」「゜」の有無や位置の誤り</td></tr>
-<tr><td>「ゃ」「っ」などの小書き忘れ</td><td>小さいかなを、大きいかなで入力した誤り</td></tr>
-<tr><td>1文字の打ち忘れ</td><td>囚虜時 → 終了時（「しゅうりょじ」と入力した場合も対象）</td></tr>
-<tr><td>余分な隣接キーの巻き込み</td><td>右田でブルクリック → 右ダブルクリック</td></tr>
-<tr><td>打つ順番の入れ替わり</td><td>続けて打つキーの順序が逆になった誤り</td></tr>
-<tr><td>濁点・半濁点が離れて入力された</td><td>保存したか゜像を確認します。 → 保存した画像を確認します。</td></tr>
-<tr><td>文中の誤変換</td><td>出るカマで考える → 出るかまで考える</td></tr>
-<tr><td>日本語入力をオフのまま入力</td><td>md@i(4l)h → 文字入力</td></tr>
-<tr><td>日本語入力オフのままローマ字入力</td><td>mojinyuuryoku → 文字入力</td></tr>
-<tr><td>文頭の「?」（変換前の記号の打ち間違い）</td><td>?今日の予定 → ・今日の予定</td></tr>
-</table>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-007.svg"><img src="assets/readme_manual/manual-007.svg" width="960" height="255" alt="入力文の自動補正と未解決箇所の紫表示"></a><figcaption>補正先を決められない箇所は元の文字を残して紫で示します。</figcaption></figure>      <p>
-かなで入力した言葉を漢字・カタカナへ変換する補正にも対応しています。
-直せない不自然な箇所は、元の文字を残して紫で示します。
-</p>
-<p>
-「1つにまとめる」レイアウトでも、自動補正を有効にすると、入力した文と貼り付けた文を補正します。
-複数行の貼り付けも対象です。
-</p>
+<p class="sec-intro">入力した文章の誤字や誤変換を自動的に直します。</p>
 
-<p>意図と違う補正になったときは、<a href="#choose">再変換</a>で候補から別の表記を選び直せます。補正先を決められない不自然な箇所は、元の文字を残して紫で示します。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-007.svg"><img src="assets/readme_manual/manual-007.svg" width="960" height="255" alt="入力文の自動補正と未解決箇所の紫表示"></a>
+
+<p>補正先を決められない不自然な箇所は、元の文字を残して紫で示します。</p>
 
 </section>
 
