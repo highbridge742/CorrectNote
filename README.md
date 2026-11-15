@@ -104,9 +104,12 @@
 
 <h3><span class="dot"></span>色の意味</h3>
 <p><img src="assets/readme_manual/manual-089.svg" width="914" height="52" alt="色の意味。薄い赤＝補正の候補がある箇所、紫＝不自然な文字列、薄い灰色＝マウスが乗っている語（選び直せる合図）、黄色＝検索で見つかった箇所。"></p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-092.png"><img src="assets/readme_manual/manual-092.png" width="1064" height="490" alt="入力欄の「会議」が黄色、「いきまし」の「し」が薄い赤、「週末の予定はぬぇふぉです」が紫で塗られ、補正欄では「いきます」に直っている画面。"></a></figure>
 
 <p>行番号に表示される茶色の縦線は、解析中の行を表します。
   解析が済むと補正を反映し、縦線が消えます。</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-093.png"><img src="assets/readme_manual/manual-093.png" width="1064" height="492" alt="4行の文を貼った直後、1〜4行目の行番号の右に茶色の縦線が出ている画面。"></a></figure>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-094.png"><img src="assets/readme_manual/manual-094.png" width="1064" height="492" alt="解析が済み、縦線が消えて語に色が付いた画面。"></a><figcaption>解析が済むと、接続詞や助詞は一回り小さく表示されます。</figcaption></figure>
 
 </section>
 
