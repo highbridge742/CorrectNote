@@ -285,21 +285,17 @@
 <h3><span class="dot"></span>登録</h3>
 <p>単語帳の <b>追加</b> を押してから、本文の単語をクリックするか、範囲をドラッグすると登録できます。</p>
 
+<figure class="guide-shot"><a href="assets/readme_manual/manual-017.png"><img src="assets/readme_manual/manual-017.png" width="200" height="160"></a></figure>
+
 <p><span class="kbd">Ctrl+Alt+Insert</span> または <span class="kbd">Ctrl+Alt+Shift+-</span> で、別のアプリを使っている最中でも単語帳を開閉できます。</p>
+
 <p>語を押したまま上下に動かすと、並べ替えられます。<BR>
-  語を消すときは、右クリックして「消す」を選びます。<BR>
-  <b>編集 → 単語帳セットを切り替える</b> で、4つのセットを使い分けられます。</p>
+  語を消すときは、右クリックして「消す」を選びます。</p>
 <figure class="guide-shot"><a href="assets/readme_manual/manual-014.png"><img src="assets/readme_manual/manual-014.png" width="256" height="177" alt="単語帳の語をドラッグして並べ替えている画面。入る位置に線が出ています。"></a></figure>
 
 <a name="guide-wordbook"></a>
 <article class="picture-guide">
-<h3>文字を登録し、クリックで貼り付ける</h3>
   
-<figure class="guide-shot"><a href="assets/readme_manual/manual-015.gif"><img src="assets/readme_manual/manual-015.gif" width="1074" height="347"></a><figcaption>「追加」を押してから本文をドラッグすると、単語帳に入ります。</figcaption></figure>
-  
-
-  
-<figure class="guide-shot"><a href="assets/readme_manual/manual-017.png"><img src="assets/readme_manual/manual-017.png" width="200" height="160" alt="上の帯が移動用、右上の「－」が最小化用です。"></a><figcaption>上の帯で移動、右上の「－」で最小化します。</figcaption></figure>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 </section>
 
