@@ -396,18 +396,26 @@
 <p>タブを右クリックすると、<b>先頭のタブに移動</b> や <b>別のウィンドウで表示する</b> を選べます。</p>
 <figure class="guide-shot"><a href="assets/readme_manual/manual-038.png"><img src="assets/readme_manual/manual-038.png" width="1064" height="492" alt="3つ目のタブを右クリックし、一覧に「先頭のタブに移動」が出ている画面。"></a><figcaption>タブを右クリックした一覧です。</figcaption></figure>
 
+<hr class="section-rule">
+
 <a name="guide-autosave"></a>
 <h3><span class="dot"></span>自動保存</h3>
 <p>書いた内容は、タブごとに自動で保存します。<BR>
   保存せずに閉じても、次に開いたときに続きから書けます。</p>
+
+<hr class="section-rule">
 
 <h3><span class="dot"></span>バックアップ</h3>
 <p>内容が変わったタブのバックアップを、1日に1つ作ります。1つのタブにつき5つまで残します。<BR>
   タブを右クリックすると、バックアップの一覧が出ます。選ぶと中身を見られます。<BR>
   <b>ファイル → 手動でバックアップを作成</b> で、その場で作ることもできます。</p>
 
+<hr class="section-rule">
+
 <h3><span class="dot"></span>コピーした範囲の表示</h3>
 <p>コピーした範囲を白い枠で囲み、文字を大きくして示します。</p>
+
+<hr class="section-rule">
 
 <h3><span class="dot"></span>文字コードと改行</h3>
 <p>開いたファイルの文字コード（UTF-8・Shift_JIS・UTF-16）と改行の形のまま保存します。<BR>
@@ -542,22 +550,25 @@
 <a href="assets/readme_manual/manual-063.svg"><img src="assets/readme_manual/manual-063.svg" width="1000" height="420" alt="ライトモードとダークモードにおける品詞ごとの文字色の初期値。名詞（サ変）などその他の品詞は欄の文字色のまま。"></a>
 <figcaption>品詞ごとの文字色（初期値）</figcaption>
 </figure>
+
+  <hr class="section-rule">
+  
 <h3><span class="dot"></span>ダークモード</h3>
 <p><b>表示 → ダークモード</b> で切り替えます。ほかの配色は<a href="#appearance">外見</a>で選べます。</p>
 <a name="memory-usage"></a>
-<h3><span class="dot"></span>メモリ使用量</h3>
-<p><b>このアプリについて → メモリ使用量</b> で、低・中・高から選べます。既定は中です。<BR>
-  高はメモリを多く使うかわりに、補正の待ち時間が短くなります。補正の内容は変わりません。</p>
-<h3><span class="dot"></span>ホットキーの個別設定</h3>
-<p>簡易入力と単語帳のホットキーは、編集メニューでそれぞれオン・オフできます。<BR>
-  反応しないときは、<b>ホットキーの状態を確認…</b> で確かめられます。</p>
+
+<hr class="section-rule">
+
 <a name="guide-whitespace"></a>
 <article class="picture-guide">
 <h3>表示メニューで空白の目印を表示する</h3>
 <p><b>表示 → 見えない空白（半角・全角・タブ）を表示</b> で、空白に印を付けます。<BR>
   印は画面だけで、保存するファイルには入りません。</p>
 <figure class="guide-shot"><a href="assets/readme_manual/manual-065.png"><img src="assets/readme_manual/manual-065.png" width="1064" height="492" alt="空白に目印が付きました。本文の文字そのものは変わりません。"></a><figcaption>空白に目印が付きました。</figcaption></figure>
-<p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
+
+
+<hr class="section-rule">
+
 <a name="guide-typing-pointer"></a>
 <article class="picture-guide">
 <h3>本文に入力するとポインターが隠れる</h3>
@@ -594,8 +605,11 @@
 <p>Ctrl＋左右キーで、助詞や句読点などの区切りごとにカーソルを動かします。<BR>
   Ctrlを押している間は、止まる場所に灰色の下線が出ます。</p>
 <figure class="guide-shot"><a href="assets/readme_manual/manual-072.gif"><img src="assets/readme_manual/manual-072.gif" width="1064" height="347" alt="Ctrlを押したまま→を3回、←を1回押してカーソルが区切りごとに動く様子。Ctrlを押している間は止まる場所に下線が出ます。"></a><figcaption>Ctrlを押している間は、止まる場所に下線が出ます。</figcaption></figure>
-<p class="guide-back"><a href="#picture-index">目次に戻る</a></p>
 </article>
+
+
+  <hr class="section-rule">
+  
 <a name="guide-cursor-vertical"></a>
 <article class="picture-guide">
 <h3>Ctrl＋上下キーで本文のまとまりを移動</h3>
@@ -612,23 +626,32 @@
 <article class="picture-guide">
 <h3>CapsLockで文字を削除</h3>
 <p>CapsLock を BackSpace と同じように使えます。編集メニューでオン・オフできます。</p>
-<p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
+
+
+  <hr class="section-rule">
+  
 <a name="guide-copy"></a>
 <article class="picture-guide">
 <h3>F1でコピー</h3>
 <p>選んだ文字を F1 でコピーします。選択していないときは、引用モードになります。</p>
-<p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
+
+
+  <hr class="section-rule">
+  
 <a name="guide-enter"></a>
 <article class="picture-guide">
 <h3>F3でエンター</h3>
 <p>F3 で、Enter と同じように改行します。</p>
 <figure class="guide-shot"><a href="assets/readme_manual/manual-082.gif"><img src="assets/readme_manual/manual-082.gif" width="1064" height="347" alt="「会議の資料」の後ろでF3を押し、行が分かれる様子。"></a><figcaption>カーソルの位置で改行します。</figcaption></figure>
-<p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
+
+<hr class="section-rule">
+
 <a name="guide-paste"></a>
 <article class="picture-guide">
 <h3>F4でペースト</h3>
 <p>F4 で、Ctrl+V と同じように貼り付けます。</p>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
+
 </section>
 
 <a name="shortcuts"></a>
