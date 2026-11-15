@@ -11,8 +11,8 @@
 誤字を補正し、確定後も素早く再変換を選べます。<br>
 また、<br>
 別のアプリ操作中でも小さな入力欄を出してメモを取る機能や、<br>
-近くの文字をコピー、複数の行を選択、カーソル移動などの操作を<br>
-素早く実行する機能があります。
+近くの文字をコピー、複数の行を選択、カーソル移動などの基本操作を<br>
+通常の2倍の早さで実行する機能があります。
 </p>
 <figure class="guide-shot intro-animation"><a href="assets/readme_manual/manual-001.gif"><img src="assets/readme_manual/manual-001.gif" width="800" height="380" alt="チャット画面風の例で、簡易入力の呼び出し、下書き、Escで閉じて元の入力欄へ送る流れを示すGIF。Ctrl+Vの場面は自動貼り付けをオフにした場合の手順です。簡易入力ウィンドウは背景画面と同じ縮尺で重ね、続いて引用、行選択、Ctrl左右上下、Alt上下の操作イメージを示します。"></a></figure>
 <hr style="border:0;border-top:1px solid var(--rule);margin:18px 0 22px;">
@@ -24,13 +24,6 @@
 ネット通信やAIは使いません。APIは不要、アカウントも不要です。入力した内容がパソコンの外に出ることはなく、すべてローカルで実行されます。
 </p>
 </div>
-<div class="card">
-<h3><span class="dot"></span>いつでも再変換</h3>
-<p style="margin-bottom:0">
-確定済みの単語も、クリックや <span class="kbd">F5</span> でいつでも候補から選び直せます。
-変換をやり直すために、消して打ち直す必要はありません。
-</p>
-</div>
 </div>
 </section>
 
@@ -38,7 +31,7 @@
 <nav class="picture-index" aria-labelledby="contents-heading">
 <a name="contents-heading"></a>
 <h2>目次</h2>
-<p>知りたい項目を選んでください。操作画像はクリックすると拡大できます。</p>
+<p>クリックで移動します。</p>
 <div class="toc-columns">
 <ol class="toc-column">
 <li><a href="#screen">画面の見かた</a></li>
@@ -83,11 +76,11 @@
 <figure class="guide-shot"><a href="assets/readme_manual/manual-002.png"><img src="assets/readme_manual/manual-002.png" width="502" height="103" alt="赤枠で囲んだ「左右に並べる」「1つにまとめる」ボタンは、画面右上にあります。"></a><br>
   <figcaption>ウインドウ右上のボタンからレイアウトを切り替えます。</figcaption></figure>
 
-<p>文章の補正は入力に合わせて進みます。</p>
-<p>行番号に表示される茶色の縦線は、補正中の行を表します。確認が済むと縦線が消えます。</p>
+
+
 
 <h3><span class="dot"></span>左右に並べるレイアウト</h3>
-<p>左に入力すると、右に補正結果を表示します。</p>
+<p>左に文字を入力すると、自動で誤字や不自然な点を判定し、右に補正した文字を表示します。</p>
 <table>
 <tr><th>入力欄</th><th>補正欄</th></tr>
 <tr><td>文字入力を<mark>性格</mark>に反映する</td><td>文字入力を<b>正確</b>に反映する</td></tr>
@@ -96,7 +89,7 @@
 <h3><span class="dot"></span>1つにまとめるレイアウト</h3>
 <p>
 入力欄と補正欄をひとつにまとめ、画面を広く使えるようにしたレイアウトです。
-自動で補正され、入力した文字を置き換えます。
+誤字は自動で補正され、入力した文字を置き換えます。
 </p>
 <table>
 <tr><th>入力欄</th></tr>
@@ -105,6 +98,9 @@
 
 <h3><span class="dot"></span>色の意味</h3>
 <p><img src="assets/readme_manual/manual-089.svg" width="914" height="52" alt="色の意味。薄い赤＝補正の候補がある箇所、紫＝不自然な文字列、薄い灰色＝マウスが乗っている語（選び直せる合図）、黄色＝検索で見つかった箇所。"></p>
+
+<p>行番号に表示される茶色の縦線は、解析中の行を表します。
+  解析が済むと補正を反映し、縦線が消えます。</p>
 
 </section>
 
@@ -204,8 +200,8 @@
 <a name="guide-quote"></a>
 <article class="picture-guide">
 <h3>カーソルを置き、本文をクリック／ドラッグして引用する</h3>
-文字を選択していない状態で <b>F1</b> を押すと、引用モードを実行します。全体の背景色が変わります。<BR>
-  次に、拾いたい単語をクリックするか、範囲をドラッグすると、カーソルの位置に複製し、引用モードを終わります。<BR>
+文字を選択していない状態で <b>F1</b> を押すと、引用モードを実行します。<BR>
+  次に、単語をクリックするか、範囲をドラッグすると、カーソルの位置に複製し、引用モードを終わります。<BR>
 <figure class="guide-shot"><a href="assets/readme_manual/manual-008.gif"><img src="assets/readme_manual/manual-008.gif" width="1064" height="347" alt="「クリックして引用」を押し、「会議の資料」をドラッグすると、3行目の「引用：」の後ろに入る様子。"></a><figcaption>拾った文字がカーソルの位置に入ります。</figcaption></figure>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 
@@ -221,7 +217,18 @@
 <section>
 <hr class="section-rule">
 <h2>括弧で括る</h2>
-<p class="sec-intro">ツールバーのボタンで、文字を括弧で囲めます。</p>
+  <figure class="guide-shot"><a href="assets/readme_manual/manual-009.gif"><img src="assets/readme_manual/manual-009.gif" width="1064" height="347" alt="「資料」を選び、「」ボタン、F2、F2、Escの順に押す様子。"></a></figure>
+  
+<p class="sec-intro">ツールバーのボタン、または<B>F2</B>で、文字を括弧で囲めます。</p>
+
+<a name="guide-bracket"></a>
+<article class="picture-guide">
+  
+  <p>範囲を選択して押すと、選んだ文字を括弧で囲みます。<BR>
+  選択していないときは、カーソルの位置に括弧を入れます。</p>
+<p><span class="kbd">F2</span> を続けて押すと、括弧の種類が（）→「」→『』→【】→“” の順に変わります。<BR>
+  <span class="kbd">Esc</span> で括弧を取り消します。</p>
+  
 <table class="keys">
 <tr><th>ボタン</th><th>括弧の種類</th></tr>
 <tr><td class="k">（）</td><td>丸括弧</td></tr>
@@ -230,17 +237,10 @@
 <tr><td class="k">【】</td><td>すみ付き括弧</td></tr>
 <tr><td class="k">“”</td><td>ダブルクォーテーション</td></tr>
 </table>
-<p>範囲を選択して押すと、選んだ文字を括弧で囲みます。<BR>
-  選択していないときは、カーソルの位置に括弧を入れます。</p>
-<p><span class="kbd">F2</span> を続けて押すと、括弧の種類が（）→「」→『』→【】→“” の順に変わります。<BR>
-  <span class="kbd">Esc</span> で括弧を取り消します。<BR>
-  変換中の文字を括るときは <span class="kbd">Ctrl</span>+<span class="kbd">F2</span> を押します。</p>
-<a name="guide-bracket"></a>
-<article class="picture-guide">
-<h3>選択範囲をボタン／F2で括る</h3>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-009.gif"><img src="assets/readme_manual/manual-009.gif" width="1064" height="347" alt="「資料」を選び、「」ボタン、F2、F2、Escの順に押す様子。"></a><figcaption>「」ボタンで括り、F2で種類を変え、Escで戻します。</figcaption></figure>
+
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 </section>
+
 
 <a name="listmode"></a>
 <section>
