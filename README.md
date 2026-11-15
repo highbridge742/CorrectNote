@@ -8,13 +8,13 @@
 <h2>CorrectNoteとは</h2>
 <p class="intro-copy">
 効率よく文字を編集できるメモ帳です。<br>
-誤字を補正し、確定後も素早く再変換を選べます。<br>
+文脈を理解し、誤字を自動で補正します。<br>
 また、<br>
-別のアプリ操作中でも小さな入力欄を出してメモを取る機能や、<br>
+別ウィンドウ操作中の時でも入力欄を出してメモを取る機能や、<br>
 近くの文字をコピー、複数の行を選択、カーソル移動などの基本操作を<br>
 通常の2倍の早さで実行する機能があります。
 </p>
-<figure class="guide-shot intro-animation"><a href="assets/readme_manual/manual-001.gif"><img src="assets/readme_manual/manual-001.gif" width="800" height="380" alt="チャット画面風の例で、簡易入力の呼び出し、下書き、Escで閉じて元の入力欄へ送る流れを示すGIF。Ctrl+Vの場面は自動貼り付けをオフにした場合の手順です。簡易入力ウィンドウは背景画面と同じ縮尺で重ね、続いて引用、行選択、Ctrl左右上下、Alt上下の操作イメージを示します。"></a></figure>
+<figure class="guide-shot intro-animation"><a href="assets/readme_manual/manual-001.gif"><img src="assets/readme_manual/manual-001.gif" width="800" height="380"></a></figure>
 <hr style="border:0;border-top:1px solid var(--rule);margin:18px 0 22px;">
 
 <div class="grid2">
@@ -72,13 +72,13 @@
 <section>
 <hr class="section-rule">
 <h2>画面の見かた</h2>
-<p class="sec-intro">CorrectNote には、2つの画面レイアウトがあります。<br>
+<p class="sec-intro">2つの画面レイアウトがあります。<br>
   <b>左右に並べる</b> と <b>1つにまとめる</b> のボタンで、いつでも切り替えられます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-002.png"><img src="assets/readme_manual/manual-002.png" width="502" height="103" alt="赤枠で囲んだ「左右に並べる」「1つにまとめる」ボタンは、画面右上にあります。"></a><br>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-002.png"><img src="assets/readme_manual/manual-002.png" width="502" height="103"></a><br>
   <figcaption>ウインドウ右上のボタンからレイアウトを切り替えます。</figcaption></figure>
 
 
-
+<hr class="section-rule">
 
 <h3><span class="dot"></span>左右に並べるレイアウト</h3>
 <p>左の欄に文字を入力すると、自動で誤字や不自然な点を判定し、右に補正した文字を表示します。</p>
@@ -86,6 +86,8 @@
 <tr><th>入力欄</th><th>補正欄</th></tr>
 <tr><td>文字入力を<mark>性格</mark>に反映する</td><td>文字入力を<b>正確</b>に反映する</td></tr>
 </table>
+
+<hr class="section-rule">
 
 <h3><span class="dot"></span>1つにまとめるレイアウト</h3>
 <p>
@@ -96,6 +98,9 @@
 <tr><th>入力欄</th></tr>
 <tr><td>文字入力を<mark>正確</mark>に反映する</td></tr>
 </table>
+
+
+<hr class="section-rule">
 
 <h3><span class="dot"></span>色の意味</h3>
 <p><img src="assets/readme_manual/manual-089.svg" width="914" height="52" alt="色の意味。薄い赤＝補正の候補がある箇所、紫＝不自然な文字列、薄い灰色＝マウスが乗っている語（選び直せる合図）、黄色＝検索で見つかった箇所。"></p>
