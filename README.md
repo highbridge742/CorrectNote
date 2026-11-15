@@ -254,6 +254,7 @@
 <p>選択した順に1行ずつ並べます。</p>
   <figure class="guide-shot"><a href="assets/readme_manual/manual-010.gif"><img src="assets/readme_manual/manual-010.gif" width="1064" height="347" ></a></figure>
 
+
 <p>メニューの <b>箇条書き</b> を押すと箇条書きモードを実行します。<BR>
   本文の単語をクリックするか、範囲をドラッグすると、カーソル行の下に複製します。<BR>
   複製後は箇条書きモードが継続しているので、次に選択した範囲がまた下の行に複製されます。<BR>
@@ -261,7 +262,8 @@
 
 
 <h3><span class="dot"></span>簡易入力したあとの文字を整える</h3>  
-<p>簡易入力を閉じて本文に文字を送り、背景色が付いている間に <b>箇条書き</b> を押すと、色の付いた部分を1行ずつ並べます。</p>
+<p>簡易入力を閉じて本文に文字を送り、背景色が付いている間に <b>箇条書き</b> を押すと、<BR>
+  色の付いた部分を1行ずつ並べます。</p>
 
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 
