@@ -169,9 +169,8 @@
 <ul>
 <li><b>思いつきをすぐにメモする。</b>作業中に浮かんだことを簡易入力へ書き、<span class="kbd">Esc</span> で閉じると本体のメモへ残せます。</li>
 <li><b>Slackなどに送る文章を先に整える。</b> 簡易入力の中では <span class="kbd">Enter</span> が改行になるので、送信を気にせず複数行の下書きを書けます。Escで閉じると、初期設定では下書きが元の送信欄へ自動で貼り付けられます。</li>
-
 </ul>
-<p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
+
 </section>
 
 <a name="quick-selected-text"></a>
@@ -193,16 +192,14 @@
 <section>
 <hr class="section-rule">
 <h2>単語を拾って引用する</h2>
-<p class="sec-intro">近くの単語を、クリックで拾って複製します。</p>
+<p class="sec-intro">近くの単語をカーソル位置に複製します。</p>
 
 <figure class="guide-shot"><a href="assets/readme_manual/manual-008.gif"><img src="assets/readme_manual/manual-008.gif" width="1064" height="347"></a></figure>
 
 <a name="guide-quote"></a>
 <article class="picture-guide">
-<h3>カーソルを置き、本文をクリック／ドラッグして引用する</h3>
 文字を選択していない状態で <b>F1</b> を押すと、引用モードを実行します。<BR>
-  次に、単語をクリックするか、範囲をドラッグすると、カーソルの位置に複製し、引用モードを終わります。<BR>
-<p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
+  次に、単語をクリックするか範囲をドラッグすると、カーソル位置に複製し、引用モードを終わります。<BR>
 
 <h3><span class="dot"></span>行番号を入力して引用する</h3>
 <p>引用モードで行番号を入力して <span class="kbd">Enter</span> を押すと、その行の本文が入ります。<BR>
@@ -210,7 +207,10 @@
 
 <h3><span class="dot"></span>数式を入力して計算する</h3>
 <p>引用モードで数式を入力して <span class="kbd">Enter</span> を押すと、補正欄に計算結果を表示します。</p>
+
+<p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 </section>
+
 
 <a name="bracket"></a>
 <section>
@@ -244,13 +244,15 @@
 <a name="listmode"></a>
 <section>
 <hr class="section-rule">
-<h2>箇条書き・選択範囲の文字種</h2><a name="guide-list"></a>
+<h2>箇条書き</h2><a name="guide-list"></a>
 <article class="picture-guide">
-<h3>本文の文字をクリック／ドラッグして1行ずつ並べる</h3>
+
+  <figure class="guide-shot"><a href="assets/readme_manual/manual-010.gif"><img src="assets/readme_manual/manual-010.gif" width="1064" height="347" ></a><figcaption>拾った文字が1行ずつ並びます。</figcaption></figure>
+
 <p><b>箇条書き</b> を押して、本文の単語をクリックするか、範囲をドラッグします。<BR>
   拾った文字が、カーソル行の下に1行ずつ並びます。<BR>
-  <span class="kbd">Esc</span> で終わります。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-010.gif"><img src="assets/readme_manual/manual-010.gif" width="1064" height="347" alt="「箇条書き」を押し、「資料の確認」と「予定の共有」をドラッグして1行ずつ並べ、Escで終える様子。"></a><figcaption>拾った文字が1行ずつ並びます。</figcaption></figure>
+  <span class="kbd">Esc</span> で箇条書きモードを終わります。</p>
+
   
 <p>簡易入力から送った文字に背景色が付いているときは、<b>箇条書き</b> を押すと、色の付いた部分を1行ずつ並べます。</p>
 
@@ -263,8 +265,12 @@
 <h3><span class="dot"></span>選択範囲の文字種を変える</h3>
 <p>選択範囲を <span class="kbd">F6</span> でひらがな、<span class="kbd">F7</span> でカタカナ、<span class="kbd">F8</span> で半角に変えます。<BR>
   <span class="kbd">F9</span> は JISかな配列の英数字キー列に変えます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-013.gif"><img src="assets/readme_manual/manual-013.gif" width="1064" height="347" alt="確定済みの「資料を確認」と「明日の予定」を選んでF6を押し、「しりょうをかくにん」「あしたのよてい」とひらがなになる様子。"></a><figcaption>確定済みの文字も、F6でひらがなになります。</figcaption></figure>
+  
+<figure class="guide-shot"><a href="assets/readme_manual/manual-013.gif"><img src="assets/readme_manual/manual-013.gif" width="1064" height="347"></a><figcaption>確定済みの文字も、F6でひらがなになります。</figcaption></figure>
+
+<p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 </section>
+
 
 <a name="wordbook"></a>
 <section>
@@ -272,7 +278,10 @@
 <h2>単語帳</h2>
 <p class="sec-intro">よく使う単語を登録しておき、クリックでペーストします。<BR>
 別のアプリやブラウザなどにもペーストできます。</p>
-  
+
+  <figure class="guide-shot"><a href="assets/readme_manual/manual-016.gif"><img src="assets/readme_manual/manual-016.gif" width="1074" height="347"></a><figcaption>単語帳の語をクリックすると、カーソルの位置に入ります。<BR>
+</figcaption></figure>
+
 <p>単語帳の <b>追加</b> を押してから、本文の単語をクリックするか、範囲をドラッグすると登録できます。<BR>
   登録した語をクリックすると、直前に使っていた入力欄へ貼り付けます。</p>
 <p><span class="kbd">Ctrl+Alt+Insert</span> または <span class="kbd">Ctrl+Alt+Shift+-</span> で、別のアプリを使っている最中でも単語帳を開閉できます。</p>
@@ -284,9 +293,10 @@
 <a name="guide-wordbook"></a>
 <article class="picture-guide">
 <h3>文字を登録し、クリックで貼り付ける</h3>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-015.gif"><img src="assets/readme_manual/manual-015.gif" width="1074" height="347" alt="単語帳の「追加」を押し、本文の「会議の資料」をドラッグして登録する様子。"></a><figcaption>「追加」を押してから本文をドラッグすると、単語帳に入ります。</figcaption></figure>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-016.gif"><img src="assets/readme_manual/manual-016.gif" width="1074" height="347" alt="「貼り付け先：」の後ろにカーソルを置き、単語帳の「会議の資料」をクリックして入れる様子。"></a><figcaption>単語帳の語をクリックすると、カーソルの位置に入ります。<BR>
-</figcaption></figure>
+  
+<figure class="guide-shot"><a href="assets/readme_manual/manual-015.gif"><img src="assets/readme_manual/manual-015.gif" width="1074" height="347"></a><figcaption>「追加」を押してから本文をドラッグすると、単語帳に入ります。</figcaption></figure>
+  
+
   
 <figure class="guide-shot"><a href="assets/readme_manual/manual-017.png"><img src="assets/readme_manual/manual-017.png" width="200" height="160" alt="上の帯が移動用、右上の「－」が最小化用です。"></a><figcaption>上の帯で移動、右上の「－」で最小化します。</figcaption></figure>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
