@@ -282,8 +282,9 @@
   <figure class="guide-shot"><a href="assets/readme_manual/manual-016.gif"><img src="assets/readme_manual/manual-016.gif" width="1074" height="347"></a><figcaption>単語帳の語をクリックすると、カーソルの位置に入ります。<BR>
 </figcaption></figure>
 
-<p>単語帳の <b>追加</b> を押してから、本文の単語をクリックするか、範囲をドラッグすると登録できます。<BR>
-  登録した語をクリックすると、直前に使っていた入力欄へ貼り付けます。</p>
+<h3><span class="dot"></span>登録</h3>
+<p>単語帳の <b>追加</b> を押してから、本文の単語をクリックするか、範囲をドラッグすると登録できます。</p>
+
 <p><span class="kbd">Ctrl+Alt+Insert</span> または <span class="kbd">Ctrl+Alt+Shift+-</span> で、別のアプリを使っている最中でも単語帳を開閉できます。</p>
 <p>語を押したまま上下に動かすと、並べ替えられます。<BR>
   語を消すときは、右クリックして「消す」を選びます。<BR>
