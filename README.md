@@ -221,10 +221,9 @@
 <section>
 <hr class="section-rule">
 <h2>括弧で括る</h2>
+  <p>ツールバーのボタン、または<B>F2</B>で、文字を括弧で囲めます。</p>
   <figure class="guide-shot"><a href="assets/readme_manual/manual-009.gif"><img src="assets/readme_manual/manual-009.gif" width="1064" height="347" alt="「資料」を選び、「」ボタン、F2、F2、Escの順に押す様子。"></a></figure>
   
-<p class="sec-intro">ツールバーのボタン、または<B>F2</B>で、文字を括弧で囲めます。</p>
-
 <a name="guide-bracket"></a>
 <article class="picture-guide">
   
@@ -252,14 +251,17 @@
 <h2>箇条書き</h2><a name="guide-list"></a>
 <article class="picture-guide">
 
-  <figure class="guide-shot"><a href="assets/readme_manual/manual-010.gif"><img src="assets/readme_manual/manual-010.gif" width="1064" height="347" ></a><figcaption>拾った文字が1行ずつ並びます。</figcaption></figure>
+<p>選択した順に1行ずつ並べます。</p>
+  <figure class="guide-shot"><a href="assets/readme_manual/manual-010.gif"><img src="assets/readme_manual/manual-010.gif" width="1064" height="347" ></a></figure>
 
-<p><b>箇条書き</b> を押して、本文の単語をクリックするか、範囲をドラッグします。<BR>
-  拾った文字が、カーソル行の下に1行ずつ並びます。<BR>
+<p>メニューの <b>箇条書き</b> を押すと箇条書きモードを実行します。<BR>
+  本文の単語をクリックするか、範囲をドラッグすると、カーソル行の下に複製します。<BR>
+  複製後は箇条書きモードが継続しているので、次に選択した範囲がまた下の行に複製されます。<BR>
   <span class="kbd">Esc</span> で箇条書きモードを終わります。</p>
 
-  
-<p>簡易入力から送った文字に背景色が付いているときは、<b>箇条書き</b> を押すと、色の付いた部分を1行ずつ並べます。</p>
+
+<h3><span class="dot"></span>簡易入力したあとの文字を整える</h3>  
+<p>簡易入力を閉じて本文に文字を送り、背景色が付いている間に <b>箇条書き</b> を押すと、色の付いた部分を1行ずつ並べます。</p>
 
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 
