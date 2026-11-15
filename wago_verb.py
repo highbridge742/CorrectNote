@@ -9,6 +9,15 @@
 """
 import os
 
+
+def _kk_rule(rid):
+    """ひらがなのまま通す一覧の決まりの向き（kana_keep_list・2026-11-14）。読めなければ True（今までどおり）"""
+    try:
+        import kana_keep_list
+        return kana_keep_list.rule_on(rid)
+    except Exception:
+        return True
+
 GAP = 80
 DOMINANT = 5
 COMMON = 470
@@ -197,7 +206,8 @@ def _odd_parse(words):
 
 
 def repair_line(line, result):
-    if os.environ.get('CN_WAGO_VERB_KANJI') == '0' or not isinstance(result, dict) or not kana_only(line):
+    if (os.environ.get('CN_WAGO_VERB_KANJI') == '0' or not isinstance(result, dict) or not kana_only(line)
+            or not _kk_rule('wago_verb_kanji')):
         return result
     done = result.get('corrected') or line
     import reading_lattice as lat
@@ -245,6 +255,13 @@ def repair_line(line, result):
             face, rd, pos = w[0], w[1], w[2]
             s, e = at, at + len(rd)
             at = e
+            # を の後ろで文が終わる所の名詞（てがみをかく。の かく → 核）は、述語の無い文になる。読みが動詞の終止形の形で、
+            # 前の 名詞＋を の組が動詞の表記を決めるときだけ動詞として見る（手紙を書く）。CN_WAGO_VERB_END_NOUN=0 で前のまま
+            end_noun = (pos == '名詞' and k == len(words) - 1 and prev and prev[-1][2] == '助詞' and prev[-1][1] == 'を'
+                        and (j == len(done) or done[j] in '。．.!！?？、') and rd[-1] in 'うくぐすつぬぶむる'
+                        and os.environ.get('CN_WAGO_VERB_END_NOUN') != '0')
+            if end_noun:
+                pos = '動詞'
             if pos != '動詞' or len(rd) < 2 or not any(a <= s and e <= b for a, b in same) \
                     or (heads is not None and s not in heads) \
                     or any(a < e - i and s - i < b for a, b, _w in adj):
@@ -297,6 +314,8 @@ def repair_line(line, result):
                 except Exception:
                     pass
             pick = choose(rd, pn, pp)
+            if end_noun and not _LAST_BY_FRAME[0]:
+                pick = None
             # 組（手紙を書く）で決めた表記は、同じ読みの名詞（下記）より確か。名詞との比べは組の無い時だけ
             # すぐ後ろが動詞にしか付かない語（まし・ませ・て・た）なら名詞とは読めないので、名詞との比べはしない
             nxt = words[k + 1] if k + 1 < len(words) else None

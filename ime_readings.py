@@ -104,6 +104,37 @@ DEFAULT_LIMIT = 5000
 # いくつも溜まるのは打ち間違いの読みなので、浅くてよい。
 DEFAULT_PER_SURFACE = 4
 
+# 英字まじりの打った読み（2026-11-14）。ローマ字入力で母音の付かない子音が英字のまま残ると、IME は残りのかなだけを
+# 漢字にして、確定の表記にも読み（RESULTREADSTR）にも英字が残る（作った例: 田m者 → たmしゃ。うにさんの確かめ
+# 2026-11-13: 20 の確定のうち 8 で表記と読みの両方に英字）。かなだけの表（pairs）とは別の入れ物（mixed）に置き、
+# 読む側は mixed_readings_for だけで引く（今の読み手は何も変わらない）。上限は別に 1,000。CN_IME_MIXED=0 で覚えない・引かない
+MIXED_LIMIT = 1000
+
+
+def mixed_on(environ=None):
+    environ = os.environ if environ is None else environ
+    return environ.get('CN_IME_MIXED') != '0'
+
+
+def to_mixed_reading(s):
+    """IME の読みを、英字まじりの読みの形に（かなは ひらがな、全角の英字は NFKC で半角の小文字）。"""
+    return reading_to_hiragana(s or '').lower()
+
+
+def is_mixed_reading(s):
+    """かな（is_kana_reading と同じ字）と半角の英字だけで、英字もかなも1字以上あるか。"""
+    if not s:
+        return False
+    letter = kana = False
+    for c in s:
+        if 'a' <= c <= 'z':
+            letter = True
+        elif 'ぁ' <= c <= 'ん' or c in 'ーゝゞ゛゜':
+            kana = True
+        else:
+            return False
+    return letter and kana
+
 
 def reading_to_hiragana(s):
     """
@@ -199,6 +230,8 @@ class IMEReadings:
         self.per_surface = max(1, int(per_surface or DEFAULT_PER_SURFACE))
         # 挿入順＝**最後に打たれた順**（Python の dict は順を保つ）
         self._pairs = {}
+        self._mixed = {}         # 英字まじりの打った読み（表記 → 読み、新しい順）。並びは最後に打たれた順
+        self.mixed_limit = MIXED_LIMIT
         self._revision = 0
         self._dirty = False
         self._loaded = False
@@ -249,6 +282,19 @@ class IMEReadings:
                     break
             if got:
                 self._pairs[surface] = got
+        mixed = data.get('mixed') if isinstance(data, dict) else None
+        if isinstance(mixed, dict):
+            for surface, readings in mixed.items():
+                if not isinstance(surface, str) or not surface or not isinstance(readings, (list, tuple)):
+                    continue
+                got = []
+                for r in readings:
+                    if isinstance(r, str) and is_mixed_reading(r) and r != surface and r not in got:
+                        got.append(r)
+                    if len(got) >= self.per_surface:
+                        break
+                if got:
+                    self._mixed[surface] = got
         self._trim()
         self._revision += 1
         return self
@@ -264,7 +310,11 @@ class IMEReadings:
         try:
             tmp = self.path + '.tmp'
             with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump({'version': VERSION, 'pairs': self._pairs},
+                # 英字まじりの読み（mixed）は在る時だけ書く。無ければ前と同じ形（version・pairs）のまま（2026-11-14）
+                body = {'version': VERSION, 'pairs': self._pairs}
+                if self._mixed:
+                    body['mixed'] = self._mixed
+                json.dump(body,
                           f, ensure_ascii=False)
             os.replace(tmp, self.path)
             self._dirty = False
@@ -324,24 +374,76 @@ class IMEReadings:
         self._revision += 1
         return True
 
+    def remember_mixed(self, surface, reading):
+        """
+        英字まじりの打った読みを1つ覚える（remember が覚えない形・ローマ字入力の時だけ呼ぶ）。
+
+        読みは かな＋半角の英字 だけ（全角の英字は NFKC で半角の小文字にする）。英字もかなも要る。
+        表記と読みが同じ物・長すぎる物は覚えない（remember と同じ）。CN_IME_MIXED=0 なら覚えない。
+        戻り値: 中身が変わったら True。
+        """
+        if not mixed_on() or not surface or not isinstance(surface, str):
+            return False
+        reading = to_mixed_reading(reading)
+        if not is_mixed_reading(reading) or surface == reading:
+            return False
+        if len(surface) > 64 or len(reading) > 96:
+            return False
+        old = self._mixed.get(surface)
+        if old and old[0] == reading:
+            self._mixed.pop(surface, None)
+            self._mixed[surface] = old           # 並びだけ新しく（答えは変わらない）
+            self._dirty = True
+            return False
+        got = [reading] + [r for r in (old or ()) if r != reading]
+        del got[self.per_surface:]
+        self._mixed.pop(surface, None)
+        self._mixed[surface] = got
+        self._dirty = True
+        self._trim()
+        self._revision += 1
+        return True
+
+    def forget_mixed(self, surface):
+        """その表記の英字まじりの読みを全部消す（IME の読みの画面で、その表記の読みを消した時に一緒に）。戻り値は消した数。"""
+        old = self._mixed.pop(surface, None)
+        if not old:
+            return 0
+        self._dirty = True
+        self._revision += 1
+        return len(old)
+
+    def mixed_readings_for(self, surface):
+        """その表記の英字まじりの打った読み（新しい順）。知らなければ空。CN_IME_MIXED=0 なら空。"""
+        if not surface or not mixed_on():
+            return []
+        got = self._mixed.get(surface)
+        return list(got) if got else []
+
     def forget(self, surface, reading=None):
         """指定した保存対だけを除く。Noneならその表記の全読みを除く。
 
         戻り値は削除した読み数。保存と画面更新は呼出し側が行う。
         語彙や補正判断には流さず、後のIME確定は再び記録できる。
         """
-        old = self._pairs.get(surface)
-        if not old:
-            return 0
-        target = reading_to_hiragana(reading) if reading is not None else None
-        kept = [r for r in old if r != target] if target is not None else []
-        removed = len(old) - len(kept)
+        removed = 0
+        # 英字まじりの読みも一緒に消す（2026-11-14。読みを指定した時は、その形に直して比べる）
+        for store, target in ((self._pairs, reading_to_hiragana(reading) if reading is not None else None),
+                              (self._mixed, to_mixed_reading(reading) if reading is not None else None)):
+            old = store.get(surface)
+            if not old:
+                continue
+            kept = [r for r in old if r != target] if target is not None else []
+            gone = len(old) - len(kept)
+            if not gone:
+                continue
+            removed += gone
+            if kept:
+                store[surface] = kept
+            else:
+                del store[surface]
         if not removed:
             return 0
-        if kept:
-            self._pairs[surface] = kept
-        else:
-            del self._pairs[surface]
         self._dirty = True
         self._revision += 1
         return removed
@@ -363,12 +465,13 @@ class IMEReadings:
 
     def _trim(self):
         """上限を超えたぶんを**古いほうから**落とす。"""
-        over = len(self._pairs) - self.limit
-        if over <= 0:
-            return
-        for surface in list(self._pairs)[:over]:
-            self._pairs.pop(surface, None)
-        self._dirty = True
+        for store, limit in ((self._pairs, self.limit), (self._mixed, self.mixed_limit)):
+            over = len(store) - limit
+            if over <= 0:
+                continue
+            for surface in list(store)[:over]:
+                store.pop(surface, None)
+            self._dirty = True
 
     def keep_only_in(self, texts):
         """
@@ -393,18 +496,21 @@ class IMEReadings:
         判定は**本文への部分一致**で始める（粗いが、上限5,000の輪と
         合わせれば毎保存でも軽い）。重い・粗いが出たら測ってから直す。
         """
-        if not self._pairs:
+        if not self._pairs and not self._mixed:
             return 0
         got = [t for t in (texts or ()) if isinstance(t, str)]
         if not got:
             return 0
         blob = '\n'.join(got)
-        gone = [s for s in self._pairs if s not in blob]
-        for s in gone:
-            self._pairs.pop(s, None)
-        if gone:
+        dropped = 0
+        for store in (self._pairs, self._mixed):          # 英字まじりの読みも同じく（2026-11-14）
+            gone = [s for s in store if s not in blob]
+            for s in gone:
+                store.pop(s, None)
+            dropped += len(gone)
+        if dropped:
             self._dirty = True
-        return len(gone)
+        return dropped
 
     # ---------------------------------------------------------------- 諸々
 
@@ -441,7 +547,12 @@ class IMEReadings:
             mixed ^= zlib.crc32(
                 (surface + '\t' + '\t'.join(readings)).encode('utf-8',
                                                               'ignore'))
-        return [len(self._pairs), n, mixed]
+        if not self._mixed:
+            return [len(self._pairs), n, mixed]      # 英字まじりが無ければ前と同じ値（控えを外さない）
+        letters = 0
+        for surface, readings in self._mixed.items():
+            letters ^= zlib.crc32(('M\t' + surface + '\t' + '\t'.join(readings)).encode('utf-8', 'ignore'))
+        return [len(self._pairs), n, mixed, len(self._mixed), letters]
 
 
 def attach_to_engine(path='ime_readings.json'):

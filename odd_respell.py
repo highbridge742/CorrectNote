@@ -558,6 +558,18 @@ def _stray_mark_repair(line, result, run, store, dict_index, context_vec, decide
     return out
 
 
+def _undo_overlap(line, done, a, b):
+    """done のうち、元の行の [a, b) に掛かる書き換えだけを元の字に戻した文。戻しても写せなければ None。"""
+    parts = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, line, done, autojunk=False).get_opcodes():
+        hit = tag != 'equal' and (i1 < b and a < i2 or (i1 == i2 and a < i1 < b))
+        parts.append(line[i1:i2] if hit else done[j1:j2])
+    out = ''.join(parts)
+    if out == done or _to_done(line, out, a, b) is None:
+        return None
+    return out
+
+
 def _to_done(line, done, a, b):
     if line == done:
         return a, b
@@ -1011,6 +1023,8 @@ def _judge(done, a, b, texts, run, other_odd, typed=False):
             ok = False        # 競う形としては残す
         if fixed not in seen or cost < seen[fixed][0]:
             seen[fixed] = (cost, ok)
+            if fixed != text:
+                seen.came[fixed] = text
             if text in _MISREAD or (fixed != text and not _same_reading(fixed, text)):
                 # 補正し直しが読みを替えずに漢字を置いただけ（ばあい→場合）なら、もう1か所の直しではない（手分けA）
                 seen.further.add(fixed)
@@ -1068,6 +1082,7 @@ class _Seen(dict):
         super().__init__(*a, **k)
         self.further = set()
         self.source = {}     # further の行 → 補正し直す前の行（戻しを当てただけの行）
+        self.came = {}       # 補正し直した行 → 戻しを当てただけの行（読みの同じ置き換えも含む）
 
 
 def _stacked_inside(done, a, b, seen, best, rds=()):
@@ -1130,6 +1145,11 @@ def _pick(seen, margin=MARGIN):
     if not ok:
         return None
     rivals = [x for x in ranked[1:] if not (best not in further and x[0] in further)]
+    if os.environ.get('CN_PICK_OK_RIVAL') != '0':
+        # 補正し直しても紫が残る形（ここでひゅう辞 → 給仕: 入口がなお異様と見る形）は、紫の残らない一番より重いなら
+        # 並ぶ形として数えない（2026-11-13 補正担当: 1打で ひょうじ → 表示 が紫なしで一番なのに、紫の残る二番と並んで
+        # 紫のままだった）。CN_PICK_OK_RIVAL=0 で前のまま
+        rivals = [x for x in rivals if x[1][1] or x[1][0] < cost]
     # 一番と読みが同じで書き方だけ違う形（漢字を置いた形とかなのままの形）は、並ぶ形ではなく同じ答え
     # （一番に漢字を置いた形、二番が同じ読みのかなのままで、離れずに紫に残っていた・2026-11-01 B）
     if rivals:
@@ -1864,6 +1884,23 @@ def _resegment_suffix(done, a, b, rds, run, other_odd=()):
 FEWEST = __import__('contextvars').ContextVar('cn_respell_fewest', default=False)
 
 
+def _physical_one(x, y):
+    """読み x から y への1打の戻しが、キーの並びで裏付けられるか: 1字を抜く戻しは抜いた打鍵が隣の打鍵のキーの隣
+    （kana_layout.single_key_drop_adjacency）、1字を替える戻しは替えた字のキーが元の字のキーの隣（縦の隣を含め距離1.1以内）。"""
+    if not x or not y:
+        return False
+    try:
+        import kana_layout as k
+        if len(x) == len(y) + 1:
+            return bool(k.single_key_drop_adjacency(x, y))
+        if len(x) == len(y):
+            diff = [(p, q) for p, q in zip(x, y) if p != q]
+            return len(diff) == 1 and k.kana_key_distance(diff[0][0], diff[0][1]) <= 1.1
+    except Exception:
+        return False
+    return False
+
+
 def _key_edits(x, y):
     """読み x から y へのキーの数えの編集距離（濁点・半濁点も1打）。読めなければ None。"""
     if not x or not y:
@@ -1948,6 +1985,14 @@ def _choose(done, a, b, rds, run, store, dict_index, context_vec, other_odd=(), 
         # それを採る（もみと: み の巻き込み1打を抜いた もと と、2打を替えた 文字・味噌）。少ない形が二番より
         # MARGIN 以上不自然なら採らない
         rd_of = {t: r for _c, t, r in pre}
+        if os.environ.get('CN_FEWEST_SOURCE') != '0':
+            # 補正し直しでさらに替わった行（漢字1字を後の段がかなに戻した形）は、戻しを当てた行の読みで数える
+            # （戻しを当てた行にしか読みの控えが無く、数えられずに外れて紫のままだった・2026-11-14 未解決タブ）
+            src_of = dict(getattr(seen1, 'came', {}) or {})
+            src_of.update(getattr(seen1, 'source', {}) or {})
+            for t in list(seen1):
+                if t not in rd_of and src_of.get(t) in rd_of:
+                    rd_of[t] = rd_of[src_of[t]]
         ok = sorted((c, t) for t, (c, v) in seen1.items() if v)
         if ok:
             dist = {t: _key_edits(src.get(rd_of.get(t), ''), rd_of.get(t)) for _c, t in ok}
@@ -1963,6 +2008,16 @@ def _choose(done, a, b, rds, run, store, dict_index, context_vec, other_odd=(), 
                     need1 = need / 2 if lo == 1 and len(ok) == 1 else need
                     if base - c0 >= need1 and not _stacked_inside(done, a, b, seen1, t0, rds):
                         return t0
+                elif (lo == 1 and len(rds_few) == 2 and os.environ.get('CN_FEWEST_PHYSICAL') != '0'
+                      and all(dist[t] > lo for _c, t in near if (_c, t) not in few)):
+                    # 1打の戻しが2通り（1打を抜いた形と1打を替えた形）並ぶなら、キーの並びで裏付けのある方が1つだけならそれ
+                    # （抜いた字が両隣のキーの隣＝巻き込み、替えた字が元の字のキーの隣＝打ち違い）。2026-11-14 未解決タブ20行目:
+                    # 真ん中の巻き込みの1字を抜く形と、3字目を替えた別の語が数え1で並んで紫のままだった
+                    sup = [(c, t) for c, t in few if _physical_one(src.get(rd_of.get(t), ''), rd_of.get(t))]
+                    if len({rd_of.get(t) for _c, t in sup}) == 1:
+                        c0, t0 = sup[0]
+                        if base - c0 >= need and not _stacked_inside(done, a, b, seen1, t0, rds):
+                            return t0
     if got is None or base - got[1] < need:
         return None
     best, cost = got
@@ -2948,6 +3003,15 @@ def _repair_line(line, result, run, store, dict_index, context_vec=None, decided
             continue
         cur = out.get('corrected') or line
         at = _to_done(line, cur, a0, b0)
+        if at is None and os.environ.get('CN_RESPELL_UNDO_OVERLAP') != '0':
+            # 紫の所に前の段の書き換えが掛かっていて、元の行の位置を写せない（PC の IME の道: 後で取り消される直しが
+            # 紫の所に重なっていた、2026-11-13 挙動関連担当の切り分け）。紫が残っている＝その書き換えは効いていない
+            # ので、紫に掛かる書き換えだけ元の字に戻した形で読み直す。採れた時だけ戻した形が答えに入る。
+            # CN_RESPELL_UNDO_OVERLAP=0 で前のまま
+            cur2 = _undo_overlap(line, cur, a0, b0)
+            if cur2 is not None:
+                cur = cur2
+                at = _to_done(line, cur, a0, b0)
         if at is None:
             continue
         # タブは欄の終わり（打った行＋タブ＋メモ の行で、紫の所の読み・行の費用・補正し直しにメモまで入れない・手分けA）

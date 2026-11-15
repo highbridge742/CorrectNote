@@ -338,6 +338,8 @@ DEFAULTS = {
     'debug_timings_defaults': DEBUG_TIMINGS_DEFAULTS_VERSION,
     # デバッグメニュー「候補の何回目で採ったかを集計」（respell_stats・2026-11-10 うにさん「デフォルトはオフ」）
     'debug_respell_stats': False,
+    # デバッグメニュー「削除の記録」（deletion_log.txt・2026-11-14 既定はオフ。CN_DELETION_LOG=1 でもオン）
+    'debug_deletion_log': False,
 }
 
 # 古い設定ファイルからの読み替え。

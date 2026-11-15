@@ -192,7 +192,9 @@ class CompactRealDataTests(unittest.TestCase):
         with _TableForm(None):
             ordinary = DictIndex(path)
             self.assertTrue(ordinary._load_cache())
-        self.assertIs(type(ordinary._by_reading), dict)
+        # 2026-11-05 から索引はどの段階でも詰めた形（dict_index._compact）。CN_PLAIN_TABLES=1 でも dict には戻らない
+        # （表は 2026-10-31 から既定で詰めた形になった）
+        self.assertIs(type(ordinary._by_reading), C.CompactLists)
         with _TableForm('1'):
             compact = DictIndex(path)
             self.assertTrue(compact._load_cache())
@@ -246,9 +248,10 @@ class CompactRealDataTests(unittest.TestCase):
     def test_english_lexicon_compact_answers_like_the_frozenset(self):
         import os
         import subprocess
-        code = ('import loanword,compact_tables as C;s=loanword._english_seed_all();'
-                'import seed_english;print(type(s).__name__,len(s),"neighbours" in s,"zzzz" in s,'
-                'len(getattr(seed_english,"EXTRA_WORDS",())))')
+        # 11-07 から控えで読むと seed_english を import しないため、試験が自分で import せず、import の前の状態を数える
+        code = ('import sys,loanword,compact_tables as C;s=loanword._english_seed_all();'
+                'm=sys.modules.get("seed_english");n=len(getattr(m,"EXTRA_WORDS",())) if m else 0;'
+                'print(type(s).__name__,len(s),"neighbours" in s,"zzzz" in s,n)')
         out = {}
         # compact in every tier since 2026-10-31 (the read table is released); CN_PLAIN_WORDS=1 keeps the frozenset
         for key, flag, plain in (('low', '1', None), ('default', None, None), ('plain', None, '1')):

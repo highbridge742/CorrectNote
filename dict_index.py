@@ -113,8 +113,51 @@ def _should_prune(surface, pos, sub_pos, sub_sub_pos, cost):
     return False
 
 
+# 候補に持つか持たないかを AI が日常の入力で読んで決めた漢字だけの語（2026-11-13 うに「一度も変換しなさそうな語が多い」
+# 「樹海 が無い」・everyday_kango_judged.json）。drop: 費用では残るが日常に出ない語（允可・印加・想到・掃蕩・企劃・
+# 漸騰・溯及）。add: 費用で刈られていた日常の語（樹海・草原・極上）と読み。加えた語は費用が高いので帯（異様判定の
+# あと・F2 の候補）にだけ出る。世の中の読み（world）は変えない。CN_DICT_JUDGED=0 で前のまま
+_JUDGED = None
+
+
+def _load_judged():
+    global _JUDGED
+    if _JUDGED is not None:
+        return _JUDGED
+    _JUDGED = ({}, frozenset())
+    if os.environ.get('CN_DICT_JUDGED') == '0':
+        return _JUDGED
+    here = os.path.dirname(os.path.abspath(__file__))
+    for path in (os.path.join(here, 'everyday_kango_judged.json'), 'everyday_kango_judged.json'):
+        try:
+            with open(path, encoding='utf-8') as f:
+                data = json.load(f)
+            _JUDGED = ({k: frozenset(v) for k, v in (data.get('add') or {}).items()},
+                       frozenset(data.get('drop') or ()))
+            break
+        except Exception:
+            continue
+    return _JUDGED
+
+
+def judged_table():
+    """AI の判定の表（everyday_kango_judged.json）を読めたか（bundle_manifest の確かめ用）。"""
+    add, drop = _load_judged()
+    return bool(add or drop)
+
+
+def _judged(surface, reading):
+    """True: 候補に持つ（AI が日常の語と見た）。False: 持たない。None: 前のまま費用で決める。"""
+    add, drop = _load_judged()
+    if surface in drop:
+        return False
+    if reading in add.get(surface, ()):
+        return True
+    return None
+
+
 # キャッシュの形式が変わったら数字を上げる（古い索引を作り直させる）
-CACHE_VERSION = 11  # Native one-character inflections, 2026-10-02
+CACHE_VERSION = 12  # AI-judged everyday kango (add/drop), 2026-11-13
 # 索引として最低限あるべき読みの数。これを下回るものは
 # 作りかけ・壊れた索引とみなして作り直す。
 # （空の索引が保存されると、候補が一切出ないのに
@@ -295,7 +338,10 @@ class DictIndex:
             # 地名・人名・難語も入れてよい（触らない側に倒すため）。
             if len(reading) <= _WORLD_MAX_LEN:
                 world.add(reading)
-            if _should_prune(surface, pos, sub_pos, sub_sub_pos, cost):
+            judged = _judged(surface, reading)
+            if judged is False:
+                continue      # AI が日常の入力に出ないと見た漢語（允可・掃蕩・企劃 の類）は候補に持たない
+            if judged is not True and _should_prune(surface, pos, sub_pos, sub_sub_pos, cost):
                 continue
             # 帯の印（従来の刈り込みなら落ちていた2字漢語・項目48-OJ）
             if (_should_exclude(surface, pos, sub_pos, sub_sub_pos, cost)

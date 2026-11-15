@@ -7,12 +7,22 @@ work. Results carry request ids and are accepted by the UI's document checks.
 """
 import multiprocessing as mp
 from contextlib import contextmanager
+import os
 import sys
 import keyboard_layout
 import queue
 import time
 import traceback
 from collections import defaultdict
+
+
+def keep_line_original(result,line):
+    """答えの「元の行」を、頼んだ行にそろえる（2026-11-15。補正の包みが行を変えて補正に通した時の original の取り違えで、
+    タブが済みにならず裏の解析が同じタブをやり直し続けた）。位置は包みが行の位置へ直してある前提。CN_ORIGINAL_GUARD=0 で前の形"""
+    if (isinstance(result,dict) and isinstance(line,str) and result.get('original') not in (None,line)
+            and os.environ.get('CN_ORIGINAL_GUARD')!='0'):
+        return dict(result,original=line)
+    return result
 
 
 def state_key(app):
@@ -175,6 +185,8 @@ def snapshot(app):
         choices={name:dict(getattr(choices,name,{})) for name in ('_readings','_units','_contexts')},
         choice_revision=choices.revision() if choices is not None else 0,
         ime={k:list(v) for k,v in getattr(ime,'_pairs',{}).items()},
+        # 英字まじりの打った読み（ime_readings._mixed・2026-11-14）も子へ（typed_back が引く）
+        ime_mixed={k:list(v) for k,v in getattr(ime,'_mixed',{}).items()},
         charngram=dict(charngram._LEARNED or {}))
 
 
@@ -328,6 +340,7 @@ class Runtime:
             from last_choice import set_active
             set_active(self.choices)
             self.ime._pairs=data['ime']
+            self._set_ime_mixed(data)
             kanji_guess.set_ime_readings_provider(self._read_ime)
             self._state_identity=identity
             return
@@ -375,6 +388,7 @@ class Runtime:
         self.choices._revision=data['choice_revision'];self.choices.bind(self.store,self.index)
         set_active(self.choices)
         self.ime=IMEReadings();self.ime._pairs=data['ime']
+        self._set_ime_mixed(data)
         kanji_guess.set_ime_readings_provider(self._read_ime)
         self.context_vec=None
         if data['context'] is not None:
@@ -547,6 +561,15 @@ class Runtime:
             # A janome failure fell back to the simple splitter: prepare tries again.
             if _FALLBACK_ROWS[0]!=failures:continue
             self.line_tokens[line]=rows;self.content_words[line]=words
+
+    def _set_ime_mixed(self,data):
+        """英字まじりの打った読み（2026-11-14）を子の入れ物に入れ、typed_back の引き先にする。"""
+        self.ime._mixed=dict(data.get('ime_mixed') or {})
+        try:
+            import typed_back
+            typed_back.set_provider(self.ime.mixed_readings_for)
+        except Exception:
+            pass
 
     def _read_ime(self,surface):
         values=self.ime.readings_for(surface)
@@ -862,6 +885,11 @@ class Runtime:
                     occurrence_calculations=task.get('calculations',()),
                     occurrence_strokes=occurrence_strokes(task.get('readings',())),**extra)
                 _early_end()
+                # 答えの「元の行」は、いつも頼んだ行（2026-11-15 うにさん「2時間放置した後タブを切り替えると、解析がまだ
+                # 終わっていない」: 補正の包み reading_gloss が読みがなを抜いた行のまま original を返し、tab_analysis._save が
+                # 「行と答えが合わない」としてタブを済みにせず、裏の解析が同じタブを何度もやり直して、ほかのタブへ進まなかった）。
+                # 位置（original_spans など）は包みが行の位置へ直してある。CN_ORIGINAL_GUARD=0 で前の形
+                result=keep_line_original(result,task['line'])
                 if isinstance(result,dict) and result.get('deferred_stages'):
                     # Not final, redone when the typing stops: nothing may keep it across a model change
                     result=dict(result);result.pop('used_keys',None)

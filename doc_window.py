@@ -24,6 +24,10 @@ class _Peer(tk.Text):
     def __init__(self, master, original, **kw):
         self._setup(master, {})
         original.tk.call(original._w, 'peer', 'create', self._w, *self._options(kw))
+        if getattr(original, '_cn_body_state', None):
+            # タイトルと目次を本文の中の字として置く形（title_inline）: 別窓も本文の行で呼ぶ（route_edits はこの上に掛かる）
+            import body_index
+            body_index.install(self, 0, share=original._cn_body_state)
 
 
 def route_edits(peer, editor):

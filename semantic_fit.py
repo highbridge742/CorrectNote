@@ -403,6 +403,12 @@ def propose(text, input_method='kana'):
         if not best:
             continue
         best.sort(reverse=True)
+        if (by_key and not (len(best) == 1 and best[0][0] >= FIX_WEIGHT)
+                and os.environ.get('CN_SF_KEY_WEAK') != '0'):
+            # 1打違いの読みの候補だけが根拠で、それが弱く（重み FIX_WEIGHT 未満）幾つも在るなら、噛み合わないことの証に
+            # しない（子音が落ちる に 威信・神威 が重み2で並び紫→読み直しで 市内 にしていた・2026-11-12 未解決タブの誤判定。
+            # 1打違いの語はどの語にもいくらでも在る）。CN_SF_KEY_WEAK=0 で前のまま
+            continue
         cand = best[0][1]
         # 直すのは、同じ読みの候補が1つで、元の語も直し先も2字以上で、直し先が一般の文で元の語よりよく使う語か、
         # 直し先の組そのものが例文に在るとき（1字の語・1打違いの読みは根拠が弱いので紫だけ）
@@ -814,10 +820,34 @@ def _verb_alternatives(t, pos='動詞'):
                 continue
             if [c for c in face if not _is_kanji(c)] != [c for c in t.surface if not _is_kanji(c)]:
                 continue  # かなの部分が違う候補は区切りの違い（停｜まる→止ま）
-            for row in dictionary_inflections(face) or ():
-                if row[0].startswith(want + ',自立,') and row[1] == form and row[3] == rd:
+            rows = [row for row in dictionary_inflections(face) or ()
+                    if row[0].startswith(want + ',自立,') and row[1] == form]
+            if _rare_reading(face, rd, _c, pos, rows):
+                continue
+            for row in rows:
+                if row[3] == rd:
                     out[face] = row[2]
     return out
+
+
+ALT_READING_GAP = 2000   # 候補の表記にとって、この読みがほかの読みよりこれだけ重い（稀な読み）なら候補にしない
+
+
+def _rare_reading(face, rd, cost, pos, rows):
+    """候補の表記が、この読みでは稀にしか読まれない（入る を いる と読む: はいる より 4,600 重い）。ケースが要る・
+    空中に居る を 入る にしていた（2026-11-12 未解決タブの誤判定）。同じ読みの選び違いは、ふつうその読みで書く語どうし。
+    CN_SF_ALT_MAIN_READING=0 で前のまま"""
+    if os.environ.get('CN_SF_ALT_MAIN_READING') == '0':
+        return False
+    import reading_lattice
+    best = cost
+    for row in rows:
+        if row[3] == rd:
+            continue
+        for f2, _l, _r, c2, p2 in reading_lattice._table.get(row[3], ()):
+            if f2 == face and p2 == pos and c2 < best:
+                best = c2
+    return cost - best >= ALT_READING_GAP
 
 
 def _kata_noun(t):
@@ -840,6 +870,11 @@ def _verb_args(toks, j):
         if t.pos == '動詞' and k + 1 < j and toks[k + 1].pos == '形容詞' and _sub(toks[k + 1]) == '非自立':
             k -= 1
             continue
+        if t.pos == '助詞' and _sub(t) == '副詞化' and os.environ.get('CN_SF_ADVERBIAL_NI') != '0':
+            # 形容動詞の語幹＋に（適度に・静かに）は動詞を飾る言い方で、格の組ではない（適度に撃つ→打つ にしていた
+            # 2026-11-12 未解決タブの誤判定）。副詞と同じに越える。CN_SF_ADVERBIAL_NI=0 で前のまま
+            k -= 2
+            continue
         if t.pos != '助詞' or t.surface not in CASES + ('で', 'から', 'まで', 'より'):
             break
         n = toks[k - 1]
@@ -852,13 +887,29 @@ def _verb_args(toks, j):
         if (((n.pos in ('動詞', '形容詞', '助動詞')) and not purpose) or (t.pos_sub or '').startswith('接続助詞')) \
                 and os.environ.get('CN_SF_ARGS_STOP') != '0':
             break
-        if t.surface in CASES and (_noun(n) or _kata_noun(n)) and _codes(n.surface):
+        if t.surface in CASES and (_noun(n) or _kata_noun(n)) and _codes(n.surface) and not _kata_compound_tail(toks, k - 1):
             out.append((t, n))
         # 名詞の前の 数・接頭・接尾・の を越えて、さらに前の組へ
         k -= 2
         while k >= 1 and toks[k].pos == '名詞' and _sub(toks[k]) in ('数', '接尾', '一般', 'サ変接続') and toks[k].end == toks[k + 1].start:
             k -= 1
     return out
+
+
+def _kata_compound_tail(toks, i):
+    """i の片仮名の名詞が、前の片仮名の名詞と続く外来語の複合語の後ろ（スクリーン｜ショット）で、複合語まるごとは分類に
+    無いか。外来語の複合語の意味は後ろの語の分類と違う（ショット＝撃つ・撮る）ので、組の根拠にしない（2026-11-13
+    全体評価の作った正しい文: スクリーンショットを撮って → 取って）。CN_SF_KATA_COMPOUND=0 で前のまま"""
+    if os.environ.get('CN_SF_KATA_COMPOUND') == '0' or i < 1:
+        return False
+    n, p = toks[i], toks[i - 1]
+    kata = lambda w: bool(w) and all('ァ' <= c <= 'ヺ' or c == 'ー' for c in w)
+    if not (kata(n.surface) and kata(p.surface) and p.pos == '名詞' and p.end == n.start):
+        return False
+    j = i - 1
+    while j >= 1 and toks[j - 1].pos == '名詞' and kata(toks[j - 1].surface) and toks[j - 1].end == toks[j].start:
+        j -= 1
+    return not _codes(''.join(x.surface for x in toks[j:i + 1]))
 
 
 def _verb_marks(toks):
@@ -1040,6 +1091,11 @@ def _verb_mark_one(v, p, n, pos='動詞'):
     if prof is None:
         # 元の動詞に例が無いときは、候補の基本形が1つで一般の文で元よりはっきりよく使う語なら直す
         sure = one and _rank(alt) <= here - FIX_RANK_GAP
+        if sure and os.environ.get('CN_SF_NOOWN_NEAR') != '0':
+            # 名詞が候補の仲間と細かい項目でも合うときだけ（2026-11-13: 枠が離した → 話した にしない。枠 と 話す の
+            # 主語の仲間［人・語］は中項目でしか重ならない）。CN_SF_NOOWN_NEAR=0 で前のまま
+            pa = profile(p.surface, alt)
+            sure = bool(pa and (fit(n.surface, pa) or fit(n.surface, pa, MISS_DEPTH)))
         if not sure:
             return None  # 根拠が候補の側だけのときは紫にしない（議題に上る・送れる）
     return (v.start, v.end, face if sure else None)

@@ -27,7 +27,7 @@ import pickle
 from array import array
 
 ENV = 'CN_TABLE_MMAP'
-_MAGIC = b'CNMAPPED1\n'
+_MAGIC = b'CNMAPPED2\n'   # 2: 同じ物を1つに写す（11-13）
 # これより小さい str・array は見出しの中にそのまま入れる
 _BIG = 1 << 16
 _ALIGN = 8
@@ -117,7 +117,22 @@ def _mark(*objects):
 
 def _convert(value):
     """compact_tables の物の中の、字で数えた位置の並びをバイトの位置に直した写しを作る（書く時だけ）。
-    直せない物（知らない形）は None。"""
+    直せない物（知らない形）は None。同じ物が2か所にあれば（語の一覧の (広い, 狭い) が同じ物）写しも1つにする
+    （2026-11-13 補正担当: 読んだ時に同じ中身の物が2つできていた）。"""
+    key = id(value)
+    hit = _CONVERTED.get(key)
+    if hit is not None and hit[0] is value:
+        return hit[1]
+    got = _convert_one(value)
+    if not isinstance(value, (str, int, float, bool, bytes, type(None))):
+        _CONVERTED[key] = (value, got)
+    return got
+
+
+_CONVERTED = {}
+
+
+def _convert_one(value):
     import compact_tables as C
     if isinstance(value, (tuple, list)):
         out = []
@@ -236,6 +251,7 @@ class _Reader(pickle.Unpickler):
 def write(path, stamp, value):
     """value を写像して読める形で path に書く。書けない形なら False。"""
     _MARKED.clear()
+    _CONVERTED.clear()
     try:
         converted = _convert(value)
         if converted is None:
@@ -246,6 +262,7 @@ def write(path, stamp, value):
         head = head.getvalue()
     finally:
         _MARKED.clear()
+        _CONVERTED.clear()
     start = len(_MAGIC) + 8 + len(head)
     pad = (-start) % _ALIGN
     total = start + pad + sum(len(c) for c in chunks)

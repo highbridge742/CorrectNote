@@ -25,6 +25,12 @@ def child():
         return (not a._foreground_analysis_pending() and a._analyze_text==a.editor_source_text()
             and a._analyze_pos>=len(a._analyze_todo) and a._analyze_dependencies==analysis_worker.state_key(a)
             and a._analyze_work==analysis_work_app.token(a))
+    def fresh_clock():
+        # 2026-11-14: 前の区切りは wheel_time を先の時刻（clock+.25 など）で送るので、本物の時計で .31秒待っても、
+        # アプリの見る「前の切り替え」からは .2秒（試験の同じ向きの待ち）に届かないことがあった（.157秒で最初の目盛りが
+        # 捨てられ、切り替えが0回）。新しい区切りの時刻は、前の切り替えの時刻＋.35秒より後から始める（期待は変えない）
+        last=getattr(a,'_tab_wheel_last_step',None)
+        return max(time.monotonic(),(last[0]+.35) if last else 0)
     def emit(widget,event,wheel_time=None,**values):
         values.update(x=4,y=4,rootx=widget.winfo_rootx()+4,rooty=widget.winfo_rooty()+4)
         if wheel_time is not None:
@@ -249,26 +255,26 @@ def child():
             expect('tab_button5_switches',a.session.active==1)
             # A slow tab switch can delay the second delivery of one notch.
             time.sleep(.31);a._switch_tab(0);until(done)
-            label=a._tab_widgets[0]['label'];clock=time.monotonic()
+            label=a._tab_widgets[0]['label'];clock=fresh_clock()
             emit(label,'<MouseWheel>',delta=-120,time=51000,wheel_time=clock)
             emit(label,'<Button-5>',time=51010,wheel_time=clock+.45)
             expect('delayed_dual_wheel_one_switch',a.session.active==1)
             # A second physical notch 250 ms later must still move a tab.
             time.sleep(.31);a._switch_tab(0);until(done)
-            label=a._tab_widgets[0]['label'];clock=time.monotonic()
+            label=a._tab_widgets[0]['label'];clock=fresh_clock()
             emit(label,'<MouseWheel>',delta=-120,time=52000,wheel_time=clock)
             emit(label,'<Button-5>',time=52250,wheel_time=clock+.25)
             expect('separate_physical_notch_switches',a.session.active==2)
             # Some devices deliver one notch in both Tk wheel formats.
             time.sleep(.31);a._switch_tab(0);until(done)
-            label=a._tab_widgets[0]['label'];clock=time.monotonic()
+            label=a._tab_widgets[0]['label'];clock=fresh_clock()
             emit(label,'<MouseWheel>',delta=-120,wheel_time=clock)
             emit(label,'<Button-5>',wheel_time=clock+.01)
             expect('dual_tab_wheel_one_switch',a.session.active==1)
             time.sleep(.31);a._switch_tab(0);until(done)
             with patch.object(a,'_on_wheel_units') as scroll:
                 emit(a.editor,'<ButtonPress-3>')
-                clock=time.monotonic()
+                clock=fresh_clock()
                 emit(a.editor,'<MouseWheel>',delta=-120,state=0x0400,wheel_time=clock)
                 emit(a.editor,'<Button-5>',state=0x0400,wheel_time=clock+.01)
                 expect('dual_right_wheel_one_switch',a.session.active==1)

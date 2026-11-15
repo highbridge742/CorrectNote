@@ -59,6 +59,10 @@ class AppDirTests(unittest.TestCase):
         with patch.object(app, 'running_as_package', return_value=False):
             self.assertEqual(app.app_dir(), os.path.dirname(os.path.abspath(app.__file__)))
             exe = os.path.join(tempfile.gettempdir(), 'portable', 'CorrectNote.exe')
+            # 2026-11-14: 書けない EXE の隣は %LOCALAPPDATA% へ逃がす（app.exe_data_dir）。ここは書ける隣を見るので、
+            # フォルダを作り、前の確かめの覚えを消す
+            os.makedirs(os.path.dirname(exe), exist_ok=True)
+            app._EXE_DATA_DIR.clear()
             with patch.object(sys, 'frozen', True, create=True), patch.object(sys, 'executable', exe):
                 self.assertEqual(app.app_dir(), os.path.dirname(exe))
 

@@ -13,10 +13,20 @@ It runs in a child process of its own (analysis_worker.Worker), so the document'
 neither waited for nor superseded, and Tk is never held up. The child is started on the first
 check and closed when the app closes or after IDLE_CLOSE_MS without checks.
 """
+import os
+import time
+from collections import OrderedDict
+
 import keyboard_layout
 
 POLL_MS = 20
 IDLE_CLOSE_MS = 60000
+# 確かめた答えの控え（2026-11-14 うにさん「再変換の、候補が順に出た後、一度閉じて再度選択すると候補を作り直している。
+# 少し前のは覚えておくはず」）。同じ行の文・同じ所・同じ候補・同じ入力方式なら、少し前の答え（通った／紫になった）を
+# すぐ使い、まだ確かめていない物だけ確かめる。途中で閉じても、確かめ終えた分は残る。行の文が変われば鍵が変わる。
+# メモリだけ（ファイルには書かない）。CN_TYPO_CHECK_MEMO=0 で前の形（開くたびに全部確かめる）
+MEMO_LIMIT = 512
+MEMO_SEC = 600
 
 
 class CandidateCheck:
@@ -30,6 +40,7 @@ class CandidateCheck:
         self.idle_id = None
         self.generation = 0
         self.on_done = None
+        self.memo = OrderedDict()   # (行, 始め, 語, 入力方式, 配列) → (通ったか, 時刻)
 
     # --- public --------------------------------------------------------
     def start(self, line, items, on_pass, on_done=None):
@@ -45,9 +56,46 @@ class CandidateCheck:
             if not surface:
                 continue
             new_line = line[:start] + surface + line[end:]
+            known = self._remembered(new_line, start, surface)
+            if known is True:
+                on_pass(candidate)      # 少し前に通った: すぐ出す
+                continue
+            if known is False:
+                continue                # 少し前に紫になった: 出さない
             self.jobs.append((new_line, start, surface,
                               lambda c=candidate: generation == self.generation and on_pass(c)))
         self._schedule(0)
+
+    # --- the memo of answers -----------------------------------------
+    def _memo_key(self, line, start, surface):
+        settings = getattr(self.app, 'settings', None)
+        try:
+            method = settings.get('input_method') or 'kana'
+            layout = repr(keyboard_layout.spec(settings))
+        except Exception:
+            method, layout = None, None
+        return (line, start, surface, method, layout)
+
+    def _remembered(self, line, start, surface):
+        """少し前に確かめた答え（True 通った・False 紫）。無い・古い・切ってあるなら None。"""
+        if os.environ.get('CN_TYPO_CHECK_MEMO') == '0':
+            return None
+        key = self._memo_key(line, start, surface)
+        got = self.memo.get(key)
+        if got is None:
+            return None
+        if time.monotonic() - got[1] > MEMO_SEC:
+            del self.memo[key]
+            return None
+        self.memo.move_to_end(key)
+        return got[0]
+
+    def _remember(self, line, start, surface, passed):
+        if os.environ.get('CN_TYPO_CHECK_MEMO') == '0':
+            return
+        self.memo[self._memo_key(line, start, surface)] = (bool(passed), time.monotonic())
+        while len(self.memo) > MEMO_LIMIT:
+            self.memo.popitem(last=False)
 
     def cancel(self):
         """The list closed: stop checking (the child keeps running for the next list)."""
@@ -172,8 +220,10 @@ class CandidateCheck:
             self.current = None
             line, start, surface, on_pass = job
             result = value.get('result') or {}
-            if not self.purple_at(result, line, start, start + len(surface),
-                                  getattr(self.app, 'decisions', None)):
+            passed = not self.purple_at(result, line, start, start + len(surface),
+                                        getattr(self.app, 'decisions', None))
+            self._remember(line, start, surface, passed)
+            if passed:
                 on_pass()
         except Exception:
             # A failed check shows nothing more; the list stays as it is.

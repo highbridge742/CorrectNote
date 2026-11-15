@@ -29,12 +29,36 @@ COMMON_RANK = 450
 
 
 @lru_cache(maxsize=1)
-def joyo():
+def joyo_table():
+    """常用漢字表そのもの（2136字）。"""
     try:
         with open(os.path.join(_HERE, 'joyo_kanji.json'), encoding='utf-8') as f:
             return frozenset(json.load(f)['chars'])
     except Exception:
         return frozenset()
+
+
+@lru_cache(maxsize=1)
+def everyday_extra():
+    """常用漢字表の外で、ふだんの文によく出る字（嬉・嘘・噂・溜・喋・綺…: everyday_kanji_extra.json、AI が判定した表。
+    うに 2026-11-12「常用漢字をひとつの基準にしているなら、AIの視点で加えるべきものを判断して改善して」）。"""
+    try:
+        with open(os.path.join(_HERE, 'everyday_kanji_extra.json'), encoding='utf-8') as f:
+            return frozenset(json.load(f)['chars'])
+    except Exception:
+        return frozenset()
+
+
+def joyo():
+    """疑わない字: 常用漢字表＋ふだんの文によく出る字（everyday_extra）。CN_KD_EXTRA_KANJI=0 で常用漢字表だけ。"""
+    if os.environ.get('CN_KD_EXTRA_KANJI') == '0':
+        return joyo_table()
+    return _joyo_with_extra()
+
+
+@lru_cache(maxsize=1)
+def _joyo_with_extra():
+    return joyo_table() | everyday_extra()
 
 
 def _kanji(c):
@@ -44,6 +68,54 @@ def _kanji(c):
 def outside(surface):
     j = joyo()
     return bool(j) and any(_kanji(c) and c not in j for c in surface)
+
+
+EVERYDAY_SHARE = 0.25   # 常用漢字のうち、使われ方がこれより下の割合の字よりよく使われる常用外の字は、ふだんの字とみる
+
+
+@lru_cache(maxsize=1)
+def _char_use():
+    """({字: 使われ方}, 常用漢字の EVERYDAY_SHARE の所の使われ方)。使われ方は、その字を含む語の wordfreq の頻度の和
+    （同梱の ja_wordfreq.json.gz）。読めなければ ({}, None)。解析の子ごとに json を読まないよう、字の表（数千字）を
+    控え（cn_kd_char_use.cache.pickle）から読む（ime_reconvert._freq と同じ決まり）。"""
+    path = os.path.join(_HERE, 'ja_wordfreq.json.gz')
+    try:
+        import compact_tables
+        stamp = ('kd_char_use', 1, EVERYDAY_SHARE, compact_tables._file_stamp(path))
+        got = compact_tables._pickled('cn_kd_char_use.cache.pickle', stamp, lambda: _char_use_build(path))
+        if got is not None:
+            return got
+    except Exception:
+        pass
+    return _char_use_build(path) or ({}, None)
+
+
+def _char_use_build(path):
+    import gzip
+    try:
+        with gzip.open(path, 'rt', encoding='utf-8') as f:
+            words = json.load(f)['words']
+    except Exception:
+        return None
+    use = {}
+    for w, v in words.items():
+        f = 10 ** (-v / 100)
+        for c in set(w):
+            if _kanji(c):
+                use[c] = use.get(c, 0.0) + f
+    j = sorted(use[c] for c in joyo_table() if c in use)
+    if not j:
+        return use, None
+    return use, j[int(len(j) * EVERYDAY_SHARE)]
+
+
+def _everyday_outside(surface):
+    """語の常用外の字が、どれもふだんの字（常用漢字の下から EVERYDAY_SHARE よりよく使われる）か。"""
+    use, line = _char_use()
+    if line is None:
+        return False
+    out = [c for c in surface if _kanji(c) and c not in joyo_table()]
+    return bool(out) and all(use.get(c, 0.0) >= line for c in out)
 
 
 def _hira(s):
@@ -63,6 +135,13 @@ def suspects(text, store=None):
             continue
         after = text[t.end:]
         if t.pos_sub == '固有名詞' or any(after.startswith(m) for m in _NAME_MARKS):
+            continue
+        # 常用外でも、ふだんの文で常用漢字の下から4分の1よりよく使われる字（溜・噂・喋）だけの語は疑わない
+        # （うに 2026-11-12「溜めは日常的な漢字です」: 溜め に ゛ を足した 駄目 で紫→読み直しで と まで消していた）。
+        # CN_KD_EVERYDAY_CHAR=0 で前のまま
+        # 固有名詞（地名・人名の 阿野）は字の使われ方が名前で上がるので、この扱いにしない
+        if (os.environ.get('CN_KD_EVERYDAY_CHAR') != '0' and not (t.pos_sub or '').startswith('固有名詞')
+                and _everyday_outside(t.surface)):
             continue
         # 常用外でも、ふつうの文によく出る語（嘘・噂・誰: 身近さの段 COMMON_RANK 以下）は疑わない。隣とつないだ窓で
         # 別の語（もう嘘 → もうそう 妄想）に届いても、元の語が身近なら打ち違いの根拠にならない（2026-11-09）

@@ -1,5 +1,5 @@
 <h1>CorrectNote 説明書</h1>
-<p class="muted">バージョン 1.18.3</p>
+<p class="muted">バージョン 1.19.0</p>
 <p class="store-badge"><a href="https://apps.microsoft.com/detail/9NJZGX71LHTZ?referrer=appbadge&amp;mode=direct"><img src="https://get.microsoft.com/images/ja%20dark.svg" width="200" alt="Microsoft Store から入手"></a> <a href="https://github.com/highbridge742/CorrectNote/releases/latest/download/CorrectNote.exe"><img src="assets/readme_manual/manual-091.svg" width="200" alt="GitHub から最新版を直接ダウンロード"></a></p>
 
 
@@ -14,7 +14,7 @@
 近くの文字をコピー、複数の行を選択、カーソル移動などの基本操作を<br>
 通常の2倍の早さで実行する機能があります。
 </p>
-<figure class="guide-shot intro-animation"><a href="assets/readme_manual/manual-001.gif"><img src="assets/readme_manual/manual-001.gif" width="800" height="380"></a></figure>
+<figure class="guide-shot intro-animation"><a href="assets/readme_manual/manual-001.gif"><img src="assets/readme_manual/manual-001.gif" width="800" height="420" alt="誤字が自動で直る様子、ブラウザの上で簡易入力に書いて欄へ入れる様子、日本語の区切りでカーソルを動かして行をコピーする様子を順に見せるアニメーション"></a></figure>
 <hr style="border:0;border-top:1px solid var(--rule);margin:18px 0 22px;">
 
 <div class="grid2">

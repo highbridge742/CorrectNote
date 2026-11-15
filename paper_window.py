@@ -28,6 +28,34 @@ WM_NCDESTROY = 0x0082
 # WM_MOUSEMOVE から WM_MBUTTONDBLCLK、WM_MOUSEWHEEL、WM_XBUTTON*、WM_MOUSEHWHEEL
 MOUSE_MESSAGES = frozenset(range(0x0200, 0x020F))
 SUBCLASS_ID = 0x434E    # 'CN'
+# タッチの1本指のなぞり（2026-11-13 うにさん「タッチモニター1本指でスクロールができなくなっている。背景イラストの
+# 影響と思われる」）。透かした画素のタッチも OS が後ろの Canvas へ渡すので、なぞり（パンのジェスチャー）は Canvas に
+# 届き、本文の欄はスクロールしなかった。タッチの元の知らせ（WM_POINTER*）は PostMessage で送り直せない
+# （ERROR_INVALID_MESSAGE）ので、Canvas でパンを受けて、指の動いた縦の量をホイールの知らせにして本文の欄へ送る
+# （ホイールの知らせは送り直せて、本文の欄のホイールの束縛がそのまま働く）。CN_PAPER_TOUCH=0 で前の形
+WM_GESTURE = 0x0119
+WM_MOUSEWHEEL = 0x020A
+GID_BEGIN, GID_END, GID_PAN = 1, 2, 4
+WHEEL_DELTA = 120
+# 指がこの画素だけ動くとホイール1目盛り（120）。本体のホイールは1目盛りで1行（app._on_wheel・ceil(delta/120)）
+# なので、だいたい1行の高さにして、指と本文が同じくらい動くようにする
+PAN_WHEEL_PX = 24
+
+
+def pan_wheel(previous_y, y, remainder=0.0, px=PAN_WHEEL_PX):
+    """パンの1回ぶんの指の縦の動きを、ホイールの量にする。(送る量, 残り)。指を上へ（y が減る）＝下へ送る＝負の量。
+    送るのは1目盛り（120）の倍数だけ（本体は 120 未満の量を、下へは1行・上へは0行に丸めてしまう）。
+    目盛りに足りない動きは次へ持ち越す（ゆっくりなぞっても止まらない）。"""
+    amount = (y - previous_y) * WHEEL_DELTA / float(px) + remainder
+    notches = int(amount / WHEEL_DELTA)
+    whole = notches * WHEEL_DELTA
+    return whole, amount - whole
+
+
+def touch_enabled(environ=None):
+    import os
+    environ = os.environ if environ is None else environ
+    return environ.get('CN_PAPER_TOUCH') != '0'
 
 _api = None
 _proc = None
@@ -71,11 +99,58 @@ def _load():
         comctl.DefSubclassProc.restype = LRESULT
         comctl.DefSubclassProc.argtypes = (wt.HWND, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t)
 
+        class GESTUREINFO(ctypes.Structure):
+            _fields_ = [('cbSize', wt.UINT), ('dwFlags', wt.DWORD), ('dwID', wt.DWORD), ('hwndTarget', wt.HWND),
+                        ('x', ctypes.c_short), ('y', ctypes.c_short), ('dwInstanceID', wt.DWORD),
+                        ('dwSequenceID', wt.DWORD), ('ullArguments', ctypes.c_ulonglong), ('cbExtraArgs', wt.UINT)]
+        try:
+            user32.GetGestureInfo.restype = wt.BOOL
+            user32.GetGestureInfo.argtypes = (ctypes.c_void_p, ctypes.POINTER(GESTUREINFO))
+            user32.CloseGestureInfoHandle.restype = wt.BOOL
+            user32.CloseGestureInfoHandle.argtypes = (ctypes.c_void_p,)
+            gestures = touch_enabled()
+        except AttributeError:
+            gestures = False
+        pans = {}          # Canvas の窓 → [前の指の y, ホイールの端数]
+
+        def pan(hwnd, lparam, target):
+            """パンを受けたら True（ホイールを送った・始まり・終わり）。ほかのジェスチャーは False。"""
+            info = GESTUREINFO()
+            info.cbSize = ctypes.sizeof(GESTUREINFO)
+            if not user32.GetGestureInfo(ctypes.c_void_p(lparam), ctypes.byref(info)):
+                return False
+            if info.dwID == GID_BEGIN:
+                pans.pop(hwnd, None)
+                return False                     # 始まりは既定の手続きへ（ほかのジェスチャーも決まる）
+            if info.dwID == GID_END:
+                pans.pop(hwnd, None)
+                return False
+            if info.dwID != GID_PAN:
+                return False
+            state = pans.get(hwnd)
+            if state is None:
+                pans[hwnd] = [info.y, 0.0]
+            else:
+                delta, state[1] = pan_wheel(state[0], info.y, state[1])
+                state[0] = info.y
+                if delta:
+                    delta = max(-32768, min(32767, delta))
+                    user32.PostMessageW(target, WM_MOUSEWHEEL, (delta & 0xFFFF) << 16,
+                                        ((info.y & 0xFFFF) << 16) | (info.x & 0xFFFF))
+            user32.CloseGestureInfoHandle(ctypes.c_void_p(lparam))
+            return True
+
         def forward(hwnd, msg, wparam, lparam, uid, target):
             # ★ Tk を呼ばない
             if msg in MOUSE_MESSAGES:
                 user32.PostMessageW(target, msg, wparam, lparam)
                 return 0
+            if msg == WM_GESTURE and gestures:
+                try:
+                    if pan(hwnd, lparam, target):
+                        return 0                 # 受けた（閉じた）パンは既定の手続きへ渡さない
+                except Exception:
+                    pass
             if msg == WM_NCDESTROY:
                 comctl.RemoveWindowSubclass(hwnd, _proc, SUBCLASS_ID)
             return comctl.DefSubclassProc(hwnd, msg, wparam, lparam)

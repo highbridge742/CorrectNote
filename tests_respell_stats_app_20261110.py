@@ -92,20 +92,21 @@ class RespellStatsApp(unittest.TestCase):
         app = SimpleNamespace(settings=_Settings(debug_timings={}))
         self.assertEqual(debug_menu.minimum('respell_attempts'), 0)
         self.assertEqual(debug_menu.maximum('respell_attempts', app), 30)
-        self.assertEqual(debug_menu.default('respell_attempts', app), 6)   # 2026-11-10 うにさん「6で進めて」
+        # 11-13 うにの言葉で 6→8 に変更（「手のずれの優先度を下げて、回数は増やしてもいいが抑えてください」）
+        self.assertEqual(debug_menu.default('respell_attempts', app), 8)
         odd_respell.set_attempt_limit(0)
-        debug_menu.apply(app)                          # 保存に無くても既定の 6 を当てる
-        self.assertEqual(odd_respell.ATTEMPT_LIMIT, 6)
-        self.assertEqual(analysis_worker.respell_setting()[1], 6)
+        debug_menu.apply(app)                          # 保存に無くても既定の 8 を当てる
+        self.assertEqual(odd_respell.ATTEMPT_LIMIT, 8)
+        self.assertEqual(analysis_worker.respell_setting()[1], 8)
         debug_menu.set_value(app, 'respell_attempts', 11, save=False)
         self.assertEqual(odd_respell.ATTEMPT_LIMIT, 11)
         self.assertEqual(app.settings['debug_timings'], {'respell_attempts': 11})
         debug_menu.set_value(app, 'respell_attempts', 0, save=False)   # 0＝上限なしも残る（既定ではない）
         self.assertEqual(odd_respell.ATTEMPT_LIMIT, 0)
         self.assertEqual(app.settings['debug_timings'], {'respell_attempts': 0})
-        debug_menu.set_value(app, 'respell_attempts', 6, save=False)   # 既定に戻すと保存から外れる
+        debug_menu.set_value(app, 'respell_attempts', 8, save=False)   # 既定に戻すと保存から外れる
         self.assertEqual(app.settings['debug_timings'], {})
-        self.assertEqual(odd_respell.ATTEMPT_LIMIT, 6)
+        self.assertEqual(odd_respell.ATTEMPT_LIMIT, 8)
         self.assertFalse(app.settings.get(respell_stats.SETTING))     # 既定はオフ
         debug_menu.choose_rank_stats(app, True)
         self.assertTrue(app.settings[respell_stats.SETTING])

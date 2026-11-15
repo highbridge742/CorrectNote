@@ -35,6 +35,37 @@ _STRAY_SYMBOL = re.compile(r'(?<=[\u3041-\u3093])[=＝@＠#＃$＄%％^＾&＆*�
 
 
 
+def _symbol_splits_word(text, a, b):
+    """記号を抜くと、両側の字が1つの語になる（かなの語の中に割り込んだ記号）か。両側がそれぞれ語として成り立つ形
+    （泳ぐ＝運動・休みあり＝週末: 記号で語をつなぐメモの書き方）は紫にしない（2026-11-14 補正担当・全体評価の方針 v1 の2）。
+    CN_STRAY_SYMBOL_SPLIT=0 で前のまま（いつも紫）"""
+    import os
+    if os.environ.get('CN_STRAY_SYMBOL_SPLIT') == '0':
+        return True
+    try:
+        from morphology import tokenize
+        # 記号のすぐ前が助詞・助動詞（家に＝透けて）なら、語をつなぐ書き方ではない（手のずれで記号が混じった跡）
+        left = [t for t in tokenize(text[:a]) if t.end == a]
+        if left and left[-1].pos in ('助詞', '助動詞'):
+            return True
+        joined = text[:a] + text[b:]
+        for t in tokenize(joined):
+            if t.start < a < t.end and t.pos not in ('記号',) and getattr(t, 'has_reading', True):
+                return True
+        return False
+    except Exception:
+        return True
+
+
+def _suffix_kanji(face):
+    """辞書がその漢字1字を名詞に付く語（接尾の一般・助数詞: 段・行・字・型）として持つか。"""
+    try:
+        from morphology import dictionary_inflections
+        return any(r[0].startswith(('名詞,接尾,一般', '名詞,接尾,助数詞')) for r in dictionary_inflections(face) or ())
+    except Exception:
+        return False
+
+
 def _mixed_katakana_word(line, a, b):
     """片仮名1字の後ろのかなを片仮名にすると辞書の片仮名の名詞1語になる所（スくりーん・シャつ）は、混ぜ書きの名詞
     （浮いた1字ではない・2026-11-03 tests_mixed_nominal_argument）。"""
@@ -106,6 +137,18 @@ def _mora(r):
 def _one_kanji_noun(t):
     return (t.pos == '名詞' and len(t.surface) == 1 and _kanji(t.surface)
             and not (t.pos_sub or '').startswith(('接尾', '非自立', '数', '副詞可能')))
+
+
+def _whole_word(face):
+    """名詞＋1字（補助｜輪）が、まとめて1語として表に在るか（seed_japanese.is_unit）。在れば浮いた1字ではない
+    （2026-11-13 全体評価の作った正しい文: 補助輪 の 輪 を除いていた）。CN_BROKEN_WHOLE_WORD=0 で前のまま"""
+    if __import__('os').environ.get('CN_BROKEN_WHOLE_WORD') == '0':
+        return False
+    try:
+        import seed_japanese
+        return seed_japanese.is_unit(face) is True
+    except Exception:
+        return False
 
 
 _EXTRA = ('語の後ろに1字が混じっています', '語の前に1字が混じっています', '言い終わりの後ろに1字が混じっています')
@@ -198,14 +241,22 @@ def spans(text, tokens=None):
             out.append((t.start, q.end, '名詞と動詞のつながりが変です'))
         if _one_kanji_noun(t) and _mora(t.reading) == 1:
             if (p and p.pos == '名詞' and _kanji(p.surface) and len(p.surface) >= 2
-                    and not (p.pos_sub or '').startswith(('副詞可能', '数')) and q and q.pos == '助詞'):
+                    and not (p.pos_sub or '').startswith(('副詞可能', '数')) and q and q.pos == '助詞'
+                    and not _whole_word(p.surface + t.surface)):
                 out.append((p.start, t.end, '語の後ろに1字が混じっています'))
             if (p and p.pos == '助詞' and q and q.pos == '名詞' and len(q.surface) >= 2 and _kanji(q.surface[:1])
-                    and (_kanji(q.surface) or (q.pos_sub or '').startswith('副詞可能'))):
+                    and (_kanji(q.surface) or (q.pos_sub or '').startswith('副詞可能'))
+                    and not _whole_word(t.surface + q.surface)):
                 out.append((t.start, q.end, '語の前に1字が混じっています'))
             if (p and p.pos in ('助動詞', '動詞', '形容詞') and (q is None or q.pos == '助動詞' or q.pos == '記号')
                     and not ((p.infl_form or '') in ('基本形', '体言接続', '連体形') and q is not None and q.pos == '助動詞'
                              and __import__('os').environ.get('CN_BROKEN_ATTR_NOUN') != '0')
+                    # 言い切り・連体の形＋行末の1字の名詞（母が描いた画）は名詞を修飾する正しい形（2026-11-14 全体評価の方針 v2 の L）。
+                    # 動詞・た の後ろで、名詞の一般の語だけ。CN_BROKEN_ATTR_END=0 で前のまま
+                    and not ((p.infl_form or '') in ('基本形', '体言接続', '連体形') and p.pos in ('動詞', '助動詞')
+                             and (p.pos == '動詞' or p.surface == 'た') and (t.pos_sub or '') == '一般'
+                             and (q is None or q.surface in '。．.！？!?')
+                             and __import__('os').environ.get('CN_BROKEN_ATTR_END') != '0')
                     and not ((p.infl_form or '') in ('基本形', '体言接続', '連体形') and q is not None and q.surface in '、，,'
                              and _long_noun_reading(t.surface)
                              and __import__('os').environ.get('CN_BROKEN_ATTR_COMMA') != '0')):
@@ -213,9 +264,37 @@ def spans(text, tokens=None):
                 # 言い切り・連体の形＋1字の名詞＋だ・です（いい子だから・赤い花だ）は名詞を修飾する正しい形（2026-11-07）
                 out.append((t.start, t.end, '言い終わりの後ろに1字が混じっています'))
         if (_one_kanji_noun(t) and p and q and p.pos not in ('助詞', '記号', '連体詞', '接頭詞', '形容詞', '名詞')
-                and q.pos not in ('助詞', '記号', '助動詞', '名詞')):
+                and q.pos not in ('助詞', '記号', '助動詞', '名詞')
+                # 前の漢字1字（解析が動詞と見た 採）とつないだ2字が表の1語（採水）なら、解析の切り違いで浮いた1字ではない
+                # （2026-11-15 補正担当・作った正しい文）。CN_BROKEN_LONE_JOIN=0 で前のまま
+                and not (len(p.surface) == 1 and _kanji(p.surface) and _whole_word(p.surface + t.surface)
+                         and __import__('os').environ.get('CN_BROKEN_LONE_JOIN') != '0')):
             out.append((t.start, t.end, '1字だけ浮いています'))
-        if _kata(t.surface) and len(t.surface) <= 2:
+        # 片仮名1字が漢字の語にすぐ付いて複合語を作る所（オ段・ウ段・A案）は、メモの普通の書き方。打ち違いの跡と見ない
+        # （2026-11-14 補正担当・全体評価の方針 v1 の3: 残すのは、ひらがなの並びに挟まる片仮名1字）。CN_KATA_ONE_COMPOUND=0 で前のまま
+        # 形は「助詞＋片仮名1字＋漢字1字の語＋助詞か行末」だけ（音が｜オ｜段｜で）。片仮名1字が漢字の語の後ろ（準備ガ）・
+        # 行の頭（リ勝）・2字以上の漢字の語の前（チ時間）は打ち違いの跡のことが多い（cases_full 692行で5行が紫を失った）
+        _r = tokens[i + 2] if i + 2 < n else None
+        _kata_compound = (len(t.surface) == 1 and _kata(t.surface) and __import__('os').environ.get('CN_KATA_ONE_COMPOUND') != '0'
+                          and ((p is not None and p.pos in ('助詞', '記号'))
+                               # 行の頭は、後ろが の・で・は・も・行末の時だけ（ア段の音・カ行は）。行の頭の 片仮名1字＋漢字1字＋を
+                               # （リ勝を送る）は打ち違いの跡だった
+                               or (p is None and (_r is None or _r.surface in ('の', 'で', 'は', 'も', '、', '。'))))
+                          and q is not None and q.start == t.end and len(q.surface) == 1 and _kanji(q.surface)
+                          and _suffix_kanji(q.surface)
+                          and (_r is None or _r.pos in ('助詞', '記号')))
+        # 接頭の漢字（全・新・各）のすぐ後ろの片仮名2字の名詞（全｜タブ）は、接頭＋外来語の普通の書き方
+        # （2026-11-14 補正担当、未解決タブ40行目の型）。CN_KATA_AFTER_PREFIX=0 で前のまま
+        _prefix_kata = (p is not None and p.pos == '接頭詞' and t.pos == '名詞' and len(t.surface) == 2
+                        and getattr(t, 'has_reading', True) and __import__('os').environ.get('CN_KATA_AFTER_PREFIX') != '0')
+        # 漢字の名詞に挟まれた身近な片仮名2字の名詞（隣接｜キー｜補正）は、外来語を挟んだ複合語の普通の書き方
+        # （2026-11-14 未解決タブの正しい文）。CN_KATA_IN_COMPOUND=0 で前のまま
+        _known_kata = (len(t.surface) == 2 and t.pos == '名詞' and getattr(t, 'has_reading', True)
+                       and p is not None and q is not None and p.pos == '名詞' and q.pos == '名詞'
+                       and (p.pos_sub or '').startswith('サ変')     # 隣接｜キー（する名詞＋外来語）。先輩｜イン は見ない
+                       and _kanji(p.surface[-1:]) and _kanji(q.surface[:1]) and _kata_common(t.surface)
+                       and __import__('os').environ.get('CN_KATA_IN_COMPOUND') != '0')
+        if _kata(t.surface) and len(t.surface) <= 2 and not _kata_compound and not _prefix_kata and not _known_kata:
             if p and q and _kanji(p.surface[-1:]) and _kanji(q.surface[:1]):
                 out.append((t.start, t.end, '片仮名が混じっています'))
             elif (q and _kanji(q.surface[:1]) and not (q.pos_sub or '').startswith('接尾') and (not p or p.pos == '助詞')
@@ -223,7 +302,7 @@ def spans(text, tokens=None):
                 out.append((t.start, q.end, '片仮名が混じっています'))
             elif p and _kanji(p.surface[-1:]) and q and q.pos != '助詞' and q.pos != '記号':
                 out.append((t.start, t.end, '片仮名が混じっています'))
-        if (len(t.surface) == 1 and _kata(t.surface) and t.surface not in 'ーヶヵ'
+        if (len(t.surface) == 1 and _kata(t.surface) and t.surface not in 'ーヶヵ' and not _kata_compound
                 and not (p and _kata(p.surface[-1:])) and not (q and _kata(q.surface[:1])) and (p or q)
                 and not (p and p.pos == '記号' and (q is None or q.pos == '記号'))
                 and not _mixed_katakana_word(text, t.start, t.end)):
@@ -274,6 +353,8 @@ def spans(text, tokens=None):
         if ch in '゛゜ﾞﾟ' and not (k and text[k - 1] in '「『（(\'"“‘【［[') and (k == 0 or not ('\u3041' <= text[k - 1] <= '\u30fa' or '\uff66' <= text[k - 1] <= '\uff9d')):
             out.append((k, k + 1, '付く字の無い濁点が混じっています'))
     for mt in _STRAY_SYMBOL.finditer(text):
+        if not _symbol_splits_word(text, mt.start(), mt.end()):
+            continue
         out.append((mt.start(), mt.end(), '文の途中に記号が混じっています'))
     seen, uniq = set(), []
     for a, b, why in out:
@@ -398,3 +479,12 @@ def repair_line(line, result, decided=(), input_method='kana'):
         out['face_doubt_spans'] = sorted(set(tuple(x[:2]) for x in (result.get('face_doubt_spans') or ()))
                                          | {(a, b) for a, b, _ in merged})
     return out
+
+
+def _kata_common(face):
+    """片仮名の語が身近か（語の使われやすさの順位が 530 以下）。"""
+    try:
+        import ime_reconvert
+        return ime_reconvert._rank(face) <= 530
+    except Exception:
+        return False

@@ -28,6 +28,30 @@ _STOP = set('。、，．！？!?　 「」『』（）()…・')
 _VAUX = ('た', 'ます', 'まし', 'ませ', 'れる', 'られる', 'せる', 'させる', 'ず', 'ぬ', 'る', 'つ')
 
 
+def _familiar_end_noun(surface):
+    """動詞の言い切り＋名詞で終わる行（写真を切り抜きする道具・3都市間を走る列車）は、メモ・見出しの体言止めとして普通。
+    名詞が身近な語（kango_tier の1段目）なら打ち違いの跡と見ない（2026-11-14 補正担当・全体評価の方針 v1 の1）。
+    CN_POS_SEQ_END_FAMILIAR=0 で前のまま"""
+    if os.environ.get('CN_POS_SEQ_END_FAMILIAR') == '0':
+        return False
+    try:
+        import kango_tier
+        if kango_tier.known_usage_tier(surface) == 1:
+            return True
+    except Exception:
+        pass
+    # 身近の表に無くても、辞書の1語の名詞（道すじ・感じ・天体・山脈）で、漢字1字の切れ端でない語は打ち違いの跡と見ない
+    # （2026-11-14 全体評価の方針 v2 の I: 名詞の身近さでなく打ち違いの跡で決める）。CN_POS_SEQ_END_DICT=0 で身近の表だけ
+    if os.environ.get('CN_POS_SEQ_END_DICT') == '0' or len(surface) < 2:
+        return False
+    try:
+        from morphology import dictionary_inflections
+        return any(r[0].startswith('名詞,') and not r[0].startswith(('名詞,固有名詞', '名詞,接尾', '名詞,非自立'))
+                   and r[2] == surface for r in dictionary_inflections(surface) or ())
+    except Exception:
+        return False
+
+
 def _hira(s):
     return bool(s) and all('ぁ' <= c <= 'ゖ' for c in s)
 
@@ -156,7 +180,7 @@ def spots(line):
                           # （2026-11-09 うに 未解決タブの誤判定の行）。CN_POS_SEQ_WO_SAHEN=0 で前のまま
                           and not (ts.startswith('サ変接続') and os.environ.get('CN_POS_SEQ_WO_SAHEN') != '0'))
                          or (p.pos == '動詞' and ps.startswith('自立') and getattr(p, 'infl_form', '') == '基本形'
-                             and len(t.surface) >= 2))):
+                             and len(t.surface) >= 2 and not _familiar_end_noun(t.surface)))):
                 out.append((p.start, t.end, f'「{p.surface}」のすぐ後ろの「{t.surface}」で文が終わります'))
             elif t.surface == 'ずつ' and t.pos == '助詞' and p.pos == '助詞':
                 out.append((p.start, t.end, f'「{p.surface}」のすぐ後ろに「ずつ」は続きません'))
@@ -203,7 +227,15 @@ def _names_command(toks, i):
     if os.environ.get('CN_POS_SEQ_VO_COMMAND') == '0' or i + 1 >= len(toks):
         return False
     n = toks[i + 1]
-    return (n.base_form or n.surface) in _PICK_VERBS or n.surface in _PICK_VERBS
+    if (n.base_form or n.surface) in _PICK_VERBS or n.surface in _PICK_VERBS:
+        return True
+    # 操作・参照を表す サ変の名詞＋する（参照してください・確認します）も同じ。画面の機能名（取り込む）を括弧なしで
+    # 書いて を で受ける書き方（2026-11-15 全体評価: 未解決タブ37行目は正しい文）。CN_POS_SEQ_VO_SAHEN=0 で前のまま
+    if (os.environ.get('CN_POS_SEQ_VO_SAHEN') != '0' and n.pos == '名詞' and (n.pos_sub or '').startswith('サ変接続')
+            and i + 2 < len(toks) and toks[i + 2].pos == '動詞' and toks[i + 2].base_form == 'する'
+            and toks[i + 2].start == n.end):
+        return True
+    return False
 
 
 def _in_world_kana_word(line, a, b, dict_index):

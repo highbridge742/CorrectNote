@@ -49,7 +49,9 @@ def run(requests, wait=1.2, later=()):
     inbox, outbox = queue.Queue(), queue.Queue()
     for r in requests:
         inbox.put(r)
-    with patch.object(W, 'Runtime', FakeRuntime):
+    # WARM_IDLE_S の既定が 0.3 から 2.0 になったため、この試験の時刻の前提（0.3秒）を当てる（CN_WARM_IDLE_S=0.3 と同じ。
+    # 値は import の時に読まれるので、モジュールの値を差し替える）
+    with patch.object(W, 'Runtime', FakeRuntime), patch.object(W, 'WARM_IDLE_S', 0.3):
         th = threading.Thread(target=W._serve_requests, args=(inbox, outbox, Owner()), daemon=True)
         th.start()
         for delay, r in later:

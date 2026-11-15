@@ -37,6 +37,12 @@ def propose(text, input_method='kana'):
         if (os.environ.get('CN_NPS_KANA_VERB') != '0'
                 and not any('ぁ' <= c <= 'ゖ' for c in v.surface)):
             continue
+        # 形容詞の基本形は名詞の前に置く形（ぐらいの高い山・などの細かい点）なので、副助詞＋の の後ろでも文の形になる。
+        # 行がそこで終わっても、次の行の名詞へ続く書き方がある（2026-11-12 未解決タブの誤判定: ぐらいの高い → ぐらいに高い）。
+        # CN_NPS_ADJ_ATTR=0 で前のまま
+        if (os.environ.get('CN_NPS_ADJ_ATTR') != '0' and v.pos == '形容詞'
+                and (getattr(v, 'infl_form', '') or '').startswith('基本形')):
+            continue
         here = morphology.path_cost(text)
         if here is None:
             continue

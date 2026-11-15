@@ -87,6 +87,11 @@ def boundary_marker_spans(text, boundaries):
     return tuple((stop - 1, stop) for stop in boundaries
                  if 0 < stop < len(text))
 
+
+# bare() の窓を dump 1回で見る（CN_BARE_DUMP=0 で前の tag nextrange の形）
+import os as _os
+DUMP_WINDOW=_os.environ.get('CN_BARE_DUMP')!='0'
+
 class BoundaryColors:
     SETTLE_MS = 180
     # Rows that scroll into view get their marks once the view has settled.
@@ -289,13 +294,25 @@ class BoundaryColors:
             if not alive:return True
             if row>window[0]:
                 last=row+span-1;end=f'{last+1}.0';rows=set()
-                for tag in alive:
-                    index=f'{row}.0'
-                    while True:
-                        found=w.tag_nextrange(tag,index,end)
-                        if not found:break
-                        tagged=int(str(found[0]).split('.')[0]);rows.add(tagged)
-                        index=f'{tagged+1}.0'
+                if DUMP_WINDOW:
+                    # 窓の中のタグの始まりを1回の dump で（品詞ごと・行ごとに tag nextrange を聞くと、1打で約590回
+                    # 呼んでいた・2026-11-15）。範囲は行の中にあるので、始まり（tagon）の行＝前と同じ行
+                    # タイトルと目次を本文の中に置く形（title_inline）では、行をずらして生の欄に聞く（返る位置を1つずつ直さない）
+                    raw=getattr(w,'_cn_body_raw',None);state=getattr(w,'_cn_body_state',None)
+                    h=int(state['h']) if raw and state else 0
+                    wanted=set(alive)
+                    items=w.tk.splitlist(w.tk.call(raw if h else w._w,'dump','-tag',f'{row+h}.0',f'{last+1+h}.0'))
+                    for k in range(0,len(items)-2,3):
+                        if str(items[k])=='tagon' and str(items[k+1]) in wanted:
+                            rows.add(int(str(items[k+2]).split('.')[0])-h)
+                else:
+                    for tag in alive:
+                        index=f'{row}.0'
+                        while True:
+                            found=w.tag_nextrange(tag,index,end)
+                            if not found:break
+                            tagged=int(str(found[0]).split('.')[0]);rows.add(tagged)
+                            index=f'{tagged+1}.0'
                 window[0]=last;window[1]=rows
             return row not in window[1]
         return bare

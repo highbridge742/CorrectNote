@@ -13,7 +13,9 @@ class IMECommitEvidenceTkTests(unittest.TestCase):
         self.root=tk.Tk();self.root.withdraw()
         a=self.a=SimpleNamespace(root=self.root,editor=tk.Text(self.root,undo=True),ime_readings=IMEReadings(),
             _ime_pairs_dirty=False,_ime_comp='資料',_ime_comp_reading='ｼﾘｮｳ',_ime_first_kana='しりょう',
-            _ime_last_result='',_IME_POLL_IDLE_MS=150,_IME_POLL_ACTIVE_MS=30,_on_change=Mock(),_ime_reading_tick=Mock())
+            _ime_last_result='',_IME_POLL_IDLE_MS=150,_IME_POLL_ACTIVE_MS=30,_on_change=Mock(),_ime_reading_tick=Mock(),
+            # v1.17.0 から _ime_reading_tick が頭で呼ぶ（窓の手続きが積んだ確定の受け渡し）。作り物には積む物が無い
+            _take_ime_commits=Mock())
         a._remember_ime_pair=MethodType(app.CorrectNoteApp._remember_ime_pair,a)
         a._input_document=Document(W.owner(a),'');W.install(a)
     def tearDown(self):

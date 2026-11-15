@@ -192,8 +192,25 @@ def _pred_marks(toks, pairs):
         if not best:
             continue
         best.sort(reverse=True)
+        if best[0][0] < PRED_FIX and os.environ.get('CN_PAIR_PRED_BROAD') != '0' \
+                and _pred_breadth(p.surface, base) >= PRED_BROAD:
+            # 元の 助詞＋述語 が例文で多くの名詞を取る（を閉める: ドア・窓・店…）なら、この名詞との組が例文に無いだけでは
+            # 選び違いの証にならない。別の述語の組も少ない（PRED_FIX 未満）なら紫にしない（作った正しい文: 家の鍵を閉める が
+            # 鍵を締める 3回 だけで紫になっていた・2026-11-14）
+            continue
         marks.append((t.start, t.end, best[0][1] if len(best) == 1 and best[0][0] >= PRED_FIX else None))
     return marks
+
+
+PRED_BROAD = 15      # 元の 助詞＋述語 が例文でこれだけ以上の名詞を取るなら、組の無さだけで紫にしない
+
+
+def _pred_breadth(particle, verb):
+    try:
+        import correction_entry
+        return len(correction_entry._frame_nouns(particle, verb))
+    except Exception:
+        return 0
 
 
 def _key_alternatives(noun, reading):

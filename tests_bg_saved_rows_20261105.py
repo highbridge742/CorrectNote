@@ -74,6 +74,9 @@ def child():
             lines = a.session.tabs[1]['text'].split(chr(10))
             kept = {line for i, line in enumerate(lines) if i % 2 and line}
             rest = {line for i, line in enumerate(lines) if not i % 2 and line}
+            # 控えを読むのは起動の準備（_poll_warmup）が済んでから。作った直後にはまだ無いことがあるので待つ
+            # （2026-11-15: 待たずに見て AttributeError で落ちていた。待てば通る＝読む中身は変わっていない）
+            wait(lambda: hasattr(a, '_analysis_partial'), 60)
             assert a._analysis_partial, 'the file was not read'
             wait(lambda: rest <= set(sent))
             assert not (kept & set(sent)), ('rows in the file were read again', len(kept & set(sent)))

@@ -4953,6 +4953,8 @@ def with_last_keystroke_repair(fn):
             found = None
         if found and _breaks_kana_word(line, found, options.get('dict_index'), result):
             found = None
+        if found and _breaks_known_katakana(line, found, options.get('dict_index'), result):
+            found = None
         if found and _keeps_sure_mark(line, found):
             found = None
         if not found:
@@ -5068,6 +5070,44 @@ def _kana_word_span(text, pos, end, dict_index):
     except Exception:
         pass
     return best
+
+
+def _breaks_known_katakana(line, found, dict_index, result=None):
+    """1打の直し found が、紫も迷いも無い所の片仮名の語（世の中の語の表に在る2字以上の連なり）を崩すか。
+    かな入力の片仮名は IME で変換して確定した語で、ひらがなの1打の打ち違いの跡ではない（デフォルトは**オン**で を
+    ん に崩していた。2026-11-15）。紫か迷いが掛かっている所は、これまでどおり直してよい。
+    CN_KEEP_KNOWN_KATAKANA=0 で前のまま。"""
+    import os
+    if os.environ.get('CN_KEEP_KNOWN_KATAKANA') == '0':
+        return False
+    try:
+        _text, _inner, (lo, hi, _face) = found
+    except Exception:
+        return False
+    hi = max(hi, lo + 1)
+    marks = [tuple(x[:2]) for x in ((result or {}).get('odd_spans') or ())]
+    marks += [tuple(x[:2]) for x in ((result or {}).get('unsure_spans') or ())]
+    try:
+        import corrector
+    except Exception:
+        return False
+
+    def kata(c):
+        return corrector.is_katakana(c) or c == 'ー'
+    for k in range(lo, min(hi, len(line))):
+        if not kata(line[k]):
+            continue
+        a = k
+        while a > 0 and kata(line[a - 1]):
+            a -= 1
+        b = k
+        while b < len(line) and kata(line[b]):
+            b += 1
+        if b - a < 2 or any(x < b and a < y for x, y in marks):
+            continue
+        if corrector._katakana_known_or_compound(line[a:b], dict_index):
+            return True
+    return False
 
 
 def _breaks_kana_word(line, found, dict_index, result=None):

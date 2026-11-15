@@ -1,0 +1,18 @@
+{
+ "version": 1,
+ "rules": [
+  {"id": "wago_kana", "label": "和語の名詞・形容詞はかなのまま", "label_en": "Keep native Japanese nouns and adjectives in kana",
+   "description": "訓読みの語（おもちゃ・ちいさい・むすめ など）を、読みを変えずに漢字にしない。漢語（でんわ・しょくじ）は漢字にする",
+   "description_en": "Words read with native readings (e.g. omocha, chiisai) are not turned into kanji. Sino-Japanese words (denwa, shokuji) are.",
+   "on": true, "members": ["wago_noun", "wago_katakana", "wago_respell", "lattice_wago_noun"]},
+  {"id": "function_kana", "label": "形式名詞・補助の動詞・接続詞はかなのまま", "label_en": "Keep formal nouns, auxiliary verbs and conjunctions in kana",
+   "description": "ところ・こと・〜ている・〜ておく・ところで などを漢字にしない",
+   "description_en": "Words such as tokoro, koto, -te iru, -te oku and tokorode are not turned into kanji.",
+   "on": true, "members": ["function_word", "aux_verb"], "targets_from": ["wago_verb._KANA_VERBS", "correction_entry._FORMAL_KANA_NOUNS"]},
+  {"id": "verb_kanji", "label": "和語の動詞は漢字にする", "label_en": "Turn native Japanese verbs into kanji",
+   "description": "かなだけの行の動詞（はなす・よむ など）を漢字にする。オフにすると動詞もかなのまま",
+   "description_en": "Verbs in kana-only lines (hanasu, yomu) are written in kanji. When off, verbs stay in kana.",
+   "on": true, "members": ["wago_verb_kanji"]}
+ ],
+ "words": ["あなた", "あまい", "あらかじめ", "ありがとう", "あるいは", "あんこ", "いう", "いく", "いたす", "いただく", "いちご", "いちばん", "いったん", "いろいろ", "いわし", "うどん", "うなぎ", "うまい", "うれしい", "えのき", "おいしい", "おおきい", "おかげ", "おかゆ", "おかわり", "おしえる", "おでん", "おにぎり", "おめでとう", "おもしろい", "おもち", "カタカナ", "かつお", "かなしい", "からあげ", "からい", "かわいい", "きく", "きれい", "くる", "こども", "ごはん", "ごま", "ごめんなさい", "さすが", "さっそく", "さつまいも", "さば", "さびしい", "さまざま", "さらに", "さんま", "しいたけ", "しめじ", "しょうゆ", "しょっぱい", "しれない", "じゃがいも", "すいか", "すきやき", "すぎない", "すこし", "すごい", "すっぱい", "すでに", "せんべい", "そうめん", "そば", "たくさん", "ただし", "たとえば", "たのしい", "たべる", "たまねぎ", "ため", "だいふく", "だれ", "ちがいない", "ちなみに", "ちょうど", "ちょっと", "つけもの", "てんぷら", "できる", "とおり", "とき", "ところ", "ともだち", "とりあえず", "どこ", "なお", "なに", "にがい", "にんじん", "にんにく", "のむ", "ひらがな", "ふりかけ", "ぶどう", "ぶり", "ほうれんそう", "ほか", "ほしい", "ほとんど", "まいる", "まさに", "ますます", "まるで", "まんじゅう", "みかん", "みそ", "みそしる", "みりん", "みる", "みんな", "むしろ", "むずかしい", "むだ", "もっとも", "もつ", "もも", "やきとり", "やさしい", "ようかん", "よろしく", "りんご", "わかめ", "わかる", "わけ", "わさび", "わずか", "わたし"]
+}

@@ -127,6 +127,20 @@ def _token_rarity(t, tokens=None):
             pair = u.surface + face if u.end == t.start else face + u.surface if u.start == t.end else None
             if pair and DOUBT <= _rank(pair) < 800:
                 r = max(r, _rank(pair))
+    if (DOUBT <= r and t.pos == '名詞' and os.environ.get('CN_RECONVERT_DERIVED') != '0'
+            and not str(t.pos_sub or '').startswith(('固有名詞', '接尾', '非自立')) and _dict_one_noun(face)):
+        # 辞書が1語の名詞と読む複合・派生の形（枯れ＋葉・読み＋物）で、部品がどれも身近な語（DOUBT より前）なら、
+        # 表で珍しく出るのは複合の形だからで、打ち違いの跡ではない（2026-11-14 補正担当・全体評価の方針 v2 の O）。
+        # 部品は、送りがなの在る前の部品（枯れ）か、どちらも2字以上の時だけ（漢字1字どうし 死＋霊 は見ない）
+        for k in range(1, len(face)):
+            a, b = face[:k], face[k:]
+            if not (_strong(a) and _strong(b)):
+                continue
+            if not ((len(a) >= 2 and a[-1] >= 'ぁ' and a[-1] <= 'ゖ' and _kanji(a[0])) or (len(a) >= 2 and len(b) >= 2)):
+                continue
+            ra, rb = _rank(a), _rank(b)
+            if ra < DOUBT and rb < DOUBT:
+                return min(r, max(ra, rb))
     if r >= 800 and t.pos == '名詞':
         # 接頭の1字＋表の語（再＋描画・未＋登録）は、後ろの語の珍しさで見る。CN_RECONVERT_SEED_WORD=0 で前のまま
         if (len(face) >= 3 and _kanji(face[0]) and _seed_word(face[1:]) and _prefix_kanji(face[0])):
@@ -334,6 +348,14 @@ def _faces_index():
 
 
 @lru_cache(maxsize=4096)
+def _dict_one_noun(face):
+    try:
+        from morphology import dictionary_inflections
+        return any(x[0].startswith('名詞,') and x[2] == face for x in dictionary_inflections(face) or ())
+    except Exception:
+        return False
+
+
 def _compound_verb_rarity(face):
     try:
         from morphology import tokenize
@@ -342,7 +364,11 @@ def _compound_verb_rarity(face):
     best = None
     for k in range(1, len(face) - 1):
         head, tail = face[:k], face[k:]
-        if not _strong(head) or not _strong(tail[:1]):
+        # 連用形＋かなの動詞（読み＋かける・書き＋はじめる）は、語の表に無い派生の形。かなの動詞は珍しさを持たないので、
+        # 前の動詞の珍しさで見る（2026-11-14 補正担当・全体評価の方針 v2 の O）。CN_RECONVERT_DERIVED=0 で前のまま
+        kana_tail = (os.environ.get('CN_RECONVERT_DERIVED') != '0' and len(tail) >= 2
+                     and all('ぁ' <= c <= 'ゖ' for c in tail))
+        if not _strong(head) or not (_strong(tail[:1]) or kana_tail):
             continue
         tt = list(tokenize(tail))
         if len(tt) != 1 or tt[0].pos != '動詞' or tt[0].surface != tail:
@@ -350,7 +376,10 @@ def _compound_verb_rarity(face):
         ht = list(tokenize(head + 'ます'))
         if not ht or ht[0].pos != '動詞' or ht[0].surface != head or not getattr(ht[0], 'base_form', ''):
             continue
-        v = max(_rank(ht[0].base_form), _rank(getattr(tt[0], 'base_form', '') or tail))
+        if kana_tail and not _strong(tail):
+            v = _rank(ht[0].base_form)
+        else:
+            v = max(_rank(ht[0].base_form), _rank(getattr(tt[0], 'base_form', '') or tail))
         best = v if best is None else min(best, v)
     return best
 

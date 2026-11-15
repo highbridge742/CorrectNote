@@ -190,6 +190,18 @@ def preserves_nominal_spelling_context(source,start,end,surface):
     return True
 
 
+def _is_kanji(c):
+    return '\u4e00'<=c<='\u9fff' or c in '々〆'
+
+
+def _kanji_first(frame,result):
+    import os
+    if os.environ.get('CN_MEANING_KANJI_FIRST')!='0' and any(_is_kanji(c) for c in frame.get('surface','') or ''):
+        kanji=tuple(s for s in result if any(_is_kanji(c) for c in s))
+        if kanji:return kanji
+    return result
+
+
 def candidates(frame):
     if frame['kind']=='familiar_nominal':return frame['ordinary_faces']
     if frame.get('owner_spelling'):
@@ -202,7 +214,7 @@ def candidates(frame):
     if 'inflection' in frame:return _action_candidates(frame)
     role=_expected_role(frame)
     cache=_CORRECTION_CACHE.get();key=('meaning_candidates',frame['kind'],role,frame['reading'])
-    if cache is not None and key in cache:return cache[key]
+    if cache is not None and key in cache:return _kanji_first(frame,cache[key])
     # The same native nominal/quantity evidence remains usable when the
     # operating system cannot supply conversion candidates. Generation does
     # not choose a sense: exact reading, native form and the source role are
@@ -217,8 +229,12 @@ def candidates(frame):
         (native_spelling_only(frame['reading'],s) if frame['kind']=='geometric_count' else
          any(pos.startswith('名詞,') and rd==frame['reading']
              for pos,form,base,rd in dictionary_inflections(s) or ())))
+    # 漢字の原文（日本）の意味の直しに、読みをそのまま仮名で書いた形（にほん）は別の意味の表記にならない。漢字の候補（二本）が
+    # 在る時は仮名だけの候補を外す（PC の IME の候補一覧が仮名の形も出し、2つ並んで紫だけになっていた・2026-11-14 補正担当）。
+    # CN_MEANING_KANJI_FIRST=0 で前のまま
+    # 控えには外す前の候補を入れ、控えから返す時にも同じく外す（控えの鍵に原文の表記が入らないため）
     if cache is not None:cache[key]=result
-    return result
+    return _kanji_first(frame,result)
 
 
 def supports_replacement(target,changed,local_start,local_end,surface):

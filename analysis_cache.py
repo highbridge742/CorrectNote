@@ -520,7 +520,17 @@ def build_fingerprint(app_dir, app_version, input_method, recent_words,
         'decisions': _small_store_stamp(
             decisions, ('rejected_list', 'protected_list')),
         'choices': _small_store_stamp(choices, ('all_records',)),
+        # ひらがなのまま通す語の一覧（kana_keep_list・2026-11-14 うにさん）。一覧が変われば控えは使わない
+        'kana_keep': _kana_keep_stamp(),
     }
+
+
+def _kana_keep_stamp():
+    try:
+        import kana_keep_list
+        return kana_keep_list.version()
+    except Exception:
+        return None
 
 
 # 48-WN: 正常/未完を取り違えないため、診断と停止理由も保存する。
@@ -640,7 +650,7 @@ def next_generation():
         return _GENERATION_COUNTER[0]
 
 
-def save(path, fingerprint, tabs, partial=None, generation=None):
+def save(path, fingerprint, tabs, partial=None, generation=None, keep_texts=None):
     """
     控えを書き出す。
 
@@ -697,6 +707,21 @@ def save(path, fingerprint, tabs, partial=None, generation=None):
         total += len(lines)
         entries.append({'text': text, 'tab_has_kana': _tab_kana(text), 'partial': True,
                         'results': [None if r is None else _pack(r) for r in kept]})
+    # 本体のメモリの控え（12タブ）から落ちた、まだ開いているタブの控え（2026-11-15 うにさん: 戻ったタブを大きく
+    # 解き直していた）。書き直す前のファイルに同じ指紋で在れば、そのまま残す（中身は前に書いた形のまま・照合は読む時に
+    # load_all と同じ）。keep_texts＝いま開いているタブの本文の鍵。既定はオン（2026-11-15・既存の試験の3件を片付けてから）。CN_ANALYSIS_DISK_KEEP=0 で前の形
+    if keep_texts and os.environ.get('CN_ANALYSIS_DISK_KEEP') != '0':
+        have = {e['text'] for e in entries}
+        for entry in _entries_on_disk(path, fingerprint):
+            text = entry.get('text')
+            if not isinstance(text, str) or text in have or text not in keep_texts:
+                continue
+            n = len(text.split('\n'))
+            if total + n > MAX_CACHED_LINES:
+                continue
+            total += n
+            have.add(text)
+            entries.append(entry)
     if not entries:
         try:
             if os.path.exists(path):
@@ -722,6 +747,27 @@ def save(path, fingerprint, tabs, partial=None, generation=None):
             return True
         except Exception:
             return False
+
+
+def _entries_on_disk(path, fingerprint):
+    """ファイルに書いてある控えの欄（同じ指紋の時だけ・形は書いたまま）。"""
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception:
+        return []
+    if not isinstance(data, dict) or data.get('fingerprint') != fingerprint:
+        return []
+    return [e for e in data.get('tabs') or () if isinstance(e, dict)]
+
+
+def lookup(path, fingerprint, text):
+    """ファイルの控えから、この本文の行の結果（済んだタブなら全部、途中のタブなら済んでいない行は None）。
+    照合は起動の時の load_all と同じ。無ければ None。"""
+    out, partial = load_all(path, fingerprint)
+    if text in out:
+        return out[text]
+    return partial.get(text)
 
 
 def load(path, fingerprint):

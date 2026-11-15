@@ -112,8 +112,10 @@ class RowReuseTests(unittest.TestCase):
         self.check('vocab_in_text', lambda a: a.store.add('しりょう', '試料', category='その他'))
 
     def test_3_a_choice(self):
+        # 11-08 batch359 で学んだ語と最後の選択を既定で使わなくなった（last_choice.LEARNED_OFF）ので、選択を覚えても
+        # 答えの変わる行は無い（やり直す行が無くてよい。残した行と全部やり直した結果の違い0は今までどおり見る）
         self.check('choice', lambda a: a.choices.remember('資料', '資料', reading='しりょう', store=a.store,
-                                                          dict_index=a.dict_index))
+                                                          dict_index=a.dict_index), expect_some_redone=False)
 
     def test_4_a_recent_word(self):
         # 最近使った語を読まない行は使い回す（読む行が無ければ、やり直す行が無くてよい・2026-11-02）

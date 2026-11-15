@@ -89,14 +89,15 @@ ITEMS = (
     ('respell_attempts', '紫の所の読み直し：候補を補正に通す回数の上限',
      'odd_respell', 'ATTEMPT_LIMIT', '回', 0,
      '0 は上限なし。少なくすると速くなるが、後ろの候補で直る行は直らなくなる（答えが変わる）。'
-     '既定の 6 は 2026-11-10 うにさんの指定'),
+     '既定の 8 は 2026-11-13 うにさんの指定（11-10 の 6 から上げた）'),
 )
 # 持ち主に `<名前>_MAX` が無い項目の上限（既定が 0＝上限なしの項目は、既定を上限にできない）
 _MAX = {'respell_attempts': 30}
 # コードの定数ではなく、ここで決める既定（2026-11-10 うにさん「6で進めて」）。この項目は、保存に無くても
 # いつも当てる（apply）。持ち主の定数の既定が別の値でも、本体と子へ渡る値（analysis_worker.respell_setting）は
 # いつもこの値か保存した値になる
-_DEFAULT = {'respell_attempts': 6}
+# 2026-11-13 うにさん「手のずれの優先度を下げて、回数は増やしてもいいが抑えてください」を受けて 6→8
+_DEFAULT = {'respell_attempts': 8}
 KEYS = tuple(item[0] for item in ITEMS)
 # 窓の見出し（その鍵の項目の前に出す・2026-10-18 うにさん）。2つ目からは前に1行あける。
 # 打鍵から計算を始めるまで・下準備と打った行を見に行く間隔（1ms／5ms）の4項目は、
@@ -271,10 +272,27 @@ def open_window(app, colors=None):
     tk.Button(rank_row, text='集計を見る…', command=lambda: open_rank_window(app, colors)).pack(
         side='left', padx=(8, 0))
     dlg._rank_on = rank_on
+    # 削除の記録（deletion_log.txt・2026-11-14: 既定はオフ。本文の断片と打鍵が入る）
+    deletion_on = tk.BooleanVar(master=dlg, value=bool(app.settings.get('debug_deletion_log')))
+
+    def toggle_deletion():
+        app.settings.set('debug_deletion_log', bool(deletion_on.get()))
+        try:
+            app.settings.save()
+        except Exception:
+            pass
+    tk.Checkbutton(dlg, text='削除の記録（打った後で文字が勝手に消えた時の証拠を deletion_log.txt に書く。'
+                   '消える前後の行と打鍵が入る）',
+                   variable=deletion_on, command=toggle_deletion, bg=bg, fg=ink, selectcolor=panel,
+                   activebackground=bg, font=('Yu Gothic UI', 9)).pack(anchor='w', padx=12, pady=(0, 6))
+    dlg._deletion_on = deletion_on
     # 解析の記録（項目48-LO・メモリの中の最新40件）。2026-11-09 うにさん「再解析のデバッグは一旦外したまま……一旦外して」：
     # 窓のボタンは CN_DEBUG_TOOLS=1 の時だけ出す（記録そのものはメモリの中だけで、そのまま取っている）
     import os as _os_trace
-    if _os_trace.environ.get('CN_DEBUG_TOOLS') == '1':
+    import sys as _sys_trace
+    # 2026-11-14 うにさん「全体に再解析が入るチェックを開発側に適用して」: 開発版（frozen でない時）では CN_DEBUG_TOOLS に
+    # 関わらず出す。EXE・Store 版は今のまま CN_DEBUG_TOOLS=1 の時だけ
+    if _os_trace.environ.get('CN_DEBUG_TOOLS') == '1' or not getattr(_sys_trace, 'frozen', False):
         tk.Button(dlg, text='解析の記録…', command=lambda: open_trace_window(app, colors)).pack(
             anchor='w', padx=12, pady=(0, 6))
     # スクロールの記録（2026-11-07・本文の欄の一番上の行が変わった時の行番号と関数の名前だけ。本文は残さない）。

@@ -121,6 +121,12 @@ class ParticleChoiceTkTests(unittest.TestCase):
                     self.assertEqual(widget.get('1.0','end-1c'),self.source)
                     a.choices.record.assert_not_called()
                     callback()
+                    if pane=='result' and not app.CorrectNoteApp._choices_take_effect(a):
+                        # 2026-11-14 うにさん「F5再変換で…候補から選んだが、何も変わらなかった」: 選びを覚えない間
+                        # （last_choice.LEARNED_OFF）は、補正欄で選んだ語を本文へ書き込む（覚えるだけでは何も変わらない）
+                        a.choices.record.assert_not_called()
+                        self.assertEqual(a.editor.get('1.0','end-1c'),'前文。文書には、後文。')
+                        continue
                     self.assertEqual(a.choices.record.call_args.args[:2],('文書に気は','文書には'))
                     if pane!='result':
                         self.assertEqual(widget.get('1.0','end-1c'),'前文。文書には、後文。')

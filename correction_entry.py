@@ -664,15 +664,41 @@ def correct_line(line, store, context_vocab=None, decisions=None,
         input_method = 'romaji'
     mtoken = _ODD_RUN_MEMO.set({}) if (_ODD_RUN_MEMO.get() is None
                                        and os.environ.get('CN_ODD_RUN_MEMO') != '0') else None
+    # 1行前（行の頭の助詞の守りが、前の行から続く文かを見る: head_may_continue）。中で回す補正し直しは外の行の値のまま
+    ptoken = _PREV_LINE.set(previous_line) if _PREV_LINE.get() is _PREV_UNKNOWN else None
     try:
         return _correct_line_entry(line, store, context_vocab, decisions, input_method, context_vec, dict_index,
                                    nearby_words, recent_words, occurrence_readings, occurrence_calculations,
                                    occurrence_strokes, tab_has_kana, previous_line, defer_heavy)
     finally:
+        if ptoken is not None:
+            _PREV_LINE.reset(ptoken)
         if mtoken is not None:
             _ODD_RUN_MEMO.reset(mtoken)
         if etoken is not None:
             _lk_e.EARLY_ODD.reset(etoken)
+
+
+_PREV_UNKNOWN = object()
+_PREV_LINE = __import__('contextvars').ContextVar('cn_prev_line', default=_PREV_UNKNOWN)
+
+
+def head_may_continue(previous_line=_PREV_UNKNOWN):
+    """行の頭の助詞（の本は・に別の道具がある）が、前の行から続く文を助詞の所で改行した形でありうるか。
+    1行前が文の途中の字で終わる行のときだけ True。1行前が無い・空の行・文の終わりの字で終わる（アプリは空の行・タブの
+    1行目で previous_line を None で渡す）なら、行の頭の助詞は前から続く文の頭ではなく打ち違いの跡（2026-11-14 未解決タブ:
+    空の行の次の行の頭の助詞を守りが残し、11-13 より前は直っていた1キーの打ち違いが直らなくなった）。
+    correct_line の外から呼ばれて前の行を知らないときは、今まで通り True。CN_HEAD_GUARD_PREV=0 で前のまま（いつも True）"""
+    if os.environ.get('CN_HEAD_GUARD_PREV') == '0':
+        return True
+    if previous_line is _PREV_UNKNOWN:
+        previous_line = _PREV_LINE.get()
+    if previous_line is _PREV_UNKNOWN:
+        return True
+    if not isinstance(previous_line, str):
+        return False
+    prev = previous_line.rstrip('\r\n \u3000')
+    return bool(prev) and prev[-1] not in _SENTENCE_END
 
 
 def _correct_line_entry(line, store, context_vocab, decisions, input_method, context_vec, dict_index,
@@ -1689,6 +1715,14 @@ def _elongation_guard(line, result, store, context_vocab, decisions, input_metho
         import difflib
         ops = [o for o in difflib.SequenceMatcher(None, line, corrected, autojunk=False).get_opcodes() if o[0] != 'equal']
         hit = [o for o in ops if any(o[1] <= b and a <= o[2] for a, b in runs)]
+        if hit and os.environ.get('CN_ELONGATION_CORE') != '0':
+            # 長い並び（ごにゅぅりょくしたきー）の、伸ばしの ー から2字より前だけに掛かる直し（誤入力）は、伸ばしの書き方を
+            # 打ち違いと見た直しではない（2026-11-13 補正担当・未解決タブ）。CN_ELONGATION_CORE=0 で前のまま
+            cores = []
+            for a, b in runs:
+                k = next((i for i in range(a + 1, b) if line[i] == 'ー' and 'ぁ' <= line[i - 1] <= 'ゖ'), a)
+                cores.append((max(a, k - 2), b))
+            hit = [o for o in hit if any(o[1] <= b and a <= o[2] for a, b in cores)]
         if hit and len(hit) == len(ops) and _loan_fix(corrected, hit, line):
             hit = []
         if hit and len(hit) == len(ops):
@@ -2198,6 +2232,16 @@ def _unexplained_change_guard(line, result):
         return result
     out = dict(result)
     out.update({'corrected': line, 'changed': False, 'details': [], 'spans': [], 'original_spans': []})
+    if os.environ.get('CN_CHANGE_GUARD_SAME_READING') != '0':
+        # 書き換えが全部、かなを同じ読みの漢字に置いただけ（ひをけす → ひを消す）なら、元の行は打ったとおりで誤りではない。
+        # 漢字に置くのを止めて元の行に戻すだけにし、紫は付けない（2026-11-14 補正担当: かなだけの正しい短い行に紫が付いた）。
+        # CN_CHANGE_GUARD_SAME_READING=0 で前のまま
+        try:
+            import fixed_still_odd as _fso
+            if _fso.same_reading_line(line, corrected):
+                return out
+        except Exception:
+            pass
     odd = [tuple(o[:2]) for o in (result.get('odd_spans') or ())]
     for sp in spans:
         if not any(o[0] < sp[1] and sp[0] < o[1] for o in odd):
@@ -3202,6 +3246,13 @@ def _far_reading_guard(line, result, decisions):
         # 消えた語の1つに求める（爆睡 → 破壊: 爆睡 は知られた語）
         if not all(t.pos in func or R._rank(t.surface) <= (FAR_KNOWN if t.pos == '名詞' else FAR_COMMON) for t in old):
             continue
+        if os.environ.get('CN_FAR_ALIGN_NEW') != '0':
+            # 直した行の語も、元の行の語の端（a, b）に揃えた所まで広げて読む（日本 → 二本: 字の違いは 日→二 だけで、
+            # 直した側の語が 二 だけになり 本 の読みが落ちた。2026-11-14 補正担当）。CN_FAR_ALIGN_NEW=0 で前のまま
+            na, nb = j1 - (i1 - a), j2 + (b - i2)
+            wide = [t for t in dt if t.start < max(nb, na + 1) and na < t.end]
+            if wide:
+                new = wide
         new_face = ''.join(t.surface for t in new)
         new_rd = hira(''.join(t.reading or t.surface for t in new))
         old_rd = hira(''.join(t.reading or t.surface for t in old))
@@ -3223,6 +3274,14 @@ def _far_reading_guard(line, result, decisions):
             rds.update(hira(x) for x in kanji_guess.ime_readings_for(face))
             parts = [[hira(t.reading or t.surface)] + [hira(x) for x in kanji_guess.ime_readings_for(t.surface)]
                      for t in old]
+            if os.environ.get('CN_FAR_DICT_READINGS') != '0':
+                # 辞書に在るほかの読み（日本: にっぽん・にほん）も比べる。解析の一番の読みだけだと、同じ読みの語
+                # （二本）への直しを読みの遠い直しと見た（2026-11-14 補正担当）。CN_FAR_DICT_READINGS=0 で前のまま
+                from morphology import dictionary_inflections as _dinf
+                for k, t in enumerate(old):
+                    for pos, form, base, rd in (_dinf(t.surface) or ()):
+                        if base == t.surface and rd and hira(rd) not in parts[k]:
+                            parts[k].append(hira(rd))
             import itertools
             for combo in itertools.islice(itertools.product(*parts), 16):
                 rds.add(''.join(combo))
@@ -3846,6 +3905,11 @@ def _lone_kanji_tail(line, result):
     if not (t.pos == '名詞' and len(t.surface) == 1 and '一' <= t.surface <= '鿿' and p.pos == '助詞'
             and p.end == t.start and len([c for c in rd if c not in 'ャュョァィゥェォゃゅょぁぃぅぇぉ']) == 1):
         return result
+    # 連体修飾の の・という の後ろの漢字1字（犬の字・猫という字）は名詞として立つ。紫にしない（2026-11-14 補正担当・
+    # 全体評価の方針 v2 の L）。CN_LONE_KANJI_ATTR=0 で前のまま
+    if os.environ.get('CN_LONE_KANJI_ATTR') != '0' and (str(p.pos_sub or '').startswith('連体化')
+                                                       or p.surface in ('という', 'といった', 'との', 'への')):
+        return result
     # 直した行の位置を元の行に戻す（その所は前の段が触っていない所だけ）
     m = None
     for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, done, line, autojunk=False).get_opcodes():
@@ -3977,8 +4041,17 @@ def _classical_verbs(done, line):
         if T is None:
             return []
         out, at = [], 0
-        for t in T.tokenize(done):
+        toks = list(T.tokenize(done))
+        for k, t in enumerate(toks):
             sf = t.surface
+            nx = toks[k + 1] if k + 1 < len(toks) else None
+            if (len(sf) == 1 and (t.infl_form or '').startswith('体言接続特殊') and nx is not None
+                    and nx.part_of_speech.startswith('名詞,サ変接続') and any('一' <= ch <= '鿿' for ch in nx.surface)
+                    and os.environ.get('CN_FIX_CLASSICAL_PREFIX') != '0'):
+                # 1字の漢字＋サ変の名詞（誤＋入力・誤＋送信）は、解析が頭の字を古い動詞（誤る）と読んだだけで、漢語の
+                # 頭に付く字（2026-11-13 補正担当・未解決タブ: 正しく直った 誤入力 が戻された）。CN_FIX_CLASSICAL_PREFIX=0 で前のまま
+                at += len(sf)
+                continue
             if (t.part_of_speech.startswith('動詞') and ((t.infl_type or '').startswith(_CLASSICAL_VERB)
                                                         or (t.infl_form or '').startswith('文語')
                                                         or ((t.infl_form or '').startswith('体言接続特殊')
@@ -5453,7 +5526,37 @@ def _odd_respell(line, result, run, store, dict_index, context_vec, decisions, i
         got = _letter_vowel_choice(line, result, out, store, dict_index)
     if got is out:
         got = _letter_vowel_rival(line, result, out, store, dict_index)
+    if _respell_breaks_fix(result, got):
+        return result
     return got
+
+
+def _respell_breaks_fix(result, out):
+    """紫の所の読み直しが、前の段の直し（かーそね → カーソル）の語を崩すなら真（作った例: 直した語の中の1字を
+    元の行の位置で別の字に替えて カーひね にしていた・2026-11-14 未解決タブ）。前の直しの語（2字以上）が直した行に在り、
+    読み直した行から消える所を見る。CN_RESPELL_KEEP_FIX=0 で前のまま"""
+    import os
+    if os.environ.get('CN_RESPELL_KEEP_FIX') == '0' or not isinstance(result, dict) or not isinstance(out, dict) \
+            or out is result:
+        return False
+    before = result.get('corrected') or ''
+    after = out.get('corrected') or ''
+    if not before or before == after:
+        return False
+    old = [d for d in result.get('details') or () if isinstance(d, (list, tuple)) and len(d) >= 2]
+    added = [d for d in out.get('details') or () if isinstance(d, (list, tuple)) and len(d) >= 2 and d not in old]
+    for d in old:
+        if isinstance(d[1], str) and len(d[1]) >= 2 and d[1] in before and d[1] not in after:
+            # 読み直しがその直した語そのものを読み直した（サッカー → さっかへ: 直しを見た上での読み直し）なら止めない。
+            # 元の行の位置で語の中の字だけを替えて、前の直しを知らずに崩した形（そ → ひ）だけを止める
+            if any(isinstance(n[0], str) and d[1] in n[0] for n in added):
+                continue
+            # 元の行の位置で前の直しの所をまるごと（ほぼ同じ長さで）直し直した形（のょみうの → の妙の を のょみう → 旅行）
+            # は止めない。前の直しの所の半分以下の小さな字だけを替えた形（かーそね の そ → ひ）を止める
+            if any(isinstance(n[0], str) and isinstance(d[0], str) and n[0] and n[0] in d[0]
+                   and 2 * len(n[0]) <= len(d[0]) for n in added):
+                return True
+    return False
 
 
 LETTER_VOWEL_MARGIN = 1000
@@ -7861,6 +7964,15 @@ def _function_kana(token):
             or token.pos == '接続詞')
 
 
+def _kk_rule(rid):
+    """ひらがなのまま通す一覧の決まりの向き（kana_keep_list・2026-11-14）。読めなければ True（今までどおり）"""
+    try:
+        import kana_keep_list
+        return kana_keep_list.rule_on(rid)
+    except Exception:
+        return True
+
+
 def _keep_function_kana(line, result):
     """
     かなで書いた形式名詞・補助の動詞・接続詞を、**同じ読みのまま漢字に替えるだけ**の直しを戻す（2026-10-24・うにさん
@@ -7868,7 +7980,7 @@ def _keep_function_kana(line, result):
     （品詞の細分類で決める）。戻した所は直しから外す。
     """
     import os
-    if os.environ.get('CN_FUNCTION_KANA') == '0' or not result:
+    if os.environ.get('CN_FUNCTION_KANA') == '0' or not result or not _kk_rule('function_word'):
         return result
     done = result.get('corrected') or line
     if done == line:
@@ -8210,5 +8322,226 @@ except Exception:
 try:
     import pass_screen as _pass_screen
     _pass_screen.install()
+except Exception:
+    pass
+
+
+# 紫の所の読み直しを、8秒の時計でなく補正に通した回数（8回）で切る（2026-11-13 うにのカード「8回で切る」・
+# respell_budget.py、_deadline_run を外から置き換える・守りの時計30秒）。CN_RESPELL_BUDGET=0 で前のまま
+try:
+    import respell_budget as _respell_budget
+    _respell_budget.install()
+except Exception:
+    pass
+
+
+# 紫だけで止まる行のうち、崩れたかなの並び（付く先の無い小書き）が残る行を、その並びから読み直す（2026-11-10 全体評価の
+# 手分け1・purple_narrow.py、odd_respell._repair_line・yoon_slip.repair_line・_far_kana_respell を外から包む）。
+# CN_PURPLE_NARROW=0 で前のまま
+try:
+    import purple_narrow as _purple_narrow
+    _purple_narrow.install()
+except Exception:
+    pass
+
+
+# 行の頭の1字の助詞（前の行から続く文の改行）を、後ろの語と合わせて別の漢字の語に替えない（2026-11-13 補正担当・
+# head_particle_keep.py、未解決タブの誤判定 に別→人別）。CN_HEAD_PARTICLE_KEEP=0 で前のまま
+try:
+    import head_particle_keep as _head_particle_keep
+    _head_particle_keep.install()
+except Exception:
+    pass
+
+
+# 直した所のすぐ前に、助詞も無く浮いた1字の漢字が残るなら、その字に紫を足す（2026-11-13 全体評価のリリース前の検査・
+# lone_beside_fix.py）。CN_LONE_BESIDE_FIX=0 で前のまま
+try:
+    import lone_beside_fix as _lone_beside_fix
+    _lone_beside_fix.install()
+except Exception:
+    pass
+
+
+# 入口が「異様だが直し先を決められない」とだけ見た紫が、身近な語そのもの・身近な2語の続きなら外す（2026-11-13 全体評価の
+# 作った正しい文・common_word_purple.py）。CN_COMMON_WORD_PURPLE=0 で前のまま
+try:
+    import common_word_purple as _common_word_purple
+    _common_word_purple.install()
+except Exception:
+    pass
+
+
+# 紫も付かない誤りのうち、IME が辞書の語として読めなかった所（未知の切れ端・単漢字・1字の動詞の語幹）に紫を足す
+# （2026-11-13 全体評価・うにのカード「紫も付かない誤りを減らす」・ime_class_mark.py）。CN_IME_CLASS_MARK=0 で前のまま
+try:
+    import ime_class_mark as _ime_class_mark
+    _ime_class_mark.install()
+except Exception:
+    pass
+
+
+# 補正が書き換え紫が1つも無い行で、直した後の文の費用がまだ高い所（語3つの窓・行の1字あたり）に紫を足す（2026-11-13
+# 全体評価・うにのカード「2打の誤字の選び違いを調べる」・fixed_still_odd.py）。CN_FIXED_STILL_ODD=0 で前のまま
+try:
+    import fixed_still_odd as _fixed_still_odd
+    _fixed_still_odd.install()
+except Exception:
+    pass
+
+
+# ローマ字入力で英字が残り IME が前後を漢字にした語を、打った読みに置き換えて補正にもう1度通す（2026-11-13 全体評価・
+# typed_back.py）。入口の correct_line を包むので、correct_line を包む部品の一番外（最後）に掛ける。CN_TYPED_BACK=0 で前のまま
+try:
+    import typed_back as _typed_back
+    _typed_back.install()
+except Exception:
+    pass
+
+
+# 空白・括弧・矢印で区切られた語句を、紫が残った時はそこだけ単体で見直す（chunk_alone.py・2026-11-14 全体評価スレッド）。
+# ほかの部品が付けた紫を見てから動くので、typed_back より外（最後）に掛ける。CN_CHUNK_ALONE=0 で前のまま
+try:
+    import chunk_alone as _chunk_alone
+    _chunk_alone.install()
+except Exception:
+    pass
+
+
+# 漢字の語のすぐ後ろの括弧の中の読みがな（紅葉（もみじ））は書き換えず紫も付けない（reading_gloss.py・2026-11-14 補正担当、
+# 全体評価の方針 v1 の5）。ほかの部品の答えの後で見るので一番外に掛ける。CN_READING_GLOSS=0 で前のまま
+try:
+    import reading_gloss as _reading_gloss
+    _reading_gloss.install()
+except Exception:
+    pass
+
+
+# キー1つで打つ記号（＝ ＋）で2つの語をつないだ所を、記号を消して1つに解いた書き換えは採らない（symbol_join_keep.py・
+# 2026-11-14 補正担当、全体評価の方針 v2 の A）。CN_SYMBOL_JOIN_KEEP=0 で前のまま
+try:
+    import symbol_join_keep as _symbol_join_keep
+    _symbol_join_keep.install()
+except Exception:
+    pass
+
+
+# 辞書の語のまま読める行の語を、使われやすさの差・例文の組の少なさだけで別の語に置き換えない（dict_word_keep.py・
+# 2026-11-14 補正担当、全体評価の方針 v2 の N）。odd_reason_fill より内側に掛ける。CN_DICT_WORD_KEEP=0 で前のまま
+try:
+    import dict_word_keep as _dict_word_keep
+    _dict_word_keep.install()
+except Exception:
+    pass
+
+
+# 入口が理由なしで付けた珍しい辞書の語の紫を、その語の読みの IME の第1候補が今の表記と同じなら外す
+# （ime_first_keep.py・2026-11-15 全体評価の方針）。既定オフ、CN_IME_FIRST_KEEP=1 で入る。理由の文の無い紫だけを見るので
+# odd_reason_fill より先に入れる（内側になる）
+try:
+    import ime_first_keep as _ime_first_keep
+    _ime_first_keep.install()
+except Exception:
+    pass
+
+
+# 理由の文の無い紫を見直す: 名詞・動詞の連用形＋する、・で並べた辞書の語、接尾の付く辞書の名詞の紫は外し、残す紫には理由の文を
+# 付ける（odd_reason_fill.py・2026-11-14 補正担当、全体評価の方針 v2 の K・M）。CN_ODD_REASON_FILL=0 で前のまま
+try:
+    import odd_reason_fill as _odd_reason_fill
+    _odd_reason_fill.install()
+except Exception:
+    pass
+
+
+# 書き換えは採るが、直した後の並びに崩れ（元の助詞の並びが残る・漢字1字の切れ端・例文に無い組）が残る所には紫を足す
+# （rewrite_doubt.py・2026-11-14 補正担当、全体評価「決められない時は紫」）。一番外側。CN_REWRITE_DOUBT=0 で前のまま
+try:
+    import rewrite_doubt as _rewrite_doubt
+    _rewrite_doubt.install()
+except Exception:
+    pass
+
+
+# ひらがなのまま通す語の一覧（kana_keep_list.py・2026-11-14 うに「特定の語だけひらがなのままにするリスト」）。一覧の有効な語を
+# 漢字で書いた書き換えはかなに戻す。決まりより強いので一番外側。CN_KANA_KEEP_LIST=0 で無効
+try:
+    import kana_keep_list as _kana_keep_list
+    _kana_keep_list.install()
+except Exception:
+    pass
+
+# かなのままの1字の名詞＋助詞で始まる文（きをうえる。てをふる。）は打ったまま通す（lone_kana_head.py・2026-11-14
+# 全体評価の方針 U）。CN_LONE_KANA_HEAD=0 で無効
+try:
+    import lone_kana_head as _lone_kana_head
+    _lone_kana_head.install()
+except Exception:
+    pass
+
+# 名詞＋格助詞＋など＋同じ格助詞 の前の格助詞を余分な打鍵として外す（particle_dup.py・2026-11-14 未解決タブ）。
+# CN_PARTICLE_DUP=0 で無効
+try:
+    import particle_dup as _particle_dup
+    _particle_dup.install()
+except Exception:
+    pass
+
+# 推し量りだけの直し（常用外の字・漢字を消しただけ）の後にその所か隣に紫が残るなら、直しを戻して紫だけ（guess_back.py・
+# 2026-11-14 未解決タブ）。CN_GUESS_BACK=0 で無効
+try:
+    import guess_back as _guess_back
+    _guess_back.install()
+except Exception:
+    pass
+
+# 紫だけが残る行の語を同じ読みの別の表記に替えて通し直し、紫も書き換えも出ない形が1つだけなら採る（purple_homophone.py・
+# 2026-11-14 全体評価の案）。既定はオン（うにのカード）、CN_PURPLE_HOMOPHONE=0 で無効
+try:
+    import purple_homophone as _purple_homophone
+    _purple_homophone.install()
+except Exception:
+    pass
+
+# 数を表す英字1字＋助数詞（n個め・n回目）の英字は任意の数として直さない（var_count.py・2026-11-15 うに）。
+# CN_VAR_COUNT=0 で無効
+try:
+    import var_count as _var_count
+    _var_count.install()
+except Exception:
+    pass
+
+
+
+# 外から correct_line を包む部品（head_particle_keep・typed_back ほか）の包みが元の関数の印（__wrapped__）を持たないと、
+# analysis_worker が inspect.signature で見る引数（defer_heavy・tab_has_kana・previous_line・on_early_odd）が見えず、
+# 子がそれらを渡さなくなる（2026-11-13 挙動関連担当の知らせ）。包みの並びをたどって、印の無い包みに1つ内側の関数を付ける。
+# 答えは変えない（引数の見え方だけ）。CN_KEEP_SIGNATURE=0 で前のまま
+def _keep_signature():
+    import os as _os
+    import sys as _sys
+    if _os.environ.get('CN_KEEP_SIGNATURE') == '0':
+        return
+    f, seen = correct_line, set()
+    while f is not None and id(f) not in seen:
+        seen.add(id(f))
+        if getattr(f, '__module__', None) == __name__:
+            break
+        if hasattr(f, '__wrapped__'):
+            f = f.__wrapped__
+            continue
+        mod = _sys.modules.get(getattr(f, '__module__', '') or '')
+        inner = (getattr(mod, '_orig', None) or {}).get('correct_line') if mod is not None else None
+        if not callable(inner):
+            break
+        try:
+            f.__wrapped__ = inner
+        except Exception:
+            break
+        f = inner
+
+
+try:
+    _keep_signature()
 except Exception:
     pass

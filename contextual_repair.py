@@ -6612,6 +6612,15 @@ def independent_key_pair_repairs(reading,dictionary,before='',after=''):
         return any(lexical(value[:cut]) and any(_grammatical_suffix(value[cut:],state)
                     for state in ('N','R','Bw','IST','END'))
                    for cut in range(2,len(value)))
+    # 試す組の数の上限（2026-11-14 補正担当・全体評価: 11-10 に探索を既定で止めたため せぞ→保存 が直らなくなった。
+    # 前の重さ 16,384 には戻さず、組の数が上限を超える読みでは組を作らない）。CN_PAIR_SEARCH=1 で上限なし、
+    # CN_PAIR_SEARCH_CAP で上限を替える（0 で上限なし）
+    _env=__import__('os').environ
+    _cap=0 if _env.get('CN_PAIR_SEARCH')=='1' else int(_env.get('CN_PAIR_SEARCH_CAP','256') or 0)
+    _pairs_ok=not _cap or sum(1 for f in atoms for g in atoms
+                               if f.position<g.position and f.position+len(f.pressed)<=g.position)<=_cap
+    if not _pairs_ok:
+        return      # 組の数が上限を超える読みは、1字抜けと組む探索（後ろ）もしない（11-10 の止めた形と同じ）
     for first in atoms:
         a=first.position;az=a+len(first.pressed)
         for second in atoms:
@@ -6879,7 +6888,10 @@ def validate(target, surface, engine, tokenize, store, dictionary, decisions=Non
     # （雲で IME の判定を記録で開いたとき 横浜→よこしま に崩した。名前は直さない: うに 11-05 keep names の続き）。
     # CN_KEEP_PROPER=0 で前のまま
     import os as _os
-    if _os.environ.get('CN_KEEP_PROPER')!='0' and _replaces_proper_noun(target, surface):
+    # ただし意味の枠が「この固有名詞（国名）はここでは同じ読みの別の語」と示した所（日本｜の｜線 → 二本: 幾何学的な線の数）は
+    # 守らない（2026-11-14 補正担当・未解決タブ: 枠の候補が名前の守りで落ちて紫だけ）。CN_KEEP_PROPER_MEANING=0 で前のまま
+    _meaning_ok = (target.boundary_kind == 'meaning_context' and _os.environ.get('CN_KEEP_PROPER_MEANING') != '0')
+    if _os.environ.get('CN_KEEP_PROPER')!='0' and not _meaning_ok and _replaces_proper_noun(target, surface):
         return False, 'kept_proper_noun'
     # 2026-10-16: a line-initial case particle before a complete predicate
     # (になります・にします) can continue the previous line. Only a repair
@@ -6899,7 +6911,7 @@ def validate(target, surface, engine, tokenize, store, dictionary, decisions=Non
         return False, 'changed_intact_polite_tail'
     # 2026-10-30: 直す先で、補助の いる・おく・しまう を漢字（て居る・て置く・て仕舞う）で新しく書かない。
     # いまの文の補助動詞はかなで書く（お願すいたします → すいて居ます を採っていた）
-    if surface and any(c in surface for c in '居置仕'):
+    if surface and any(c in surface for c in '居置仕') and _kk_rule('aux_verb'):
         _src=getattr(target,'source','') or ''
         _new=_src[max(0,target.start-1):target.start]+surface
         if any(p in _new and p not in _src for p in ('て居','で居','て置','で置','て仕舞','で仕舞')):
@@ -9314,6 +9326,11 @@ def rank_candidates(rows):
 
 def _faithful_word_outside_oddness(target,diagnostic):
     if not any('一'<=ch<='鿿' for ch in target.text):return False
+    # 意味の枠（context_meaning）の的は、IME の最初の変換が文脈に合わない同じ読みの語だと示した所（日本｜の｜線）。
+    # IME がその読みを元の字に戻すことは、元の字が正しい証にならない（PC だけ 二本 の候補が外れて紫のままだった・
+    # 2026-11-14 補正担当）。CN_FAITHFUL_MEANING=0 で前のまま
+    import os as _os
+    if target.boundary_kind=='meaning_context' and _os.environ.get('CN_FAITHFUL_MEANING')!='0':return False
     if not target.anomalies or not all(m[2]<=target.start and target.end<m[3] or m[2]<target.start and target.end<=m[3]
                                        for m in target.anomalies if len(m)>=4):return False
     readings=[r.get('text') for r in diagnostic.get('readings',()) if r.get('text')]
@@ -9361,6 +9378,35 @@ def _repair_key_count(repair):
     if not steps:return 1
     return sum(1 for step in steps if (step.get('operation') if isinstance(step,dict) else getattr(step,'operation',None))!='shift') or 1
 TWO_KEY_COST = 2.0
+
+
+def _kk_rule(rid):
+    """ひらがなのまま通す一覧の決まりの向き（kana_keep_list・2026-11-14）。読めなければ True（今までどおり）"""
+    try:
+        import kana_keep_list
+        return kana_keep_list.rule_on(rid)
+    except Exception:
+        return True
+
+
+def _nearer_rival_one_word(reading):
+    """1打の戻しの相手（意味の裏付けが無いだけで外れた読み）が、読みの格子で1つの語として読めるか（変わった・進行）。
+    2つ以上の語の寄せ集め（赤＋差し・阿草＋市）や漢字1字の名詞だけ（庵＋する）は、2打の語を止める相手に数えない
+    （2026-11-14 補正担当: 資料をあんさしました が 印刷 に直らなくなっていた・前は 1.17.0 で直っていた）。
+    する・助詞・助動詞は数えない。CN_NEARER_ONE_WORD=0 で前のまま（どの相手も数える）"""
+    if __import__('os').environ.get('CN_NEARER_ONE_WORD')=='0':
+        return True
+    try:
+        import reading_lattice
+        res=reading_lattice.best(reading)
+    except Exception:
+        return True
+    words=[w for w in (res.words or ()) if w[2] not in ('助詞','助動詞','記号')
+           and not (w[2]=='動詞' and w[1] in ('し','さ','せ','する','すれ','しろ','せよ'))]
+    if any(w[2] in ('フィラー','未知') for w in words) or len(words)!=1:
+        return False
+    w=words[0]
+    return not (w[2]=='名詞' and len(w[0])==1)
 
 
 import contextvars as _defer_cv
@@ -10051,7 +10097,8 @@ def resolve(target, engine, tokenize, store, dictionary, decisions=None, legacy_
                 # 1打の戻しで辞書の語になったが、意味の裏付けが無いだけで外れた形（かわっさた → 変わった）。
                 # 2打以上の戻しを選ぶときの比べに使う（2026-11-01 B）
                 if (reason.startswith('unproven') and repair.operation!='same_reading'
-                        and repair.reading!=reading.text and repair.cost<=ONE_KEY_COST):
+                        and repair.reading!=reading.text and repair.cost<=ONE_KEY_COST
+                        and _nearer_rival_one_word(repair.reading)):
                     near_one_key.append(repair.reading)
                 # Unknown lexical meaning is not negative evidence against
                 # another attested reading of the same damaged predicate.
@@ -11243,7 +11290,7 @@ def with_contextual_repair(fn):
         # 合わせた行で、補助の いる・おく・しまう が漢字（て居・て置・て仕舞）で新しく書かれたら、その漢字を出した直しを外す
         # （2026-10-30・お願すいたします → すいて居ます。て と 居 が別々の直しから来るので、合わせた行で見る）
         _aux=('て居','で居','て置','で置','て仕舞','で仕舞','た居','し居','だ居')
-        if any(p in corrected and p not in line for p in _aux):
+        if any(p in corrected and p not in line for p in _aux) and _kk_rule('aux_verb'):
             selected=[(a,b,surface) for a,b,surface in selected if not any(c in surface for c in '居置仕')
                       or any(c in line[a:b] for c in '居置仕')]
             corrected = _apply(line, retained+[(a,b,_keep_written_edges(line[a:b],surface)) for a,b,surface in selected])

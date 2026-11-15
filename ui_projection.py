@@ -362,6 +362,11 @@ def _write_peer(widget):
             original = widget._w + '_correctnote_work'
             name = widget._w + '_correctnote_writer'
             widget.tk.call(original, 'peer', 'create', name, '-state', 'normal', '-undo', 0, '-takefocus', 0)
+            # タイトルと目次を本文の中の字として置く形（title_inline）: 書く道の分身も、本文の行で呼ぶ（変換を掛けないと
+            # 本文の行のまま見出しの行を書き換えた・2026-11-15）
+            if getattr(widget, '_cn_body_state', None):
+                import types, body_index
+                body_index.install(types.SimpleNamespace(_w=name, tk=widget.tk), 0, share=widget._cn_body_state)
             def gone(event, name=name):
                 # a sibling, not a child: it does not go with the pane by itself (and would keep the text alive)
                 if event.widget is widget:

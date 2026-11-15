@@ -114,8 +114,20 @@ ITEMS = (
          '程度の副詞が名詞にかかった所（とても思い → とても重い）が分からず、直しも紫も出なくなる',
          False),
     # 常用漢字表（2026-10-26・kanji_doubt.py。2136字）。表の外の字を含む語を一度疑い、より自然な表記へ直す段。
-    Item('joyo_kanji.json', 'kanji_doubt:joyo',
+    Item('joyo_kanji.json', 'kanji_doubt:joyo_table',
          '常用漢字表の外の字を含む語を疑う段が働かず、その語の直しも紫も出なくなる',
+         False),
+    # 常用漢字表の外で、ふだんの文によく出る字（2026-11-12・kanji_doubt.py。AI が判定した表）。常用漢字と同じに扱う。
+    # ひらがなのまま通す語の一覧の初め（2026-11-14・kana_keep_list.py。きれい と決まりの3つの名前）。無ければ部品の中の写しで動く。
+    Item('kana_keep_default.json', 'kana_keep_list:default_available',
+         'ひらがなのまま通す語の一覧の初めの語と決まりの説明が、部品の中の写しになる（中身は同じ）',
+         False),
+    Item('everyday_kanji_extra.json', 'kanji_doubt:everyday_extra',
+         'ふだん使う常用外の字（溜・嘘・噂）の語まで疑い、正しい文に紫や直しが出やすくなる',
+         False),
+    # 候補の索引に持つ・持たない漢字だけの語（2026-11-13・dict_index.py。AI が日常の入力で判定した表）。
+    Item('everyday_kango_judged.json', 'dict_index:judged_table',
+         '候補に日常で使わない漢語（允可・掃蕩）が残り、費用で刈られた日常の語（樹海・草原）が候補に出ない',
          False),
     # 文変換の窓（2026-10-26・convert_window.py／context_skeleton.py。補正には使わない）。
     # JMdict（EDRDG・CC BY-SA 4.0）・WordNet 3.0・lemminflect（MIT）から作った表と、英語の2語の数。

@@ -83,7 +83,7 @@ def clean_ruler_rows(rows):
 
 def new_tab(text='', path=None, saved=True, cursor='1.0', scroll=0.0,
             title=None, bookmarks=None, top=None, file_format=None, calculations=None,ruler_rows=None,
-            text_styles=None, backup_id=None):
+            text_styles=None, backup_id=None, doc_title=None):
     """タブ1つぶんの控えを作る。
 
     top: 画面のいちばん上に見えていた**行番号**（1始まり）。
@@ -111,6 +111,9 @@ def new_tab(text='', path=None, saved=True, cursor='1.0', scroll=0.0,
     if styles:tab['text_styles'] = styles
     # タブのバックアップの名札（tab_backup・2026-10-23）。まだファイルの無いタブを、閉じるまで見分ける
     if isinstance(backup_id, str) and backup_id:tab['backup_id'] = backup_id
+    # 本文の上のタイトル（title_toc・2026-11-15 うにさん「タイトルと目次を実装します」）。タブの見出しの 'title' とは別。
+    # 保存する .txt の本文には書かない（このタブの控えにだけ持つ）
+    if isinstance(doc_title, str) and doc_title:tab['doc_title'] = doc_title.split(chr(10), 1)[0]
     return tab
 
 
@@ -328,6 +331,7 @@ class SessionStore:
                 ruler_rows=t.get('ruler_rows'),
                 text_styles=t.get('text_styles'),
                 backup_id=t.get('backup_id'),
+                doc_title=t.get('doc_title'),
             ))
         if not clean:
             return False

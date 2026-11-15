@@ -203,6 +203,48 @@ def monitor_work_area(x, y):
         return None
 
 
+def monitor_rects_at(x, y):
+    """座標 (x, y) を含むモニターの (作業領域, モニター全体)、どちらも (left, top, right, bottom)。
+    その点にモニターが無ければ None（MONITOR_DEFAULTTONULL・monitor_work_area は近いモニターを返す）。"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        u32 = ctypes.windll.user32
+        u32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+        u32.MonitorFromPoint.restype = ctypes.c_void_p
+        hmon = u32.MonitorFromPoint(wintypes.POINT(int(x), int(y)), 0)   # MONITOR_DEFAULTTONULL
+        if not hmon:
+            return None
+
+        class _MONITORINFO(ctypes.Structure):
+            _fields_ = [('cbSize', wintypes.DWORD),
+                        ('rcMonitor', wintypes.RECT),
+                        ('rcWork', wintypes.RECT),
+                        ('dwFlags', wintypes.DWORD)]
+
+        mi = _MONITORINFO()
+        mi.cbSize = ctypes.sizeof(_MONITORINFO)
+        if not u32.GetMonitorInfoW(ctypes.c_void_p(hmon), ctypes.byref(mi)):
+            return None
+        w, m = mi.rcWork, mi.rcMonitor
+        return (w.left, w.top, w.right, w.bottom), (m.left, m.top, m.right, m.bottom)
+    except Exception:
+        return None
+
+
+def monitor_left_of(x, y):
+    """座標 (x, y) のモニターの左隣のモニターの作業領域（タスクバーを除く）。左隣が無ければ None。"""
+    here = monitor_rects_at(x, y)
+    if here is None:
+        return None
+    work, whole = here
+    for probe_y in (y, (whole[1] + whole[3]) // 2):
+        there = monitor_rects_at(whole[0] - 2, probe_y)
+        if there is not None and there[1] != whole and there[1][2] <= whole[0]:
+            return there[0]
+    return None
+
+
 def frame_size_for_dpi(dpi):
     """その拡大率のモニターで、ふつうの窓のタイトルバーと枠の幅・高さ。分からなければ None。"""
     try:
@@ -412,7 +454,7 @@ APP_TITLE = 'CorrectNote'
 # 「判断に迷った箇所」から**「不自然な文字列」**へ入れ替え（既定オン・
 # 補正が入った範囲には付けない）、**かな書きのアルファベット読みを
 # 英字に直す**（`エフ2 → F2`）、スクロール後の反映（項目48-IZ〜）。
-APP_VERSION = '1.18.3'
+APP_VERSION = '1.19.0'
 
 # 控え（session.json・ime_readings）と語彙の自動保存の間合い（2026-10-20 うにさんの決定で5分）。
 # 以前は打つ手が止まって1.5秒ごとに丸ごと書き直していた。最初の変更から5分後にまとめて1回
@@ -559,6 +601,10 @@ def design33_classify(applied, spans, now):
         corrected = applied[start:end]
         if not before or not corrected or before == corrected:
             continue
+        if not (_d33_has_word(before) and _d33_has_word(corrected)):
+            # 数字・記号だけの組（80-34 → 46 のような計算・番号）は、語の直しではないので
+            # 「直さない」に自動で入れない（うに 2026-11-13「こういうのは自動で入れない」）
+            continue
         tail = applied[end:]
         if now == applied[:start] + tail:
             # 消えた範囲＝補正の範囲。後ろが残っていれば甲、
@@ -570,16 +616,27 @@ def design33_classify(applied, spans, now):
     return out
 
 
+def _d33_has_word(text):
+    """字（かな・漢字・英字）を1つでも含むか。数字・記号・空白だけなら False。"""
+    return any(c.isalpha() for c in text)
+
+
 DROPDOWN_LINE_GAP = 24      # 上へ置くとき、元の行の分だけ空ける
 
 
-def fit_dropdown(count, anchor, top, bottom, padding, row_height, above=False, gap=DROPDOWN_LINE_GAP):
+def fit_dropdown(count, anchor, top, bottom, padding, row_height, above=False, gap=DROPDOWN_LINE_GAP, keep=False):
     """候補一覧の行数と、元の行の上に置くか。(行数, 上か)。anchor は元の行のすぐ下（2026-11-03 うにさん「あとから
     候補が入って伸びると元の行が隠れる」）。下に入らなければ上へ。一度上へ移したら、開いている間は下へ戻さない
-    （行き来でちらつかない）。どちらにも入らなければ、広いほうに入るだけの行数にして元の行を隠さない。"""
+    （行き来でちらつかない）。どちらにも入らなければ、広いほうに入るだけの行数にして元の行を隠さない。
+    keep=True（開いたあとで伸び縮みした時）: 開いた時の向き（above）のまま、その側に入るだけの行数にする。入らない分は
+    一覧の中を巻き取る（2026-11-14 うにさん「候補が増えて縦に伸びると、選択から下側に伸びていた枠が上側にきり替わる」）。
+    下に開いたら下のまま、上に開いたら上のまま（下の端を元の行に合わせて上へ伸ばす）。CN_DROPDOWN_KEEP_SIDE=0 で前の形"""
     below_room = bottom - anchor
     above_room = anchor - gap - top
     need = padding + count * row_height
+    if keep and os.environ.get('CN_DROPDOWN_KEEP_SIDE') != '0':
+        room = above_room if above else below_room
+        return min(count, max(1, (room - padding) // row_height)), above
     if not above and need <= below_room:
         return count, False
     if need <= above_room:
@@ -940,8 +997,215 @@ def app_dir():
         os.makedirs(path, exist_ok=True)
         return path
     if getattr(sys, 'frozen', False):
-        return os.path.dirname(os.path.abspath(sys.executable))
+        return exe_data_dir(os.path.dirname(os.path.abspath(sys.executable)))
     return os.path.dirname(os.path.abspath(__file__))
+
+
+_EXE_DATA_DIR = {}
+
+
+def folder_writable(folder):
+    """そのフォルダにファイルを書けるか（一時ファイルを作って、すぐ消す）。"""
+    try:
+        import tempfile
+        handle, probe = tempfile.mkstemp(prefix='.cn-write-', dir=folder)
+        os.close(handle)
+        os.remove(probe)
+        return True
+    except Exception:
+        return False
+
+
+def exe_data_dir(exe_folder, environ=None):
+    """
+    EXE（Store 版でない）のデータの置き場（2026-11-14）。EXE の隣に書ければそこ（持ち運べる・今までどおり）、書けなければ
+    （Program Files など）%LOCALAPPDATA%\\CorrectNote。前は書けない所でも EXE の隣のままで、全部の書き込みが黙って
+    失敗し、閉じるとタブの中身が残らなかった。確かめは1つの EXE の場所につき1回（覚えておく）。
+    解析の子へ渡す CORRECTNOTE_DATA_DIR も app_dir() から取るので同じ場所になる。CN_DATA_FALLBACK=0 で前の形
+    """
+    environ = os.environ if environ is None else environ
+    if environ.get('CN_DATA_FALLBACK') == '0':
+        return exe_folder
+    got = _EXE_DATA_DIR.get(exe_folder)
+    if got is not None:
+        return got
+    if folder_writable(exe_folder):
+        got = exe_folder
+    else:
+        base = environ.get('LOCALAPPDATA') or os.path.expanduser('~')
+        got = os.path.join(base, 'CorrectNote')
+        try:
+            os.makedirs(got, exist_ok=True)
+        except Exception:
+            got = exe_folder           # そこも作れなければ、前と同じ場所（書けないまま）
+    _EXE_DATA_DIR[exe_folder] = got
+    return got
+
+
+# 作り直せる控えをまとめる置き場（2026-11-14 うにさん「3つとも」）。データの置き場（app_dir）の下の cache\。
+# 個人のデータ（session・settings・setup・word_book・ime_readings・backups・deletion_log など）と説明書は app_dir の直下のまま。
+# EXE と Store 版（MSIX）の時だけ分ける（.py で動かす時は今までどおり .py の隣。測りの道具が直下の控えを使う）。
+# 配布物（onefile の EXE 1つ）は変わらない。動いている時に作るフォルダ。CN_CACHE_DIR_SPLIT=0 で前の形（直下）
+CACHE_FOLDER = 'cache'
+CACHE_NAMES = frozenset(('dict_index.json', 'context_vec.json', 'analysis_cache.json', 'usage_counts.json',
+                         'janome_entries.pickle.gz', 'reading_lattice_compact.pickle.gz',
+                         'reading_lattice_table.pickle.gz', 'wlsp_synonyms_compact.pickle.gz'))
+
+
+def is_cache_file(name):
+    """作り直せる控えの名前か（dict_index の compact／写像・cn_*.cache.pickle と、その写像も）。"""
+    return (name in CACHE_NAMES or name.startswith('dict_index.json.')
+            or (name.startswith('cn_') and '.cache.pickle' in name))
+
+
+def cache_split_on(environ=None):
+    environ = os.environ if environ is None else environ
+    if environ.get('CN_CACHE_DIR_SPLIT') == '0':
+        return False
+    return bool(getattr(sys, 'frozen', False)) or running_as_package()
+
+
+def cache_dir():
+    """作り直せる控えの置き場。分ける時は app_dir()\\cache（無ければ作る）、分けない時は app_dir()。
+    EXE で data・savedata に分ける時（data_subdirs_on）は app_dir()\\data\\cache。"""
+    base = data_dir()
+    if not cache_split_on():
+        return base
+    path = os.path.join(base, CACHE_FOLDER)
+    try:
+        os.makedirs(path, exist_ok=True)
+    except Exception:
+        return base            # 作れなければ前と同じ直下
+    return path
+
+
+# EXE の隣を「EXE・説明書・data・savedata」の4つだけにする（2026-11-14 07:04Z うにさん「dataフォルダを作ってそこへ
+# コード類を、savedataフォルダを作ってそこへ保存ファイルとbackupsフォルダを入れて、exe、説明書、フォルダ2個が並ぶ形にして」）。
+# data\ … 作り直せる物（cache\ の控え・tools_local\ の記録）。savedata\ … うにさんの保存ファイルと backups\。
+# frozen の EXE（Store 版でない）の時だけ。書けずに %LOCALAPPDATA%\CorrectNote を使う時も同じ形。Store 版（LocalCache）と
+# .py で動かす時は今までどおり。配布物（onefile の EXE 1つ）は変わらない。CN_DATA_SUBDIRS=0 で前の形
+DATA_FOLDER = 'data'
+SAVEDATA_FOLDER = 'savedata'
+# savedata\ へ移す、直下の保存ファイル（.tmp は書く途中の物なので、同じ名前＋.tmp も一緒に移す）
+SAVEDATA_NAMES = ('vocabulary.json', 'vocabulary_personal.json', 'decisions.json', 'choices.json', 'last_choice.json',
+                  'setup.json', 'session.json', 'settings.json', 'ime_readings.json', 'respell_rank_stats.json',
+                  'word_book.json', 'vocabulary_restore.json', 'deletion_log.txt',
+                  'charngram.json', 'kana_keep_user.json', 'doc_titles.json')   # kana_keep_user.json はひらがなのまま通す語（2026-11-14）。charngram.json は起動の時に消す物（2026-09-05）。消す所を savedata\ にしたので一緒に移す
+SAVEDATA_FOLDERS = ('backups',)
+# data\ へ移す、直下のフォルダ（cache\ は data\cache\ へ）
+DATA_FOLDERS = (CACHE_FOLDER, 'tools_local')
+
+
+def data_subdirs_on(environ=None, frozen=None, package=None):
+    environ = os.environ if environ is None else environ
+    if environ.get('CN_DATA_SUBDIRS') == '0':
+        return False
+    frozen = bool(getattr(sys, 'frozen', False)) if frozen is None else frozen
+    package = running_as_package() if package is None else package
+    return frozen and not package
+
+
+def _subdir(name):
+    base = app_dir()
+    if not data_subdirs_on():
+        return base
+    path = os.path.join(base, name)
+    try:
+        os.makedirs(path, exist_ok=True)
+    except Exception:
+        return base            # 作れなければ前と同じ直下
+    return path
+
+
+def data_dir():
+    """作り直せる物（控え・記録）の置き場。EXE で分ける時は app_dir()\\data、ほかは app_dir()。"""
+    return _subdir(DATA_FOLDER)
+
+
+def savedata_dir():
+    """保存ファイル（設定・語彙・session・学んだもの・backups）の置き場。EXE で分ける時は app_dir()\\savedata、ほかは app_dir()。"""
+    return _subdir(SAVEDATA_FOLDER)
+
+
+def _move_one(source, dest):
+    """source を dest へ os.replace で移す。dest に同じ名前が在れば何もしない（上書きも削除もしない）。移せたら True。"""
+    if not os.path.exists(source) or os.path.exists(dest):
+        return False
+    try:
+        os.replace(source, dest)
+        return True
+    except Exception:
+        return False
+
+
+def _merge_folder(source, dest):
+    """フォルダ source を dest へ。dest が無ければフォルダごと移す。在れば中身を1つずつ、dest に無い物だけ移す
+    （在る物は残す）。空になった source は消す（中身が残れば消さない）。戻り値は移した数。"""
+    if not os.path.isdir(source):
+        return 0
+    if not os.path.exists(dest):
+        return 1 if _move_one(source, dest) else 0
+    if not os.path.isdir(dest):
+        return 0
+    moved = 0
+    try:
+        names = os.listdir(source)
+    except Exception:
+        return 0
+    for name in names:
+        s, d = os.path.join(source, name), os.path.join(dest, name)
+        if os.path.isdir(s) and os.path.isdir(d):
+            moved += _merge_folder(s, d)
+        elif _move_one(s, d):
+            moved += 1
+    try:
+        os.rmdir(source)        # 空の時だけ消える
+    except Exception:
+        pass
+    return moved
+
+
+def move_into_subdirs(base, data, savedata):
+    """前の形（直下）の物を data\\・savedata\\ へ移す（起動の時に1回）。新しい側に同じ名前が在れば、上書きも削除もしない
+    （cache\\ を作った時と同じ移し方）。移せなかった物（開いている等）は残し、次の起動でまた試す。戻り値は移した数。"""
+    same = lambda a, b: os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+    if not base or not data or not savedata or same(base, data) or same(base, savedata):
+        return 0
+    moved = 0
+    for name in SAVEDATA_NAMES:
+        for n in (name, name + '.tmp'):
+            if _move_one(os.path.join(base, n), os.path.join(savedata, n)):
+                moved += 1
+    for name in SAVEDATA_FOLDERS:
+        moved += _merge_folder(os.path.join(base, name), os.path.join(savedata, name))
+    for name in DATA_FOLDERS:
+        moved += _merge_folder(os.path.join(base, name), os.path.join(data, name))
+    return moved
+
+
+def move_caches_into(base, target):
+    """base の直下にある控えのうち、target にまだ無い物を os.replace で移す（起動の時に1回）。移せなかった物
+    （開いている等）はそのまま残し、次の起動でまた試す。消さない。戻り値は移した数。"""
+    if not base or not target or os.path.normcase(os.path.abspath(base)) == os.path.normcase(os.path.abspath(target)):
+        return 0
+    try:
+        names = os.listdir(base)
+    except Exception:
+        return 0
+    moved = 0
+    for name in names:
+        source = os.path.join(base, name)
+        if not is_cache_file(name) or not os.path.isfile(source):
+            continue
+        dest = os.path.join(target, name)
+        if os.path.exists(dest):
+            continue
+        try:
+            os.replace(source, dest)
+            moved += 1
+        except Exception:
+            pass
+    return moved
 
 
 def bundled_path(name):
@@ -979,37 +1243,37 @@ def bundled_path(name):
 ICON_ICO = 'correctnote.ico'
 ICON_PNG = 'correctnote.png'
 
-VOCAB_FILE = os.path.join(app_dir(), 'vocabulary.json')
-DECISIONS_FILE = os.path.join(app_dir(), 'decisions.json')
-CHOICES_FILE = os.path.join(app_dir(), 'choices.json')
+VOCAB_FILE = os.path.join(savedata_dir(), 'vocabulary.json')
+DECISIONS_FILE = os.path.join(savedata_dir(), 'decisions.json')
+CHOICES_FILE = os.path.join(savedata_dir(), 'choices.json')
 # **最後にどの変換をしたか**の1枠（項目48-QH・2026-09-05）。
 # `choices.json`（回数・時刻・前後の本文つき）を畳んだ置き換え。
-LAST_CHOICE_FILE = os.path.join(app_dir(), 'last_choice.json')
-DICT_INDEX_FILE = os.path.join(app_dir(), 'dict_index.json')
+LAST_CHOICE_FILE = os.path.join(savedata_dir(), 'last_choice.json')
+DICT_INDEX_FILE = os.path.join(cache_dir(), 'dict_index.json')
 # 語の共起から作る軽量な文脈ベクトル（同音異義語の文脈判定に使う）
-CONTEXT_VEC_FILE = os.path.join(app_dir(), 'context_vec.json')
+CONTEXT_VEC_FILE = os.path.join(cache_dir(), 'context_vec.json')
 # 初回セットアップ（辞書の取り込み・索引の作成）が済んだ印
-SETUP_FILE = os.path.join(app_dir(), 'setup.json')
+SETUP_FILE = os.path.join(savedata_dir(), 'setup.json')
 # 編集中の内容の自動保存（保存せず閉じても続きから再開できる）
-SESSION_FILE = os.path.join(app_dir(), 'session.json')
-SETTINGS_FILE = os.path.join(app_dir(), 'settings.json')
+SESSION_FILE = os.path.join(savedata_dir(), 'session.json')
+SETTINGS_FILE = os.path.join(savedata_dir(), 'settings.json')
 # 前回の解析結果の控え（起動を速くするためだけのもの。
 # 消しても動作は変わらない＝その回だけ解析し直すだけ）。
 # **ユーザーのメモそのものを含むので .gitignore に入れてある。**
-ANALYSIS_CACHE_FILE = os.path.join(app_dir(), 'analysis_cache.json')
+ANALYSIS_CACHE_FILE = os.path.join(cache_dir(), 'analysis_cache.json')
 # **IME が確定した「表記 → 打った読み」の対**（設計25(甲)）。
 # **うにさんの打った文章の断片そのものなので .gitignore に入れてある**
 # （session.json と同格）。**語彙とは別の置き場**（学び2:
 # `奥悠久子帝 → おくゆくこてい` は誤変換そのもので、語彙に入れると
 # 次からその誤変換を守ってしまう）。
-IME_READINGS_FILE = os.path.join(app_dir(), 'ime_readings.json')
+IME_READINGS_FILE = os.path.join(savedata_dir(), 'ime_readings.json')
 # 補正の段ごとの使われ方の数（usage_counts・2026-10-24 うにさん「各所に使われた・使われていないを測るものを
 # 入れておいて。やや長期的に見ます」）。段の名前と数だけ（文・語・読み・時刻は無い）。ENGINE_STAMP が
 # 変わったら 0 から数え直す
-USAGE_COUNTS_FILE = os.path.join(app_dir(), 'usage_counts.json')
+USAGE_COUNTS_FILE = os.path.join(cache_dir(), 'usage_counts.json')
 # 紫の所の読み直しで、候補の何回目を採ったかの集計（respell_stats・デバッグ・既定オフ・2026-11-10 うにさん）。
 # 8回目以降で採った行は元の行と採った行も入る（最大200件）ので、個人ファイル（公開しない）
-RESPELL_STATS_FILE = os.path.join(app_dir(), 'respell_rank_stats.json')
+RESPELL_STATS_FILE = os.path.join(savedata_dir(), 'respell_rank_stats.json')
 
 
 def debug_tools_on():
@@ -1017,6 +1281,20 @@ def debug_tools_on():
     （2026-11-09 うにさん「スクロールは解決しているようなので、デバッグメニューや計測を外してください」）。
     CN_DEBUG_TOOLS=1 で起動すれば前のとおり。settings.json の debug_timings（待ちの値）は切りでも今までどおり効く"""
     return os.environ.get('CN_DEBUG_TOOLS') == '1'
+
+
+def redo_trace_on(environ=None, frozen=None):
+    """大きな解き直しの記録（_note_big_redo）を取るか。2026-11-14 うにさん「全体に再解析が入るチェックを開発側に適用して」:
+    リリースが済んだので、開発版（frozen でない＝.py で動かす時）では既定で取る。EXE・Store 版の既定は取らないまま。
+    CN_REDO_TRACE=0 なら取らない、CN_REDO_TRACE=1 なら EXE でも取る。CN_DEBUG_TOOLS=1 でも取る（前のとおり）"""
+    environ = os.environ if environ is None else environ
+    frozen = bool(getattr(sys, 'frozen', False)) if frozen is None else frozen
+    value = environ.get('CN_REDO_TRACE')
+    if value == '0':
+        return False
+    if value == '1' or environ.get('CN_DEBUG_TOOLS') == '1':
+        return True
+    return not frozen
 # 説明書の書き出し先（exe と同じフォルダ）
 MANUAL_FILE = os.path.join(app_dir(), MANUAL_FILENAME)
 
@@ -1302,6 +1580,11 @@ def _hide_end_rule_while_scrolling(w):
                 pass
 
 
+def _title_inline_top_in_header(target):
+    import title_inline
+    return title_inline.top_in_header(target)
+
+
 class LineNumberGutter(tk.Canvas):
     """
     テキスト欄の左に表示する行番号。
@@ -1458,10 +1741,16 @@ class LineNumberGutter(tk.Canvas):
         # 余白の行（navigation_head／tail）は2つのタグの範囲から一度に引く。見えている行ごとに tag_names を聞いていた
         # （エンターの押しっぱなしで1打ごとに40回・2026-11-07 速さ）。行頭にそのタグが掛かっている行＝前と同じ判定
         spaced = self._navigation_rows(target)
+        # タイトルと目次の余白（title_toc の PAD_TAG・1行目の上の spacing1）も、番号は余白の下の字の高さに
+        # （2026-11-15 うにさん「1行目の数字がない」: 余白の真ん中＝タイトルの欄の下に描かれて見えなかった）
+        if spaced is not None and target.tag_ranges('cn_title_pad'):
+            spaced = set(spaced) | {1}
         for line_idx in range(max(1, top), min(line_count, bottom) + 1):
             try:
                 info = target.dlineinfo(f'{line_idx}.0')
-                if info is None and line_idx == top:
+                if info is None and line_idx == top and not (getattr(target, '_cn_body_raw', None) and
+                                                             _title_inline_top_in_header(target)):
+                    # （タイトルと目次を本文の中に置く形では、上が見出しの行なら番号を描かない・2026-11-15）
                     info = target.dlineinfo('@0,0')
             except Exception:
                 info = None
@@ -1469,11 +1758,16 @@ class LineNumberGutter(tk.Canvas):
                 continue   # 画面外（表示されていない行）は描かない
             _x, y, _w, h, _baseline = info
             if (line_idx in spaced if spaced is not None else any(tag in target.tag_names(f'{line_idx}.0') for tag in
-                   ('navigation_head','navigation_tail'))):
+                   ('navigation_head','navigation_tail','cn_title_pad'))):
                 # Spacing belongs to the scroll margin, not the numbered row.
                 ascent=int(target.tk.call('font','metrics',target.cget('font'),'-ascent'))
                 h=int(target.tk.call('font','metrics',target.cget('font'),'-linespace'))
                 y += _baseline-ascent
+                if line_idx == 1 and target.tag_ranges('cn_title_pad'):
+                    # タイトルと目次の高さの所は、列の地の色で塗る（絵の点を透かさない）。列の描き直しと同じ回で描くので、
+                    # スクロールのたびに別の窓を動かさない（2026-11-15 右ドラッグが重くなった件・前は列の上に板の窓を置いていた）
+                    items.append(('rectangle', (0, 0, width, y), dict(outline='', fill=self.cget('bg'),
+                                                                      tags=('title_cover',))))
 
             current = str(line_idx) == self._cursor_row
             if current:
@@ -2018,7 +2312,7 @@ class CorrectNoteApp:
         # 既に書かれているものを消して初めて「保存されていない」になる。
         # **控えは残さない**（残すと依頼の目的に反する）。
         # 同梱の初期分（`seed_context.ensure_seeded`）は今までどおり使う。
-        for _grown in (CONTEXT_VEC_FILE, os.path.join(app_dir(),
+        for _grown in (CONTEXT_VEC_FILE, os.path.join(savedata_dir(),
                                                       'charngram.json')):
             try:
                 if os.path.exists(_grown):
@@ -2245,6 +2539,12 @@ class CorrectNoteApp:
                 self.ime_readings.readings_for)
         except Exception:
             pass
+        try:
+            # 英字まじりの打った読み（2026-11-14）を typed_back へ（本体で補正する時。子は analysis_worker が差す）
+            import typed_back
+            typed_back.set_provider(self.ime_readings.mixed_readings_for)
+        except Exception:
+            pass
 
         # 語彙の控えからの復元（vocabulary_restore.json があれば一回だけ）。
         # 手入れの第1版（下記）が連用形（打ち・入れ・出し）まで
@@ -2334,7 +2634,7 @@ class CorrectNoteApp:
         # （起動直後から好きな行をクリックして書き始められるように）。
         self._restore_session()
         from word_book import WordBook
-        self._word_book = WordBook(self, os.path.join(app_dir(), 'word_book.json'),
+        self._word_book = WordBook(self, os.path.join(savedata_dir(), 'word_book.json'),
             lambda: (PANEL, INK, ACCENT), self._word_book_initial_width, monitor_work_area)
         # 前回開いていた単語帳は、本体の窓が出てから開く（2026-10-14 うにさん
         # 「タスクバーで本体のアイコンが消えた（単語帳にはある）」）。ここで
@@ -2879,14 +3179,16 @@ class CorrectNoteApp:
             return
         try:
             from tkinter import messagebox
-            answer = messagebox.askyesno(
-                'CorrectNote',
-                'アプリを更新しました。\n'
-                '辞書と索引を新しい版で作り直しますか？\n\n'
-                '・覚えた語や手で足した語は消えません（足すだけです）\n'
-                '・数十秒かかることがあります\n'
-                '・あとで「設定 → 辞書を取り込む」からもできます',
-                parent=self.root)
+            # 「あとで…からもできます」は、その項目がメニューに出ている時だけ添える（2026-11-15）。「辞書を取り込む…」は
+            # 2026-11-08 から「設定」には無く、学習 → 辞書と語彙の管理 の中。学習を残さない形（vocabulary.LEARNED_OFF）では出ない
+            import vocabulary as _vocabulary
+            message = ('アプリを更新しました。\n'
+                       '辞書と索引を新しい版で作り直しますか？\n\n'
+                       '・覚えた語や手で足した語は消えません（足すだけです）\n'
+                       '・数十秒かかることがあります')
+            if not getattr(_vocabulary, 'LEARNED_OFF', False):
+                message += '\n・あとで「学習 → 辞書と語彙の管理 → 辞書を取り込む…」からもできます'
+            answer = messagebox.askyesno('CorrectNote', message, parent=self.root)
         except Exception:
             return
         if not answer:
@@ -3243,7 +3545,7 @@ class CorrectNoteApp:
         **回数は見ない**（項目48-QG）。控えが旧形式（count 付き）
         なら `count >= 2` を「立っていた」と読む——移行と同じ読み方。
         """
-        restore_path = os.path.join(app_dir(), 'vocabulary_restore.json')
+        restore_path = os.path.join(savedata_dir(), 'vocabulary_restore.json')
         if not os.path.exists(restore_path):
             return
         try:
@@ -3388,6 +3690,8 @@ class CorrectNoteApp:
                          else cur.get('text_styles',{}) if cur else {}),
             calculations=input_work.session_calculations(self,text),
             backup_id=cur.get('backup_id') if cur else None,
+            doc_title=(self._title_toc.get_title() if getattr(self, '_title_toc', None) is not None
+                       else cur.get('doc_title') if cur else None),
             file_format=file_formats.rebase(cur.get('file_format') if cur else None,
                 cur.get('text', '') if cur else '', text)))
 
@@ -3660,9 +3964,9 @@ class CorrectNoteApp:
             tab['backup_id'] = tab_backup.new_id()      # a tab without a file: named as the daily backups do
             self._schedule_session_save()
         key = tab_backup.tab_key(tab)
-        made = tab_backup.save_manual(app_dir(), key, text, self.BACKUP_MANUAL_KEEP, title=tab_title(tab))
+        made = tab_backup.save_manual(savedata_dir(), key, text, self.BACKUP_MANUAL_KEEP, title=tab_title(tab))
         if made:
-            count = len(tab_backup.list_backups(app_dir(), key, manual=True))
+            count = len(tab_backup.list_backups(savedata_dir(), key, manual=True))
             self._flash_editor_header('手動のバックアップを作りました（このタブの手動 %d／最大 %d 個）'
                                       % (count, self.BACKUP_MANUAL_KEEP))
         else:
@@ -3688,7 +3992,7 @@ class CorrectNoteApp:
                 key = tab_backup.tab_key(tab)
                 if not key or not text.strip() or done.get(key) == text:
                     continue
-                if tab_backup.save(app_dir(), key, text, self.BACKUP_KEEP, title=tab_title(tab)):
+                if tab_backup.save(savedata_dir(), key, text, self.BACKUP_KEEP, title=tab_title(tab)):
                     done[key] = text
             except Exception:
                 pass
@@ -3699,7 +4003,7 @@ class CorrectNoteApp:
         tabs = self.session.tabs or []
         if not (0 <= index < len(tabs)):
             return []
-        found = tab_backup.list_all(app_dir(), tab_backup.tab_key(tabs[index]))
+        found = tab_backup.list_all(savedata_dir(), tab_backup.tab_key(tabs[index]))
         if not found:
             return [('― バックアップ（まだありません） ―', None)]
         items = [('― バックアップ（新しい順） ―', None)]
@@ -3923,9 +4227,67 @@ class CorrectNoteApp:
             import analysis_cache
             payload = self._analysis_cache_payload()
             if payload is not None:
-                analysis_cache.save(ANALYSIS_CACHE_FILE, *payload, generation=analysis_cache.next_generation())
+                analysis_cache.save(ANALYSIS_CACHE_FILE, *payload, generation=analysis_cache.next_generation(),
+                                    keep_texts=self._open_tab_keys())
+                self._analysis_evicted = {}
         except Exception:
             pass
+
+    def _open_tab_keys(self):
+        """いま開いているタブの本文の鍵（_analysis_key）。ディスクの控えに残すタブを決める。
+        手元に答えがあるタブ（_analysis_cache と、いま出しているタブ・解いているタブ）は除く——手元の答えで
+        残すか捨てるかを _analysis_cache_payload が決めたので、捨てた（直前の語を使った行など）タブを
+        ディスクの古い控えから戻さない（2026-11-15・tests_application_cache の
+        test_recent_word_evidence_prevents_restart_cache_reuse）。残すのは手元から押し出されたタブだけ。"""
+        keys = set()
+        try:
+            for tab in getattr(self.session, 'tabs', None) or ():
+                k = self._analysis_key(tab.get('text') or '')
+                if k:
+                    keys.add(k)
+            keys -= set(getattr(self, '_analysis_cache', None) or {})
+            for text in (getattr(self, '_analyze_text', '') or '', self.editor_source_text()):
+                k = self._analysis_key(text or '')
+                keys.discard(k)
+        except Exception:
+            return set()
+        return keys
+
+    def _analysis_cache_fingerprint(self):
+        """控えを書く時と同じ指紋（直前の語は入れない形・_analysis_cache_payload と同じ）。"""
+        import analysis_cache
+        return analysis_cache.build_fingerprint(app_dir(), APP_VERSION,
+            self.settings.get('input_method'), (), store=self.store,
+            context_vec=self.context_vec, dict_index=self.dict_index,
+            decisions=self.decisions, choices=self.choices,
+            ime_readings=getattr(self, 'ime_readings', None),
+            keyboard=keyboard_layout.spec(self.settings))
+
+    def _load_tab_from_disk_cache(self, key):
+        """メモリの控えに無いタブへ戻った: ディスクの控え（起動の時に読むのと同じ控え・同じ照合）から、この本文の
+        行の答えを、起動の時の「途中まで済んだタブ」と同じ形（_analysis_partial）で置く。あとは今の道
+        （_partial_analysis_core・restored_without_proof・_flush_heavy_redo）がそのまま使う。既定はオン（2026-11-15・既存の試験の3件を片付けてから）。CN_ANALYSIS_DISK_KEEP=0 で前の形"""
+        if os.environ.get('CN_ANALYSIS_DISK_KEEP') == '0' or not key:
+            return False
+        try:
+            import analysis_cache
+            if key in (getattr(self, '_analysis_partial', None) or {}):
+                return False
+            store = self.store
+            if getattr(store, 'saved_revision', None) != store.revision():
+                return False      # まだ書いていない語がある間は、ファイルの指紋と合わない
+            fp = self._analysis_cache_fingerprint()
+            rows = analysis_cache.lookup(ANALYSIS_CACHE_FILE, fp, key) if fp is not None else None
+            if not rows:
+                return False
+            if getattr(self, '_analysis_partial', None) is None:
+                self._analysis_partial = {}
+            self._analysis_partial[key] = rows
+            if getattr(self, '_analysis_partial_state', None) is None:
+                self._analysis_partial_state = analysis_async.state_key(self)
+            return True
+        except Exception:
+            return False
 
     def _analysis_cache_payload(self):
         """(指紋, 済んだタブ, 途中まで済んだタブ)。控えに書くもの（書いてはいけない状況なら None）。
@@ -3997,6 +4359,19 @@ class CorrectNoteApp:
             # 語彙が動いた直後で、開いているタブの段取りがまだ
             partial[text] = [keep_or_none(r, self._analyze_dependencies)
                              for r in self.line_results[:len(text.split('\n'))]]
+        # メモリの控え（12タブ）から落としたばかりで、まだ書いていないタブ（次に書くまでだけ持つ）
+        for key, (values, previous) in (getattr(self, '_analysis_evicted', None) or {}).items():
+            if (not key or not values or key in tabs or key in partial or key in stale or previous is None
+                    or not same_model_state(previous, state)):
+                continue
+            try:
+                rows = [keep_or_none(r, previous) for r in values]
+            except Exception:
+                continue
+            if all(r is not None and tab_analysis.reusable_result(r) for r in rows) and previous == state:
+                tabs[key] = rows
+            elif any(r is not None for r in rows):
+                partial[key] = rows
         # まだ開いていない、途中まで済んだタブ（控えから読んだまま）
         partial_state = getattr(self, '_analysis_partial_state', None)
         if partial_state is not None and same_model_state(partial_state, state):
@@ -4087,7 +4462,8 @@ class CorrectNoteApp:
                     partial = {k: [None if r is None else dict(r) for r in v] for k, v in partial.items()}
                     threading.Thread(target=analysis_cache.save, name='analysis-cache-save', daemon=True,
                                      args=(ANALYSIS_CACHE_FILE, fp, tabs, partial),
-                                     kwargs=dict(generation=generation)).start()
+                                     kwargs=dict(generation=generation, keep_texts=self._open_tab_keys())).start()
+                    self._analysis_evicted = {}
         except Exception:
             pass
         self._schedule_analysis_cache_autosave()
@@ -4187,6 +4563,14 @@ class CorrectNoteApp:
         選んでいなければ何もしない。"""
         widget = getattr(event, 'widget', None)
         quick = getattr(self, '_quick_text', None)
+        if widget is not None and os.environ.get('CN_FIND_ALT_I') != '0' and self._in_find_dialog(widget):
+            # 検索の窓の中の Alt+I（2026-11-12 うにさん「検索ウインドウでAlt+Iを押しても全タブ検索できない」）:
+            # 半角の時は窓の束縛（<Alt-i>）が受けるが、IME が全角の時は字（ｉ・に）を伴って欄のキーの束縛に届き、
+            # ここで「本文の欄ではない」と何もせずに捨てていた。検索欄の文字で全タブ検索する（本体と同じ動き）
+            self._alt_i_echo_until = time.monotonic() + self.ALT_I_ECHO_S
+            self._do_find_all_tabs()
+            self._focus_all_tab_results()
+            return 'break'
         if widget is None or widget not in (getattr(self, 'editor', None), getattr(self, 'result_view', None), quick):
             return None
         if os.environ.get('CN_ALT_I_IME') != '0':
@@ -4218,7 +4602,35 @@ class CorrectNoteApp:
                         dialog.lift()
                 except tk.TclError:
                     pass
+        # 本文を選んで全タブ検索した時は、結果の窓を前に出してフォーカスを移す（2026-11-12 うにさん）
+        self._focus_all_tab_results()
         return 'break'
+
+    def _in_find_dialog(self, widget):
+        """その部品が検索の窓の中か。"""
+        dlg = getattr(self, '_find_dialog', None)
+        try:
+            return dlg is not None and dlg.winfo_exists() and widget.winfo_toplevel() is dlg
+        except (tk.TclError, AttributeError):
+            return False
+
+    def _focus_all_tab_results(self):
+        """全タブ検索の結果の窓を前に出し、一覧にフォーカスを移す（上下キー・Enter ですぐ選べるように）。
+        CN_FIND_ALL_FOCUS=0 で前の形（フォーカスは元の欄のまま）"""
+        if os.environ.get('CN_FIND_ALL_FOCUS') == '0':
+            return
+        dlg = getattr(self, '_all_tab_dialog', None)
+        tree = getattr(self, '_all_tab_tree', None)
+        try:
+            if dlg is None or not dlg.winfo_exists():
+                return
+            dlg.deiconify()
+            dlg.lift()
+            dlg.focus_force()
+            if tree is not None:
+                tree.focus_set()
+        except tk.TclError:
+            pass
 
     def _drop_quick_topmost(self):
         """簡易入力から Alt+I で手前に出した検索の窓と結果の窓を、ふつうの窓に戻す（簡易入力の窓が閉じた時・本体から
@@ -4462,7 +4874,8 @@ class CorrectNoteApp:
         self._find_entry = e_find
         self._replace_entry.bind('<Return>', lambda e: self._do_replace())
         for sequence in ('<Alt-i>', '<Alt-I>'):
-            dlg.bind(sequence, lambda e: self._do_find_all_tabs())
+            # 本体の Alt+I と同じく、結果の窓を前に出す（IME が全角の時は _alt_i_find_all_tabs が受ける）
+            dlg.bind(sequence, lambda e: (self._do_find_all_tabs(), self._focus_all_tab_results(), 'break')[2])
         dlg.bind('<Escape>', lambda e: (self._close_find_dialog(), 'break')[1])
         dlg.protocol('WM_DELETE_WINDOW', self._close_find_dialog)
 
@@ -4933,11 +5346,17 @@ class CorrectNoteApp:
         tree = self._all_tab_tree = ttk.Treeview(
             frame, columns=('tab', 'line', 'text'), show='headings', selectmode='browse',
             style=self.ALL_TAB_STYLE)
-        for name, label, width, stretch in (
-                ('tab', 'タブ', 150, False), ('line', '行:桁', 70, False),
-                ('text', '一致箇所と前後の文章', 480, True)):
+        narrow = os.environ.get('CN_FIND_ALL_NARROW') != '0'
+        # 列の幅（2026-11-12 うにさん「タブの列は行桁と同じ幅、一致箇所と前後の文の列は行桁の幅の2倍になる
+        # まで横に縮める。ウインドウ全体の横幅もそれに合わせて縮める」）。窓を手で広げると、文の列が広がる
+        # （stretch）。CN_FIND_ALL_NARROW=0 で前の幅（150・70・480）
+        line_w = self.ALL_TAB_LINE_W
+        widths = ((line_w, line_w, 2 * line_w) if narrow else (150, line_w, 480))
+        for (name, label, stretch), width in zip((
+                ('tab', 'タブ', False), ('line', '行:桁', False),
+                ('text', '一致箇所と前後の文章', True)), widths):
             tree.heading(name, text=label)
-            tree.column(name, width=width, minwidth=50, stretch=stretch)
+            tree.column(name, width=width, minwidth=min(50, width), stretch=stretch)
         scroll = ttk.Scrollbar(frame, orient='vertical', command=tree.yview,
                                style=self.ALL_TAB_SCROLL_STYLE)
         tree.configure(yscrollcommand=scroll.set)
@@ -4968,6 +5387,52 @@ class CorrectNoteApp:
                       cursor='hand2').pack(side='right', padx=padx)
         dlg.bind('<Escape>', lambda e: self._close_all_tab_results())
         dlg.protocol('WM_DELETE_WINDOW', self._close_all_tab_results)
+        if narrow:
+            # 窓の横幅を一覧の列の和に合わせる（上の説明の文は折り返す。下のボタンの並びより狭くはしない）
+            try:
+                dlg.update_idletasks()
+                width = max(tree.winfo_reqwidth() + scroll.winfo_reqwidth() + 24, buttons.winfo_reqwidth() + 24)
+                for child in dlg.winfo_children():
+                    if isinstance(child, tk.Label) and child is not self._all_tab_notice:
+                        child.configure(wraplength=width - 24, justify='left')
+                self._all_tab_width = width
+                dlg.minsize(min(width, 480), 250 if os.environ.get('CN_FIND_ALL_FIT') == '0' else 150)
+                self._place_dialog(dlg, width, self.ALL_TAB_MAX_H)
+            except tk.TclError:
+                pass
+        self._place_all_tab_left_monitor(dlg)
+
+    ALL_TAB_LINE_W = 70
+
+    def _place_all_tab_left_monitor(self, dlg):
+        """全タブ検索の窓を出す時、本体の横（左右どちらか）に窓の幅の余白が無く、左隣にモニターがあれば、その
+        モニターの作業領域（タスクバーを除く）の右端に出す（2026-11-12 うにさん）。左隣が無ければ今の置き方のまま。
+        CN_FIND_ALL_LEFT=0 で前の形"""
+        if os.environ.get('CN_FIND_ALL_LEFT') == '0':
+            return
+        try:
+            dlg.update_idletasks()
+            frame_w, frame_h = window_frame_size(self.root)
+            w = dlg.winfo_width() if dlg.winfo_width() > 1 else dlg.winfo_reqwidth()
+            h = dlg.winfo_height() if dlg.winfo_height() > 1 else dlg.winfo_reqheight()
+            outer_w, outer_h = w + frame_w, h + frame_h
+            left = self.root.winfo_x()
+            right = left + self.root.winfo_width() + frame_w
+            mid_y = self.root.winfo_rooty() + self.root.winfo_height() // 2
+            area = monitor_work_area((left + right) // 2, mid_y)
+            if area is None:
+                return
+            if max(area[2] - right, left - area[0]) >= outer_w:
+                return                                   # 本体の横に余白がある: 今の置き方のまま
+            other = monitor_left_of((left + right) // 2, mid_y)
+            if other is None:
+                return                                   # 左隣のモニターが無い
+            x = other[2] - outer_w
+            y = min(max(other[1], self.root.winfo_rooty()), other[3] - outer_h)
+            x, y = fit_in_area(x, y, outer_w, outer_h, other)
+            dlg.geometry(f'{w}x{h}+{x}+{y}')
+        except Exception:
+            pass
 
     ALL_TAB_MAX_H = 430
 
@@ -6413,6 +6878,12 @@ class CorrectNoteApp:
         for window in list(getattr(self, '_doc_windows', ())):
             try:
                 window.restyle()                      # second windows take the memo's colours (doc_window)
+            except Exception:
+                pass
+        _toc = getattr(self, '_title_toc', None)
+        if _toc is not None:
+            try:
+                _toc.restyle()                        # タイトルと目次の色（目次の青も地に合わせて選び直す・2026-11-15）
             except Exception:
                 pass
         if getattr(self, '_quote_mode_shown', False):
@@ -9158,6 +9629,10 @@ class CorrectNoteApp:
         self._dirty = not tab.get('saved', True)
         self.bookmarks.clear()
         self.bookmarks.update(tab.get('bookmarks', []))
+        _toc = getattr(self, '_title_toc', None)
+        if _toc is not None:
+            # その場で作り直す（打鍵の待ちに乗せると、替えた後の描き直しのたびに延びて遅れた・2026-11-15 うにさん）
+            _toc.switched(tab.get('doc_title') or '')
         try:
             _n_lines = int(self.editor.index('end-1c').split('.')[0])
         except Exception:
@@ -10029,6 +10504,9 @@ class CorrectNoteApp:
         _btn_m_learn, m_learn = _make_menubutton('学習')
         m_learn.add_command(label='補正の判断…',
                             command=self.open_decisions_dialog)
+        # ひらがなのまま通す語（kana_keep_window・2026-11-14 うにさん「特定の単語だけひらがなのままにするリストが要る」）
+        m_learn.add_command(label='ひらがなのまま通す語…',
+                            command=self.open_kana_keep_window)
         m_learn.add_separator()
         # 保守用。通常は初回に自動で済むので、階層を1つ下げておく。
         m_maint = tk.Menu(m_learn, tearoff=0)
@@ -11591,6 +12069,11 @@ class CorrectNoteApp:
             padx=14, pady=12, spacing1=ROW_SPACING[0], spacing3=ROW_SPACING[1],
             width=1,   # grid の重みで幅が決まるよう、最小値にしておく
         )
+        # タイトルと目次を本文の中の字として置く形（title_inline・CN_TITLE_TOC_INLINE=1）: 行の変換は、行番号の列などが
+        # 命令を包む前に掛ける（その後の観察者・Undo の控えは本文の位置で見る）
+        import title_inline as _title_inline
+        if _title_inline.enabled():
+            _title_inline.prepare(self.editor)
         self.editor_gutter = LineNumberGutter(
             left_inner, self.editor, bookmarks=self.bookmarks,
             on_toggle_bookmark=self._toggle_bookmark,
@@ -11648,6 +12131,8 @@ class CorrectNoteApp:
             width=1,
         )
         self._apply_tab_stops()      # タブの止まり（項目48-LG）
+        if _title_inline.enabled():
+            _title_inline.prepare(self.result_view)      # 補正欄にも同じ見出し（左右の行をそろえる）
         self.result_gutter = LineNumberGutter(
             right_inner, self.result_view, bg=RESULT_GUTTER_BG,
             bookmarks=self.bookmarks, on_toggle_bookmark=self._toggle_bookmark,
@@ -11718,8 +12203,11 @@ class CorrectNoteApp:
         # --- 左右のスクロールを連動させる ---
         self.editor.config(yscrollcommand=self._on_editor_scroll)
         self.result_view.config(yscrollcommand=self._on_result_scroll)
+        # 本文の上のタイトルと目次（title_toc・2026-11-15 うにさん「タイトルと目次を実装します」）。CN_TITLE_TOC=0 で出ない
+        import title_toc as _title_toc
+        self._title_toc = _title_toc.install(self)
         # スクロールの記録（既定は入り・CN_SCROLL_TRACE=0 かデバッグメニューで切れる。scroll_trace.py・2026-11-07 うにさん）
-        self._scroll_trace_dir = os.path.join(app_dir(), 'tools_local', 'scroll_trace')
+        self._scroll_trace_dir = os.path.join(data_dir(), 'tools_local', 'scroll_trace')
         # 2026-11-09 から既定は切り（debug_tools_on）。CN_SCROLL_TRACE=1 か CN_DEBUG_TOOLS=1 で入る
         if debug_tools_on() or os.environ.get('CN_SCROLL_TRACE') == '1':
             try:
@@ -12286,6 +12774,11 @@ class CorrectNoteApp:
         except (OSError,AttributeError,tk.TclError):return False
 
     def _toggle_ruler(self):
+        # タイトルにカーソルがある時は何もしない（本文にもタイトルにも入れない・2026-11-15 うにさん）
+        toc=getattr(self,'_title_toc',None)
+        if toc is not None and toc.has_cursor():
+            self._sync_ruler_button()
+            return False
         self._install_editor_guides()
         enabled=self._editor_guides.toggle()
         self._sync_ruler_button()
@@ -12560,6 +13053,8 @@ class CorrectNoteApp:
         return 'break'
 
     def _on_toggle_bookmark_key(self, event=None):
+        _toc = getattr(self, '_title_toc', None)
+        if _toc is not None:_toc.changed(0)
         """
         **Ctrl+スペース——選んでいる行のブックマークを付け外しする**
         （項目48-OD・2026-09-02・うにさんの指定）。
@@ -12604,6 +13099,8 @@ class CorrectNoteApp:
         return 'break'
 
     def _toggle_bookmark(self, line):
+        _toc = getattr(self, '_title_toc', None)
+        if _toc is not None:_toc.changed(0)
         """
         行番号のダブルクリックで、その行のブックマークを付け外しする。
 
@@ -12990,6 +13487,11 @@ class CorrectNoteApp:
         ので、いくら細かく合わせても跳ね返ってこない。振動の条件
         そのものが消えているため、画素まで詰めて構わない。
         """
+        if getattr(src, '_cn_body_raw', None):
+            # タイトルと目次を本文の中に置く形（title_inline）: 上に見出しが見えている間は、右も同じ見出しの所に（2026-11-15）
+            import title_inline as _title_inline
+            if _title_inline.sync_header_view(src, dst):
+                return
         try:
             top_index = src.index('@0,0')
             top_line = int(top_index.split('.')[0])
@@ -13076,6 +13578,8 @@ class CorrectNoteApp:
         if getattr(self, '_editor_view_seen', None) == (first, last):
             return
         self._editor_view_seen = (first, last)
+        _toc = getattr(self, '_title_toc', None)
+        if _toc is not None:_toc.position()      # タイトルと目次は本文と一緒に動き、1行目が見えなくなれば隠れる
         self._copy_emphasis_scrolled(self.editor)
         _hide_end_rule_while_scrolling(self.editor)
         guides=getattr(self,'_editor_guides',None)
@@ -13127,6 +13631,8 @@ class CorrectNoteApp:
         if getattr(self, '_result_view_seen', None) == (first, last):
             return
         self._result_view_seen = (first, last)
+        _toc = getattr(self, '_title_toc', None)
+        if _toc is not None:_toc.ensure_pad()   # 補正欄を描き直すと1行目の余白のタグが外れるので掛け直す
         self._copy_emphasis_scrolled(self.result_view)
         _hide_end_rule_while_scrolling(self.result_view)
         guides=getattr(self,'_editor_guides',None)
@@ -13298,6 +13804,64 @@ class CorrectNoteApp:
         self.editor_gutter.sync_yview(first,last)
         self.result_gutter.sync_yview(*self.result_view.yview())
         return before != (first,last)
+
+    def _title_pad_scroll(self, px):
+        """1行目（タイトルと目次の余白・title_toc の PAD_TAG）が見えている間の右ドラッグを、画素で送る。送ったら True。
+        1行目が見えなくなったら（下へ）・3行目より下なら False（今までどおり行で送る）。CN_TITLE_PAD_PIXELS=0 で前の形。"""
+        if not px or getattr(self, '_overview', None) is not None:
+            return False
+        if getattr(self, '_title_toc', None) is None or os.environ.get('CN_TITLE_PAD_PIXELS') == '0':
+            return False
+        e = self.editor
+        try:
+            if not e.tag_ranges('cn_title_pad'):
+                return False
+            top = int(str(e.index('@0,0')).split('.')[0])
+            if top > 2 or (top == 2 and px > 0 and e.dlineinfo('1.0') is None):
+                return False
+        except (tk.TclError, ValueError, TypeError):
+            return False
+        # 続けて来た動きはまとめて1回で送る（2026-11-15 うにさん「右クリックのスクロールが、効きが悪くなった。全く動かない
+        # こともある」: 動きの知らせ1つごとに画素で送って描き直し、1回 60ms ほど掛かって知らせが溜まっていた）。描き直しの
+        # 前（idle）に溜まった分を1回で送る。CN_TITLE_PAD_COALESCE=0 で前の形（その場で送る）
+        if os.environ.get('CN_TITLE_PAD_COALESCE') != '0':
+            self._pad_px_pending = getattr(self, '_pad_px_pending', 0) + int(px)
+            if getattr(self, '_pad_px_job', None) is None:
+                try:
+                    self._pad_px_job = self.root.after_idle(self._flush_title_pad_scroll)
+                except Exception:
+                    self._pad_px_job = None
+                    return self._flush_title_pad_scroll()
+            return True
+        self._pad_px_pending = int(px)
+        return self._flush_title_pad_scroll()
+
+    def _flush_title_pad_scroll(self):
+        """溜まった画素の送りを1回で行う（_title_pad_scroll）。"""
+        self._pad_px_job = None
+        px, self._pad_px_pending = getattr(self, '_pad_px_pending', 0), 0
+        if not px:
+            return True
+        e = self.editor
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            self._release_navigation_padding()
+            e.yview_scroll(int(px), 'pixels')
+            if not self._layout_is_unified():
+                self._sync_partner_to_line(e, self.result_view)
+        finally:
+            self._syncing = was_syncing
+        self._view_moved_count = getattr(self, '_view_moved_count', 0) + 1
+        try:
+            first, last = e.yview()
+            self.v_scrollbar.set(first, last)
+            self._update_header_visibility(first)
+            self.editor_gutter.sync_yview(first, last)
+            self.result_gutter.sync_yview(*self.result_view.yview())
+        except Exception:
+            pass
+        return True
 
     def _on_wheel_units(self, delta):
         """
@@ -13678,6 +14242,16 @@ class CorrectNoteApp:
         except Exception:
             pass
 
+    def _deletion_log_on(self):
+        """削除の記録（deletion_log.txt・項目48-TM）を書くか（2026-11-14: 既定はオフ）。本文の断片と打鍵が入るので、
+        デバッグメニューの「削除の記録」か CN_DELETION_LOG=1 の時だけ書く。オフでも今あるファイルは消さない"""
+        if os.environ.get('CN_DELETION_LOG') == '1':
+            return True
+        try:
+            return bool(self.settings.get('debug_deletion_log'))
+        except Exception:
+            return False
+
     def _sz_snapshot(self):
         try:
             idx = str(self.editor.index('insert'))
@@ -13691,6 +14265,9 @@ class CorrectNoteApp:
     def _sz_check_shrink(self, event):
 
         """KeyRelease のあと、控えと比べて行が縮んでいたら証拠を書く。"""
+        if not self._deletion_log_on():
+            self._sz_shadow = None          # 入れ直した時に、古い控えと比べない
+            return
         prev = getattr(self, '_sz_shadow', None)
         now = self._sz_snapshot()
         self._sz_shadow = now
@@ -13744,7 +14321,7 @@ class CorrectNoteApp:
         try:
             import datetime as _dt
             import os as _os
-            path = _os.path.join(app_dir(), 'deletion_log.txt')
+            path = _os.path.join(savedata_dir(), 'deletion_log.txt')
             keys = getattr(self, '_sz_keys', []) or []
             with open(path, 'a', encoding='utf-8') as f:
                 print('=== %s  行 %d  KeyRelease=%s state=%s' % (
@@ -13824,7 +14401,7 @@ class CorrectNoteApp:
         `_prune_ime_readings` と同じ場所から呼ぶ（起動時と保存時）。
         """
         import os as _os
-        path = _os.path.join(app_dir(), 'deletion_log.txt')
+        path = _os.path.join(savedata_dir(), 'deletion_log.txt')
         if not _os.path.exists(path):
             return
         texts = [tab.get('text', '') or ''
@@ -13855,6 +14432,8 @@ class CorrectNoteApp:
             pass
 
     def _on_change(self, event=None):
+        _toc = getattr(self, '_title_toc', None)
+        if _toc is not None:_toc.changed()       # 目次の作り直しと1行目の余白の掛け直し（少し待ってから）
         import ime_burst
         if ime_burst.hold(self, event):
             return
@@ -15177,8 +15756,8 @@ class CorrectNoteApp:
                     '入力方式と配列', '直前の語', 'IMEの読み')
 
     def _note_big_redo(self, cause, lines_n, todo_n, shape):
-        # 2026-11-09 から既定は取らない（debug_tools_on）。CN_REDO_TRACE=1 か CN_DEBUG_TOOLS=1 で取る
-        if not (debug_tools_on() or os.environ.get('CN_REDO_TRACE') == '1'):
+        # 2026-11-09 から既定は取らなかった（debug_tools_on）。2026-11-14 から開発版では既定で取る（redo_trace_on）
+        if not redo_trace_on():
             return
         try:
             state = analysis_async.state_key(self)
@@ -15196,7 +15775,7 @@ class CorrectNoteApp:
             if previous is not None and state is not None:
                 moved = [self._STATE_NAMES[i] if i < len(self._STATE_NAMES) else str(i)
                          for i in range(min(len(previous), len(state))) if previous[i] != state[i]]
-            folder = getattr(self, '_scroll_trace_dir', None) or os.path.join(app_dir(), 'tools_local', 'scroll_trace')
+            folder = getattr(self, '_scroll_trace_dir', None) or os.path.join(data_dir(), 'tools_local', 'scroll_trace')
             os.makedirs(folder, exist_ok=True)
             path = os.path.join(folder, 'analysis_redo.log')
             try:
@@ -15237,6 +15816,8 @@ class CorrectNoteApp:
                 keeps_restored = core is not None
             if core is None:
                 core, unfinished = self._partial_analysis_core(text, lines)
+                if core is None and self._load_tab_from_disk_cache(key):
+                    core, unfinished = self._partial_analysis_core(text, lines)
                 if core is None:
                     return False
                 keeps_restored = any(tab_analysis.kept_answer(r) for r in core)
@@ -17271,7 +17852,15 @@ class CorrectNoteApp:
             # 2026-09-06）——下の「古いものから落とす」より前に
             self._prune_analysis_cache(keep=key)
             while len(cache) > self._analysis_cache_tabs():
-                cache.pop(next(iter(cache)))    # 古いものから落とす
+                old = next(iter(cache))
+                values = cache.pop(old)    # 古いものから落とす
+                # ディスクの控えには残す（次に書くまでだけ持ち、書いたら手放す。既定はオン・CN_ANALYSIS_DISK_KEEP=0 で前の形）
+                if os.environ.get('CN_ANALYSIS_DISK_KEEP') != '0':
+                    evicted = getattr(self, '_analysis_evicted', None)
+                    if evicted is None:
+                        evicted = self._analysis_evicted = {}
+                    evicted[old] = (values, deps.get(old))
+                    self._schedule_analysis_cache_autosave()
         except Exception:
             pass
 
@@ -19651,6 +20240,14 @@ class CorrectNoteApp:
         import analysis_work_app as input_work
         if not surface:
             return
+        if os.environ.get('CN_IME_MIXED_PROBE') == '1':
+            # 確かめ用の読むだけの記録（ime_mixed_probe・2026-11-13）。英字の有無と長さだけで、文字は残さない
+            try:
+                import ime_mixed_probe
+                ime_mixed_probe.note(data_dir(), surface, reading, self.settings.get('input_method'),
+                                     fallback=require_insertion)
+            except Exception:
+                pass
         try:
             origin=getattr(self,'_ime_origin_work',None)
             inserted=(bind_occurrence and origin is not None and input_work.remember(
@@ -19660,6 +20257,12 @@ class CorrectNoteApp:
             # An explicit RESULTSTR/RESULTREADSTR remains valid before Tk insert.
             if require_insertion and not inserted:return
             if self.ime_readings.remember(surface, reading):
+                self._ime_pairs_dirty = True
+            elif (self.settings.get('input_method') == 'romaji'
+                  and getattr(self.ime_readings, 'remember_mixed', None) is not None
+                  and self.ime_readings.remember_mixed(surface, reading)):
+                # 英字まじりの打った読み（ローマ字入力で母音の付かない子音が英字のまま残った確定・2026-11-14）。
+                # かなだけの表とは別の入れ物。CN_IME_MIXED=0 なら remember_mixed が覚えない
                 self._ime_pairs_dirty = True
         except Exception:
             pass
@@ -20143,6 +20746,14 @@ class CorrectNoteApp:
             d['direction'] = 1 if dy_step > 0 else -1
         inertia=getattr(self,'_scroll_inertia',None)
         if inertia is not None:inertia.sample_drag(-dy_step)
+        # タイトルと目次の余白の付いた1行目が見えている間は、画素で送る（行で送ると欄の高さぶんが1回で消えた・
+        # 2026-11-15 うにさん「タイトルか目次から右クリックドラッグが、ある程度動かすまで全く動かず、ある程度から目次の
+        # すべてが見切れるほど動く」。本文から始めた右ドラッグも同じ）
+        if CorrectNoteApp._title_pad_scroll(self, -dy_step):
+            d['accum'] = 0.0
+            d['last_y'] = py
+            self._edge_warp(d, widget, event)
+            return 'break'
         d['accum'] += dy_step
         line_h = self._get_line_height()
         lines = int(d['accum'] / line_h)
@@ -20430,6 +21041,14 @@ class CorrectNoteApp:
             w = getattr(self, name, None)
             if w is not None:
                 got.append(w)
+        # タイトルと目次の欄の上もカーソルが通る（そこから始めた右ドラッグでも隠す・2026-11-15 うにさん
+        # 「タイトルと目次の右クリックドラッグ時に、カーソルが消えていない」）
+        toc = getattr(self, '_title_toc', None)
+        if toc is not None:
+            try:
+                got.extend(toc.widgets())
+            except Exception:
+                pass
         return got
 
     def _scroll_cursor_hide(self, widget):
@@ -21273,7 +21892,10 @@ class CorrectNoteApp:
             self._forget_bracket_cycle()
             return self._function_key_character(event)
         widget=getattr(event,'widget',None)
-        if widget not in (self.editor,getattr(self,'_quick_text',None)) or widget is None:return None
+        _toc=getattr(self,'_title_toc',None)
+        if widget is None or widget not in (self.editor,getattr(self,'_quick_text',None),getattr(_toc,'title',None)):return None
+        # タイトルの行で打っている間（本文の欄に焦点・title_inline）は、タイトルの字に（2026-11-15）
+        if _toc is not None and hasattr(_toc,'typing_target'):widget=_toc.typing_target(widget)
         state=int(getattr(event,'state',0) or 0)
         control=bool(state&0x04)
         shift=bool(state&0x01)
@@ -21578,11 +22200,19 @@ class CorrectNoteApp:
         if widget is not None:return widget
         try:focused=self.root.focus_get()
         except tk.TclError:focused=None
-        return focused if focused is not None and focused is getattr(self,'_quick_text',None) else self.editor
+        if focused is not None and focused is getattr(self,'_quick_text',None):return focused
+        # タイトルにカーソルがある時は、タイトルの字に（2026-11-15 うにさん「F2または括弧ボタンで、タイトルに対して実行する」）
+        toc=getattr(self,'_title_toc',None)
+        if toc is not None and toc.has_cursor():return toc.title
+        return self.editor
 
     def _bracket_owner_valid(self, state):
         widget=state.get('widget',self.editor)
         if widget is self.editor:return self.session.current() is state['tab']
+        # タイトルの字（title_toc の見えない Text）も、同じタブの間は巡回を続ける（2026-11-15 うにさん「タイトルに
+        # 対してF2を繰り返しても、次の括弧に切り替わらず括弧が追加される」）
+        _toc=getattr(self,'_title_toc',None)
+        if _toc is not None and widget is getattr(_toc,'title',None):return self.session.current() is state['tab']
         return widget is not None and widget is getattr(self,'_quick_text',None) and bool(widget.winfo_exists())
 
     def _discard_widget_brackets(self, widget):
@@ -24615,6 +25245,11 @@ class CorrectNoteApp:
             return 'break'
         if self._commit_composition_first(event, self._on_f2_candidates):
             return 'break'
+        # タイトルの行で打っている間（title_inline）は、候補一覧を出さない（タイトルには候補が無い。本文の1行目の語を
+        # 開かないように・2026-11-15）
+        _toc = getattr(self, '_title_toc', None)
+        if _toc is not None and getattr(_toc, 'inline', False) and _toc.has_cursor():
+            return 'break'
         unified = self._layout_is_unified()
 
         # 簡易入力の候補一覧が開いているなら、その遡りを続ける
@@ -27000,6 +27635,19 @@ class CorrectNoteApp:
                      'span': (sa, sb), 'base': run} for sf in got]
         return []
 
+    def _choices_take_effect(self):
+        """選んだ語を覚えると、補正の答えに効くか。2026-11-08 から選びは覚えない（last_choice.LEARNED_OFF・
+        CN_LEARNED_HISTORY=1 で前のとおり）ので、統合表示の自動反映・補正欄で「覚えるだけ」にすると、選んでも何も
+        変わらなかった（2026-11-14 うにさん「F5再変換で…候補から打ってを選んだが、何も変わらなかった」）。効かない間は
+        本文を直に書き換える（学んだ語を使わない決まりは変えない）。CN_CHOICE_TO_SOURCE=0 で前の形（覚えるだけ）"""
+        if os.environ.get('CN_CHOICE_TO_SOURCE') == '0':
+            return True
+        try:
+            import last_choice as _lc
+            return not getattr(_lc, 'LEARNED_OFF', False)
+        except Exception:
+            return True
+
     def _editor_choose_word(self, row, unit, cand):
         """
         統合レイアウトで候補を選んだ。メモ欄を直接書き換える。
@@ -27030,7 +27678,7 @@ class CorrectNoteApp:
                 pass
         start = f"{row}.0+{unit['start']}c"
         end = f"{row}.0+{unit['end']}c"
-        if self.unified_autofix_on():
+        if self.unified_autofix_on() and self._choices_take_effect():
             # 自動反映が効いているときは、本文（原文）は書き換えない。
             # 選んだことを記録するだけにして、画面への反映は
             # 自動反映に任せる。こうしないと**原文のほうが
@@ -27811,7 +28459,8 @@ class CorrectNoteApp:
         dd, lb, items = parts['dd'], parts['lb'], parts['items']
         try:
             limit, parts['above'] = fit_dropdown(len(items), parts['anchor'], parts['top'], parts['bottom'],
-                                                 parts['padding'], parts['row_height'], above=parts['above'])
+                                                 parts['padding'], parts['row_height'], above=parts['above'],
+                                                 keep=True)
             lb.configure(height=limit,
                          width=max(int(lb.cget('width')),
                                    min(80 if ui_lang.is_japanese() else 110,
@@ -27937,6 +28586,11 @@ class CorrectNoteApp:
         """
         unit = self._candidate_selection_unit(row, unit, cand, self.result_view)
         if unit is None:
+            return
+        if row is not None and not self._choices_take_effect():
+            # 選びを覚えない間（_choices_take_effect）は、補正欄で選んだ語を本文のその範囲へ書き込む。覚えるだけでは
+            # 答えが変わらず、選んでも何も起きなかった（2026-11-14 うにさん）
+            self._replace_result_unit_in_source(row, unit, cand['surface'])
             return
         undo = getattr(self, '_choice_undo', None)
         undo_before = undo.before() if undo is not None else None
@@ -28181,6 +28835,27 @@ class CorrectNoteApp:
         self._analyze_cause = '判断が変わった（選び直し・もう直さない等）'
         self._analyze()
 
+    def open_kana_keep_window(self):
+        """「ひらがなのまま通す語」の窓（kana_keep_window）。"""
+        try:
+            import kana_keep_window
+            return kana_keep_window.open_from_app(self)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def kana_keep_changed(self):
+        """ひらがなのまま通す語の一覧が変わった（窓を閉じた・適用）。開いているタブを解析し直す。解析の状態の版を上げるので、
+        どの行も前の答えを使わない。解析の子は一覧のファイルの更新時刻を見て読み直す（kana_keep_list.load）。"""
+        self._analysis_state_revision = getattr(self, '_analysis_state_revision', 0) + 1
+        try:
+            self._invalidate_units_cache()
+        except Exception:
+            pass
+        self._reanalyze_all()
+        self._analyze_cause = 'ひらがなのまま通す語の一覧が変わった'
+
     def open_decisions_dialog(self):
         """
         覚えている判断の一覧。間違えて登録したものを取り消せる。
@@ -28361,6 +29036,10 @@ class CorrectNoteApp:
                 return
             count = sum(self.ime_readings.forget(surface, reading)
                         for surface, reading in selected)
+            # その表記の英字まじりの読み（この画面にはまだ出ない）も一緒に消す（2026-11-14）
+            forget_mixed = getattr(self.ime_readings, 'forget_mixed', None)
+            if forget_mixed is not None:
+                count += sum(forget_mixed(surface) for surface in {s for s, _r in selected})
             if not count:
                 return
             saved = self.ime_readings.save()
@@ -28625,7 +29304,7 @@ class CorrectNoteApp:
         except (OSError, ValueError) as error:
             return result(None, str(error))
 
-    def _place_in_new_tab(self, path, content, metadata=None):
+    def _place_in_new_tab(self, path, content, metadata=None, doc_title=''):
         """読み込んだ中身を新しいタブに置く（解析と控えの書き出しは呼び手）。
 
         今のタブが**空の無題**ならそれを使い回す（Windows 11 の
@@ -28645,6 +29324,11 @@ class CorrectNoteApp:
             self.session.add_tab(new_tab())
         self.session.current().update(text=content.rstrip('\n'),
             file_format=file_formats.clean(metadata, content),ruler_rows=[])
+        # 保存したタイトル（title_toc の split_loaded が取った1行目）。無ければ空
+        self.session.current().pop('doc_title', None)
+        if doc_title:self.session.current()['doc_title'] = doc_title
+        _toc = getattr(self, '_title_toc', None)
+        if _toc is not None:_toc.set_title(doc_title or '')
         guides=getattr(self,'_editor_guides',None)
         if guides is not None:guides.set_ruler_rows([],notify=False)
         self.bookmarks.clear()
@@ -28745,7 +29429,10 @@ class CorrectNoteApp:
                 continue
             if not self._agree_to_long_row(path, content):
                 continue
-            self._place_in_new_tab(path, content, metadata)
+            # このアプリがタイトル付きで保存したファイルだけ、1行目をタイトル・2行目を区切りとして取る（title_toc）
+            import title_toc as _title_toc
+            content, metadata, doc_title = _title_toc.split_loaded(content, metadata, path, savedata_dir(), file_formats)
+            self._place_in_new_tab(path, content, metadata, doc_title)
             placed += 1
             opened.append(path)
         if opened:
@@ -29077,6 +29764,10 @@ class CorrectNoteApp:
                 widget = self.root.focus_get()
             except Exception:
                 widget = None
+        # タイトルの行で打っている間（本文の欄に焦点・title_inline）は、タイトルへ（2026-11-15）
+        _toc = getattr(self, '_title_toc', None)
+        if _toc is not None and hasattr(_toc, 'typing_target'):
+            widget = _toc.typing_target(widget)
         # 欄の種類ごとに Tk 自身の打ち込みの手続き（検索欄などの Entry も）。
         insert = {'Text': 'tk::TextInsert', 'Entry': 'tk::EntryInsert',
                   'TEntry': 'ttk::entry::Insert'}.get(
@@ -29199,8 +29890,13 @@ class CorrectNoteApp:
         tab = self.session.current()
         metadata = file_formats.rebase(tab.get('file_format') if tab else None,
                                       tab.get('text', '') if tab else '', content)
+        # タイトルがあれば、ファイルの頭に「タイトル＋空白行」（title_toc・中で持つ本文は今のまま）
+        import title_toc as _title_toc
+        _toc = getattr(self, '_title_toc', None)
+        doc_title = _toc.get_title() if _toc is not None else ''
+        file_content, file_metadata = _title_toc.compose_for_save(doc_title, content, metadata, file_formats)
         try:
-            payload = file_formats.encode(content, metadata)
+            payload = file_formats.encode(file_content, file_metadata)
         except (UnicodeError, ValueError) as error:
             self._save_failed_error = error
             return False
@@ -29243,6 +29939,10 @@ class CorrectNoteApp:
         if tab is not None:
             tab['text'] = content
             tab['file_format'] = metadata
+            tab.pop('doc_title', None)
+            if doc_title:tab['doc_title'] = doc_title
+        if _toc is not None:
+            _title_toc.save_record(savedata_dir(), path, doc_title)
         self.current_file = path
         self._dirty = False
         self._refresh_title()
@@ -29318,6 +30018,11 @@ class CorrectNoteApp:
         path = self._ask_save_path()
         if not path:
             return
+        # タイトルが空なら、保存するファイルの名前（拡張子を除く）を入れる（title_toc）
+        _toc = getattr(self, '_title_toc', None)
+        if _toc is not None and not _toc.get_title().strip():
+            import title_toc as _title_toc
+            _toc.set_title(_title_toc.title_for_save_as('', path))
         if not self._write_to_file(path):
             err = getattr(self, '_save_failed_error', None)
             messagebox.showerror(APP_TITLE, f'保存できませんでした:\n{err}')
@@ -29465,8 +30170,21 @@ def main():
     _set_app_user_model_id()
     # The data folder for caches that modules make on their own (reading_lattice's table, 2026-10-25).
     # Set before any analysis child starts, so the children inherit it.
+    # 2026-11-14: 作り直せる控えは cache\ へ（cache_dir）。reading_lattice・compact_tables・janome_import・synonyms の
+    # 控えは、みなこの変数の場所に書くので、ここを cache_dir にすれば本体も子も同じ所を見る。前の直下の控えは
+    # ここで1回だけ cache\ へ移す（移せない物は次の起動で）
     try:
-        os.environ['CORRECTNOTE_DATA_DIR'] = app_dir()
+        # 2026-11-14 07:04Z: EXE では先に、直下の保存ファイル・backups\ を savedata\ へ、cache\・tools_local\ を data\ へ
+        if data_subdirs_on():
+            move_into_subdirs(app_dir(), data_dir(), savedata_dir())
+        if cache_split_on():
+            move_caches_into(app_dir(), cache_dir())
+        os.environ['CORRECTNOTE_DATA_DIR'] = cache_dir()
+        # ひらがなのまま通す語の一覧のユーザーの分（kana_keep_user.json）の置き場（2026-11-14）。本体は set_user_dir で、
+        # 解析の子は環境変数 CN_KANA_KEEP_USER_DIR で受け取る（子はこの後に起こすので、ここで入れれば届く）
+        os.environ['CN_KANA_KEEP_USER_DIR'] = savedata_dir()
+        import kana_keep_list as _kana_keep_list
+        _kana_keep_list.set_user_dir(savedata_dir())
     except Exception:
         pass
     root = tk.Tk()

@@ -54,6 +54,29 @@ def _one_kanji_stem(t):
     return len(s) == 1 and ('\u4e00' <= s <= '\u9fff')
 
 
+def _kana_noun_split(text, a):
+    if os.environ.get('CN_TE_KANA_NOUN_SPLIT') == '0':
+        return False
+    hira = lambda c: 'ぁ' <= c <= 'ゖ'
+    if not a.surface or not all(hira(c) for c in a.surface):
+        return False
+    r0 = a.start
+    while r0 > 0 and hira(text[r0 - 1]):
+        r0 -= 1
+    if r0 == a.start:
+        return False
+    try:
+        import reading_lattice as lat
+        lat.load()
+        for i in range(r0, a.start):
+            for j in range(a.start + 1, a.end):
+                if j - i >= 3 and any(p == '名詞' for _f, _l, _r, _c, p in lat._table.get(text[i:j], ())):
+                    return True
+    except Exception:
+        return False
+    return False
+
+
 def propose(text):
     """[(位置, 'て' か None)] 位置は連用形の終わり。None は紫だけ（範囲は連用形の語と補助の動詞）。"""
     from morphology import tokenize, dictionary_inflections
@@ -93,6 +116,11 @@ def propose(text):
         # 付いていた・2026-11-07）。CN_TE_O_KUDASAI=0 で前のまま
         if ((b.base_form or '') in ('くださる', '下さる') and i and toks[i - 1].end == a.start
                 and toks[i - 1].surface in ('お', 'ご', '御') and os.environ.get('CN_TE_O_KUDASAI') != '0'):
+            continue
+        # かなの続きの切り方が崩れた所（ひ｜ら｜が｜なで｜あり）: 連用形のかなの頭の字までを前のかなとつなぐと辞書の名詞の
+        # 読み（ひらがな）になるなら、その動詞は名詞の切れ端で、て の脱字ではない（2026-11-14 未解決タブの正しい文）。
+        # CN_TE_KANA_NOUN_SPLIT=0 で前のまま
+        if _kana_noun_split(text, a):
             continue
         ins = _te_insertable(a)
         if not ins and (b.base_form or '') in _COMPOUNDABLE:

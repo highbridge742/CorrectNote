@@ -245,6 +245,17 @@ def _variants(reading, drops_only=False, solo=frozenset(), long=False):
                     r2 = _compose(g2)
                     if r2 and r2 != reading:
                         out[r2] = min(out.get(r2, 9), w1 + w2)
+    if not drops_only and os.environ.get('CN_KSW_SWAP') != '0':
+        # 隣り合う2字の打つ順の入れ替え（はるらか → はるから）も1打の戻しと同じ重さで並べる（2026-11-13 補正担当:
+        # 入れ替えを2つの隣キーの置き換えに取って、前の正しい漢字まで替えた）。CN_KSW_SWAP=0 で前のまま
+        for n in range(len(base) - 1):
+            if base[n] == base[n + 1]:
+                continue
+            g = list(base)
+            g[n], g[n + 1] = g[n + 1], g[n]
+            r1 = _compose(g)
+            if r1 and r1 != reading:
+                out[r1] = min(out.get(r1, 9), 1.0)
     out.pop(reading, None)
     return out
 
@@ -404,7 +415,36 @@ def _lone_kanji(t, tokens, k):
         return False
     if k + 1 < len(tokens) and _strong(tokens[k + 1].surface) and _unit(t.surface + tokens[k + 1].surface) is True:
         return False
+    if os.environ.get('CN_KEYSLIP_PREFIX_PLACE') != '0' and _attached(t, tokens, k):
+        return False
     return True
+
+
+# 名詞の後ろに付いて所を表す1字の名詞（窓枠｜奥・箱｜中）。2字以上の名詞の後ろでは、その名詞の所として読める
+_PLACE_NOUNS = frozenset('奥横裏脇隅端底')
+
+
+def _attached(t, tokens, k):
+    """1字の漢字の語が、前後の語に付く決まった形（接頭詞＋名詞: 前｜隙・新｜車両、2字以上の名詞＋所の名詞: 窓枠｜奥）。接頭詞の後ろは漢字だけの名詞（打｜果て は送り仮名の付く語なので外す）。
+    語として表に無くても語の作り方どおりなので、1字の漢字が浮いた跡とみない（2026-11-12 未解決タブの誤判定:
+    後｜隙 → 後期・窓枠奥 の 奥 を消していた）。CN_KEYSLIP_PREFIX_PLACE=0 で前のまま"""
+    nx = tokens[k + 1] if k + 1 < len(tokens) else None
+    pv = tokens[k - 1] if k > 0 else None
+    if (t.pos == '接頭詞' and (t.pos_sub or '').startswith('名詞接続') and nx is not None
+            and nx.start == t.end and nx.pos == '名詞' and (nx.pos_sub or '').split(':')[0] in ('一般', 'サ変接続')
+            and all(_kanji(c) for c in nx.surface)):
+        return True
+    if (pv is not None and pv.end == t.start and pv.pos == '接頭詞' and (pv.pos_sub or '').startswith('名詞接続')
+            and t.pos == '名詞' and (t.pos_sub or '').split(':')[0] in ('一般', 'サ変接続')
+            and all(_kanji(ch) for ch in t.surface)):
+        return True
+    if t.pos == '名詞' and t.surface in _PLACE_NOUNS and pv is not None and pv.end == t.start and pv.pos == '名詞':
+        # 前の名詞が2字以上（窓枠）か、前の2語で1語（窓｜枠）
+        head = pv.surface
+        if k >= 2 and tokens[k - 2].end == pv.start and _unit(tokens[k - 2].surface + pv.surface) is True:
+            head = tokens[k - 2].surface + pv.surface
+        return len(head) >= 2 and all(_kanji(c) or _kata(c) for c in head)
+    return False
 
 
 _PASSIVE_CAUSE = ('れる', 'られる', 'せる', 'させる')
@@ -437,6 +477,15 @@ def _grammar_breaks(tokens):
     return out
 
 
+def _head_may_continue():
+    # 1行前が空の行・文の終わりなら、行の頭の の は前から続く文の頭ではない（correction_entry.head_may_continue）
+    try:
+        import correction_entry
+        return correction_entry.head_may_continue()
+    except Exception:
+        return True
+
+
 def _stacked_no(tokens):
     """名詞に付く の（連体化）が、行の頭か が・を・に のすぐ後ろに在る所の添字（荷物が｜の｜日｜って）。"""
     out = []
@@ -444,6 +493,14 @@ def _stacked_no(tokens):
         if t.surface != 'の' or (t.pos_sub or '') != '連体化':
             continue
         p = tokens[k - 1] if k else None
+        if p is None and os.environ.get('CN_KEYSLIP_HEAD_NO_COMMON') != '0' and _head_may_continue():
+            # 行の頭の の は、前の行から続く文の切れ目（…先頭｜の行は）でもふつうに出る。すぐ後ろが身近な名詞
+            # （_rank が RARE 未満）なら崩れた跡とみない（2026-11-13 未解決タブの誤判定: 行の頭の の＋身近な1字の名詞を
+            # 別の語に替えていた）。CN_KEYSLIP_HEAD_NO_COMMON=0 で前のまま
+            nx = tokens[k + 1] if k + 1 < len(tokens) else None
+            if nx is not None and nx.start == t.end and nx.pos == '名詞' and _strong(nx.surface) \
+                    and _rank(nx.surface) < RARE:
+                continue
         if p is None or p.pos == '記号' or (p.pos == '助詞' and p.surface in ('が', 'を', 'に') and p.end == t.start):
             out.append(k)
     return out
@@ -1046,6 +1103,13 @@ def _suffix_after_common(tokens, a, b):
         try:
             import kanji_onkun
             on = kanji_onkun.kind_of(t.surface, rd) == 'on'
+            # 解析が訓読みを当てた字（最終｜行 を くだり と読む）でも、その字の音読みのどれかで IME が上の方に返す字なら、
+            # 漢語の複合語の後ろの字として読める（最終行・先頭行）。2026-11-14 未解決タブ。CN_KEYSLIP_SUFFIX_ON_ANY=0 で前のまま
+            if not on and os.environ.get('CN_KEYSLIP_SUFFIX_ON_ANY') != '0':
+                ons = [r for r in kanji_onkun.readings_of(t.surface) if kanji_onkun.kind_of(t.surface, r) == 'on'
+                       and ime_order.ime_plausible(t.surface, r)]
+                if ons:
+                    on, rd = True, ons[0]
         except Exception:
             on = False
         kango_head = (len(ps) >= 2 and all(_kanji(c) for c in ps) and _rank(ps) <= COMMON_WORD and p.pos == '名詞'
@@ -1151,6 +1215,8 @@ def propose(text, odd=()):
             continue                     # 片仮名の切れ端（ラ人・コ円・トシイ）は IME の崩れ方が別（これ｜カニ｜ら の カニ はよい）
         if any(_kanji_inflected(t) for t in tokens[a:b]):
             continue                     # 漢字の活用する語（取り掛か｜する）は別の段（送り仮名・活用の直し）
+        if os.environ.get('CN_KEYSLIP_NUM_SPACE') != '0' and _after_number_counter(text, s, e):
+            continue                     # 数字＋空白＋助数詞の並び（20 日後）は、空白で切れて読み違えた数の言い方
         kana_src = not any(_kanji(c) for c in src)
         cands = {}
         gained = set()
@@ -1253,8 +1319,8 @@ def propose(text, odd=()):
                 q = weak[1]
                 found.append((max(s, q - 1), q + 1, [], here, core, 0, 'unsure'))
                 continue
-            if (rejected and not weak and di + dj == 0 and odd_purple() and _plain_lone(tokens[a:b])
-                    and not _suffix_after_common(tokens, a, b)):
+            if (rejected and not weak and di + dj == 0 and odd_purple() and _plain_lone(tokens[a:b], tokens[a - 1] if a > 0 else None)
+                    and not _suffix_after_common(tokens, a, b) and not _lone_after_no(tokens, a, b)):
                 # 1キーの戻しで行がはっきり良くなるのに、どの戻し先も語としてきれいでない（如何｜軸・安｜さ）。
                 # 直し先は決めきれないが打ち違いの見込みは高いので、紫だけ付ける
                 found.append((s, e, [], here, core, 0, 'unsure'))
@@ -1287,7 +1353,17 @@ def propose(text, odd=()):
         return _with_two(text, sorted(rare), two)
     # 前後の助詞を入れた窓は、入れない窓で候補が無いときだけ（に｜友達都映画 → の｜友達と映画 にしない）
     plain = {f[4] for f in found if f[5] == 0 and f[2]}
-    found = [f for f in found if f[5] == 0 or f[4] not in plain]
+    if os.environ.get('CN_KSW_EXT_BETTER') != '0':
+        # ただし助詞を入れた窓の一番が、入れない窓の一番より GAIN 以上よいなら残す（春らか → 春から: 打つ順の入れ替えが
+        # 助詞に掛かる形。入れない窓は 春ら → 羽に と前の正しい漢字まで替えた、2026-11-13 補正担当）。CN_KSW_EXT_BETTER=0 で前のまま
+        best_plain = {}
+        for f in found:
+            if f[5] == 0 and f[2]:
+                best_plain[f[4]] = min(best_plain.get(f[4], 1e18), f[2][0][1][0])
+        found = [f for f in found if f[5] == 0 or f[4] not in plain
+                 or (f[2] and f[2][0][1][0] + GAIN <= best_plain.get(f[4], 1e18))]
+    else:
+        found = [f for f in found if f[5] == 0 or f[4] not in plain]
     # 重なる窓は一番よいもの（費用の下がり＋差）を残す
     best = []
     for s, e, ranked, here, _core, _ext, _kind in sorted(found, key=lambda f: f[2][0][1][0] if f[2] else 1e18):
@@ -1399,7 +1475,7 @@ def _first_verb_kept(line, s, verb):
     return False
 
 
-def _plain_lone(run):
+def _plain_lone(run, prev=None):
     """紫だけ付ける並びは、1字の漢字の語が普通の名詞（以下｜族 の 族）のときだけ。接尾（作成｜中）・数は付かない。
     続けた形が辞書に在る・身近な並び（誤判定）と、1字の語が隣の語の端の字と身近な語になる並び（誤判｜定 の 判定）は、
     語の切り違いとみて付けない（2026-11-08 補正担当: 見出しの 誤判定 に紫。CN_KEYSLIP_UNSURE_RESPLIT=0 で前のまま）"""
@@ -1412,12 +1488,92 @@ def _plain_lone(run):
     whole = ''.join(t.surface for t in run)
     if _rank(whole) <= COMMON or _unit(whole) is True or _in_dict(whole, run):
         return False
+    if os.environ.get('CN_KEYSLIP_UNSURE_RELNOUN') != '0' and all(
+            k + 1 < len(run) and (run[k + 1].pos_sub or '').startswith('副詞可能') and run[k + 1].pos == '名詞'
+            and len(run[k + 1].surface) >= 2 and _rank(run[k].surface) <= COMMON for k in lone):
+        # 身近な1字の名詞のすぐ後ろが 以降・以前・以来 のような副詞可能の名詞（どの名詞にも付く）なら、語の並びとして
+        # 成り立つ（夏以降・秋以前）。1字の名詞が切れ端なのではない（2026-11-14 補正担当・全体評価の G）。
+        # CN_KEYSLIP_UNSURE_RELNOUN=0 で前のまま
+        return False
+    if os.environ.get('CN_KEYSLIP_UNSURE_SAHEN_HEAD') != '0' and all(
+            k > 0 and run[k - 1].pos == '名詞' and (run[k - 1].pos_sub or '').startswith('サ変接続')
+            and len(run[k - 1].surface) >= 2 and all(_kanji(x) for x in run[k - 1].surface)
+            and _rank(run[k - 1].surface) <= COMMON and _head_kanji_ok(run[k].surface) for k in lone):
+        # 身近な漢字2字以上のサ変の名詞のすぐ後ろに身近な1字の名詞が付く並び（洗濯｜籠・料理｜本）は、「〜する時の物」の
+        # 複合語として成り立つ。1字の名詞が切れ端なのではない（2026-11-14 補正担当・誤判定 行49 の型）。
+        # CN_KEYSLIP_UNSURE_SAHEN_HEAD=0 で前のまま
+        return False
+    if os.environ.get('CN_KEYSLIP_UNSURE_SAHEN_TAIL') != '0' and all(
+            k + 1 < len(run) and run[k + 1].pos == '名詞' and (run[k + 1].pos_sub or '').startswith('サ変接続')
+            and len(run[k + 1].surface) >= 2
+            # 片仮名のサ変の名詞（耳｜コピー）も同じ（2026-11-15 未解決タブの正しい文）
+            and (all(_kanji(x) for x in run[k + 1].surface) or all(_kata(x) or x == 'ー' for x in run[k + 1].surface))
+            and _rank(run[k + 1].surface) <= COMMON and _rank(run[k].surface) <= COMMON and _head_kanji_ok(run[k].surface)
+            and _word_edge(run[k - 1] if k > 0 else prev)
+            for k in lone):
+        # 身近な1字の名詞のすぐ後ろに身近な漢字2字以上のサ変の名詞が付く並び（行｜選択・列｜追加）は、「〜を…すること」の
+        # 複合語として成り立つ（SAHEN_HEAD の逆向き、2026-11-15 補正担当・未解決タブ47行目の型）。
+        # 1字の名詞は語の切れ目（行頭・記号・助詞の後ろ）に立つ時だけ（捨て｜天｜登録・早生｜素｜中止 は打ち違いの跡）。
+        # CN_KEYSLIP_UNSURE_SAHEN_TAIL=0 で前のまま
+        return False
     for k in lone:
         c = run[k].surface
         for pair in ((run[k - 1].surface[-1] + c) if k > 0 else '', (c + run[k + 1].surface[0]) if k + 1 < len(run) else ''):
             if len(pair) == 2 and all(_kanji(x) for x in pair) and _rank(pair) <= COMMON:
                 return False
     return True
+
+
+def _word_edge(t):
+    return t is None or t.pos in ('記号', '助詞')
+
+
+def _after_number_counter(text, s, e):
+    """窓 s..e のすぐ前が空白で、その前が数字なら、空白を抜いて数字につないだ形で読み、窓の字がどれも数に付く語
+    （助数詞・接尾: 日・後・年・前）として読めるか。空白で切れたせいで 日 を固有名詞などと読み、打ち違いと見ていた
+    （2026-11-14 補正担当、未解決タブ23行目の型）。CN_KEYSLIP_NUM_SPACE=0 で前のまま。"""
+    k = s
+    while k > 0 and text[k - 1] in ' 　':
+        k -= 1
+    if k == s or k == 0 or not (text[k - 1].isdigit()):
+        return False
+    j = k
+    while j > 0 and text[j - 1].isdigit():
+        j -= 1
+    num = text[j:k]
+    try:
+        from morphology import tokenize
+        toks = list(tokenize(num + text[s:e]))
+    except Exception:
+        return False
+    rest = [t for t in toks if t.start >= len(num)]
+    return bool(rest) and rest[0].start == len(num) and all(
+        t.pos == '名詞' and str(t.pos_sub or '').startswith(('接尾', '数')) for t in rest)
+
+
+def _lone_after_no(tokens, a, b):
+    """窓の中の1字の普通の名詞がどれも、連体の の のすぐ後ろの身近な語（の上・の下・の前）か。名詞＋の＋1字の名詞は
+    位置や持ち主を言う普通の形で、1字の名詞が切れ端なのではない（2026-11-14 補正担当、未解決タブ32行目の型）。
+    CN_KEYSLIP_UNSURE_AFTER_NO=0 で前のまま。"""
+    if os.environ.get('CN_KEYSLIP_UNSURE_AFTER_NO') == '0':
+        return False
+    lone = [k for k in range(a, b) if len(tokens[k].surface) == 1 and _kanji(tokens[k].surface)
+            and tokens[k].pos == '名詞' and (tokens[k].pos_sub or '').startswith('一般')]
+    return bool(lone) and all(k > 0 and tokens[k - 1].surface == 'の' and (tokens[k - 1].pos_sub or '').startswith('連体化')
+                              and _rank(tokens[k].surface) <= COMMON for k in lone)
+
+
+def _head_kanji_ok(c):
+    """サ変の名詞の後ろに付く1字の名詞が、ふだんの字（常用漢字＋ふだんの文によく出る字: kanji_doubt.joyo）か。
+    1字の語の身近さ（_rank）は語として単独で使う多さなので、複合語の後ろの字には厳しすぎる（PC の誤判定 行49 は 556）。"""
+    try:
+        import kanji_doubt
+        j = kanji_doubt.joyo()
+    except Exception:
+        j = None
+    if not j:
+        return _rank(c) <= COMMON
+    return all(x in j for x in c)
 
 
 def _in_dict(face, run):

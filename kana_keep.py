@@ -17,6 +17,15 @@ import difflib
 import os
 
 
+def _kk_rule(rid):
+    """ひらがなのまま通す一覧の決まりの向き（kana_keep_list・2026-11-14）。読めなければ True（今までどおり）"""
+    try:
+        import kana_keep_list
+        return kana_keep_list.rule_on(rid)
+    except Exception:
+        return True
+
+
 def _hira(s):
     return ''.join(chr(ord(c) - 0x60) if 'ァ' <= c <= 'ヶ' else c for c in s or '')
 
@@ -204,7 +213,7 @@ def wago_kana_respell(line, fixed):
     """かなで打った所を打ち違いとして読みごと直したとき（くたせさい→下さい）、直した語が和語なら漢字にせずかなで書く
     （くださいと打つ人は ください と書く・かなのままでよいのは和語 2026-11-01 うに）。漢語（電話）は漢字のまま。"""
     import os
-    if os.environ.get('CN_RESPELL_WAGO_KANA') == '0' or not fixed or fixed == line:
+    if os.environ.get('CN_RESPELL_WAGO_KANA') == '0' or not fixed or fixed == line or not _kk_rule('wago_respell'):
         return fixed
     from morphology import tokenize
     toks = list(tokenize(fixed))
@@ -251,9 +260,9 @@ def repair_line(line, result, decided=()):
         try:
             face = fixed[s:e]
             if all(_kata(c) for c in face):
-                if not native_katakana(face, line[a:b]):
+                if not _kk_rule('wago_katakana') or not native_katakana(face, line[a:b]):
                     continue
-            elif is_kango(face, line[a:b]) or is_kango_sahen(face, line[a:b]):
+            elif not _kk_rule('wago_noun') or is_kango(face, line[a:b]) or is_kango_sahen(face, line[a:b]):
                 continue
         except Exception:
             continue

@@ -57,8 +57,8 @@ def _adverb_end(toks, i, words):
     return None
 
 
-def _quantity_like(tok):
-    """時・場所・量の名詞（程度の副詞が普通にかかる: ちょっと前・かなり昔・少し水）。"""
+def _quantity_like(tok, feeling=True):
+    """時・場所・量の名詞（程度の副詞が普通にかかる: ちょっと前・かなり昔・少し水）。feeling=False なら気持ちの名詞は数えない。"""
     if tok.pos_sub in ('副詞可能', '数', '接尾', '代名詞', '固有名詞', '非自立'):
         return True
     try:
@@ -71,7 +71,7 @@ def _quantity_like(tok):
     # 気持ちの名詞（分類語彙表 1.30: 不満・不安・心配）は、辞書が形容動詞の語幹と書いていなくても程度の副詞を受ける
     # （とても不満です・2026-11-08 補正担当の正しい文の試し）。CN_DEGREE_FEELING=0 で前のまま
     import os
-    return os.environ.get('CN_DEGREE_FEELING') != '0' and any(str(c).startswith('1.30') for c in codes)
+    return feeling and os.environ.get('CN_DEGREE_FEELING') != '0' and any(str(c).startswith('1.30') for c in codes)
 
 
 def _no_predicate_after(toks, j, text):
@@ -136,7 +136,15 @@ def propose(text, dict_index):
         # サ変の名詞（賛成・感謝）は する を省いた述語として程度の副詞を受ける（おおむね賛成だ）ので見ない
         is_noun = t.pos == '名詞' and t.pos_sub == '一般'
         is_renyou = t.pos == '動詞' and (getattr(t, 'infl_form', '') or '').startswith('連用')
-        if not (is_noun or is_renyou) or _quantity_like(t):
+        if not (is_noun or is_renyou):
+            continue
+        # 気持ちの名詞は程度の副詞を受ける（とても不満）が、同じ読みの形容詞が在る語（思い／重い）は形容詞の打ち違いとして
+        # 見る（とても思い→とても重い）。2026-11-14 補正担当。CN_DEGREE_FEELING_FACE=0 で前のまま
+        import os
+        feeling_face = os.environ.get('CN_DEGREE_FEELING_FACE') != '0'
+        if _quantity_like(t, feeling=not feeling_face):
+            continue
+        if feeling_face and _quantity_like(t) and not _adjective_faces(_hira(t.reading or ''), dict_index):
             continue
         if not _no_predicate_after(toks, k, text):
             continue

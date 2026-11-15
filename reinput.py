@@ -16,6 +16,7 @@ IME の変換中（未確定の字がある間）のキーは IME に任せる�
 import time
 
 TAG = 'cn_reinput'
+_HOME_END = ('Home', 'End', 'KP_Home', 'KP_End')
 START = 'cn_reinput_start'
 END = 'cn_reinput_end'
 HERE = 'cn_reinput_cursor'
@@ -394,6 +395,8 @@ class ReInput:
             return 'break'
         if self.state is None or self.composing():
             return None
+        if key in _HOME_END:
+            return self._home_end(key, event)
         if _is_space(event):
             self._space_at = time.monotonic()
             self.convert_next()
@@ -405,6 +408,37 @@ class ReInput:
             self.cancel()
             return 'break'
         return None
+
+    def _home_end(self, key, event):
+        """再入力変換の範囲を開いている間の Home・End は、その範囲の先頭・末尾へ（範囲の外へ出ない）。Shift と一緒なら
+        範囲の中で選ぶ（2026-11-15 うにさん「再入力変換の実行中に、ホームキーかエンドキーを押したら、その範囲の中で
+        先頭か末尾に移動する」）。Ctrl と一緒（文書の頭・終わり）は今までどおり。CN_REINPUT_HOME_END=0 で前のまま。"""
+        import os
+        state = int(getattr(event, 'state', 0) or 0)
+        if os.environ.get('CN_REINPUT_HOME_END') == '0' or state & 0x4:
+            return None
+        w = self.widget
+        try:
+            target = w.index(START if key in ('Home', 'KP_Home') else END)
+            if state & 0x1:
+                ranges = w.tag_ranges('sel')
+                here = w.index('insert')
+                if len(ranges) == 2:
+                    first, last = w.index(ranges[0]), w.index(ranges[1])
+                    anchor = first if w.compare(here, '==', last) else last
+                else:
+                    anchor = here
+                w.tag_remove('sel', '1.0', 'end')
+                lo, hi = (anchor, target) if w.compare(anchor, '<=', target) else (target, anchor)
+                if w.compare(lo, '<', hi):
+                    w.tag_add('sel', lo, hi)
+            else:
+                w.tag_remove('sel', '1.0', 'end')
+            w.mark_set('insert', target)
+            w.see('insert')
+        except Exception:
+            return None
+        return 'break'
 
     def _selection_space(self, event):
         """本文を1行の中で選んでいて、修飾キーなしのスペース（IME が字にしたキーは別）。"""
@@ -532,11 +566,13 @@ class ReInput:
         first, last = f'{row}.0+{span[0]}c', f'{row}.0+{span[1]}c'
         original = w.get(first, last)
         reading = self.reading_of(row, span[0], original)
+        typed = self._typed_in(row, span)
         line_before = text
         w.tag_remove('sel', '1.0', 'end')
         w.mark_set(START, first); w.mark_gravity(START, 'left')
         w.mark_set(END, last); w.mark_gravity(END, 'right')
-        self.state = dict(original=original, shown=original, reading=None, choices=None, at=-1, owner=self._owner(), wrote=False, line_before=line_before)
+        self.state = dict(original=original, shown=original, reading=None, choices=None, at=-1, owner=self._owner(), wrote=False, line_before=line_before,
+                          typed=typed, typed_reading=reading)
         self._color()
         self._write(reading)
         self.state.update(opened=self.current())
@@ -825,6 +861,7 @@ class ReInput:
             return
         wrote = st['wrote']
         self._remember_conversion(st)
+        self._keep_typed(st)
         row = int(w.index(START).split('.')[0])
         chosen = (w.get(f'{row}.0', f'{row}.end'), st['shown'], set(), st['line_before']) if not self.quick and st['at'] >= 0 and st['shown'] != st['reading'] else None
         self._drop()
@@ -852,6 +889,69 @@ class ReInput:
                 analysis_work_app.remember(self.app, st['shown'], st['reading'])
             finally:
                 w.mark_set('insert', here)
+        except Exception:
+            pass
+
+    # --- 打った記録の引き継ぎ（2026-11-15 うにさん「再入力変換で変換した後、同じ所をもう一度再入力変換すると、漢字の
+    # 読みが初回と違う読みのひらがなになる。打った時のキーの記録はあるので、2回目も押したキーの読みに戻るはず」）。
+    # 開くと範囲の字をかなに書き換えるので、本文の控えの確定の読み（打った読み・キー）はその範囲で消える。確定して
+    # 終える時（変換・Enter・Esc・範囲の外へ出た時）に、開いた時の打った記録を今の範囲へ付け直す:
+    #   開く前の字に戻ったら、元の確定をそのままの位置に。かなを変えずに変換したら、その語の範囲に元の打った読み（
+    #   範囲がちょうど1つの確定なら、そのキーの記録も）。手で書き換えた範囲・元から記録の無い所は今まで通り。
+    #   CN_REINPUT_KEEP_TYPED=0 で前の形（付け直さない）
+    def _typed_in(self, row, span):
+        """範囲 span（行の中の位置）にまるごと入る確定 [(範囲の中の始まり, 終わり, 表記, 読み, キー, Shift)]。"""
+        if self.quick:
+            return []
+        try:
+            import analysis_work_app
+            lines = self.widget.get('1.0', 'end-1c').split('\n')
+            found = analysis_work_app.line_readings(self.app, row - 1, lines)
+        except Exception:
+            return []
+        return [(x.start - span[0], x.end - span[0], x.surface, x.reading, tuple(getattr(x, 'strokes', ()) or ()),
+                 tuple(getattr(x, 'shifts', ()) or ()))
+                for x in sorted(found or (), key=lambda x: x.start)
+                if x.reading and span[0] <= x.start < x.end <= span[1]]
+
+    def _doc_range(self, length):
+        """範囲（START〜END）の本文の控えでの位置 (文書, 始まり, 終わり)。END から length 字前を始まりとする。"""
+        import analysis_work_app
+        app, w = self.app, self.widget
+        doc = getattr(app, '_input_document', None)
+        if doc is None or doc.owner != analysis_work_app.owner(app):
+            return None
+        shown = w.get('1.0', END)
+        end = len(shown)
+        source_of = getattr(app, 'editor_source_text', None)
+        if source_of is not None:
+            source = source_of().split('\n')
+            row, col = shown.count('\n'), len(shown.rsplit('\n', 1)[-1])
+            from text_positions import map_column
+            current = w.get(f'{row + 1}.0', f'{row + 1}.end')
+            if row < len(source):
+                end = sum(len(line) + 1 for line in source[:row]) + map_column(current, source[row], col)
+        return doc, end - length, end
+
+    def _keep_typed(self, st):
+        import os
+        if self.quick or not st.get('typed') or os.environ.get('CN_REINPUT_KEEP_TYPED') == '0':
+            return
+        try:
+            text = self.current()
+            got = self._doc_range(len(text))
+            if got is None:
+                return
+            doc, start, end = got
+            if text == st['original']:
+                # 開く前の字に戻った（Esc・何も変えずに外へ）: 元の確定を元の位置に
+                for a, b, surface, reading, strokes, shifts in st['typed']:
+                    doc.remember(start + a, start + b, surface, reading, strokes, shifts)
+            elif st['at'] >= 0 and text == st['shown'] and st.get('reading') == st.get('typed_reading'):
+                # かなを変えずに変換した: その語の範囲に元の打った読み（1つの確定ならキーも）
+                whole = [t for t in st['typed'] if t[0] == 0 and t[1] == len(st['original'])]
+                strokes, shifts = (whole[0][4], whole[0][5]) if whole else ((), ())
+                doc.remember(start, end, text, st['typed_reading'], strokes, shifts)
         except Exception:
             pass
 

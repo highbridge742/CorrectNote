@@ -107,6 +107,13 @@ def child():
         os._exit(0)
 
 
+# 2段目は「語が動いた」を store.add で起こす。2026-11-08 から打った語を覚えない（vocabulary.LEARNED_OFF・うにさん
+# 「過去に何を打ったかで補正が変わる処理を、一旦無効に」）ので、既定のままでは add が何もせず、語が動かない
+# （控えの行に印が付かず kept=0 で落ちた・2026-11-15）。確かめたいのは「語が動いたら印を付けて残す」仕組みなので、
+# 子だけ覚える形（CN_LEARNED_HISTORY=1）で起動する。写しの中だけで、本人のファイルには触らない
+LEARNED_ON = dict(os.environ, CN_LEARNED_HISTORY='1')
+
+
 class Restart(unittest.TestCase):
     def test_restart(self):
         source = Path(__file__).resolve().parent
@@ -125,7 +132,7 @@ class Restart(unittest.TestCase):
             (dest / '.ui-test-isolated').touch()
             shutil.copy2(__file__, dest / 'probe_kept.py')
             for stage in '123':
-                r = subprocess.run([sys.executable, '-X', 'utf8', str(dest / 'probe_kept.py'), '--child', stage], cwd=dest, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding='utf-8', errors='replace', timeout=220)
+                r = subprocess.run([sys.executable, '-X', 'utf8', str(dest / 'probe_kept.py'), '--child', stage], cwd=dest, env=LEARNED_ON, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding='utf-8', errors='replace', timeout=220)
                 self.assertIn('KEPT_OK', r.stdout, (stage, r.stdout[-900:].encode('ascii', 'replace').decode()))
 
 

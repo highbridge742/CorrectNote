@@ -106,6 +106,36 @@ def _noun_join(text, s):
     return (s, end, found.pop(), '読みのつなぎ')
 
 
+def _kana_word_in_run(t, s):
+    """足した後の形で、s の語が動詞でも助動詞でもない かなだけの語（けっ＋く → けっく・副詞）になり、すぐ後ろも
+    助詞・助動詞でない かなの語（みな）なら True。動詞の音便を直したのではなく、崩れたかなの並びの中に別の語を
+    作っただけで、並びの残りに説明が付いていない（2026-11-13 補正担当: けっみなする → けっくみなする が紫なしで
+    残った）。そのときは置かずに紫。漢字の前（ずっ＋と＋家）は前のまま。CN_DANGLING_KANA_RUN=0 で前のまま。"""
+    if os.environ.get('CN_DANGLING_KANA_RUN') == '0':
+        return False
+    from morphology import tokenize
+    toks = list(tokenize(t))
+    k = next((n for n, x in enumerate(toks) if x.start <= s < x.end), None)
+    if k is None or k + 1 >= len(toks):
+        return False
+    w, nx = toks[k], toks[k + 1]
+    kana = lambda z: bool(z) and all('ぁ' <= c <= 'ゖ' or c == 'ー' for c in z)
+    if w.pos in ('動詞', '助動詞') or not kana(w.surface):
+        return False
+    return kana(nx.surface[:1]) and nx.pos not in ('助詞', '助動詞', '記号')
+
+
+def _dangling_adj(t, s, e):
+    """足した後の形の s..e の辺りに、後ろに て・た の続かない形容詞の っ の形（よくっ・なくっ）が出来たか。
+    動詞の音便と同じく て・た が続いて初めて文になる形で、抜けた字の説明になっていない（2026-11-14 補正担当:
+    手伝ってくっさい → 手伝ってよくっ際）。CN_DANGLING_ADJ=0 で前のまま。"""
+    if os.environ.get('CN_DANGLING_ADJ') == '0':
+        return False
+    from morphology import tokenize
+    return any(x.pos == '形容詞' and x.surface.endswith('っ') and x.start < e and s < x.end
+               and not t[x.end:].startswith(_FOLLOW) for x in tokenize(t))
+
+
 def propose(text):
     """[(開始, 終了, 置く文字列 or None)]（text の位置）。"""
     from morphology import tokenize, path_cost
@@ -125,7 +155,7 @@ def propose(text):
     for p in range(s, e + 1):
         for h in _KANA:
             t = text[:p] + h + text[p:]
-            if dangling(t):
+            if dangling(t) or _dangling_adj(t, s, e + 1):
                 continue
             if not all(x.has_reading for x in tokenize(t) if x.end > s and x.start < e + 1):
                 continue
@@ -133,7 +163,7 @@ def propose(text):
             if c is not None:
                 cands.append((c, t))
     cands.sort()
-    if cands and (len(cands) == 1 or cands[1][0] - cands[0][0] >= MARGIN):
+    if cands and (len(cands) == 1 or cands[1][0] - cands[0][0] >= MARGIN) and not _kana_word_in_run(cands[0][1], s):
         out.append((s, e, cands[0][1][s:e + 1]))
     else:
         out.append((s, e, None))

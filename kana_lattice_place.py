@@ -15,6 +15,15 @@
 import difflib
 import os
 
+
+def _kk_rule(rid):
+    """ひらがなのまま通す一覧の決まりの向き（kana_keep_list・2026-11-14）。読めなければ True（今までどおり）"""
+    try:
+        import kana_keep_list
+        return kana_keep_list.rule_on(rid)
+    except Exception:
+        return True
+
 MIN_RUN = 3            # 見るかなの並びの長さ（字）
 MIN_WORD = 2           # 置く語の読みの長さ
 SEG_MARGIN = 800       # 1番と2番の切り方の費用の差がこれ未満なら迷い（紫）
@@ -207,7 +216,7 @@ def _explained_nouns(a, spans, store, dict_index, LK, before='', doubts=None):
             continue
         if len(rd) < MIN_WORD:
             return []
-        if os.environ.get('CN_LATTICE_WAGO_SKIP') != '0' and n + 1 < len(spans) \
+        if os.environ.get('CN_LATTICE_WAGO_SKIP') != '0' and _kk_rule('lattice_wago_noun') and n + 1 < len(spans) \
                 and spans[n + 1][4] == '名詞' and any(_kanji(c) for c in spans[n + 1][2]) and _wago_noun(face, rd):
             # 和語の名詞（ひきつぎ）はかなのまま（うに 11-01 かなのままでよいのは和語）。並び全体を諦めず、
             # 続く漢語の名詞（しりょう）は置く（2026-11-04 うにの未解決タブ・作った例）

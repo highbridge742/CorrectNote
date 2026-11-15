@@ -114,9 +114,10 @@ def _pull(entry):
 
 def independent_key_pair_repairs(reading, dictionary, before='', after=''):
     original = _orig['independent_key_pair_repairs']
-    if os.environ.get('CN_PAIR_SEARCH') != '1':
-        # 2026-11-10: 既定で探索しない（作った誤字 397件で直しを増やさず、重い行の時間の3〜6割を使っていた）。
-        # CN_PAIR_SEARCH=1 で前のとおり探索する。
+    if os.environ.get('CN_PAIR_SEARCH') == '0':
+        # 2026-11-10: 既定で探索しない形にしていた（作った誤字 397件で直しを増やさず、重い行の時間の3〜6割を使っていた）。
+        # 2026-11-14: かなの短い語の 1字違い＋1字抜け（せぞ→保存）が直らなくなったので既定に戻す。重さは
+        # contextual_repair の「試す組の数」の上限（CN_PAIR_SEARCH_CAP・既定 256）で抑える。CN_PAIR_SEARCH=0 で探索しない
         return
     memo = _scope()
     if memo is None:

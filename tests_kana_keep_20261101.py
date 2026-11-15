@@ -23,8 +23,10 @@ class KanaKeepTests(unittest.TestCase):
             self.assertFalse(K.is_kango(face, rd), face)
 
     def test_native_words_stay_kana(self):
-        for line in ('おもちゃをかう。', 'ちいさいいえ。', 'ずれがある。'):
+        for line in ('ちいさいいえ。', 'ずれがある。'):
             self.assertEqual(self.run_line(line), line, line)
+        # 和語の名詞はかなのまま、和語の動詞は漢字に（うに 11-09「動詞は漢字」）
+        self.assertEqual(self.run_line('おもちゃをかう。'), 'おもちゃを買う。')
 
     def test_sino_words_and_loanwords_still_convert(self):
         self.assertEqual(self.run_line('またれんらくします。'), 'また連絡します。')

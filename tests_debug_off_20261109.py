@@ -104,7 +104,9 @@ class DebugOff(unittest.TestCase):
         self.assertTrue(got['menu_item'], got)                    # the debug menu stays (2026-11-09 うにさん)
         self.assertFalse(got['trace_on'], got)
         self.assertFalse(got['debug_scroll_item'], got)
-        self.assertFalse(got['debug_items'], got)                 # 解析の記録… also taken off for now (2026-11-09)
+        # 解析の記録… は 2026-11-09 に外したが、2026-11-14 うに「全体に再解析が入るチェックを開発側に適用して」で、開発版
+        # （frozen でない＝この子の .py の起動）では出す。frozen（EXE・Store 版）では出さないまま（tests_redo_trace_dev_20261114）
+        self.assertTrue(got['debug_items'], got)
         self.assertEqual(got['trace_files'], [], got)
         self.assertEqual(got['same_ms'], 68, got)               # the saved debug_timings still work
 
