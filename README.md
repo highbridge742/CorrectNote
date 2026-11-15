@@ -21,7 +21,8 @@
 <div class="card">
 <h3><span class="dot"></span>オフラインで完結</h3>
 <p style="margin-bottom:0">
-ネット通信やAIは使いません。APIは不要、アカウントも不要です。入力した内容がパソコンの外に出ることはなく、すべてローカルで実行されます。
+ネット通信やAIは使いません。APIは不要、アカウントも不要です。<BR>
+  入力した内容がパソコンの外に出ることはなく、すべてローカルで実行されます。
 </p>
 </div>
 </div>
@@ -80,7 +81,7 @@
 
 
 <h3><span class="dot"></span>左右に並べるレイアウト</h3>
-<p>左に文字を入力すると、自動で誤字や不自然な点を判定し、右に補正した文字を表示します。</p>
+<p>左の欄に文字を入力すると、自動で誤字や不自然な点を判定し、右に補正した文字を表示します。</p>
 <table>
 <tr><th>入力欄</th><th>補正欄</th></tr>
 <tr><td>文字入力を<mark>性格</mark>に反映する</td><td>文字入力を<b>正確</b>に反映する</td></tr>
@@ -88,7 +89,7 @@
 
 <h3><span class="dot"></span>1つにまとめるレイアウト</h3>
 <p>
-入力欄と補正欄をひとつにまとめ、画面を広く使えるようにしたレイアウトです。
+入力欄と補正欄をひとつにまとめ、画面を広く使えるようにしたレイアウトです。<BR>
 誤字は自動で補正され、入力した文字を置き換えます。
 </p>
 <table>
@@ -110,14 +111,12 @@
 <h2>再変換 ― 候補から選び直す</h2>
 <p class="sec-intro">確定済みの単語を再変換できます。</p>
 
-<h3><span class="dot"></span>F5</h3>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-003.gif"><img src="assets/readme_manual/manual-003.gif" width="1064" height="527" alt="「会議の資料と見出しを確認します。」の末尾でF5を押すたび、候補を開く対象の語が「します」「確認」「見出し」「資料」と左へ移り、Escで閉じる様子。"></a></figure>
+
 <p>
 <span class="kbd">F5</span> を押すと、カーソル位置の単語が選択され、変換候補が開きます。<BR>
-<span class="kbd">F5</span> を押すたびに、対象がひとつ左の語へ移ります。
-行の先頭まで来たら、前の行の末尾へ選択を遡ります。<BR>
-
+<span class="kbd">F5</span> を押すたびに、対象がひとつ左の語へ移ります。行の先頭まで来たら、前の行の末尾へ選択を遡ります。
 </p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-003.gif"><img src="assets/readme_manual/manual-003.gif" width="1064" height="527" alt="「会議の資料と見出しを確認します。」の末尾でF5を押すたび、候補を開く対象の語が「します」「確認」「見出し」「資料」と左へ移り、Escで閉じる様子。"></a></figure>
 
 <h3><span class="dot"></span>左右キーで対象を変更</h3>
 <p>
@@ -136,15 +135,15 @@
 <a href="#guide-reinput">再入力変換</a>が始まります。
 </p>
 
-
-
+<p class="guide-back"><a href="#picture-index">目次に戻る</a></p>
 <hr class="section-rule">
+
 
 <a name="guide-reinput"></a>
 <article class="picture-guide">
 <h3>再入力変換 ― 確定した語の読みを直して変換する</h3>
 <p>選択範囲をひらがなに戻し、キーボードで編集を加えてから変換できます。</p>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-004.gif"><img src="assets/readme_manual/manual-004.gif" width="1102" height="427" alt="「市役所で手続きをします。」の「市役所」でCtrlを素早く2回押して「しやくしょ」に開き、「し」を「く」に直してスペースで変換し、「区役所」にして確定する様子。"></a></figure>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-004.gif"><img src="assets/readme_manual/manual-004.gif" width="1102" height="427"></a></figure>
   
 <p>F5キーを通さず、範囲を選択してスペースキーを押すだけでも再入力変換を開始できます。</p>
 <p class="guide-note">範囲の外へカーソルを出すと、再入力変換は終わります。<br>字を変えていなければ元の字に戻り、字を変えていれば変換して終わります。</p>
@@ -156,8 +155,9 @@
 <hr class="section-rule">
 <h2>簡易入力ウィンドウ</h2>
 <p class="sec-intro">別のアプリを使っている最中でも、下書きをすぐに書ける小さなウィンドウです。<BR>
-  CorrectNoteを開いておき、<span class="kbd">Ctrl+Insert</span> または <span class="kbd">Ctrl+Shift+-</span> で呼び出します。<BR>
   簡易入力はほかのウィンドウより手前に表示されます。</p>
+
+<figure class="guide-shot"><a href="assets/readme_manual/manual-005.gif"><img src="assets/readme_manual/manual-005.gif" width="1256" height="590"></a></figure>
   
 <a name="guide-quick"></a>
 <article class="picture-guide">
@@ -165,8 +165,6 @@
 <p>Escで簡易入力ウィンドウを閉じます。<BR>
   閉じると、開く前に使っていたウィンドウの入力欄へ内容をペーストします。</p>
   
-<figure class="guide-shot"><a href="assets/readme_manual/manual-005.gif"><img src="assets/readme_manual/manual-005.gif" width="1256" height="590" alt="チャット画面風の説明用イメージ。入力欄と簡易入力ウィンドウを同じ画面に表示し、呼び出し、下書き、Escで閉じて貼り付ける流れを示します。簡易入力ウィンドウは背景画面の約3分の1幅です。"></a></figure>
-
 <h3><span class="dot"></span>こんなときに使えます</h3>
 <ul>
 <li><b>思いつきをすぐにメモする。</b>作業中に浮かんだことを簡易入力へ書き、<span class="kbd">Esc</span> で閉じると本体のメモへ残せます。</li>
@@ -179,9 +177,9 @@
 <a name="quick-selected-text"></a>
 <section>
 <hr class="section-rule">
-<h2>選択した文字を簡易入力へ取り込む</h2>
-<p>本体のメモや補正結果、別のアプリで選択した文字を、簡易入力の下書きへ取り込めます。<BR>
-  ブラウザで見つけた文章や、チャット履歴の文字を使いたいときも、文字を取り込めます。</p>
+<h2>文字を簡易入力へ取り込む</h2>
+<p>範囲選択して簡易入力を開くと、文字を簡易入力ウィンドウに複製します。<BR>
+  ブラウザに書かれた文字も取り込めます。</p>
 <figure class="guide-shot"><a href="assets/readme_manual/manual-006.gif"><img src="assets/readme_manual/manual-006.gif" width="1066" height="560" alt="ブラウザのページで文字を選び、Ctrl+Insertで簡易入力を開くと、選んだ文字が入っている様子。"></a></figure>
   
 <p>Excelのセルなど表の文字は、列の間をタブ、行の間を改行で区切って取り込みます。</p>
@@ -197,12 +195,13 @@
 <h2>単語を拾って引用する</h2>
 <p class="sec-intro">近くの単語を、クリックで拾って複製します。</p>
 
+<figure class="guide-shot"><a href="assets/readme_manual/manual-008.gif"><img src="assets/readme_manual/manual-008.gif" width="1064" height="347"></a></figure>
+
 <a name="guide-quote"></a>
 <article class="picture-guide">
 <h3>カーソルを置き、本文をクリック／ドラッグして引用する</h3>
 文字を選択していない状態で <b>F1</b> を押すと、引用モードを実行します。<BR>
   次に、単語をクリックするか、範囲をドラッグすると、カーソルの位置に複製し、引用モードを終わります。<BR>
-<figure class="guide-shot"><a href="assets/readme_manual/manual-008.gif"><img src="assets/readme_manual/manual-008.gif" width="1064" height="347" alt="「クリックして引用」を押し、「会議の資料」をドラッグすると、3行目の「引用：」の後ろに入る様子。"></a><figcaption>拾った文字がカーソルの位置に入ります。</figcaption></figure>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
 
 <h3><span class="dot"></span>行番号を入力して引用する</h3>
