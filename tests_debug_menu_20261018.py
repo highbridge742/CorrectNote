@@ -57,7 +57,9 @@ class DebugTimingsTests(unittest.TestCase):
         for key in debug_menu.KEYS:
             self.assertLessEqual(debug_menu.minimum(key), debug_menu.default(key, a), key)
             self.assertLessEqual(debug_menu.default(key, a), debug_menu.maximum(key, a), key)
-            if not key.startswith(('tab_wheel', 'copy_', 'find_', 'quote_', 'backup_', 'respell_')) \
+            # 2026-11-16: タブの名前の下限・タイトルと目次の字の大きさも、待ちではない（上限は持ち主の _MAX）
+            if not key.startswith(('tab_wheel', 'copy_', 'find_', 'quote_', 'backup_', 'respell_',
+                                   'tab_name_', 'title_', 'toc_')) \
                     and key not in ('ime_quiet', 'key_quiet', 'quick_quiet'):    # 待ち以外（ホイール・表示）
                 # 待ちの上限は今の既定
                 self.assertEqual(debug_menu.maximum(key, a), debug_menu.default(key, a), key)
@@ -299,11 +301,15 @@ class DebugTimingsTests(unittest.TestCase):
             'コピーした範囲の白い枠：縮み始める大きさ', 'コピーした範囲の白い枠：本来の大きさへ縮むまで',
             'コピーした範囲の白い枠：線の太さ', '引用モードの間の、メモ欄・簡易入力の地の色の濃さ',
             'タブのバックアップを、1タブにつき残す数', '手動のバックアップを、1タブにつき残す数',
-            '紫の所の読み直し：候補を補正に通す回数の上限'])
-        self.assertEqual(len(debug_menu.ITEMS), 23)    # 2026-11-10: 候補を補正に通す回数の上限
+            '紫の所の読み直し：候補を補正に通す回数の上限',
+            # 2026-11-16 うにさん: タブの名前の下限・タイトルと目次の字の大きさ
+            'タブの名前を切る時の、いちばん短い幅（全角1字＝2・半角1字＝1）',
+            'タイトルの字の大きさ', '目次の字の大きさ（0 は本文の字の大きさから決める）'])
+        self.assertEqual(len(debug_menu.ITEMS), 26)    # 2026-11-10: 候補を補正に通す回数の上限・2026-11-16: +3
         self.assertEqual(debug_menu.SECTIONS, (('ime_quiet', '【解析】'), ('tab_wheel_step', '【タブ移動】'),
                                                ('copy_emphasis', '【表示】'), ('backup_keep', '【保存】'),
-                                               ('respell_attempts', '【紫の所の読み直し】')))
+                                               ('respell_attempts', '【紫の所の読み直し】'),
+                                               ('tab_name_min', '【タブの名前】'), ('title_size', '【タイトルと目次】')))
 
     def test_removed_items_ignore_old_saved_values(self):
         with open(self.path, 'w', encoding='utf-8') as f:
@@ -354,7 +360,7 @@ class DebugWindowTkTests(unittest.TestCase):
         self.settle()
         self.assertEqual(dlg.title(), 'デバッグメニュー')
         self.assertIs(self.a.open_debug_menu(), dlg)   # 2つ目は開かない
-        self.assertEqual(len(dlg._debug_rows), 23)    # tab_wheel_release was removed (2026-10-19); 5 display rows, 2 backup rows (2026-10-23)
+        self.assertEqual(len(dlg._debug_rows), 26)    # tab_wheel_release was removed (2026-10-19); 5 display rows, 2 backup rows (2026-10-23); +3 tab name / title / TOC sizes (2026-11-16)
         self.assertNotIn('tab_wheel_release', dlg._debug_rows)
         # 【タブ移動】の並びと既定（2026-10-19 うにさん: 同じ向き 50・逆向き 30。2026-10-20 に同じ向き 65、2026-10-25 に 80）
         self.assertEqual([(k, dlg._debug_rows[k]['number'].get()) for k in

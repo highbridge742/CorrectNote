@@ -67,8 +67,11 @@ import tkinter.font as tkfont
 ENV = 'CN_TITLE_TOC'
 PAD_TAG = 'cn_title_pad'
 TITLE_SIZE = 26
+TITLE_SIZE_MAX = 60         # デバッグのパラメータの上限（2026-11-16 うにさん「タイトルのフォントサイズをデバッグパラメータに」）
 TOC_SIZE = 12               # 目次の字の上限（本文の字の 0.85 倍＋1・9〜12）
 TOC_SCALE = 0.85
+TOC_POINT = 0               # 目次の字の大きさ（デバッグのパラメータ）。0 は本文の字から決める（上の決め方）
+TOC_POINT_MAX = 40
 TOP_GAP = 2                 # タイトルの上に残す余白（窓の端の余白の決まり）
 LINK_LIGHT = '#1f5fbf'      # 明るい欄で読める青
 LINK_DARK = '#9cc8ff'       # 暗い欄で読める青（2026-11-15 うにさん「ダークモードで目次の青色が見えにくい」: 前は #7fb2ff）
@@ -403,6 +406,14 @@ class TitleToc:
             text = one_line(text)
         before, self._title_text = self._title_text, text
         self.paint_pos()
+        if before != text:
+            # タブの名前もタイトルに合わせる（まとめて少し後で・tab_label・2026-11-16）
+            queue = getattr(self.app, '_queue_tab_names', None)
+            if queue is not None:
+                try:
+                    queue()
+                except Exception:
+                    pass
         if self._loading:
             return
         if before != text:
@@ -652,11 +663,19 @@ class TitleToc:
         return getattr(mod, 'RULE', '#d8d3c4')
 
     def _toc_size(self):
+        if TOC_POINT > 0:
+            return TOC_POINT            # デバッグのパラメータで決めた大きさ
         try:
             body = abs(int(self.app._editor_font()[1]))
         except Exception:
             body = 12
         return max(9, min(TOC_SIZE, int(round(body * TOC_SCALE)) + 1))
+
+    def refresh_sizes(self):
+        """タイトル・目次の字の大きさ（デバッグのパラメータ）が変わった: その場で付け直す（行の高さ・分割の右の高さ
+        合わせもタグの字の大きさで追いつく）。"""
+        self.restyle()
+        self.paint_pos()
 
     def restyle(self):
         bg, ink, cursor, sel, selfg = self._pane_colors()

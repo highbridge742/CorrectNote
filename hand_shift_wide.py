@@ -38,6 +38,8 @@ odd_respell._choose_shifted のまま。特定の語や文字列には合わせ�
 import os
 from functools import lru_cache
 
+BOTH = [False]   # 両手のずれも作る間だけ True（odd_respell が立てる）
+
 WEIGHT = 1.5        # （候補の並び順には使わない。足した順のまま）
 MIN_KEYS = 2        # 戻すキーの数の下限（1キーだけは前からの道）
 MAX_KEYS = 16       # 読みのキーの数の上限
@@ -116,6 +118,34 @@ def shifted_readings(reading):
                     # ゛゜ のキーの所に字のキーが来る形は、前の字に付かないので そのまま並べる（_compose が決める）
                     restored = KW._compose([tuple(g) for g in ng])
                     # 前の字に付かずに残った ゛゜ は読みにならない
+                    if restored and restored != reading and '゛' not in restored and '゜' not in restored:
+                        out.setdefault(restored, WEIGHT)
+    if BOTH[0] and os.environ.get('CN_HAND_SHIFT_BOTH') != '0':
+        # 両手のずれは、ほかの直しと並ぶかを見る所（odd_respell の CN_SHIFT_TIE_PURPLE）だけで作る。ふだんの候補に混ぜると
+        # 正しい行を書き換えた（雲の束 692行で 財布を家に忘れて → 透けて ほか）
+        # 両手が揃って同じ向きに1つずれた形（作った例: かくにん → すきにん: か→す は左手、く→き は右手の人さし指で、
+        # どちらも左へ1つ）。続けて打ったキーが、手に関わらず全部同じ向きに1つずれ、両方の手のキーを含む範囲だけ
+        # （片手だけの範囲は上の道）。2026-11-17 補正担当（うにの報告の誤字 tests_ime_source_context）。CN_HAND_SHIFT_BOTH=0 で前のまま
+        for direction in (1, -1):
+            fixed = []
+            for _gi, _ki, k in flat:
+                got = None
+                for left in (True, False):
+                    got = got or _restore(k, direction, left, tables)
+                fixed.append(got)
+            for a in range(len(flat)):
+                for b in range(a + MIN_KEYS - 1, len(flat)):
+                    if any(fixed[n] is None for n in range(a, b + 1)):
+                        break
+                    # 打ちたかったキーの側で両手にわたる（打たれたキーは同じ手の側でも、ずれた右手の人さし指が境を越える）
+                    hands = {_left(tables[2][fixed[n]][0]) for n in range(a, b + 1) if fixed[n] in tables[2]}
+                    if len(hands) != 2:
+                        continue
+                    ng = [list(g) for g in groups]
+                    for n in range(a, b + 1):
+                        gi, ki, _k = flat[n]
+                        ng[gi][ki] = fixed[n]
+                    restored = KW._compose([tuple(g) for g in ng])
                     if restored and restored != reading and '゛' not in restored and '゜' not in restored:
                         out.setdefault(restored, WEIGHT)
     return out

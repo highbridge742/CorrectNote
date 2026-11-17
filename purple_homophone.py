@@ -78,6 +78,19 @@ def _targets(text, spans):
     return picked
 
 
+def _chosen_rare(tok):
+    """打った語がとても珍しい（ime_reconvert._rank が DOUBT_KEY 以上）なら、書き手が候補を下って選んだ表記とみて替えない。
+    同じ読みの身近な語が IME の最初の候補に出るので、珍しい方は選ばなければ出ない（2026-11-17 うに 誤判定:
+    先年の → 専念の）。切り替え CN_PURPLE_HOMOPHONE_RARE_KEEP=0 で前のまま"""
+    if os.environ.get('CN_PURPLE_HOMOPHONE_RARE_KEEP') == '0':
+        return False
+    try:
+        import ime_reconvert as R
+        return R._rank(tok.surface) >= R.DOUBT_KEY
+    except Exception:
+        return False
+
+
 def _clean(res, new):
     return (isinstance(res, dict) and (res.get('corrected') or new) == new
             and not res.get('odd_spans') and not res.get('unsure_spans'))
@@ -108,6 +121,8 @@ def respell(line, result, run):
     tries = 0
     out = result
     for tok in targets:
+        if _chosen_rare(tok):
+            continue
         ok = []
         for f in _candidates(tok):
             if tries >= MAX_TRIES:

@@ -29,7 +29,41 @@ from tests_mock_common import mock_tokenize
 
 def run_choice_cases(store):
     """
-    語の選び直し（手動学習）の一連の動きを確かめる。
+    選び直しを覚えるか（2026-11-08 うにさん「過去に何を打ったかで補正が変わる処理を、一旦無効に」）。
+    既定（last_choice.LEARNED_OFF）では覚えない・表示も変えないことを見てから、
+    CN_LEARNED_HISTORY=1 と同じ形（覚える）に切り替えて、前からの一連を確かめる
+    （2026-11-16 まで、この試験は既定のまま覚える前提で落ちて tests_mock を止めていた）。
+    """
+    import last_choice
+    from last_choice import LastChoiceStore as ChoiceStore
+    from units import build_line_units, unit_at
+
+    ok_off = True
+    if last_choice.LEARNED_OFF:
+        print('--- 語の選び直し（既定は覚えない） ---')
+        ch = ChoiceStore()
+        line = 'あしたのこうえんにいく'
+        r = C.correct_line(line, store, mock_tokenize, find_known_readings_flex)
+        text, units = build_line_units(r, mock_tokenize, ch)
+        u = unit_at(units, text.index('こうえん'))
+        got = (ch.record(u['base'], '公園', 'こうえん', u['prev'], u['next']),
+               ch.lookup('こうえん', 'の', 'に'),
+               build_line_units(r, mock_tokenize, ch)[0])
+        ok_off = got == (False, None, text)
+        print(f'{"OK " if ok_off else "NG "}既定では選び直しを覚えず、表示も変えない')
+        if not ok_off:
+            print(f'      得た値: {got!r}   期待: {(False, None, text)!r}')
+    saved = last_choice.LEARNED_OFF
+    last_choice.LEARNED_OFF = False
+    try:
+        return _run_choice_cases_learned(store) and ok_off
+    finally:
+        last_choice.LEARNED_OFF = saved
+
+
+def _run_choice_cases_learned(store):
+    """
+    語の選び直し（手動学習）の一連の動きを確かめる（覚える形・CN_LEARNED_HISTORY=1）。
 
     候補の並び順（同音異義語が先頭）、選び直しの表示への反映、
     文脈（前後の語）による使い分け、再選択による上書き、

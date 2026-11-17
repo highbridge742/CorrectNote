@@ -12,6 +12,7 @@ so indexes, analysis, undo and copying see the same characters as before.
 
 Prototype and measurements: tools_local/v114_emoji/ (WORK.md)."""
 import ctypes
+import os
 import re
 import sys
 
@@ -662,6 +663,24 @@ class EmojiOverlay:
         call('tag', 'raise', name)
         call('tag', 'add', name, *span)
 
+    def _body_from(self, where):
+        """An index expression to read the rows from. With the title and TOC inside the pane (title_inline: the
+        first rows are the header and body_index shifts every row by them), a point in the header became body row 1
+        while `get` from it still returned the header's lines: every emoji was laid that many rows too low, and its
+        own row stayed without colour (2026-11-16 うにさん: 1行目の絵文字が白黒・空の5行目に絵文字).
+        Such a point starts at the body's first row instead. CN_EMOJI_HEAD_ROWS=0: as before."""
+        w = self.w
+        raw = getattr(w, '_cn_body_raw', None)
+        state = getattr(w, '_cn_body_state', None)
+        if not raw or not state or os.environ.get('CN_EMOJI_HEAD_ROWS') == '0':
+            return where
+        try:
+            if int(str(w.tk.call(raw, 'index', where)).split('.')[0]) <= int(state['h']):
+                return '1.0'
+        except Exception:
+            pass
+        return where
+
     def placements(self):
         """[(x, y, w, h, text, bg)] for the emoji visible now."""
         w = self.w
@@ -673,7 +692,7 @@ class EmojiOverlay:
         # Tk 8.6.9 writes the indexes it returns with an emoji counted as two
         # columns, but reads 'row.col' with it counted as one. So the screen
         # corners go to `get` as '@x,y' themselves, never as returned indexes.
-        first = '@0,0'
+        first = self._body_from('@0,0')
         last = '@%d,%d' % (w.winfo_width(), w.winfo_height())
         line0 = int(str(call('index', first)).split('.')[0])
         text = str(call('get', first, last)) + str(call('get', last))
@@ -832,7 +851,7 @@ class EmojiOverlay:
             span = max(200, len(str(call('get', '@0,0', corner))))
             # Expressions, not the row.col Tk returns (Tk 8.6.9 reads those
             # back one column off after an emoji); only the rows are taken.
-            a = '@0,0 -%dc' % span
+            a = self._body_from('@0,0 -%dc' % span)
             b = '%s +%dc' % (corner, span)
             first = int(str(call('index', a)).split('.')[0])
             last = int(str(call('index', b)).split('.')[0])

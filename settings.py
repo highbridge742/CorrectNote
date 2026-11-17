@@ -338,7 +338,8 @@ DEFAULTS = {
     'debug_timings_defaults': DEBUG_TIMINGS_DEFAULTS_VERSION,
     # デバッグメニュー「候補の何回目で採ったかを集計」（respell_stats・2026-11-10 うにさん「デフォルトはオフ」）
     'debug_respell_stats': False,
-    # デバッグメニュー「削除の記録」（deletion_log.txt・2026-11-14 既定はオフ。CN_DELETION_LOG=1 でもオン）
+    # 削除の記録（deletion_log.txt・2026-11-14 既定はオフ）。2026-11-17 にデバッグメニューの項目を外したので、
+    # この値はもう見ない（CN_DELETION_LOG=1 の時だけ記録する）。保存済みの設定を読めるように名前だけ残す
     'debug_deletion_log': False,
 }
 

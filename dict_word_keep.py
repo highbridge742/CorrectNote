@@ -86,7 +86,26 @@ def _breaks(line, a, b):
         found += [x[:2] for x in pos_seq_odd.spots(line) or ()]
     except Exception:
         pass
+    if os.environ.get('CN_DICT_WORD_KEEP_ADNOMINAL') != '0':
+        found += _adnominal_particle(line)
     return any(s < b + 1 and a - 1 < e for s, e in found)
+
+
+def _adnominal_particle(line):
+    """名詞に掛かる形（ような の な・大きな）のすぐ後ろに、名詞でなく助詞（も・は・が）が来る所。名詞に掛かる形は後ろに
+    名詞が要るので、文法の切れ目（2026-11-16 うに: ようなも という不自然な形）。の・ので・のに・ん の前は見ない"""
+    try:
+        from morphology import tokenize
+        toks = list(tokenize(line))
+    except Exception:
+        return []
+    out = []
+    for p, n in zip(toks, toks[1:]):
+        if p.end != n.start or n.pos != '助詞' or n.surface[:1] in 'のん':
+            continue
+        if (p.pos == '助動詞' and p.base_form == 'だ' and (p.infl_form or '').startswith('体言接続')) or p.pos == '連体詞':
+            out.append((p.start, n.end))
+    return out
 
 
 def _code_any(line):
@@ -112,6 +131,57 @@ def _covers(line, src, i1, i2):
             return True
         p = line.find(src, p + 1)
     return False
+
+
+def _kana_piece_end(line, t):
+    """1字のかなの自立語が行末か記号の手前に在る（へんじ｜ほ の ほ）。かなの並びの終わりが1字に切れた形
+    （2026-11-16: 行末の切れ端を見ず、打ち違いの直しを辞書の語の並びとして戻していた）。CN_DICT_WORD_KEEP_KANA_END=0 で前のまま"""
+    if os.environ.get('CN_DICT_WORD_KEEP_KANA_END') == '0':
+        return False
+    return t.end == len(line) or line[t.end] in '。、．，！？!?」』）) 　'
+
+
+def _request_frame(text, j2):
+    """語の組の直しの直後が頼みの形（〜お願いします・〜願います）か。頼みの前の名詞は頼む事柄（返信・確認）で、語の組の段は
+    この形を表の語の1つに決めてから直す（変死→返信: うに 2026-11-02「変死は返信を優先したい」）。使われやすさの差だけの
+    直しではないので戻さない（2026-11-17 うに: 最近壊れた）。CN_DICT_WORD_KEEP_REQUEST=0 で前のまま"""
+    if os.environ.get('CN_DICT_WORD_KEEP_REQUEST') == '0' or not isinstance(text, str):
+        return False
+    rest = text[j2:].lstrip('をの')
+    return rest.startswith(('お願い', '願い', '願う', '願え', 'ねがい'))
+
+
+def _same_reading(src, dst):
+    """語の組の直しで、元の語と直し先が同じ読みの漢字の語（IME の表記の選び違い: しりょう の 飼料／資料）か。
+    （リスとヒョウ／リスト表 のように元が片仮名・かな交じりでも、直し先に漢字があり読みが同じなら同じ）。
+    語の組の段は、同じ読みの直しを、直し先が表の組の語で元の語が表の組に出ないときだけ確かとする。読みは正しく
+    打てていて、表記の選びだけが組に合わない形なので、使われやすさの差だけの直しとは違う（2026-11-17 うに: 以前は
+    直っていた 同じ読みの選び違いの行が、この戻しでそのままになっていた）。CN_DICT_WORD_KEEP_SAME_READING=0 で前のまま"""
+    if os.environ.get('CN_DICT_WORD_KEEP_SAME_READING') == '0':
+        return False
+    if not (isinstance(src, str) and isinstance(dst, str) and src and dst) or src == dst or _latin(src + dst):
+        return False
+    if not any('一' <= c <= '鿿' for c in dst):
+        return False
+    try:
+        import collocation_repair as C
+        a, b = C._word_reading(src), C._word_reading(dst)
+    except Exception:
+        return False
+    return bool(a) and a == b
+
+
+def _rare_to_common(line, text, hit, j1, j2):
+    try:
+        import ime_reconvert as R
+        from morphology import tokenize
+    except Exception:
+        return False
+    src = max([R._token_rarity(t) for t in hit] + [0])
+    if src < R.DOUBT_KEY:
+        return False
+    new = [t for t in tokenize(text) if t.start < max(j2, j1 + 1) and j1 < t.end and R._strong(t.surface)]
+    return bool(new) and max(R._token_rarity(t) for t in new) <= R.KEY_FIX_COMMON
 
 
 def keep(line, result):
@@ -143,6 +213,10 @@ def keep(line, result):
         mine = [d for d in details if d[2] in _weak() and isinstance(d[0], str) and d[0] and _covers(line, d[0], i1, i2)]
         if not mine:
             continue
+        if all(d[2] == '語の組' for d in mine) and all(_same_reading(d[0], d[1]) for d in mine):
+            continue
+        if all(d[2] == '語の組' for d in mine) and _request_frame(text, j2):
+            continue
         others = [d for d in details if d[2] not in _weak() and d[0] and d[0] in line[max(0, i1 - 2):i2 + 2]]
         if others:
             continue
@@ -156,6 +230,21 @@ def keep(line, result):
                for t in side):
             continue
         if _verb_run(toks[max(0, n0 - 1):n1 + 2]):
+            continue
+        # かなの並びが1字の自立語（く｜たせ｜さい の く）に切れている所は、辞書の語の並びではなく切り方が崩れた印
+        # （2026-11-15 v1.19.0 の CI: くたせさい→ください の戻しを、たせ が辞書の語だとして元に戻していた）。
+        # CN_DICT_WORD_KEEP_KANA_PIECE=0 で前のまま
+        if os.environ.get('CN_DICT_WORD_KEEP_KANA_PIECE') != '0' and any(
+                len(t.surface) == 1 and 'ぁ' <= t.surface <= 'ゖ' and t.surface not in 'ぁぃぅぇぉっゃゅょゎゕゖ'
+                and t.pos in ('動詞', '名詞', '形容詞', '副詞')
+                and 0 < t.start and 'ぁ' <= line[t.start - 1] <= 'ゖ'
+                and (t.end < len(line) and 'ぁ' <= line[t.end] <= 'ゖ' or _kana_piece_end(line, t))
+                for t in toks[max(0, n0 - 1):n1 + 2]):
+            continue
+        # 元の語が表でとても珍しい語（ime_reconvert の DOUBT_KEY 以上: 本字）で、書き換えた先の語がどれも身近な語なら、
+        # 使われやすさの差だけの直しではない（珍しい語そのものが打ち違いの跡）。戻さない（2026-11-16 うに: 以前は直っていた
+        # 行が、この戻しで紫も無くなっていた）。CN_DICT_WORD_KEEP_RARE_SRC=0 で前のまま
+        if os.environ.get('CN_DICT_WORD_KEEP_RARE_SRC') != '0' and _rare_to_common(line, text, hit, j1, j2):
             continue
         # 文の途中の終助詞（すずし｜いす｜ぜ｜が の ぜ）は、かなの並びの切り方が崩れた印。辞書の語の並びとは見ない
         # （2026-11-14 補正担当: かなのまま打った誤字の束で、すぜ→かぜ・はすん→はん の直しを戻していた）。

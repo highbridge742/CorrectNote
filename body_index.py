@@ -11,6 +11,7 @@
 
 ここは決まりだけ（画面は使わない）。どの命令のどの引数が位置かは translate() が持つ。
 """
+import os
 import re
 import sys
 
@@ -234,6 +235,9 @@ proc ::cnbody::outlist {l h} {
     foreach x $l {lappend got [out $x $h]}
     return $got
 }
+proc ::cnbody::dumpcb {cmd h key value index} {
+    uplevel #0 [list {*}$cmd $key $value [out $index $h]]
+}
 proc ::cnbody::clamp {raw i h} {
     set head [expr {$h + 1}].0
     if {![catch {$raw compare $i < $head} before] && $before} {return $head}
@@ -345,6 +349,13 @@ proc ::cnbody::cmd {raw var replay args} {
         dump {
             for {set k 1} {$k < $n} {incr k} {
                 set a [lindex $args $k]
+                if {$a eq "-command" && $k + 1 < $n && $::cnbody::dumpcmd} {
+                    # tkinter の dump は答えを -command の呼び返しで受ける: 呼び返しに渡す位置も本文の位置に直す（2026-11-17・
+                    # 前は見出しの行数ぶん下の位置が渡った。列は Tk の書き方のまま。CN_BODY_INDEX_CP=0 で前の形）
+                    incr k
+                    lset args $k [list ::cnbody::dumpcb [lindex $args $k] $h]
+                    continue
+                }
                 if {[string index $a 0] ne "-"} {lset args $k [in $a $h]}
             }
             set r [$raw {*}$args]
@@ -415,6 +426,7 @@ def install(widget, height, share=None):
     if not int(tk_.call('info', 'exists', '::cnbody::loaded')):
         tk_.eval(_TCL)
         tk_.setvar('::cnbody::loaded', 1)
+        tk_.setvar('::cnbody::dumpcmd', int(os.environ.get('CN_BODY_INDEX_CP') != '0'))
     tk_.call('rename', widget._w, raw)
     widget._cn_body_raw = raw
     state = share if share is not None else _State(tk_, '::cnbody::h(%s)' % raw, height)

@@ -3320,6 +3320,11 @@ def renyou_stray_noun_mismatch(a,b,line_end=False):
     # かなだけの並びは解析が無理に切る（し＋ょくじちゅう）ので、後ろはカタカナか漢字の入った名詞に限る
     if re.fullmatch(r'[ぁ-ゖー]+',b[0] or ''):return False
     if not (re.fullmatch(r'[ァ-ヺ][ァ-ヺー]*',b[0] or '') or '固有名詞' in bp or line_end):return False
+    # 行の最後というだけで見る所で、後ろが漢字1字の普通名詞なら、連用形＋1字の名詞の複合語（伸ばし＋棒・書き＋方・
+    # 揚げ＋物）。切れ端と見ない（2026-11-17 補正担当、うに: 以前紫の無かった 伸ばし棒）。CN_RENYOU_ONE_KANJI_TAIL=0 で前のまま
+    import os as _os
+    if (line_end and not re.fullmatch(r'[ァ-ヺ][ァ-ヺー]*',b[0] or '') and '固有名詞' not in bp
+            and re.fullmatch(r'[一-鿿]',b[0] or '') and _os.environ.get('CN_RENYOU_ONE_KANJI_TAIL')!='0'):return False
     import seed_japanese
     return not seed_japanese.is_unit((a[0] or '')+(b[0] or ''))
 

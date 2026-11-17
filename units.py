@@ -531,6 +531,27 @@ def _is_plain_kana_unit(u):
             and not u.get('chosen_hint'))
 
 
+_FUNC_VERBS = frozenset(('する', 'なる', 'ある', 'いる', 'いく', 'ゆく', 'くる', 'おる', 'おく', 'しまう', 'みる',
+                         'くれる', 'もらう', 'あげる', 'やる', 'いただく', 'くださる', 'できる', 'ござる', 'す'))
+
+
+def _content_verb(u):
+    """解析が自立の動詞と見た、かなの単位で、辞書の読みの元の形がどれも補助に使う動詞（する・なる・いる…）でない
+    （かい→かう・かく）。機能語の並びに巻き込まない（2026-11-16 挙動関連担当: りんごをかいます の かい＋ます が
+    機能語の1単位になり、ます の印も かい の候補も消えていた）。CN_UNITS_CONTENT_VERB=0 で前のまま"""
+    import os
+    if os.environ.get('CN_UNITS_CONTENT_VERB') == '0' or not str(u.get('pos') or '').startswith('動詞:自立'):
+        return False
+    try:
+        from morphology import dictionary_inflections
+        rows = [r for r in dictionary_inflections(u.get('text') or '') or () if r[0].startswith('動詞,')]
+    except Exception:
+        return False
+    if not rows or any(r[0].startswith('動詞,非自立') for r in rows):
+        return False
+    return not any(r[2] in _FUNC_VERBS for r in rows)
+
+
 def _merge_functional_runs(units):
     """
     続けて並んだ**機能語だけのひらがな**を、1つの単位にまとめる
@@ -605,6 +626,8 @@ def _merge_functional_runs(units):
         while i < j:
             best = None
             for end in range(j, i + 1, -1):        # 2単位以上
+                if any(_content_verb(units[k]) for k in range(i, end)):
+                    continue
                 joined = ''.join(units[k]['text'] for k in range(i, end))
                 if len(joined) > _FUNC_RUN_MAX:
                     continue
@@ -616,7 +639,7 @@ def _merge_functional_runs(units):
                 # **1文字の助詞にも候補は出さない**（同じ理由）。**それだけで機能語の並びになる単位**
                 # （ます・ました・まで）も同じ（うにさん 2026-10-25「カレーをつくり増さ」: 助動詞 ます に
                 # 打ち間違いの候補 増さ・くす が並んでいた。1字の助詞と同じ門を2字以上の助動詞にも）
-                if len(u.get('text') or '') == 1 or _is_all_functional(u.get('text') or ''):
+                if (len(u.get('text') or '') == 1 or _is_all_functional(u.get('text') or '')) and not _content_verb(u):
                     u['functional'] = True
                 out.append(u)
                 i += 1

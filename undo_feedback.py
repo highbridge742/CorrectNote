@@ -1,6 +1,7 @@
 """Volatile edit ranges for Undo/Redo color, and the steps a file tab keeps while it is away (tab_undo).
 
 Memory only: what the steps hold is never written anywhere, and goes with the step."""
+import os
 import tkinter as tk
 
 
@@ -74,7 +75,12 @@ class UndoFeedback:
 
     def _operation(self,args):
         kind=args[0]
-        start_index=self._call('index',args[1])
+        # The index as given, not Tk's answer to `index` fed back (2026-11-17: under the inline title the body_index
+        # translator returns that answer as a plain string; Tk 8.6.9 writes an emoji as two columns but reads it as
+        # one, so a column after an emoji came back one place on and an undone character measured as nothing:
+        # tests_gui_undo_feedback). CN_UNDO_INDEX_ASIS=0: as before
+        if os.environ.get('CN_UNDO_INDEX_ASIS')=='0':start_index=self._call('index',args[1])
+        else:start_index=args[1]
         if self._call('compare',start_index,'>','end-1c'):start_index='end-1c'
         start=self._count('1.0',start_index)
         if kind=='insert':finish=start_index;parts=args[2::2]
@@ -102,8 +108,35 @@ class UndoFeedback:
         self.parked.clear();self.parked_redo.clear()
         self._clear_color()
 
+    def _is_selection(self,args):
+        """Does this delete take away the selection (Delete or BackSpace on it, typing or pasting over it)?"""
+        ranges=self._call('tag','ranges','sel')
+        if not ranges or len(args)<3 or args[0]!='delete':return False
+        first,last=(str(x) for x in ranges[:2])
+        same=lambda a,b:bool(int(self._call('compare',a,'==',b)))
+        return same(args[1],first) and same(args[2],last)
+
+    def _needs_separator(self,kind,operation,args=()):
+        """A separator before this edit (2026-11-17 うにさん「部分的に文字をデリートした後、別の行選択してデリートして
+        Undoすると、2手戻る」). Tk joins every delete that follows a delete (and every insert that follows an insert)
+        into one step, wherever it is. A new step starts when a selection is deleted or typed over, and when the
+        edit is not where the last one left off (Delete and BackSpace in the same place, typing on from the last
+        character, stay one step as before). CN_UNDO_EDIT_SEP=0: as before."""
+        if self.boundary or self.last_kind is None or os.environ.get('CN_UNDO_EDIT_SEP')=='0':return False
+        start,removed,added=operation
+        last=getattr(self,'last_at',None)
+        if last is None or not (removed or added):return False
+        if kind!=self.last_kind:return False      # Tk itself starts a new step here
+        if removed and self._is_selection(args):return True
+        if removed and not added and last[1] and not last[2]:
+            return not (start==last[0] or start+removed==last[0])
+        if added and not removed and last[2] and not last[1]:
+            return start!=last[0]+last[2]
+        return False
+
     def _record(self,kind,operation,automatic):
         if not any(operation[1:]):return
+        self.last_at=operation
         self.redo.clear();self.redo_log.clear();self.parked_redo.clear()
         if self.boundary or (automatic and self.last_kind not in (None,kind)):
             self.undo.append([])
@@ -238,6 +271,9 @@ class UndoFeedback:
                 enabled=bool(int(self._call('cget','-undo')))
                 automatic=bool(int(self._call('cget','-autoseparators')))
                 self._clear_color()
+                if (enabled and automatic and self.replay is None and operation is not None
+                        and self._needs_separator(kind,operation,args)):
+                    self._call('edit','separator');self.boundary=True
             except (tk.TclError,TypeError,ValueError,IndexError):
                 enabled=False;automatic=False
             try:result=native()

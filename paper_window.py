@@ -241,3 +241,147 @@ def repaint(hwnd):
         api[1].RedrawWindow(hwnd, None, None, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW)
     except Exception:
         pass
+
+
+# --- 本文の欄そのもののタッチ（2026-11-16 うにさん「1本指ドラッグでスクロールにならず、範囲選択になりました」） ----
+# 透かした画素のタッチは上の Canvas が受けてホイールにする。透かしていない所（字の上・絵のないテーマ）のタッチは本文の
+# 欄（Tk の Text の窓）に直に届き、パンのジェスチャーを誰も受けないので、OS がマウスの押し・動きにして渡し、Tk は
+# ドラッグの選択にしていた。本文の欄の窓でも、
+#   ・パン（WM_GESTURE・GID_PAN）→ 縦の量をホイールの知らせにして自分へ送る（本文の欄のホイールの束縛がそのまま働く）
+#   ・タッチから作られたマウスの動き（GetMessageExtraInfo の MI_WP_SIGNATURE）→ 選択を広げない。パンが来ない時は、その
+#     動きをホイールにする
+#   ・タッチの押し・離し（タップ）はそのまま通す（カーソルを置く）
+# CN_TEXT_TOUCH=0 で前の動き（何も掛けない）。
+TOUCH_SUBCLASS_ID = 0x434F       # 'CO'
+WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP = 0x0200, 0x0201, 0x0202
+MI_WP_SIGNATURE, SIGNATURE_MASK = 0xFF515700, 0xFFFFFF00
+_touch_proc = None
+_touch_state = {}               # 本文の欄の窓 → dict(y, rem, gesture, down)
+
+
+def text_touch_enabled(environ=None):
+    import os
+    environ = os.environ if environ is None else environ
+    return environ.get('CN_TEXT_TOUCH') != '0'
+
+
+def from_touch(extra):
+    """マウスの知らせが、タッチ・ペンから作られた物か（GetMessageExtraInfo の印）。"""
+    return (int(extra) & SIGNATURE_MASK) == MI_WP_SIGNATURE
+
+
+def touch_step(state, msg, y, touch, gesture_y=None):
+    """本文の欄の窓が受けた知らせ1つの扱い（決まりだけ・試験から呼べる形）。
+    戻り: (送るホイールの量 or 0, この知らせを Tk へ渡すか)。state はこの窓の状態（dict）を書き換える。
+      gesture_y: パンのジェスチャーの指の y（パンの知らせの時だけ）。"""
+    if gesture_y is not None:
+        if not state.get('gesture'):
+            state.update(gesture=True, y=gesture_y, rem=0.0)
+            return 0, False
+        delta, state['rem'] = pan_wheel(state['y'], gesture_y, state.get('rem', 0.0))
+        state['y'] = gesture_y
+        return delta, False
+    if not touch:
+        return 0, True
+    if msg == WM_LBUTTONDOWN:
+        state.clear()
+        state.update(down=True, y=y, rem=0.0, gesture=False)
+        return 0, True                   # タップはカーソルを置く
+    if msg == WM_MOUSEMOVE:
+        if not state.get('down'):
+            return 0, True
+        if state.get('gesture'):
+            return 0, False              # パンが送っている。選択を広げない
+        delta, state['rem'] = pan_wheel(state.get('y', y), y, state.get('rem', 0.0))
+        state['y'] = y
+        return delta, False
+    if msg == WM_LBUTTONUP:
+        state.clear()
+        return 0, True
+    return 0, True
+
+
+def _touch_api():
+    """本文の欄のタッチの手続き（_load の ctypes を使う）。使えなければ None。"""
+    global _touch_proc
+    api = _load()
+    if api is None:
+        return None
+    ctypes, user32, comctl = api
+    if _touch_proc is not None:
+        return api
+    import ctypes.wintypes as wt
+    LRESULT = ctypes.c_ssize_t
+    SUBCLASSPROC = ctypes.WINFUNCTYPE(LRESULT, wt.HWND, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t,
+                                      ctypes.c_size_t, ctypes.c_size_t)
+    user32.GetMessageExtraInfo.restype = ctypes.c_ssize_t
+    user32.GetMessageExtraInfo.argtypes = ()
+
+    class GESTUREINFO(ctypes.Structure):
+        _fields_ = [('cbSize', wt.UINT), ('dwFlags', wt.DWORD), ('dwID', wt.DWORD), ('hwndTarget', wt.HWND),
+                    ('x', ctypes.c_short), ('y', ctypes.c_short), ('dwInstanceID', wt.DWORD),
+                    ('dwSequenceID', wt.DWORD), ('ullArguments', ctypes.c_ulonglong), ('cbExtraArgs', wt.UINT)]
+
+    def post_wheel(hwnd, delta, x, y):
+        delta = max(-32768, min(32767, int(delta)))
+        user32.PostMessageW(hwnd, WM_MOUSEWHEEL, (delta & 0xFFFF) << 16, ((y & 0xFFFF) << 16) | (x & 0xFFFF))
+
+    def proc(hwnd, msg, wparam, lparam, uid, data):
+        # ★ Tk を呼ばない（窓の手続きの中）
+        try:
+            state = _touch_state.setdefault(int(hwnd), {})
+            if msg == WM_GESTURE:
+                info = GESTUREINFO()
+                info.cbSize = ctypes.sizeof(GESTUREINFO)
+                if user32.GetGestureInfo(ctypes.c_void_p(lparam), ctypes.byref(info)):
+                    if info.dwID in (GID_BEGIN, GID_END):
+                        if info.dwID == GID_END:
+                            state.pop('gesture', None)
+                    elif info.dwID == GID_PAN:
+                        delta, _pass = touch_step(state, msg, 0, True, gesture_y=info.y)
+                        if delta:
+                            post_wheel(hwnd, delta, info.x, info.y)
+                        user32.CloseGestureInfoHandle(ctypes.c_void_p(lparam))
+                        return 0
+            elif msg in (WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP):
+                touch = from_touch(user32.GetMessageExtraInfo())
+                y = ctypes.c_short((lparam >> 16) & 0xFFFF).value
+                x = ctypes.c_short(lparam & 0xFFFF).value
+                delta, keep = touch_step(state, msg, y, touch)
+                if delta:
+                    post_wheel(hwnd, delta, x, y)
+                if not keep:
+                    return 0
+            elif msg == WM_NCDESTROY:
+                _touch_state.pop(int(hwnd), None)
+                comctl.RemoveWindowSubclass(hwnd, _touch_proc, TOUCH_SUBCLASS_ID)
+        except Exception:
+            pass
+        return comctl.DefSubclassProc(hwnd, msg, wparam, lparam)
+
+    _touch_proc = SUBCLASSPROC(proc)
+    return api
+
+
+def attach_text_touch(text_hwnd):
+    """本文の欄（Tk の Text の窓）に、タッチのなぞりをスクロールにする手続きを掛ける。掛けたら True。"""
+    if not text_touch_enabled() or not text_hwnd:
+        return False
+    api = _touch_api()
+    if api is None:
+        return False
+    try:
+        return bool(api[2].SetWindowSubclass(text_hwnd, _touch_proc, TOUCH_SUBCLASS_ID, 0))
+    except Exception:
+        return False
+
+
+def detach_text_touch(text_hwnd):
+    api = _touch_api()
+    if api is None or not text_hwnd:
+        return
+    try:
+        api[2].RemoveWindowSubclass(text_hwnd, _touch_proc, TOUCH_SUBCLASS_ID)
+        _touch_state.pop(int(text_hwnd), None)
+    except Exception:
+        pass

@@ -1638,11 +1638,12 @@ def run_design33_cases():
     tree = ast.parse(src)
 
     # --- 消え方の見分け（純粋関数） ---
-    func = next(n for n in tree.body
-                if isinstance(n, ast.FunctionDef)
-                and n.name == 'design33_classify')
+    # design33_classify は _d33_has_word（app.py の同じ階層）を呼ぶので一緒に取り出す（2026-11-16）
+    funcs = [n for n in tree.body
+             if isinstance(n, ast.FunctionDef)
+             and n.name in ('design33_classify', '_d33_has_word')]
     ns = {}
-    exec(compile(ast.Module(body=[func], type_ignores=[]), '<f>', 'exec'), ns)
+    exec(compile(ast.Module(body=funcs, type_ignores=[]), '<f>', 'exec'), ns)
     classify = ns['design33_classify']
 
     applied = '今日は間違いだ'
@@ -1882,6 +1883,11 @@ def run_scroll_cache_cases():
         _use_analysis_cache = ns2['_use_analysis_cache']
         # 途中まで済んだタブの控え（2026-10-27）。_use_analysis_cache が先に見る
         _partial_analysis_core = ns2['_partial_analysis_core']
+
+        # ディスクの控えから戻す道（2026-11-15・_load_tab_from_disk_cache）。この試験はメモリの控えだけを
+        # 見るので、ディスクには何も無い形（False）にする（2026-11-16 まで無くて落ちていた）
+        def _load_tab_from_disk_cache(self, key):
+            return False
 
         def __init__(self):
             self._analysis_cache = {}
@@ -4035,6 +4041,19 @@ def test_pos_from_row_context_48qc_48qd():
 
 
 def test_privacy_no_counts_48qg_48qh_48qj():
+    """既定では選び直しを覚えない（last_choice.LEARNED_OFF・2026-11-08）。覚える形（CN_LEARNED_HISTORY=1）に
+    切り替えた時にも、書くファイルに回数・時刻・前後の文が入らないことを見る（2026-11-16 まで既定のまま覚える前提で
+    last_choice.json が作られず落ちていた）。"""
+    import last_choice
+    saved = last_choice.LEARNED_OFF
+    last_choice.LEARNED_OFF = False
+    try:
+        return _test_privacy_no_counts_learned()
+    finally:
+        last_choice.LEARNED_OFF = saved
+
+
+def _test_privacy_no_counts_learned():
     """
     ★★ **回数と履歴を記録していないことの見張り**
     （項目48-QG/QH/QJ/QL/QM・2026-09-05）。
@@ -4955,11 +4974,14 @@ def run_view_latency_48vv():
         def winfo_height(self):return 500
         def dlineinfo(self,i):calls.append(i);return (0,0,20,20,15)
         def tag_names(self,index):return ()
+        def tag_ranges(self,tag):return ()      # 2026-11-16: 目次・タイトルの余白のタグ（この窓には無い）
     fitted=[]
     class Gutter:
         # 2026-10-19: redraw now asks fit_width for the width and uses RIGHT_GAP
         target=Target();bookmarks={70010};font='font';active_row=None;row_status=None
         RIGHT_GAP=G.RIGHT_GAP
+        # 2026-11-16: redraw は目次の印の行を先に引く（_navigation_rows）。この試験の窓には目次が無い
+        _navigation_rows=staticmethod(lambda target:set())
         def fit_width(self,line_count):fitted.append(line_count);return 60
         def configure(self,**kw):fitted.append(('configure',kw))
         def _number_font(self,number,width):return self.font

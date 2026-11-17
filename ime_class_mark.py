@@ -120,6 +120,25 @@ def _restart(text, a, face):
     return cat in ('Sm', 'So', 'Sk', 'Sc') and ('一' <= text[k - 2] <= '鿿' or _kana_face(text[k - 2]))
 
 
+def _redup(text, a, b):
+    """切れ端が、2字以上の同じ並びを2回くり返したかなの並び（ぴよぴよ・ぴよピヨ。ひらがなと片仮名は同じに見る）の中か。
+    畳語の擬音・擬態語は IME の辞書に無く切れ端で返るが、打ち違いではそろって出ない（2026-11-17 うに 誤判定）。
+    CN_IME_CLASS_REDUP=0 で前のまま"""
+    if os.environ.get('CN_IME_CLASS_REDUP') == '0':
+        return False
+    h = ''.join(chr(ord(c) - 0x60) if 'ァ' <= c <= 'ヶ' else c for c in text)
+    s, e = a, b
+    while s > 0 and _kana_face(text[s - 1]):
+        s -= 1
+    while e < len(text) and _kana_face(text[e]):
+        e += 1
+    for x in range(s, e):
+        for n in range(2, (e - x) // 2 + 1):
+            if h[x:x + n] == h[x + n:x + 2 * n] and x <= a and b <= x + 2 * n:
+                return True
+    return False
+
+
 def _listed(text, a, b):
     """中黒・読点・空白で両側を区切られた、かな1字の項目（作った例: あ・い・う・え・お）。
     並べた項目は文として続かないので、IME は1字ずつの未知の切れ端で返すが、打ち違いの跡ではない。
@@ -177,6 +196,59 @@ def _kana_noun(text, a, b, nxt):
             and text[b] in 'をがにではもへと')
 
 
+def _attached_here(text, a, b):
+    """こちらの解析で、1字の所が前の語にじかに付く語（名詞の後ろの 接尾・非自立の名詞: 焙煎｜度、動詞の後ろの助動詞:
+    劣ら｜ね｜ども）と読め、どちらも辞書の読みが在るか。IME が語として切れなかった付く語で、打ち違いの跡ではない
+    （2026-11-16 うに: 正しい文の 1字 に紫）。CN_IME_CLASS_ATTACHED=0 で前のまま。"""
+    if os.environ.get('CN_IME_CLASS_ATTACHED') == '0' or b - a != 1:
+        return False
+    try:
+        from morphology import tokenize
+        toks = list(tokenize(text))
+    except Exception:
+        return False
+    for k, t in enumerate(toks):
+        # 1字が語の中に在る（劣ら｜ね｜ども の も）ときも、その語で見る
+        if not (t.start <= a and b <= t.end) or k == 0 or not t.has_reading:
+            continue
+        p = toks[k - 1]
+        if p.end != t.start or not p.has_reading:
+            return False
+        sub = t.pos_sub or ''
+        if t.pos == '名詞' and sub.startswith(('接尾', '非自立')) and p.pos == '名詞':
+            return True
+        if t.pos == '助動詞' and p.pos in ('動詞', '助動詞'):
+            return True
+        if (t.pos == '名詞' and len(t.surface) == 1 and p.pos == '動詞' and (p.infl_form or '') in ('基本形', '連体形')
+                and (k + 1 == len(toks) or toks[k + 1].pos in ('助詞', '助動詞', '記号'))
+                and os.environ.get('CN_IME_CLASS_ATTR_VERB') != '0'):
+            # 動詞の言い切りの形が1字の名詞を修飾する（呼ぶ側・使う方）。後ろが助詞・記号・行の終わりの時だけ
+            # （2026-11-17 補正担当、うに: 以前紫の無かった 呼ぶ側）。CN_IME_CLASS_ATTR_VERB=0 で前のまま
+            return True
+        if t.pos == '助詞' and sub.startswith('接続助詞') and p.pos in ('動詞', '助動詞'):
+            return True
+        return False
+    return False
+
+
+def _own_word(text, a, b):
+    """IME が読めなかった所が、こちらの解析ではちょうど1語の漢字2字以上の普通名詞（固有名詞でない）。こちらの辞書に
+    在る語（各行）を IME が知らないだけなので、打ち違いの跡と見ない（2026-11-17 補正担当、うに: 以前紫の無かった
+    各行の選択された部分）。CN_IME_CLASS_OWN_WORD=0 で前のまま"""
+    if os.environ.get('CN_IME_CLASS_OWN_WORD') == '0' or b - a < 2:
+        return False
+    face = text[a:b]
+    if not all('一' <= c <= '鿿' for c in face):
+        return False
+    try:
+        from morphology import tokenize
+        toks = [t for t in tokenize(text) if t.start < b and a < t.end]
+    except Exception:
+        return False
+    return (len(toks) == 1 and toks[0].start == a and toks[0].end == b and toks[0].pos == '名詞'
+            and (toks[0].pos_sub or '').startswith(('一般', 'サ変接続')) and toks[0].has_reading)
+
+
 def fallen_spans(text, words):
     """IME の語の並びから、辞書の語として読めなかった所（始め, 終わり）を拾う。"""
     out = []
@@ -187,11 +259,15 @@ def fallen_spans(text, words):
         face = text[a:b]
         if not _letters(face) or _number(face) or _small_only(face):
             continue
-        if _restart(text, a, face) or _listed(text, a, b) or _quoted_kana(text, a, b):
+        if _restart(text, a, face) or _listed(text, a, b) or _quoted_kana(text, a, b) or _redup(text, a, b):
             continue
         if (kind in SINGLE or os.environ.get('CN_IME_CLASS_BARE_ANY') != '0') and _bare_subject(text, a, b):
             continue
         if _kana_noun(text, a, b, words[k + 1] if k + 1 < len(words) else None):
+            continue
+        if _attached_here(text, a, b):
+            continue
+        if _own_word(text, a, b):
             continue
         prev = words[k - 1] if k else None
         nxt = words[k + 1] if k + 1 < len(words) else None
@@ -222,8 +298,20 @@ def _mark(line, result):
     if not spans:
         return result
     odd = [tuple(x[:2]) for x in result.get('odd_spans') or ()]
+    mixed = []
+    if os.environ.get('CN_IME_CLASS_MIXED_LOAN') != '0':
+        # 片仮名とひらがなを混ぜて書いた外来語（スくりーん）は、補正がそのまま残す名詞。IME はその表記を語として
+        # 読めず切れ端で返すが、打ち違いの跡ではない（2026-11-15 v1.19.0 の CI: tests_mixed_nominal_argument）。
+        # CN_IME_CLASS_MIXED_LOAN=0 で前のまま
+        try:
+            import fixed_still_odd as _fso
+            mixed = _fso.mixed_loan_spans(text)
+        except Exception:
+            mixed = []
     add = []
     for a, b in spans:
+        if any(x < b and a < y for x, y in mixed):
+            continue
         if text == line:
             s, e = a, b
         else:

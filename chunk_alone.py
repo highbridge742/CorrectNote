@@ -174,8 +174,12 @@ def _splice(line, result, s, e, new):
     return out
 
 
-def _review(line, result, call):
+def _review(line, result, call, calcs=()):
     found = chunks(line)
+    if calcs and os.environ.get('CN_CHUNK_ALONE_CALC') != '0':
+        # 計算した式（引用の計算）に掛かる語句は単体で通さない。単体の行には式の記録が無いので、計算の答えが元の式に
+        # 戻っていた（2026-11-15 v1.19.0 の CI: 前😀1-2後 の 1-2 が計算されない）。CN_CHUNK_ALONE_CALC=0 で前のまま
+        found = [f for f in found if not any(a < f[1] and f[0] < b for a, b in calcs)]
     if not found or (len(found) == 1 and found[0][1] - found[0][0] == len(line.strip())):
         return result
     text = result.get('corrected')
@@ -257,7 +261,27 @@ def correct_line(line, *args, **kwargs):
         kw.pop('on_early_odd', None)
         if 'previous_line' in kw:
             kw['previous_line'] = None
-        return _review(line, result, lambda text: fn(text, *args, **kw))
+        calcs = []
+        for item in kwargs.get('occurrence_calculations') or ():
+            a, b = getattr(item, 'start', None), getattr(item, 'end', None)
+            if isinstance(a, int) and isinstance(b, int):
+                calcs.append((a, b))
+        if os.environ.get('CN_CHUNK_ALONE_CALC') != '0':
+            # 行の位置で書いた記録（読み・計算・打鍵）は、別の文（語句だけ・直した後の行）には当てない
+            for key in ('occurrence_readings', 'occurrence_calculations', 'occurrence_strokes'):
+                if key in kw:
+                    kw[key] = ()
+        call_fn = fn
+        if os.environ.get('CN_CHUNK_ALONE_TOP') != '0':
+            # 語句だけの通しも、いちばん外の補正（打った漢字を戻す ime_first_keep などの守りを含む）で見る。この包みの内側だけで
+            # 通すと、行全体なら守られる打った漢字が単体の答えで別の語になった（2026-11-16 うに: 括弧の付いた行だけ 打鍵から→だから）。
+            # 入れ子の通しはこの包みが busy で素通しする。CN_CHUNK_ALONE_TOP=0 で前のまま（内側だけで通す）
+            try:
+                import correction_entry as _ce
+                call_fn = _ce.correct_line
+            except Exception:
+                call_fn = fn
+        return _review(line, result, lambda text: call_fn(text, *args, **kw), calcs)
     except Exception:
         return result
     finally:

@@ -471,6 +471,19 @@ def propose(text, store, dict_index, surrounding=(), _skip=()):
             break
         if a is None:
             continue
+        # 説明の付かない並びの頭が、そのまま片仮名にすると身近な片仮名の語（表の順位 KATA_COMMON 以内）になり、伸ばしか
+        # 半濁音を含み（ぽけもん）、残りが助詞などで説明の付くなら、格子が語を知らなくても片仮名で置く（2026-11-17 うに:
+        # 11/14 まで紫の無かった行に紫。格子は ぽ｜褻｜門 と読む）。CN_LATTICE_KATA_WHOLE=0 で前のまま
+        if not explained and os.environ.get('CN_LATTICE_KATA_WHOLE') != '0':
+            hit = _kata_whole(kana)
+            if hit is not None:
+                places.append((a, a + hit[0], hit[1]))
+                continue
+        if a == a0:
+            hit = _kata_verb(kana)
+            if hit is not None:
+                places.append((a, a + hit[0], hit[1]))
+                continue
         try:
             r = lat.best(kana)
         except Exception:
@@ -874,6 +887,54 @@ def _wago_noun(face, rd):
         return not kana_keep.is_kango(face, rd)
     except Exception:
         return False
+
+
+def _kata_whole(kana):
+    """(長さ, 片仮名) か None。kana の頭の3字以上を片仮名にした形が身近な片仮名の語で、伸ばしか半濁音を含み、
+    残りが空か文法で説明の付くかな。長いほうから見る。"""
+    try:
+        import pos_grammar
+    except Exception:
+        return None
+    for n in range(len(kana), 2, -1):
+        head, rest = kana[:n], kana[n:]
+        if not any(c in 'ーぱぴぷぺぽ' for c in head) or not all('ぁ' <= c <= 'ゖ' or c == 'ー' for c in head):
+            continue
+        kata = ''.join(chr(ord(c) + 0x60) if 'ぁ' <= c <= 'ゖ' else c for c in head)
+        if not _kata_common(kata):
+            continue
+        try:
+            if rest and not pos_grammar.explain_kana_run(rest, after_kanji=True):
+                continue
+        except Exception:
+            continue
+        return n, kata
+    return None
+
+
+def _kata_verb(kana):
+    """(長さ, 片仮名) か None。"""
+    if os.environ.get('CN_LATTICE_KATA_VERB') != '0':
+        # 片仮名の語＋る の動詞（みす｜って → ミスっても）。同梱の読みの表で「頭＋る」のただ1つの一番の表記が、頭を片仮名に
+        # した形＋る で、後ろがら行の五段の活用の字（っ・ら・り・る・れ・ろ）なら、頭を片仮名で置く（2026-11-17 うにの
+        # 未解決タブ・以前は直っていた行）。CN_LATTICE_KATA_VERB=0 で前のまま
+        try:
+            import last_keystroke as L
+        except Exception:
+            return None
+        for n in range(len(kana) - 1, 1, -1):
+            head, rest = kana[:n], kana[n:]
+            if rest[:1] not in ('っ', 'ら', 'り', 'る', 'れ', 'ろ') or not all('ぁ' <= c <= 'ゖ' for c in head):
+                continue
+            kata = ''.join(chr(ord(c) + 0x60) for c in head)
+            rows = L._seed_surfaces(head + 'る')
+            if not rows:
+                continue
+            best = min(c for _f, c in rows)
+            tops = [f for f, c in rows if c == best]
+            if tops == [kata + 'る']:
+                return n, kata
+    return None
 
 
 def _kata_common(face):

@@ -486,6 +486,23 @@ def _head_may_continue():
         return True
 
 
+_TE_AUX = ('いる', 'いく', 'おく', 'しまう', 'くる', 'ある', 'みる')
+
+
+def _te_aux_after_noun(tokens, k):
+    """名詞（日）のすぐ後ろが って（引用の助詞）で、その後ろが て形に付く補助の動詞（いる・しまう…）か。
+    名詞＋って＋います は言えないので、名詞と って は動詞の て形（残って）が崩れた跡（2026-11-17 うに: 行の頭の
+    の日っています が、前の行が名詞で終わると直らなかった）。CN_KEYSLIP_HEAD_TE_AUX=0 で前のまま"""
+    if os.environ.get('CN_KEYSLIP_HEAD_TE_AUX') == '0' or k + 2 >= len(tokens):
+        return False
+    t, u, v = tokens[k], tokens[k + 1], tokens[k + 2]
+    return (t.pos == '名詞' and u.surface == 'って' and u.pos == '助詞' and u.start == t.end
+            and v.pos == '動詞' and v.base_form in _TE_AUX and v.start == u.end)
+
+
+_CLOSE = '」』）)】〉》］]｝}〕”"’\''
+
+
 def _stacked_no(tokens):
     """名詞に付く の（連体化）が、行の頭か が・を・に のすぐ後ろに在る所の添字（荷物が｜の｜日｜って）。"""
     out = []
@@ -499,8 +516,13 @@ def _stacked_no(tokens):
             # 別の語に替えていた）。CN_KEYSLIP_HEAD_NO_COMMON=0 で前のまま
             nx = tokens[k + 1] if k + 1 < len(tokens) else None
             if nx is not None and nx.start == t.end and nx.pos == '名詞' and _strong(nx.surface) \
-                    and _rank(nx.surface) < RARE:
+                    and _rank(nx.surface) < RARE and not _te_aux_after_noun(tokens, k + 1):
                 continue
+        if (p is not None and p.surface and p.surface[-1] in _CLOSE and p.end == t.start
+                and os.environ.get('CN_KEYSLIP_CLOSE_BRACKET_NO') != '0'):
+            # 閉じ括弧の後ろの の（「．」の全角）は、括弧で括った語に付くふつうの の。崩れた跡とみない
+            # （2026-11-17 うに 誤判定: 「．」の全角にしてから → の全角にしたから）。CN_KEYSLIP_CLOSE_BRACKET_NO=0 で前のまま
+            continue
         if p is None or p.pos == '記号' or (p.pos == '助詞' and p.surface in ('が', 'を', 'に') and p.end == t.start):
             out.append(k)
     return out
@@ -1077,6 +1099,32 @@ def _breaks_common_word(r, v, toks, face):
     return False
 
 
+def _respelled_untouched(r, v, toks, face):
+    """戻した打鍵の所（元の読みで替わった所）に掛からない漢字の語（全角）が、直した表記で別の漢字（前核）に替わるか。
+    読みの替わらない語は書き手が IME で選んだ表記のまま残す（2026-11-17 うに 誤判定: の全角にしてから → の前核にしたから。
+    打鍵の戻しは して の て だけ）。既定は外す（692行の比べで 準備 の直しを2行失った。57行目は閉じ括弧の の の決まりで直る）。
+    切り替え CN_KEYSLIP_KEEP_UNTOUCHED=1 で使う"""
+    if os.environ.get('CN_KEYSLIP_KEEP_UNTOUCHED') != '1':
+        return False
+    rds = [_hira(t.reading or '') for t in toks]
+    if not all(rds) or ''.join(rds) != r:
+        return False
+    i = 0
+    while i < min(len(r), len(v)) and r[i] == v[i]:
+        i += 1
+    j = 0
+    while j < min(len(r), len(v)) - i and r[len(r) - 1 - j] == v[len(v) - 1 - j]:
+        j += 1
+    lo, hi = i, len(r) - j
+    pos = 0
+    for t, rd in zip(toks, rds):
+        a, b = pos, pos + len(rd)
+        pos = b
+        if b <= lo and any(_kanji(c) for c in t.surface) and not face.startswith(''.join(x.surface for x in toks[:toks.index(t) + 1])):
+            return True
+    return False
+
+
 def _suffix_after_common(tokens, a, b):
     """窓の1字の漢字の語がどれも、英字・数のすぐ後ろに付いて、その読みで IME が上の方に返す字
     （A｜列）なら、直し先が決まらないときの紫は付けない（語に付く造語の要素で、打ち違いの印が弱い）。
@@ -1295,7 +1343,8 @@ def propose(text, odd=()):
                             and face[0] == text[s - 1] and os.environ.get('CN_KEYSLIP_NO_DOUBLE') != '0'):
                         continue
                     line = text[:s] + face + text[e:]
-                    if (_breaks_common_word(r, v, tokens[a:b], face) or _bad_placed(text, s, src, face, tokens, a)
+                    if (_breaks_common_word(r, v, tokens[a:b], face) or _respelled_untouched(r, v, tokens[a:b], face)
+                            or _bad_placed(text, s, src, face, tokens, a)
                             or _suffix_swap(r, v, tokens[a:b], src, face) or _stem_sa(tokens[a:b])):
                         continue
                     c = path_cost(line)

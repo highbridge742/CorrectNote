@@ -68,10 +68,13 @@ def still_odd(text):
         if whole is None:
             return None
     best, where = 0.0, None
+    mixed = mixed_loan_spans(text)
     for i in range(len(toks)):
         a, b = toks[i].start, toks[min(len(toks), i + SPAN) - 1].end
         if any(t.pos == '記号' for t in toks[i:i + SPAN]):
             continue
+        if any(x < b and a < y for x, y in mixed):
+            continue        # 片仮名とひらがなを混ぜて書いた外来語（シャつ）を含む窓は、費用が書き方のせいで高い
         if _STRETCH.search(text[a:b]) and os.environ.get('CN_FIXED_STILL_ODD_STRETCH') != '0':
             continue        # ひらがなの後ろの伸ばす音（話し言葉の てねー・たー）を含む窓は、費用が書き方のせいで高い
         c = path_cost(text[a:b])
@@ -85,8 +88,79 @@ def still_odd(text):
     if best > _num('CN_FIXED_STILL_ODD_WINDOW', WINDOW):
         return where
     if whole / len(plain) > _num('CN_FIXED_STILL_ODD_CHAR', PER_CHAR):
+        if _open_line(toks):
+            # 改行は文の途中で入る（うに 2026-11-17「文が途中まで・途中からの行は想定する」）。行の終わり・始まりが文の
+            # 途中なら、行ぜんたいを1つの文として測った費用（文の終わり・始まりの重さ）は根拠にしない。窓の測りは上のまま
+            return None
         return 'fix'            # 行ぜんたいが高い: どこかは決められないので、直した所に付ける
     return None
+
+
+_ORIG = [None]     # 直す前の行（still_odd を呼ぶ間だけ）
+
+
+def _end_kept(surface):
+    """名詞で終わる直した行の、終わりの語が直す前の行の終わりのままか。直しが行の終わりを名詞に替えた形
+    （咲く → 差額）は、元は文として閉じていた行なので開いた行と見ない（2026-11-17 補正担当・検査の short2 の誤った直し）。
+    CN_FIXED_STILL_ODD_OPEN_NOUN_KEPT=0 で前のまま"""
+    orig = _ORIG[0]
+    if os.environ.get('CN_FIXED_STILL_ODD_OPEN_NOUN_KEPT') == '0' or not isinstance(orig, str):
+        return True
+    return orig.rstrip().endswith(surface)
+
+
+def _open_line(toks):
+    """行が文の途中で終わるか、文の途中から始まるか（格助詞・係助詞・接続助詞・読点で終わる／助詞・助動詞で始まる）。
+    終助詞・句点で終わる行、接続詞で始まる行は文として見る（うに 2026-11-17「接続詞で始まる行は意図したもの」）。
+    CN_FIXED_STILL_ODD_OPEN=0 で前のまま"""
+    if os.environ.get('CN_FIXED_STILL_ODD_OPEN') == '0':
+        return False
+    body = [t for t in toks if not (t.pos == '記号' and t.surface not in ('、', '，', ','))]
+    if not body:
+        return False
+    last, first = body[-1], body[0]
+    if last.surface in ('、', '，', ','):
+        return True
+    if last.pos == '助詞' and not (last.pos_sub or '').startswith(('終助詞', '副助詞／並立助詞／終助詞')):
+        return True
+    if first.pos in ('助詞', '助動詞') and first is not last:
+        return True
+    if os.environ.get('CN_FIXED_STILL_ODD_OPEN_NOUN') != '0' and last.pos == '名詞' \
+            and not any(t.surface in ('。', '．', '！', '？', '!', '?') for t in toks) \
+            and _end_kept(last.surface):
+        # 名詞で終わる行（入力ミス・誤入力したキー）も、文の途中の切れ目か見出し。行ぜんたいを1つの文として測らない
+        # （2026-11-17 補正担当、うにの方針の続き）。CN_FIXED_STILL_ODD_OPEN_NOUN=0 で前のまま
+        return True
+    return False
+
+
+def mixed_loan_spans(text):
+    """片仮名とひらがなを混ぜて書いた外来語（スくりーん・シャつ）の所。かなの並び（片仮名・ひらがな・ー）のうち両方の字を
+    含む頭の部分を片仮名にすると、世の中の片仮名の語になる所。補正は混ぜ書きの名詞をそのまま残す（tests_mixed_nominal_argument）
+    ので、そこの費用の高さは直しの良し悪しの手がかりにならない（2026-11-15 v1.19.0 の CI）。
+    CN_FIXED_STILL_ODD_MIXED_LOAN=0 で見ない。"""
+    if os.environ.get('CN_FIXED_STILL_ODD_MIXED_LOAN') == '0':
+        return []
+    try:
+        import corrector
+    except Exception:
+        return []
+
+    def kata(x):
+        return ''.join(chr(ord(c) + 0x60) if 'ぁ' <= c <= 'ゖ' else c for c in x)
+    out = []
+    for m in re.finditer('[ぁ-ゖァ-ヶー]+', text):
+        run, base = m.group(), m.start()
+        if not re.search('[ァ-ヶ]', run) or not re.search('[ぁ-ゖ]', run):
+            continue
+        for k in range(len(run), 1, -1):
+            head = run[:k]
+            if not re.search('[ァ-ヶ]', head) or not re.search('[ぁ-ゖ]', head):
+                continue
+            if corrector._katakana_known_or_compound(kata(head)):
+                out.append((base, base + k))
+                break
+    return out
 
 
 def _has_context(line, text):
@@ -226,7 +300,11 @@ def _mark(line, result):
         return result
     if _only_same_reading(line, text) and _kept_kana_cost_only(result, text):
         return result
-    where = _still_odd_fields(line, text)
+    _ORIG[0] = line
+    try:
+        where = _still_odd_fields(line, text)
+    finally:
+        _ORIG[0] = None
     if where is None:
         return result
     if isinstance(where, tuple) and where[0] == 'fix':

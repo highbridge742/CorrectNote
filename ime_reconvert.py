@@ -152,6 +152,13 @@ def _token_rarity(t, tokens=None):
             ra, rb = _rank(a), _rank(b)
             if ra <= 520 and rb <= 520:
                 return max(ra, rb)
+        # 頻度の表に無いだけの辞書の1語（焙煎・洗濯機: 表は語の切り方の違う元から作られていて、日常の語でも抜けている）は、
+        # 表に無い＝珍しいとは数えない。門（DOUBT）の手前に置く。打ち違いで出来た形（変所・化時）は辞書の語でないので今まで通り
+        # （2026-11-16 うに「焙煎は日常的な言葉です。使われることが少ないの基準を見直す」）。CN_RECONVERT_DICT_NOT_RARE=0 で前のまま
+        if (len(face) >= 2 and os.environ.get('CN_RECONVERT_DICT_NOT_RARE') != '0'
+                and not str(t.pos_sub or '').startswith('固有名詞') and _dict_word(face)
+                and _seed_top(face, getattr(t, 'reading', '') or '')):
+            return DOUBT - 1
     return r
 
 
@@ -1472,6 +1479,95 @@ def _head_suffix_marks(text, tokens):
     return out
 
 
+def _seed_top(face, reading):
+    """同梱の読みの表（seed_japanese_cost・SudachiDict 由来）で、face がその読みのただ1つの一番の表記か（ばいせん → 焙煎）。
+    同じ費用の表記が並ぶ読み（ふうい: 諷意・風位）の語は、ふだんの語とは言えない（2026-11-17 batch598: 頻度の表に無いだけの
+    辞書の語を一律に身近とすると、打ち違いで出来た珍しい語 風位 の紫が消えた）。CN_RECONVERT_DICT_SEED_TOP=0 で見ない"""
+    if os.environ.get('CN_RECONVERT_DICT_SEED_TOP') == '0':
+        return True
+    rd = _hira(reading or '')
+    if not rd:
+        return False
+    try:
+        import last_keystroke as L
+        rows = L._seed_surfaces(rd)
+    except Exception:
+        return False
+    if not rows:
+        return False
+    best = min(c for _f, c in rows)
+    tops = [f for f, c in rows if c == best]
+    return tops == [face]
+
+
+def _dict_word(face):
+    """face が辞書（SudachiDict の狭い側）の1語か。"""
+    try:
+        import seed_japanese
+        return bool(seed_japanese.is_common_unit(face))
+    except Exception:
+        return False
+
+
+def _same_reading_swap(text, other):
+    """選び違いの直し（同じ読みの別の表記）か。替わった所の読み（こちらの解析）が元と同じ時だけ真。読みが替わる
+    （田部井号 → 米号: たべい → べい）のは選び違いではないので、直さず紫に留める（2026-11-17 補正担当、うに:
+    以前は紫だった行が 米号 に書き換わった）。CN_RECONVERT_SAME_READING_ONLY=0 で前のまま（いつも真）"""
+    if os.environ.get('CN_RECONVERT_SAME_READING_ONLY') == '0' or not other or other == text:
+        return True
+    try:
+        from morphology import tokenize
+        ops = [o for o in difflib.SequenceMatcher(None, text, other, autojunk=False).get_opcodes() if o[0] != 'equal']
+        if not ops:
+            return True
+        a, b, c, d = ops[0][1], ops[-1][2], ops[0][3], ops[-1][4]
+
+        def rd(t, x, y):
+            toks = [k for k in tokenize(t) if k.start < y and x < k.end]
+            if not toks:
+                return None
+            x2, y2 = min(k.start for k in toks), max(k.end for k in toks)
+            return x2 - x, y2 - y, ''.join(_hira(k.reading or k.surface) for k in toks)
+        r1, r2 = rd(text, a, b), rd(other, c, d)
+        if r1 is None or r2 is None:
+            return True
+        # 前後の同じ字の分は読みが同じなので、語の境まで広げた読みどうしで比べてよい
+        return r1[2] == r2[2]
+    except Exception:
+        return True
+
+
+def _okuri_omitted(text, phon, words, s, e):
+    """窓に掛かる漢字の並び（塩漬）が、同じ読みの辞書の語（塩漬け）から送り仮名を省いた形か。送り仮名を省く書き方
+    （申込・受付・塩漬）は正しい表記で、珍しく見えるのは表に無いだけ（2026-11-17 うに 誤判定: 塩漬にして →
+    塩付 の紫）。切り替え CN_RECONVERT_OKURI_OMIT=0 で前のまま"""
+    if os.environ.get('CN_RECONVERT_OKURI_OMIT') == '0':
+        return False
+    a, b = s, e
+    while a > 0 and _kanji(text[a - 1]):
+        a -= 1
+    while b < len(text) and _kanji(text[b]):
+        b += 1
+    while a < b and not _kanji(text[a]):
+        a += 1
+    while b > a and not _kanji(text[b - 1]):
+        b -= 1
+    if b - a < 2:
+        return False
+    cover = [x for x in words if a <= x[0] and x[1] <= b]
+    if not cover or cover[0][0] != a or cover[-1][1] != b:
+        return False
+    reading = _hira(phon[cover[0][2]:cover[-1][3]])
+    try:
+        import reading_lattice as lat
+        lat.load()
+        faces = [f for f, *_r in lat._table.get(reading, ())]
+    except Exception:
+        return False
+    face = text[a:b]
+    return any(f != face and ''.join(c for c in f if _kanji(c)) == face and f.startswith(face[0]) for f in faces)
+
+
 def propose(text, input_method='kana', ime=None):
     """[(開始, 終了, 置く行 or None)]。置く行があれば直す、None は紫。"""
     typed = _env_on('CN_RECONVERT_TYPED')
@@ -1533,6 +1629,8 @@ def propose(text, input_method='kana', ime=None):
             src_rare = _span_rarity(text, s, e, tokens)
             if src_rare < DOUBT or any(a < e and s < b for a, b, _f in picked):
                 continue
+            if _okuri_omitted(text, phon, words, s, e):
+                continue
             first = conv.first(w)
             found = None
             same = _judge(text, here, first, s, e, tokens, src_rare, path_cost, tokenize)
@@ -1541,8 +1639,14 @@ def propose(text, input_method='kana', ime=None):
                 # 直すのは、表に無いほど珍しい語が IME 自身の変換で身近な語に替わるときだけ（迷うなら紫）
                 if (s <= a and b <= e and src_rare >= DOUBT_KEY and src_rare - rr >= FIX_JUMP and rr <= FIX_COMMON
                         and gain >= MARK_GAIN):
-                    found = (s, e, first)
+                    found = (s, e, first if _same_reading_swap(text, first) else None)
                 elif src_rare >= DOUBT_MARK and gain >= MARK_GAIN:
+                    found = (s, e, None)
+                elif (s <= a and b <= e and gain >= KEY_GAIN and rr <= COMMON and src_rare - rr >= JUMP
+                      and os.environ.get('CN_RECONVERT_SAME_READING_GAIN') != '0'):
+                    # 門（DOUBT_MARK）より少し身近な語でも、同じ読みのよく使う語に替えると行の費用が KEY_GAIN 以上下がるなら
+                    # 選び違いを疑って紫（飼料を送ります → 資料: 2026-11-17 うに「以前は直っていた」）。直すかは後ろの段
+                    # （purple_homophone）に任せる。CN_RECONVERT_SAME_READING_GAIN=0 で前のまま
                     found = (s, e, None)
                 elif (typed and os.environ.get('CN_RECONVERT_SAME_BIG') != '0' and s <= a and b <= e
                       and gain >= SAME_BIG_GAIN and rr <= COMMON and src_rare - rr >= JUMP
@@ -1567,7 +1671,12 @@ def propose(text, input_method='kana', ime=None):
                           and (os.environ.get('CN_RECONVERT_ROLLIN_PROPER') == '1'
                                or not any((t.pos_sub or '').startswith('固有名詞')
                                           for t in tokens if t.start < e and s < t.end)))
-            if found is None and not plain_compound and (rollin_low or src_rare >= DOUBT_KEY_TRY) \
+            # IME 自身が窓の読みを今の表記に変換し（第1候補が元の行のまま）、その表記が辞書の1語（焙煎）なら、頻度の表に
+            # 無いだけの正しく打った語。1打の戻しを試して紫にしない（2026-11-16 うに: 11/14 まで紫が無かった）。
+            # CN_RECONVERT_IME_OWN_WORD=0 で前のまま
+            own_word = (found is None and first == text and len(w) == 1 and _strong(text[s:e])
+                        and os.environ.get('CN_RECONVERT_IME_OWN_WORD') != '0' and _dict_word(text[s:e]))
+            if found is None and not own_word and not plain_compound and (rollin_low or src_rare >= DOUBT_KEY_TRY) \
                     and (rollin_low or src_rare >= DOUBT_KEY or not _in_noun_run(tokens, s, e)) \
                     and not (src_rare < DOUBT_KEY and _typed_real_noun(text, s, e, _hira(phon[rs:re_]), tokens)):
                 reading = _hira(phon[rs:re_])
@@ -1607,7 +1716,13 @@ def propose(text, input_method='kana', ime=None):
                                 and not _homophone_tie(text, o0)
                                 # 辞書で変換し直したときは、漢字が1字だけの窓は直さず紫（IME なら前後の語とつないで
                                 # 変換する所で、窓だけの辞書の表記は当てにならない: 罪李→妻李・点くの→地区の の型）
-                                and not (conv.dict and sum(_kanji(c) for c in text[s:e]) <= 1)):
+                                and not (conv.dict and sum(_kanji(c) for c in text[s:e]) <= 1)
+                                # 窓に固有名詞（人名・地名: 田部井）が在れば、名前も打ち違いの跡も同じ形になるので、1打の
+                                # 戻しで直さず紫（2026-11-17 補正担当、うに: 田部井号して が 米号 に書き換わった。正しくは
+                                # タブ移動して）。CN_RECONVERT_KEY_PROPER_MARK=0 で前のまま
+                                and not (os.environ.get('CN_RECONVERT_KEY_PROPER_MARK') != '0'
+                                         and any((t.pos_sub or '').startswith('固有名詞')
+                                                 for t in tokens if t.start < e and s < t.end))):
                             found = (s, e, o0)
             if found is not None:
                 # 紫は窓の中の珍しい語だけに付ける（前後の助詞などは含めない）
@@ -1624,6 +1739,8 @@ def propose(text, input_method='kana', ime=None):
     # IME が本文の語を辞書と違う読みで読んだ所（浅煎り を せんいり）は、その読みからの直しも紫も出さない（2026-10-31）
     # 置く行が印の外まで書き換えるとき（印は 煎り、置く行は 浅 も変える）は、書き換わる所全体で見る
     out = [m for m in picked if not _touches(m, misread, text)]
+    # 送り仮名を省いた正しい表記（塩漬）に掛かる直し・紫は、ほかの探し（区切り直し・母音の打ち違い）の分も出さない
+    out = [m for m in out if not _okuri_omitted(text, phon, words, m[0], m[1])]
     if big:
         # 重なる所は、ほかの探しの直しを先に、紫だけならこちらの直しを先に
         ov = lambda m, ms: any(a < m[1] and m[0] < b for a, b, _f in ms)
@@ -1643,6 +1760,8 @@ def propose(text, input_method='kana', ime=None):
                 return (conv.first(w) if w else text) == text
             out = [m for m in out if not (m in split and _same(m))]
             out = [(m[0], m[1], None) if m in split else m for m in out]
+    if big:
+        out = [m for m in out if not _okuri_omitted(text, phon, words, m[0], m[1])]
     return out
 
 

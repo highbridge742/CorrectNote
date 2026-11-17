@@ -504,6 +504,14 @@ class InlineTitleToc(T.TitleToc):
     def enter_title(self, col=None):
         editor = self.app.editor
         if not self._active:
+            # 本文で続けていた括弧の巡回は、ほかの所をクリックした時と同じに確定する（このクリックは本文の欄の
+            # クリックの束縛まで届かないので、ここで。tests_gui_shortcuts_menu・2026-11-16）
+            forget = getattr(self.app, '_forget_bracket_cycle', None)
+            if forget is not None:
+                try:
+                    forget()
+                except Exception:
+                    pass
             saved = tuple(t for t in editor.bindtags() if t != BIND_TAG)
             self._saved_tags = saved
             top = str(editor.winfo_toplevel())
@@ -647,6 +655,10 @@ class InlineTitleToc(T.TitleToc):
             self._drag = True
             return 'break'
         self.leave_title()
+        # 目次・下の線の行を押した: ボタンを離すまでの動きで選択を広げない（このクリックは Text の束縛へ渡していないので、
+        # そのまま流すと Tk が前の選択の起点から広げた・2026-11-15 うにさん「目次の行をクリックしてジャンプした後、
+        # マウスを少し動かすと広い範囲が選択される」）。CN_TOC_CLICK_HOLD=0 で前の動き
+        self._head_press = os.environ.get('CN_TOC_CLICK_HOLD') != '0'
         rows = getattr(editor, '_cn_head_rows', [])
         k = row - 2
         if 0 <= k < len(rows):
@@ -684,6 +696,8 @@ class InlineTitleToc(T.TitleToc):
         return 'break'
 
     def _b1_motion(self, event):
+        if getattr(self, '_head_press', False):
+            return 'break'
         if not (self._active and self._drag):
             return None
         col = self._col_at(event)
@@ -702,6 +716,9 @@ class InlineTitleToc(T.TitleToc):
         return 'break'
 
     def _release(self, event):
+        if getattr(self, '_head_press', False):
+            self._head_press = False
+            return 'break'
         if self._drag:
             self._drag = False
             return 'break'

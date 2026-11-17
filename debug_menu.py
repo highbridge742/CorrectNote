@@ -90,6 +90,15 @@ ITEMS = (
      'odd_respell', 'ATTEMPT_LIMIT', '回', 0,
      '0 は上限なし。少なくすると速くなるが、後ろの候補で直る行は直らなくなる（答えが変わる）。'
      '既定の 8 は 2026-11-13 うにさんの指定（11-10 の 6 から上げた）'),
+    # タブの名前を切る時の、いちばん短い幅（2026-11-16 うにさん「文字数の下限は全角6文字、半角のみなら12文字。デバッグ
+    # パラメータに出して」）。全角＝2・半角＝1 で数える。全部のタブが窓に収まらない時だけ切る（tab_label）
+    ('tab_name_min', 'タブの名前を切る時の、いちばん短い幅（全角1字＝2・半角1字＝1）',
+     'tab_label', 'MIN_WIDTH', '', 2, '全角1字（幅2）より短くはしない'),
+    # タイトルと目次の字の大きさ（2026-11-16 うにさん）。変えたらその場で付け直す（apply の終わり・refresh_sizes）
+    ('title_size', 'タイトルの字の大きさ',
+     'title_toc', 'TITLE_SIZE', 'pt', 8, '8pt より小さくはしない（本文より小さい題は読みにくい）'),
+    ('toc_size', '目次の字の大きさ（0 は本文の字の大きさから決める）',
+     'title_toc', 'TOC_POINT', 'pt', 0, '0 は今の決め方（本文の字の 0.85 倍＋1・9〜12pt）'),
 )
 # 持ち主に `<名前>_MAX` が無い項目の上限（既定が 0＝上限なしの項目は、既定を上限にできない）
 _MAX = {'respell_attempts': 30}
@@ -103,7 +112,8 @@ KEYS = tuple(item[0] for item in ITEMS)
 # 打鍵から計算を始めるまで・下準備と打った行を見に行く間隔（1ms／5ms）の4項目は、
 # うにさんの指定で窓から外した（コードの値はそのまま）。
 SECTIONS = (('ime_quiet', '【解析】'), ('tab_wheel_step', '【タブ移動】'), ('copy_emphasis', '【表示】'),
-            ('backup_keep', '【保存】'), ('respell_attempts', '【紫の所の読み直し】'))
+            ('backup_keep', '【保存】'), ('respell_attempts', '【紫の所の読み直し】'),
+            ('tab_name_min', '【タブの名前】'), ('title_size', '【タイトルと目次】'))
 _BY_KEY = {item[0]: item for item in ITEMS}
 _ORIGINAL = {}   # 書き換えたモジュールの定数の、書き換える前の値
 
@@ -207,6 +217,20 @@ def apply(app, saved=None):
             setattr(module, name, saved[key])
         elif key in _ORIGINAL:
             setattr(module, name, _ORIGINAL.pop(key))
+    # タイトル・目次の字の大きさ・タブの名前の下限は、その場で付け直す（2026-11-16）
+    toc = getattr(app, '_title_toc', None)
+    if toc is not None and hasattr(toc, 'refresh_sizes'):
+        try:
+            toc.refresh_sizes()
+        except Exception:
+            pass
+    fit = getattr(app, '_queue_tab_fit', None)
+    if fit is not None and getattr(app, '_tab_widgets', None):
+        try:
+            app._tab_char_limit = None
+            fit()
+        except Exception:
+            pass
 
 
 def set_value(app, key, value, save=True):
@@ -272,20 +296,8 @@ def open_window(app, colors=None):
     tk.Button(rank_row, text='集計を見る…', command=lambda: open_rank_window(app, colors)).pack(
         side='left', padx=(8, 0))
     dlg._rank_on = rank_on
-    # 削除の記録（deletion_log.txt・2026-11-14: 既定はオフ。本文の断片と打鍵が入る）
-    deletion_on = tk.BooleanVar(master=dlg, value=bool(app.settings.get('debug_deletion_log')))
-
-    def toggle_deletion():
-        app.settings.set('debug_deletion_log', bool(deletion_on.get()))
-        try:
-            app.settings.save()
-        except Exception:
-            pass
-    tk.Checkbutton(dlg, text='削除の記録（打った後で文字が勝手に消えた時の証拠を deletion_log.txt に書く。'
-                   '消える前後の行と打鍵が入る）',
-                   variable=deletion_on, command=toggle_deletion, bg=bg, fg=ink, selectcolor=panel,
-                   activebackground=bg, font=('Yu Gothic UI', 9)).pack(anchor='w', padx=12, pady=(0, 6))
-    dlg._deletion_on = deletion_on
+    # 削除の記録（deletion_log.txt）の項目は外した（2026-11-17 うにさん「直近で起きていないので、項目を外してください」）。
+    # 記録は CN_DELETION_LOG=1 の時だけ（app._deletion_log_on）
     # 解析の記録（項目48-LO・メモリの中の最新40件）。2026-11-09 うにさん「再解析のデバッグは一旦外したまま……一旦外して」：
     # 窓のボタンは CN_DEBUG_TOOLS=1 の時だけ出す（記録そのものはメモリの中だけで、そのまま取っている）
     import os as _os_trace

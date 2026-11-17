@@ -6266,6 +6266,25 @@ def _everyday_example_noun(face):
         return False
 
 
+def _prefix_noun_parts(face):
+    """稀の表に在る2字の名詞が、身近な接頭詞1字＋身近な名詞1字（各＋行・毎＋行）に分けて読める語なら、
+    字の組み合わせで意味の通る日常の語。紫にしない（2026-11-17 うに: 以前は紫の無かった正しい行に紫）。
+    語の一覧は作らない。CN_RARE_PREFIX_PARTS=0 で前のまま"""
+    import os
+    if os.environ.get('CN_RARE_PREFIX_PARTS') == '0' or len(face) != 2 or not all(_kanji(c) for c in face):
+        return False
+    try:
+        import morphology
+        import ime_reconvert as _R
+        a = list(morphology.tokenize(face[0]))
+        b = list(morphology.tokenize(face[1]))
+        return (len(a) == 1 and a[0].pos == '接頭詞' and len(b) == 1 and b[0].pos == '名詞'
+                and str(b[0].pos_sub or '') == '一般'
+                and _R._rank(face[0]) < _R.DOUBT and _R._rank(face[1]) < _R.DOUBT)
+    except Exception:
+        return False
+
+
 def _general_common(face):
     try:
         import ime_reconvert
@@ -6360,6 +6379,7 @@ def _mark_rare_clauses(result, line, options):
     spans = [sp for sp in spans if not _resplit_common(toks, sp)]
     spans += _rare_kanji_join(toks)
     spans = [sp for sp in spans if not _everyday_example_noun(line[sp[0]:sp[1]])]
+    spans = [sp for sp in spans if not _prefix_noun_parts(line[sp[0]:sp[1]])]
     # 文法で確かな印（活用の形が合わない続き: 閑雅**て**・角**煮ください**・初める**た**）は、直せなくても紫を残す
     sure = [(toks[i].start, toks[i + 1].end) for i in sorted(_conjugation_mismatch(toks)) if i + 1 < len(toks)]
     sure += _odd_joins(toks)

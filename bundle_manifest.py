@@ -151,7 +151,9 @@ ITEMS = (
          False),
     # 2層の語彙の下の層（2026-10-26・vocabulary.open_vocabulary。作り方は
     # tools_local/vocab_split_20261026/build_base_vocab.py）。初期状態の語彙（load_seed → 初回の準備の行）。
-    Item('base_vocab.json.gz', 'vocabulary',
+    # 確かめは load_base_rows（無ければ []）。'vocabulary' だけだと available() を探して
+    # ci_smoke が止まっていた（vocabulary に available は無い・2026-11-16）。
+    Item('base_vocab.json.gz', 'vocabulary:load_base_rows',
          '語彙が1層（vocabulary.json）に戻り、初回の準備で辞書の取り込みが走る',
          False),
     # 文変換の英文（2026-10-26・en_convert.py。作り方は tools_local/convert_v9_20261026/build_en_rev.py）。

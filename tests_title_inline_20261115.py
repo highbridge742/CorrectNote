@@ -327,6 +327,9 @@ class Inline(unittest.TestCase):
         self.click_body(2)
         self.assertEqual(self.editor.index('insert'), '2.0')
         self.assertEqual(self.editor.tag_ranges('sel'), ())                # 作り直したクリックがダブルクリックにならない
+        # 作ったキーは焦点のある窓へ届く。ほかの試験の窓と一緒に回すと焦点が外れていることがあった（2026-11-16）
+        self.editor.focus_force()
+        self.root.update()
         self.key('BackSpace')                                             # 選択が無いので改行1つだけ
         self.assertEqual(self.editor.get('1.0', '1.end'), '1行目の文です。2行目の文です。')
 

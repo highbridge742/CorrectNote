@@ -2,6 +2,7 @@
 """正しい文を書き換えない（うに 2026-11-12「誤判定を対応する」）。例は作った文。"""
 import os
 import unittest
+from unittest import mock
 
 import keyslip_window as KW
 import no_particle_slip as NPS
@@ -512,6 +513,86 @@ class DictWordKeep(unittest.TestCase):
             got = K.keep('読書に充てている', {'corrected': '読書に当てている', 'details': [['充て', '当て', '意味の分類']]})
             self.assertEqual(got['corrected'], '読書に当てている')
 
+    def test_same_reading_pair_kept(self):
+        # Batch620: 語の組の直しで同じ読みの表記の選び違い（作った例: 会議の死霊）は戻さない
+        import dict_word_keep as K
+        got = K.keep('会議の死霊を配る', {'corrected': '会議の資料を配る', 'details': [['死霊', '資料', '語の組']],
+                                       'odd_spans': []})
+        self.assertEqual(got['corrected'], '会議の資料を配る')
+        with _Env(CN_DICT_WORD_KEEP_SAME_READING='0'):
+            got = K.keep('会議の死霊を配る', {'corrected': '会議の資料を配る', 'details': [['死霊', '資料', '語の組']],
+                                           'odd_spans': []})
+            self.assertEqual(got['corrected'], '会議の死霊を配る')
+
+    def test_prefix_noun_parts_not_rare(self):
+        # Batch621: 接頭詞1字＋名詞1字に分けて読める2字の語（作った例: 毎行）は稀の紫にしない
+        import last_keystroke as L
+        self.assertTrue(L._prefix_noun_parts('毎行'))
+        self.assertFalse(L._prefix_noun_parts('選択'))
+        with _Env(CN_RARE_PREFIX_PARTS='0'):
+            self.assertFalse(L._prefix_noun_parts('毎行'))
+
+    def test_head_keyslip_rest_broken(self):
+        # Batch622: 前の行から続きうる行でも、頭の助詞を外した残りが読めない1キーの直しは通す（作った例）
+        import head_particle_keep as H
+        d = [['の日っています', '残っています', 'かな入力の1キーの打ち違い']]
+        got = H.keep_head('の日っています', {'corrected': '残っています', 'details': d, 'odd_spans': []}, '本の下')
+        self.assertEqual(got['corrected'], '残っています')
+        with _Env(CN_HEAD_KEYSLIP_COST='0'):
+            got = H.keep_head('の日っています', {'corrected': '残っています', 'details': d, 'odd_spans': []}, '本の下')
+            self.assertEqual(got['corrected'], 'の日っています')
+
+    def test_keyslip_head_te_aux(self):
+        # Batch622: 名詞＋って＋補助の動詞（作った例: 行の頭の の日っています）は崩れた跡
+        import keyslip_window as W
+        from morphology import tokenize
+        toks = list(tokenize('の日っています'))
+        self.assertTrue(W._te_aux_after_noun(toks, 1))
+        toks = list(tokenize('の日って楽しい'))
+        self.assertFalse(W._te_aux_after_noun(toks, 1))
+
+    def test_te_aux_bad_de(self):
+        # Batch623: く の動詞のイ音便＋で（作った例: 書いでいる）は て＋補助の動詞の守りに入れない
+        import guess_back as G
+        self.assertEqual(G._te_aux_spots('書いでいる'), [])
+        self.assertEqual(G._te_aux_spots('泳いでいる'), [(2, 3)])
+        with _Env(CN_GUESS_BACK_TE_AUX_DE='0'):
+            self.assertEqual(G._te_aux_spots('書いでいる'), [(2, 3)])
+
+    def test_respell_off_mark(self):
+        # Batch624: 紫の所に掛からない読み直しは採らない（作った例の位置で見る）
+        import odd_respell as O
+        self.assertTrue(O._off_mark('察して返事', 'そっと返事', 3, 5))
+        self.assertFalse(O._off_mark('察して変字', '察して返事', 3, 5))
+        with _Env(CN_RESPELL_OFF_MARK='0'):
+            self.assertFalse(O._off_mark('察して返事', 'そっと返事', 3, 5))
+
+    def test_tail_drop_mark(self):
+        # Batch625: 行の終わりの1字を余計な1打として落とした直しで、その字のキーの隣に助詞があれば紫（作った例）
+        import guess_back as G
+        r = G.tail_drop_mark('てがみほ', {'corrected': '手紙', 'details': [('てがみほ', '手紙', 'かな入力')], 'odd_spans': []})
+        self.assertEqual(r['corrected'], '手紙を')
+        self.assertEqual(r['odd_spans'], [])
+        with _Env(CN_GUESS_BACK_TAIL_WO='0'):
+            r = G.tail_drop_mark('てがみほ', {'corrected': '手紙', 'details': [('てがみほ', '手紙', 'かな入力')],
+                                            'odd_spans': []})
+            self.assertEqual([tuple(x) for x in r['odd_spans']], [(0, 4)])
+        with _Env(CN_GUESS_BACK_TAIL_DROP='0'):
+            r = G.tail_drop_mark('てがみほ', {'corrected': '手紙', 'details': [('てがみほ', '手紙', 'かな入力')],
+                                            'odd_spans': []})
+            self.assertEqual(r['odd_spans'], [])
+
+    def test_batch627_guards(self):
+        # Batch627: 半角英字を消さない・身近な語だけ替えて珍しい語を残す読み直しを採らない・頼みの形の語の組（作った例）
+        import odd_respell as O
+        import dict_word_keep as K
+        self.assertTrue(O._ascii_letter_dropped('n回目を見る', '回目を見る'))
+        self.assertFalse(O._ascii_letter_dropped('さm歩に行く', '散歩に行く'))
+        self.assertFalse(O._ascii_letter_dropped('隣のｌ席', '隣の席'))
+        self.assertTrue(O._common_changed_rare_left('値総尺', '当てそうしゃく', 0, 3))
+        self.assertTrue(K._request_frame('確認お願いします', 2))
+        self.assertFalse(K._request_frame('確認します', 2))
+
     def test_derived_verb_not_rare(self):
         import ime_reconvert as I
         import morphology as M
@@ -924,6 +1005,36 @@ class Batch566ImeField(unittest.TestCase):
             self.assertEqual(O.narrow_ime_field(line, r)['odd_spans'], [(0, 13)])
 
 
+class Batch584(unittest.TestCase):
+    """2026-11-16 うに: 句点のない長い文の全体に紫。例は作った文。"""
+
+    def test_ime_field_with_inner_reason_narrows(self):
+        import odd_reason_fill as F
+        line = '新しい機能を追加したので使い方を説明書に書いておいて明日の会議で皆さんに紹介する予定です'
+        n = len(line)
+        r = {'corrected': line, 'odd_spans': [(0, n)], 'odd_reasons': [(0, n, F.IME_FIELD), (18, 20, 'x')]}
+        out = F.narrow_ime_field(line, r)
+        self.assertEqual(out['odd_spans'], [(18, 20)])
+        self.assertEqual(out['odd_reasons'], [(18, 20, 'x')])
+        with _Env(CN_ODD_REASON_IME_FIELD_MIXED='0'):
+            self.assertEqual(F.narrow_ime_field(line, r)['odd_spans'], [(0, n)])
+
+
+class Batch583(unittest.TestCase):
+    """2026-11-15 v1.19.0 の CI: 混ぜ書きの外来語に IME の読めなかった印を付けない。IME の答えは作った並び。"""
+
+    def test_ime_class_skips_mixed_loan(self):
+        import ime_class_mark as M
+        words = [(0, 1, 0, 1, 900, 3), (1, 5, 1, 5, 103, 11), (5, 6, 5, 6, 0, 10), (6, 9, 6, 9, 211, 3),
+                 (9, 10, 9, 10, 0, 2), (10, 11, 10, 11, 907, 3)]
+        M.set_words_provider(lambda t: words)
+        self.addCleanup(M.set_words_provider, None)
+        r = {'corrected': 'スくりーんをください。', 'odd_spans': []}
+        self.assertEqual(M._mark('スくりーんをくたせさい。', r).get('odd_spans'), [])
+        with _Env(CN_IME_CLASS_MIXED_LOAN='0'):
+            self.assertEqual(M._mark('スくりーんをくたせさい。', r).get('odd_spans'), [(0, 1)])
+
+
 class Batch580(unittest.TestCase):
     """2026-11-15 全体評価の方針: IME の欄の紫を狭める時の珍しさ・浮いたかな。例は作った語。"""
 
@@ -1036,6 +1147,537 @@ class Batch568(unittest.TestCase):
         toks = list(tokenize('取り込むを参照してください'))
         self.assertTrue(P._names_command(toks, 1))
         self.assertFalse(P._names_command(list(tokenize('行くを出した')), 1))
+
+
+class Batch585(unittest.TestCase):
+    def test_verb_tail_noun_suru(self):
+        import odd_reason_fill as F
+        line = '下見しました'
+        r = {'corrected': line, 'odd_spans': [(0, 3)], 'odd_reasons': [(0, 3, '「下見」と「し」は続けて置けない')]}
+        self.assertFalse(F.fill(line, r)['odd_spans'])
+        self.assertFalse(F._verb_tail_noun('資料'))
+
+    def test_action_status_compound(self):
+        import odd_reason_fill as F
+        line = '設定は変更可能'
+        r = {'corrected': line, 'odd_spans': [(5, 7)], 'odd_reasons': [(5, 7, F.GENERIC)]}
+        self.assertFalse(F.fill(line, r)['odd_spans'])
+        line = '会議の死霊を配る'
+        r = {'corrected': line, 'odd_spans': [(3, 5)], 'odd_reasons': [(3, 5, F.GENERIC)]}
+        self.assertTrue(F.fill(line, r)['odd_spans'])
+
+    def test_head_particle_pair_purple(self):
+        import head_particle_keep as H
+        line = 'を確認した'
+        r = {'corrected': line, 'odd_spans': [(0, 3)], 'odd_reasons': [(0, 3, '「を」と「確認」は続けて置けない')]}
+        self.assertFalse(H.keep_head(line, r)['odd_spans'])
+        with _Env(CN_HEAD_PARTICLE_PAIR='0'):
+            self.assertTrue(H.keep_head(line, r)['odd_spans'])
+
+    def test_te_known_katakana_end(self):
+        import broken_shape as B
+        self.assertFalse(B.spans('入力してテキスト'))
+        self.assertFalse(B.spans('返信をお願いいただけますか'))
+
+
+class Batch587(unittest.TestCase):
+    def test_noun_pair(self):
+        import odd_reason_fill as F
+        line = '入力欄を見る'
+        r = {'corrected': line, 'odd_spans': [(0, 3)], 'odd_reasons': [(0, 3, '「入力」と「欄」は続けて置けない')]}
+        self.assertTrue(F.fill(line, r)['odd_spans'])
+        with _Env(CN_ODD_REASON_NOUN_PAIR='1'):
+            self.assertFalse(F.fill(line, r)['odd_spans'])
+
+    def test_noun_renyo(self):
+        import odd_reason_fill as F
+        line = '数字を右詰めにする'
+        r = {'corrected': line, 'odd_spans': [(3, 6)], 'odd_reasons': [(3, 6, '「右詰め」' + F.KEYSLIP_TAIL)]}
+        self.assertFalse(F.fill(line, r)['odd_spans'])
+
+    def test_te_aux_back(self):
+        import guess_back as G
+        line = '雨が降ってきた'
+        r = {'corrected': '雨が降来た', 'odd_spans': [], 'details': [['ってき', '来', '紫の所の打ち違い']]}
+        self.assertEqual(G.te_aux_back(line, r)['corrected'], line)
+        with _Env(CN_GUESS_BACK_TE_AUX='0'):
+            self.assertEqual(G.te_aux_back(line, r)['corrected'], '雨が降来た')
+
+
+class Batch588(unittest.TestCase):
+    def test_head_small_toggle(self):
+        import head_particle_keep as H
+        self.assertTrue(H._small_toggle('に有力を使う', '入力を使う', 2, 0, 1))
+        self.assertFalse(H._small_toggle('も他をうたう', 'モチをうたう', 2, 0, 2))
+
+
+class Batch591(unittest.TestCase):
+    def test_numeral_same_reading(self):
+        import correction_entry as ce
+        self.assertTrue(ce._numeral_same_reading('二階', 'に貝'))
+        self.assertFalse(ce._numeral_same_reading('二本', 'に本'))
+        self.assertFalse(ce._numeral_same_reading('五人', '誤認'))
+        self.assertFalse(ce._numeral_same_reading('三十五度', '三十度'))
+
+    def test_unknown_word_guard_switch(self):
+        import os
+        self.assertNotEqual(os.environ.get('CN_UNKNOWN_WORD_SUFFIX'), '0')
+
+class Batch592(unittest.TestCase):
+    def test_frame_unique(self):
+        import odd_respell as O
+        self.assertTrue(O._frame_unique('元に戻る', 0, 1))
+
+    def test_head_intrusion_drop_negative(self):
+        import head_particle_keep as H
+        self.assertFalse(H._intrusion_drop('も他をうたう', 'モチをうたう', 2, 0, 2))
+
+    def test_ime_class_attached(self):
+        import ime_class_mark as M
+        self.assertTrue(M._attached_here('温度計の精度', 2, 3))
+        self.assertTrue(M._attached_here('行かねばならぬ', 2, 3))
+        self.assertFalse(M._attached_here('積み森を', 2, 3))
+
+
+class Batch596(unittest.TestCase):
+    def test_dict_word_not_rare(self):
+        import ime_reconvert as R
+        from morphology import tokenize
+        t = [x for x in tokenize('週明けに会う') if x.surface == '週明け'][0]
+        self.assertEqual(R._rank('週明け'), 800)
+        self.assertLess(R._token_rarity(t), R.DOUBT)
+        self.assertFalse(R._seed_top('風位', 'ふうい'))
+        self.assertTrue(R._seed_top('週明け', 'しゅうあけ'))
+
+    def test_kana_piece_end(self):
+        import dict_word_keep as K
+        from morphology import tokenize
+        toks = list(tokenize('あすへほ'))
+        last = toks[-1]
+        self.assertTrue(K._kana_piece_end('あすへほ', last))
+        self.assertFalse(K._kana_piece_end('あすへほか', last))
+
+
+class Batch597(unittest.TestCase):
+    def test_sahen_tail(self):
+        import odd_reason_fill as F
+        from morphology import tokenize
+        toks = list(tokenize('会議で反証を示す'))
+        self.assertTrue(F._sahen_tail_ok(toks, [t for t in toks if t.surface == '反証'][0]))
+        toks = list(tokenize('案を検討せれる'))
+        self.assertFalse(F._sahen_tail_ok(toks, [t for t in toks if t.surface == '検討'][0]))
+
+
+class Batch599(unittest.TestCase):
+    def test_reading_drop_one_key(self):
+        import broken_shape as B
+        import kana_layout
+        # じ は し＋゛ の2打なので、抜く1打の形にはならない。か は ん の隣のキー
+        self.assertFalse(kana_layout.single_key_drop_adjacency('へんかじを', 'へんかを'))
+        self.assertTrue(kana_layout.single_key_drop_adjacency('へんかじを', 'へんじを'))
+        import morphology
+        d = '友達に変化字を書く'
+        self.assertEqual(B._reading_drop(d, list(morphology.tokenize(d)), 3, 6), '返事')
+
+
+class Batch600(unittest.TestCase):
+    def test_kata_whole(self):
+        import kana_lattice_place as K
+        self.assertEqual(K._kata_whole('ぱそこんを'), (4, 'パソコン'))
+        self.assertIsNone(K._kata_whole('ねこが'))
+
+
+class Batch601(unittest.TestCase):
+    def test_sahen_rare_neighbor(self):
+        import odd_reason_fill as F
+        from morphology import tokenize
+        t = list(tokenize('会議で反証を示す'))
+        x = [u for u in t if u.surface == '反証'][0]
+        self.assertTrue(F._sahen_word(t, x.start, x.end))
+
+
+class Batch602(unittest.TestCase):
+    def test_head_drop_spot(self):
+        import broken_shape as B
+        import morphology
+        d = '宿題に手取り掛かった'
+        t = list(morphology.tokenize(d))
+        self.assertTrue(B._head_drop_spots(t))
+        self.assertEqual(B._head_drop_spots(list(morphology.tokenize('宿題に取り掛かった'))), [])
+
+    def test_kata_verb(self):
+        import kana_lattice_place as K
+        self.assertEqual(K._kata_verb('さぼったら'), (2, 'サボ'))
+        self.assertIsNone(K._kata_verb('はしったら'))
+
+    def test_loan_run(self):
+        import kana_keep as K
+        self.assertEqual(K._loan_runs('ぐぐったら', 'ググったら'), [(0, 2)])
+
+
+class Batch603(unittest.TestCase):
+    def test_lone_voicing_mark_keeps_purple_when_ime_field_narrows(self):
+        # 行全体の IME の欄の紫を狭める時、濁点だけの語（゜）は残す（作った例）
+        import odd_reason_fill as F
+        from unittest import mock
+        line = 'カ゜）本を'
+        r = {'corrected': line, 'odd_spans': [(0, len(line))], 'odd_reasons': [(0, len(line), F.IME_FIELD)]}
+        with mock.patch.object(F, '_rare_token', lambda t, toks: False), mock.patch.object(F, '_wide_weak', lambda *a: True):
+            got = F.narrow_ime_field(line, r)
+        self.assertIn((1, 2), [tuple(x[:2]) for x in got['odd_spans']])
+        with mock.patch.dict('os.environ', {'CN_ODD_REASON_IME_FIELD_MARK': '0'}), \
+                mock.patch.object(F, '_rare_token', lambda t, toks: False), mock.patch.object(F, '_wide_weak', lambda *a: True):
+            got = F.narrow_ime_field(line, r)
+        self.assertNotIn((1, 2), [tuple(x[:2]) for x in got['odd_spans']])
+
+
+class Batch604(unittest.TestCase):
+    def test_wide_reasonless_purple_keeps_clear_slips(self):
+        # 行全体の理由の無い紫を外す時、濁点だけの語と読みの無い1字は残す（作った例）
+        import odd_reason_fill as F
+        from unittest import mock
+        line = 'ヅ゜）本の番号を'
+        r = {'corrected': line, 'odd_spans': [(0, len(line))], 'odd_reasons': []}
+        with mock.patch.object(F, '_wide_weak', lambda *a: True):
+            got = [tuple(x[:2]) for x in F.fill(line, r)['odd_spans']]
+        self.assertIn((1, 2), got)
+        self.assertNotIn((0, len(line)), got)
+        with mock.patch.dict('os.environ', {'CN_ODD_REASON_WIDE_SLIP': '0'}), mock.patch.object(F, '_wide_weak', lambda *a: True):
+            self.assertEqual(F.fill(line, r)['odd_spans'], [])
+
+    def test_wide_reasonless_purple_on_plain_line_still_goes(self):
+        import odd_reason_fill as F
+        from unittest import mock
+        line = '明日の会議の資料を作る'
+        r = {'corrected': line, 'odd_spans': [(0, len(line))], 'odd_reasons': []}
+        with mock.patch.object(F, '_wide_weak', lambda *a: True):
+            self.assertEqual(F.fill(line, r)['odd_spans'], [])
+
+
+class Batch605(unittest.TestCase):
+    def test_mark_replaced_reads_symbol_as_its_key(self):
+        # 付く先の無い ゜ と、ょ のキーの ） の交じる所（作った例）。印を抜いただけの直しは印を替えた答えではない
+        import odd_respell as O
+        self.assertFalse(O._mark_replaced('ギ゜）鵜番号を', '行番号を'))
+        self.assertTrue(O._mark_replaced('あ゛', 'あせ'))
+        with mock.patch.dict('os.environ', {'CN_MARK_REPLACED_SURFACE': '0'}):
+            self.assertTrue(O._mark_replaced('ギ゜）鵜番号を', '行番号を'))
+
+    def test_far_kana_respell_reads_symbol_and_table_word(self):
+        import correction_entry as ce
+        l = 'ギ゜）鵜番号を見る。'
+        out = {'corrected': '行番号を見る。'}
+        self.assertFalse(ce._far_kana_respell(l, {'corrected': l}, out, 'kana'))
+        with mock.patch.dict('os.environ', {'CN_RESPELL_KANA_FAR_SURFACE': '0'}):
+            self.assertTrue(ce._far_kana_respell(l, {'corrected': l}, out, 'kana'))
+        # 記号の無い行は今のまま（読むう→消す は3打）
+        self.assertTrue(ce._far_kana_respell('本を読むう', {'corrected': '本を読むう'}, {'corrected': '本を消す'}, 'kana'))
+
+    def test_table_compound_kept_over_two_slip_form(self):
+        import odd_respell as O
+        self.assertEqual(O._kanji_run_at('行番号を', 0, 1), '行番号')
+        self.assertTrue(O._table_word('行番号'))
+        self.assertFalse(O._table_word('牛番号'))
+
+
+class Batch606(unittest.TestCase):
+    def test_open_line_is_not_measured_as_a_whole_sentence(self):
+        # 行は文の途中で切れることがある（作った例: 格助詞で終わる行・助詞で始まる行）
+        import fixed_still_odd as F
+        from morphology import tokenize
+        self.assertTrue(F._open_line(list(tokenize('会議の資料を'))))
+        self.assertTrue(F._open_line(list(tokenize('を見てください。'))))
+        self.assertFalse(F._open_line(list(tokenize('しかし雨が降った。'))))
+        self.assertFalse(F._open_line(list(tokenize('雨が降ったよ'))))
+        with mock.patch.dict('os.environ', {'CN_FIXED_STILL_ODD_OPEN': '0'}):
+            self.assertFalse(F._open_line(list(tokenize('会議の資料を'))))
+
+
+class Batch607(unittest.TestCase):
+    def test_compound_line_keeps_shape_reason(self):
+        # 身近な名詞をつないだだけの行でも、形の見立て（片仮名の語のあいだの 化）の紫は残す（作った例）
+        import odd_reason_fill as F
+        line = 'コピー化ペースト'
+        why = '片仮名の語のあいだの「化」は、並べる「か」かもしれません'
+        r = {'corrected': line, 'odd_spans': [(3, 4)], 'odd_reasons': [(3, 4, why)]}
+        with mock.patch.object(F, '_compound_line', lambda l: (0, len(l))):
+            self.assertEqual([tuple(x[:2]) for x in F.drop_compound_line(line, r)['odd_spans']], [(3, 4)])
+            r2 = {'corrected': line, 'odd_spans': [(3, 4)], 'odd_reasons': [(3, 4, F.GENERIC)]}
+            self.assertEqual(F.drop_compound_line(line, r2)['odd_spans'], [])
+            with mock.patch.dict('os.environ', {'CN_ODD_REASON_COMPOUND_STRONG': '0'}):
+                self.assertEqual(F.drop_compound_line(line, r)['odd_spans'], [])
+
+
+class Batch608(unittest.TestCase):
+    def test_noun_ending_line_is_open(self):
+        import fixed_still_odd as F
+        from morphology import tokenize
+        self.assertTrue(F._open_line(list(tokenize('会議の資料'))))
+        self.assertFalse(F._open_line(list(tokenize('会議の資料。'))))
+        with mock.patch.dict('os.environ', {'CN_FIXED_STILL_ODD_OPEN_NOUN': '0'}):
+            self.assertFalse(F._open_line(list(tokenize('会議の資料'))))
+
+
+class Batch609(unittest.TestCase):
+    def test_kango_plus_particle_stays_kanji(self):
+        # かなの打ち違いを直して 漢語＋助詞 になった所は、助詞の字で和語と見てかなに戻さない（作った例）
+        import kana_keep as K
+        self.assertEqual(K.wago_kana_respell('会議のでんわほ', '会議の電話を'), '会議の電話を')
+        with mock.patch.dict('os.environ', {'CN_RESPELL_WAGO_KANA_TOKENS': '0'}):
+            self.assertEqual(K.wago_kana_respell('会議のでんわほ', '会議の電話を'), '会議のでんわを')
+        # 和語は今のまま
+        self.assertEqual(K.wago_kana_respell('くたせさい', '下さい'), 'ください')
+
+    def test_stray_top_near_switch(self):
+        import odd_respell as O
+        import inspect
+        self.assertIn('CN_STRAY_TOP_NEAR', inspect.getsource(O._stray_mark_repair))
+
+
+class Batch610(unittest.TestCase):
+    def test_mark_key_replaced_by_other_kana_goes_back_to_purple(self):
+        # 付く先の無い ゛ のキーを別のかなにした直しは戻して紫（作った例）
+        import correction_entry as ce
+        line = '会議でて゛んわを'
+        r = {'corrected': '会議でてけんわを', 'changed': True, 'details': [['て゛', 'てけ', 'かな入力']],
+             'spans': [[3, 5]], 'original_spans': [[3, 5]], 'odd_spans': []}
+        with mock.patch('odd_respell._mark_replaced', lambda a, b: True):
+            got = ce._mark_replaced_back(line, r, 'kana')
+        self.assertEqual(got['corrected'], line)
+        self.assertTrue(got['odd_spans'])
+        self.assertIs(ce._mark_replaced_back(line, r, 'romaji'), r)
+        with mock.patch.dict('os.environ', {'CN_MARK_REPLACED_BACK': '0'}):
+            self.assertIs(ce._mark_replaced_back(line, r, 'kana'), r)
+
+
+class Batch611(unittest.TestCase):
+    def test_both_hands_shift_restored(self):
+        # 両手が揃って左へ1つずれた打ち方を戻す（作った例: ほうこく を わあひき と打った）
+        import hand_shift_wide as H
+        self.assertNotIn('ほうこく', H.shifted_readings('わあひき'))   # ふだんの候補には混ぜない
+        H.BOTH[0] = True
+        self.addCleanup(H.BOTH.__setitem__, 0, False)
+        self.assertIn('ほうこく', H.shifted_readings('わあひき'))
+        with mock.patch.dict('os.environ', {'CN_HAND_SHIFT_BOTH': '0'}):
+            self.assertNotIn('ほうこく', H.shifted_readings('わあひき'))
+
+    def test_tie_purple_switch_exists(self):
+        import odd_respell
+        src = __import__('pathlib').Path(odd_respell.__file__).read_text(encoding='utf-8')
+        self.assertIn("CN_SHIFT_TIE_PURPLE", src)
+        self.assertIn("tie_spans", src)
+
+
+class Batch612(unittest.TestCase):
+    def test_noun_end_open_only_when_end_kept(self):
+        # 直しが行の終わりを名詞に替えた行は、開いた行と見ない（作った例）
+        import fixed_still_odd as F
+        from morphology import tokenize
+        toks = list(tokenize('机の上に本棚'))
+        F._ORIG[0] = '机の上に本棚'
+        try:
+            self.assertTrue(F._open_line(toks))
+            F._ORIG[0] = '机の上に置く'
+            self.assertFalse(F._open_line(toks))
+            with mock.patch.dict('os.environ', {'CN_FIXED_STILL_ODD_OPEN_NOUN_KEPT': '0'}):
+                self.assertTrue(F._open_line(toks))
+        finally:
+            F._ORIG[0] = None
+
+
+class Batch613(unittest.TestCase):
+    def test_head_drop_skips_sahen_honorific(self):
+        # 動作の名詞＋敬語の動詞（作った例: 項目を追加いただけ）に、頭の1字が混じった紫を付けない
+        import broken_shape as B
+        import morphology
+        toks = list(morphology.tokenize('項目を追加いただけますか'))
+        self.assertEqual(B._head_drop_spots(toks), [])
+        with mock.patch.dict('os.environ', {'CN_HEAD_DROP_SAHEN_HONOR': '0'}):
+            self.assertTrue(B._head_drop_spots(toks))
+
+
+class Batch614(unittest.TestCase):
+    def test_head_drop_skips_sahen_noun_before_verb(self):
+        # 動作の名詞の後ろに を を省いて動詞（作った例: 【変更見ます】）
+        import broken_shape as B
+        import morphology
+        toks = list(morphology.tokenize('【変更見ます】'))
+        self.assertEqual(B._head_drop_spots(toks), [])
+
+    def test_kana_nominal_renyou_with_de(self):
+        # かなの連用形が名詞の表記を持つなら、で は格助詞として続く（作った例: うちあわせで）
+        import correction_entry as ce
+        self.assertTrue(ce._kana_nominal('うちあわせ'))
+        self.assertFalse(ce._kana_nominal('癒え'))
+        with mock.patch.dict('os.environ', {'CN_FIX_RENYOU_NOMINAL': '0'}):
+            self.assertFalse(ce._kana_nominal('うちあわせ'))
+
+    def test_variant_cap_raised(self):
+        import correction_entry as ce
+        self.assertGreaterEqual(ce.REOPEN_VARIANT_CAP, 4000)
+
+    def test_tie_check_does_not_spend_budget(self):
+        import odd_respell
+        src = __import__('pathlib').Path(odd_respell.__file__).read_text(encoding='utf-8')
+        self.assertIn("_rb._COUNT['passes'] = _p0", src)
+
+
+class Batch615(unittest.TestCase):
+    def test_joined_word_with_kana_spelling(self):
+        # 2つの名詞の読みをつないだ語が、片方をかなで書いた表記で表に在る（作った例: 鍵括弧 ← カギ括弧）
+        import odd_reason_fill as F
+        import morphology
+        t = list(morphology.tokenize('鍵括弧を使う'))
+        self.assertTrue(F._joined_word(t, 0, 3))
+        t2 = list(morphology.tokenize('期間車を見る'))
+        self.assertFalse(F._joined_word(t2, 0, 3))
+
+    def test_ime_class_attached_and_own_word(self):
+        # 作った例: 使う方・各人 は IME が読めなくても紫にしない
+        import ime_class_mark as I
+        self.assertTrue(I._attached_here('使う方を選ぶ', 2, 3))
+        self.assertTrue(I._own_word('各人の意見', 0, 2))
+        self.assertFalse(I._own_word('積み森の', 0, 3))
+        with mock.patch.dict('os.environ', {'CN_IME_CLASS_ATTR_VERB': '0', 'CN_IME_CLASS_OWN_WORD': '0'}):
+            self.assertFalse(I._attached_here('使う方を選ぶ', 2, 3))
+            self.assertFalse(I._own_word('各人の意見', 0, 2))
+
+
+class Batch617(unittest.TestCase):
+    def test_same_reading_gain_switch(self):
+        import ime_reconvert as R
+        src = __import__('pathlib').Path(R.__file__).read_text(encoding='utf-8')
+        self.assertIn('CN_RECONVERT_SAME_READING_GAIN', src)
+        self.assertLessEqual(R.KEY_GAIN, 3000)
+
+    def test_selection_fix_keeps_reading(self):
+        # 作った例: 読みの替わる直し（たかはし → かはし）は選び違いとして直さない
+        import ime_reconvert as R
+        self.assertFalse(R._same_reading_swap('高橋号を見る', '可橋号を見る'))
+        self.assertTrue(R._same_reading_swap('会議の死霊を配る', '会議の資料を配る'))
+        src = __import__('pathlib').Path(R.__file__).read_text(encoding='utf-8')
+        self.assertIn('CN_RECONVERT_KEY_PROPER_MARK', src)
+
+
+class Batch616(unittest.TestCase):
+    def test_renyou_one_kanji_tail_at_line_end(self):
+        # 連用形＋漢字1字の名詞で終わる行（作った例: 書き方）は切れ端と見ない
+        import oddness
+        a = ('書き', '動詞:自立', '', 0, 2, '', '連用形')
+        b = ('方', '名詞:一般', '', 2, 3, '', '')
+        self.assertFalse(oddness.renyou_stray_noun_mismatch(a, b, True))
+        with mock.patch.dict('os.environ', {'CN_RENYOU_ONE_KANJI_TAIL': '0'}):
+            with mock.patch('seed_japanese.is_unit', lambda w: False):
+                self.assertTrue(oddness.renyou_stray_noun_mismatch(a, b, True))
+
+
+class Batch628(unittest.TestCase):
+    def test_no_after_close_bracket_is_not_stacked(self):
+        # 作った例: 閉じ括弧の後ろの の（「え」の文字）は崩れた跡とみない
+        import keyslip_window as K
+        from morphology import tokenize
+        toks = list(tokenize('「え」の文字に変えてから、'))
+        self.assertEqual(K._stacked_no(toks), [])
+        with mock.patch.dict('os.environ', {'CN_KEYSLIP_CLOSE_BRACKET_NO': '0'}):
+            self.assertTrue(K._stacked_no(toks))
+
+    def test_reduplicated_kana_not_respelled(self):
+        # 作った例: くり返しの擬音（ころころ）は読み直さない
+        import odd_respell as O
+        self.assertTrue(O._reduplicated('犬がころころ転ぶ', 3, 4))
+        self.assertFalse(O._reduplicated('犬がころがる', 3, 4))
+        with mock.patch.dict('os.environ', {'CN_RESPELL_KEEP_REDUP': '0'}):
+            self.assertFalse(O._reduplicated('犬がころころ転ぶ', 3, 4))
+
+    def test_homophone_keeps_rare_chosen_word(self):
+        # とても珍しい語は書き手が選んだ表記とみて同じ読みの語に替えない
+        import purple_homophone as P
+        import ime_reconvert as R
+
+        class T:
+            surface = '某語'
+        with mock.patch.object(R, '_rank', lambda w: R.DOUBT_KEY + 1):
+            self.assertTrue(P._chosen_rare(T()))
+            with mock.patch.dict('os.environ', {'CN_PURPLE_HOMOPHONE_RARE_KEEP': '0'}):
+                self.assertFalse(P._chosen_rare(T()))
+
+    def test_ime_field_clause_and_nominalizer(self):
+        # 作った例: 読点の後ろの節の全体に掛かる IME の欄の紫は、節の中身全部として狭める。準体の の は疑わない
+        import odd_reason_fill as F
+        from morphology import tokenize
+        line = '雨でしたが、本を読んでいるのは、'
+        toks = list(tokenize(line))
+        self.assertTrue(F._wide_weak(line, toks, 6, 15))
+        with mock.patch.dict('os.environ', {'CN_ODD_REASON_IME_FIELD_CLAUSE': '0'}):
+            self.assertFalse(F._wide_weak(line, toks, 6, 15))
+        no = [t for t in toks if t.surface == 'の' and str(t.pos_sub or '').startswith('非自立')]
+        self.assertTrue(no and F._nominalizer(no[0]))
+
+    def test_lone_tsu_inside_kana_word(self):
+        # 作った例: かなの語の中の っ（ぽっぷ）は音便の動詞と見ない
+        import dangling_verb as D
+        self.assertTrue(D._lone_tsu('ぽっぷ', 1, 2))
+        self.assertFalse(D._lone_tsu('待っ', 1, 2))
+        with mock.patch.dict('os.environ', {'CN_DANGLING_LONE_TSU': '0'}):
+            self.assertFalse(D._lone_tsu('ぽっぷ', 1, 2))
+
+    def test_ime_class_redup_kana(self):
+        # 作った例: くり返しの擬音（ころコロ）の切れ端は紫にしない
+        import ime_class_mark as M
+        self.assertTrue(M._redup('ころコロ！', 0, 1))
+        self.assertFalse(M._redup('ころがる', 0, 1))
+        with mock.patch.dict('os.environ', {'CN_IME_CLASS_REDUP': '0'}):
+            self.assertFalse(M._redup('ころコロ！', 0, 1))
+
+    def test_reconvert_okuri_omitted(self):
+        # 作った例: 送り仮名を省いた表記（受付）は、同じ読みの辞書の語（受け付け）の省いた形として疑わない
+        import ime_reconvert as R
+        import reading_lattice as lat
+        lat.load()
+        words = ((0, 1, 0, 2, 100, 3), (1, 2, 2, 4, 100, 3), (2, 3, 4, 5, 0, 2))
+        self.assertTrue(R._okuri_omitted('受付で', 'うけつけで', words, 0, 2))
+        with mock.patch.dict('os.environ', {'CN_RECONVERT_OKURI_OMIT': '0'}):
+            self.assertFalse(R._okuri_omitted('受付で', 'うけつけで', words, 0, 2))
+
+    def test_ime_field_name_of_common_chars(self):
+        # 作った例: 解析が姓と読んだ身近な字の並び（大中）は珍しい語と数えない
+        import odd_reason_fill as F
+        import ime_reconvert as R
+
+        class T:
+            surface = '大中'
+            pos_sub = '固有名詞:人名:姓'
+        self.assertTrue(F._name_of_common_chars(T(), R))
+        with mock.patch.dict('os.environ', {'CN_ODD_REASON_IME_FIELD_NAME_CHARS': '0'}):
+            self.assertFalse(F._name_of_common_chars(T(), R))
+        src = __import__('pathlib').Path(F.__file__).read_text(encoding='utf-8')
+        self.assertIn('CN_ODD_REASON_IME_FIELD_PART', src)
+
+
+class Batch629(unittest.TestCase):
+    def test_body_ignores_marks(self):
+        # 作った例: 矢印・箇条書きの印は行の中身の字に数えない
+        import odd_reason_fill as F
+        self.assertTrue(F._mark_char('→'))
+        self.assertFalse(F._mark_char('あ'))
+        with mock.patch.dict('os.environ', {'CN_ODD_REASON_BODY_SYMBOLS': '0'}):
+            self.assertFalse(F._mark_char('→'))
+
+    def test_wago_verb_intransitive_without_object(self):
+        # を の組がほとんど無い動詞（が の組だけ）は、目的語の無い使い方の表記として選ぶ
+        import wago_verb as W
+        with mock.patch.object(W, '_PARTS', [{'作る自': [10, 0], '作る他': [10, 9]}]):
+            self.assertTrue(W._intransitive('作る自'))
+            self.assertFalse(W._intransitive('作る他'))
+        src = __import__('pathlib').Path(W.__file__).read_text(encoding='utf-8')
+        self.assertIn('CN_WAGO_VERB_INTRANSITIVE', src)
+
+    def test_respell_keeps_kata_common_pair(self):
+        # 作った例: 身近な片仮名の語＋漢字の語（ペン先）の所を別の語に替える読み直しは採らない
+        import odd_respell as O
+        self.assertTrue(O._kata_common_pair('左のペン先', '左の変'))
+        with mock.patch.dict('os.environ', {'CN_RESPELL_KATA_PAIR': '0'}):
+            self.assertFalse(O._kata_common_pair('左のペン先', '左の変'))
 
 
 if __name__ == '__main__':

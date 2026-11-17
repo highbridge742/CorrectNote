@@ -22,6 +22,9 @@ import re
 _HIRA = re.compile(r'[ぁ-ゟ]')
 _SAHEN_OK = {'する', 'できる', '出来る', 'なさる', 'いたす', '致す', 'される', 'させる', 'くださる',
              '始める', '終わる', '終える', '続ける', '出す', '直す'}
+# 動作の名詞の後ろに直に付く敬語の動詞（追加いただく・ご確認ください・お願い申し上げる）。2026-11-16 うに: 追加いただけ に紫。
+# CN_BROKEN_SAHEN_HONOR=0 で前のまま
+_SAHEN_HONOR = {'いただく', 'いただける', '頂く', '頂ける', '願う', '申し上げる', '差し上げる', '賜る'}
 _SMALL = 'ゃゅょぁぃぅぇぉゎ'
 # する の連用 し の直後に付く動詞（し直す・し始める など）
 _AFTER_SHI = {'直す', '始める', '終わる', '終える', '続ける', '忘れる', '合う', '損ねる', '損なう', '過ぎる', '出す',
@@ -223,6 +226,14 @@ def _clean_after_cut(text, d):
     return True
 
 
+def _kata_word_known(k):
+    try:
+        import corrector
+        return bool(corrector._katakana_known_or_compound(k))
+    except Exception:
+        return False
+
+
 def spans(text, tokens=None):
     """(start, end, 理由) の並び。text の位置。"""
     if tokens is None:
@@ -237,7 +248,8 @@ def spans(text, tokens=None):
         if t.pos == '助動詞' and t.surface in ('まし', 'でし') and (q is None or q.surface[:1] not in 'たてょ'):
             out.append((t.start, q.end if q is not None and q.pos != '記号' else t.end, '丁寧の形の後ろが続きません'))
         if (t.pos == '名詞' and sub == 'サ変接続' and _kanji(t.surface) and p and p.surface == 'を'
-                and q and q.pos == '動詞' and (q.pos_sub or '') == '自立' and q.base_form not in _SAHEN_OK):
+                and q and q.pos == '動詞' and (q.pos_sub or '') == '自立' and q.base_form not in _SAHEN_OK
+                and not (q.base_form in _SAHEN_HONOR and __import__('os').environ.get('CN_BROKEN_SAHEN_HONOR') != '0')):
             out.append((t.start, q.end, '名詞と動詞のつながりが変です'))
         if _one_kanji_noun(t) and _mora(t.reading) == 1:
             if (p and p.pos == '名詞' and _kanji(p.surface) and len(p.surface) >= 2
@@ -334,7 +346,11 @@ def spans(text, tokens=None):
                 and t.pos == 'フィラー' and len(t.surface) == 1):
             out.append((t.start, q.end, '行の頭に1字が混じっています'))
         if (t.pos == '助詞' and sub == '接続助詞' and t.surface in ('て', 'で') and q and q.pos == '名詞' and _kata(q.surface)
-                and (i + 2 >= n or tokens[i + 2].pos == '記号')):
+                and (i + 2 >= n or tokens[i + 2].pos == '記号')
+                # 行末の片仮名が世の中の外来語（選択して｜コピー）なら、名詞で言い終える箇条書きの普通の書き方
+                # （2026-11-16 うに）。CN_BROKEN_TE_KATA_END=0 で前のまま
+                and not (len(q.surface) >= 2 and __import__('os').environ.get('CN_BROKEN_TE_KATA_END') != '0'
+                         and _kata_word_known(q.surface))):
             out.append((t.start, q.end, '言い終わりに片仮名が混じっています'))
         if (t.pos == '名詞' and _kanji(t.surface) and sub in ('サ変接続', '一般') and q and q.pos == '動詞'
                 and q.base_form == 'なる' and _hira_head(q.surface)):
@@ -356,12 +372,140 @@ def spans(text, tokens=None):
         if not _symbol_splits_word(text, mt.start(), mt.end()):
             continue
         out.append((mt.start(), mt.end(), '文の途中に記号が混じっています'))
+    # 助詞・記号のすぐ後ろの漢字で始まる名詞が、助詞を挟まず自立の動詞に続き（課題に｜手取り｜掛かる）、名詞の読みの頭の
+    # 1打（て）が前後のキーの隣で、それを抜けば説明の付く所は、隣のキーを一緒に押した1字の足しの見込み（正しい文765行で
+    # 0件・2026-11-17 うにの未解決タブ）。CN_BROKEN_HEAD_DROP_VERB=0 で前のまま
+    if __import__('os').environ.get('CN_BROKEN_HEAD_DROP_VERB') != '0':
+        out += [x for x in _head_drop_spots(tokens) if not any(x[0] < y[1] and y[0] < x[1] for y in out)]
     seen, uniq = set(), []
     for a, b, why in out:
         if (a, b) not in seen and a < b:
             seen.add((a, b))
             uniq.append((a, b, why))
     return uniq
+
+
+def _head_drop_spots(tokens):
+    try:
+        import kana_layout
+    except Exception:
+        return []
+    out = []
+    for i in range(1, len(tokens) - 1):
+        p, x, q = tokens[i - 1], tokens[i], tokens[i + 1]
+        if not (p.pos in ('助詞', '記号') and x.pos == '名詞' and _kanji(x.surface[:1]) and x.end == q.start
+                and q.pos == '動詞' and (q.pos_sub or '') == '自立'
+                and (q.base_form or '') not in ('する', 'できる', '出来る', 'なる')):
+            continue
+        if ((x.pos_sub or '') == 'サ変接続' and __import__('os').environ.get('CN_HEAD_DROP_SAHEN_HONOR') != '0'
+                and ((q.base_form or '') in (_SAHEN_OK | _SAHEN_HONOR)
+                     or __import__('os').environ.get('CN_HEAD_DROP_SAHEN_ANY') != '0')):
+            # 動作の名詞（入力・追加）の後ろに を を省いて動詞が続くのは、メモの書き方でふつう（【入力見ています】）。
+            # 頭の1打が混じった形とは見ない（2026-11-17 補正担当、うに: 以前直った行に batch602 で紫）。
+            # CN_HEAD_DROP_SAHEN_ANY=0 で敬語・する の仲間だけ
+            # 動作の名詞に直に付く敬語・する の仲間（追加いただけ・ご確認ください）は、そのままで続く形（2026-11-17 補正担当、
+            # うに 11-16 の 追加いただけ の紫が batch602 で戻った）。CN_HEAD_DROP_SAHEN_HONOR=0 で前のまま
+            continue
+        r = _reading_of(x)
+        if len(r) < 2 or not all('ぁ' <= c <= 'ゖ' for c in r):
+            continue
+        pr, qr = _reading_of(p)[-1:], _reading_of(q)[:1]
+        try:
+            if kana_layout.single_key_drop_adjacency(pr + r + qr, pr + r[1:] + qr):
+                out.append((x.start, q.end, '語の前に1字が混じっています'))
+        except Exception:
+            continue
+    return out
+
+
+def _head_drop(done, tokens, s, e):
+    """_head_drop_spots の所で、名詞の読みの頭の1打を抜いた読みの表記（同梱の読みの表・かなのまま）に替えた行のうち、
+    元より READING_DROP_GAIN 以上軽く、二番より MARGIN 以上軽いものの (名詞の始め, 終わり, 表記)。無ければ None"""
+    try:
+        import morphology
+        import last_keystroke as L
+        import odd_respell as O
+    except Exception:
+        return None
+    x = [t for t in tokens if t.start == s]
+    if not x or x[0].pos != '名詞':
+        return None
+    x = x[0]
+    r2 = _reading_of(x)[1:]
+    base = morphology.path_cost(done)
+    if base is None or not r2:
+        return None
+    ranked = []
+    for f in dict.fromkeys([f for f, _c in L._seed_surfaces(r2)][:8] + [r2]):
+        cost = morphology.path_cost(done[:x.start] + f + done[x.end:])
+        if cost is not None:
+            ranked.append((cost, f))
+    ranked.sort()
+    if not ranked or base - ranked[0][0] < READING_DROP_GAIN:
+        return None
+    if len(ranked) > 1 and ranked[1][0] - ranked[0][0] < O.MARGIN:
+        return None
+    return x.start, x.end, ranked[0][1]
+
+
+READING_DROP_GAIN = 2000
+
+
+def _reading_drop(done, tokens, s, e):
+    """「語の後ろに1字が混じっています」の所（変化｜字）で、漢字1字を抜いても直らない時に、所の読み（へんかじ）から
+    隣のキーを一緒に押した1打のかな（ん の隣の か）を抜いた読み（へんじ）の表記（返事）に替える形。1打で説明できる
+    抜き方だけ（じ＝し＋゛ のような2打は抜かない: 2026-11-17 うに「し も ゛ も隣接キーではありません」）。
+    行の費用が元より READING_DROP_GAIN 以上軽く、二番の形より MARGIN 以上軽いものが1つだけなら (表記)、ほかは None（紫のまま）。"""
+    try:
+        import kana_layout
+        import morphology
+        import last_keystroke as L
+        import odd_respell as O
+    except Exception:
+        return None
+    inside = [t for t in tokens if s <= t.start and t.end <= e]
+    if not inside or inside[0].start != s or inside[-1].end != e:
+        return None
+    rd = ''.join(_reading_of(t) for t in inside)
+    nxt = [t for t in tokens if t.start == e]
+    q = _reading_of(nxt[0]) if nxt else ''
+    if not rd or not all('ぁ' <= c <= 'ゖ' or c == 'ー' for c in rd + q):
+        return None
+    base = morphology.path_cost(done)
+    if base is None:
+        return None
+    seen = {}
+    for i in range(len(rd)):
+        r2 = rd[:i] + rd[i + 1:]
+        if len(r2) < 2 or r2 in seen:
+            continue
+        try:
+            if not kana_layout.single_key_drop_adjacency(rd + q, r2 + q):
+                continue
+        except Exception:
+            continue
+        # 同じ読みの表記どうし（返事・返辞）は張り合わせない。読みごとに、いちばん使われる表記（ime_reconvert の順位）で
+        # 抜き方どうしを比べる
+        faces = [f for f, _c in list(L._seed_surfaces(r2))[:6] if any('一' <= ch <= '鿿' for ch in f)]
+        if not faces:
+            continue
+        try:
+            import ime_reconvert as R
+            face = min(faces, key=R._rank)
+        except Exception:
+            face = faces[0]
+        cost = morphology.path_cost(done[:s] + face + done[e:])
+        if cost is not None:
+            seen[r2] = (cost, face)
+    ranked = sorted(seen.values())
+    if not ranked:
+        return None
+    # 所の崩れは spans が見つけた決め手なので、1打で説明できる形だけを比べ、費用の下がりは READING_DROP_GAIN で足りる
+    if base - ranked[0][0] < READING_DROP_GAIN:
+        return None
+    if len(ranked) > 1 and ranked[1][0] - ranked[0][0] < O.MARGIN:
+        return None
+    return ranked[0][1]
 
 
 def repair_line(line, result, decided=(), input_method='kana'):
@@ -434,7 +578,7 @@ def repair_line(line, result, decided=(), input_method='kana'):
     def blocked(org):
         return any(x < org[1] and org[0] < y for x, y in list(decided or ()) + marked)
 
-    add, cut = [], []
+    add, cut, swap = [], [], []
     for s, e, why in found:
         org = to_org(s, e)
         if org is None:
@@ -449,20 +593,32 @@ def repair_line(line, result, decided=(), input_method='kana'):
         if why in _EXTRA and inner:
             cut.extend(inner)
             continue
+        if why == _EXTRA[1] and input_method == 'kana' and os.environ.get('CN_BROKEN_HEAD_DROP_VERB') != '0':
+            got = _head_drop(done, tokens, s, e)
+            if got is not None:
+                swap.append(got)
+                continue
+        if why == _EXTRA[0] and input_method == 'kana' and os.environ.get('CN_BROKEN_READING_DROP') != '0':
+            got = _reading_drop(done, tokens, s, e)
+            if got is not None:
+                swap.append((s, e, got))
+                continue
         add.append((org[0], org[1], why))
     cut = sorted(set(cut))
     # 除いた字に掛かる別の決め手の紫は付けない
     add = [x for x in add if not any(to_org(*d) and x[0] < to_org(*d)[1] and to_org(*d)[0] < x[1] for d in cut)]
-    if not add and not cut:
+    swap = [x for x in swap if not any(x[0] < d[1] and d[0] < x[1] for d in cut)]
+    if not add and not cut and not swap:
         return result
     out = dict(result)
-    if cut:
+    if cut or swap:
         new = done
         details = list(result.get('details') or ())
-        for ks, ke in reversed(cut):
-            details.append([done[max(0, ks - 2):min(len(done), ke + 2)],
-                            done[max(0, ks - 2):ks] + done[ke:min(len(done), ke + 2)], '1字の足し'])
-            new = new[:ks] + new[ke:]
+        edits = [(ks, ke, '') for ks, ke in cut] + list(swap)
+        for ks, ke, face in sorted(edits, reverse=True):
+            details.append([done[ks:ke] if face else done[max(0, ks - 2):min(len(done), ke + 2)],
+                            face if face else done[max(0, ks - 2):ks] + done[ke:min(len(done), ke + 2)], '1字の足し'])
+            new = new[:ks] + face + new[ke:]
         ops2 = [o for o in difflib.SequenceMatcher(None, line, new, autojunk=False).get_opcodes() if o[0] != 'equal']
         out.update({'original': line, 'corrected': new, 'changed': new != line, 'details': details,
                     'spans': [[o[3], o[4]] for o in ops2], 'original_spans': [[o[1], o[2]] for o in ops2]})

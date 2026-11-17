@@ -13,6 +13,9 @@ import last_choice
 
 class ChoiceUndoTests(unittest.TestCase):
     def setUp(self):
+        # 11-08 から既定では選び直しを覚えない（last_choice.LEARNED_OFF）。ここでは覚える場合の履歴の仕組みを確かめる。
+        self._learned_off = last_choice.LEARNED_OFF
+        last_choice.LEARNED_OFF = False
         self.root = tk.Tk()
         self.root.withdraw()
         self.text = tk.Text(self.root, undo=True)
@@ -29,6 +32,7 @@ class ChoiceUndoTests(unittest.TestCase):
     def tearDown(self):
         self.root.destroy()
         self.folder.cleanup()
+        last_choice.LEARNED_OFF = self._learned_off
 
     def _choose(self):
         before = self.undo.before()

@@ -339,6 +339,30 @@ def _nearby_redo(host):
     return bool(getattr(host, 'NEARBY_REDO', True))
 
 
+def _pin_left(widget):
+    """折り返す Text の横の位置を左端に留める（xscrollcommand で横に送られたのを見て、手が空いたら戻す）。"""
+    state = {'job': None}
+
+    def back():
+        state['job'] = None
+        try:
+            if float(widget.xview()[0]) > 0.0:
+                widget.xview_moveto(0.0)
+        except Exception:
+            pass
+
+    def moved(first, last):
+        try:
+            if float(first) > 0.0 and state['job'] is None:
+                state['job'] = widget.after_idle(back)
+        except Exception:
+            pass
+    try:
+        widget.configure(xscrollcommand=moved)
+    except Exception:
+        pass
+
+
 def _stable_text_index(widget, index):
     """保存して後でTextに渡せる、行頭からの文字数による位置。"""
     row, column = _python_text_position(widget, index)
@@ -5559,7 +5583,7 @@ class CorrectNoteApp:
     def _all_tab_snapshots(self):
         active = self.session.current()
         return [(tab, self.editor_source_text().rstrip('\n') if tab is active
-                 else tab.get('text', ''), tab_title(tab)) for tab in self.session.tabs]
+                 else tab.get('text', ''), self._tab_full_name(tab)) for tab in self.session.tabs]
 
     def _do_find_all_tabs(self):
         pattern = self._current_pattern()
@@ -9145,6 +9169,8 @@ class CorrectNoteApp:
         for widget in (self._tab_viewport, self.tab_bar):
             widget.bind('<Configure>', self._queue_tab_reveal)
             widget.bind('<MouseWheel>', self._scroll_tab_bar)
+        # 窓の幅が変わったら、タブの名前を切るかどうかを見直す（tab_label・2026-11-16）
+        self._tab_viewport.bind('<Configure>', self._queue_tab_fit, add=True)
         self._refresh_tab_bar()
 
     # ------------------------------------------------------------
@@ -9180,7 +9206,7 @@ class CorrectNoteApp:
         最初の行」）。
         """
         tabs = self.session.tabs or []
-        head = (tab_title(tabs[index]) if 0 <= index < len(tabs) else 'タブ')
+        head = (self._tab_full_name(tabs[index]) if 0 <= index < len(tabs) else 'タブ')
         path = self._tab_path(index)
         items = [('― %s ―' % head, None)]
         if path:
@@ -9247,17 +9273,96 @@ class CorrectNoteApp:
             messagebox.showerror(
                 APP_TITLE, 'エクスプローラを開けませんでした:\n%s' % e)
 
-    def _tab_label_text(self, tab, active):
+    def _tab_full_name(self, tab, active=None):
+        """タブの名前の全体（切る前）。タイトルがあればタイトル・無ければファイル名（tab_label・2026-11-16 うにさん）。
+        全タブ検索・タブのメニュー・閉じる時の確かめなど、名前の全体が要る所もこれを使う。"""
+        import tab_label
+        if active is None:
+            active = tab is self.session.current()
         if active:
-            title = (os.path.basename(self.current_file)
-                     if self.current_file else '無題')
+            fallback = os.path.basename(self.current_file) if self.current_file else '無題'
+            path = self.current_file
+            toc = getattr(self, '_title_toc', None)
+            doc_title = toc.get_title() if toc is not None else (tab or {}).get('doc_title', '')
+        else:
+            fallback = tab_title(tab)
+            path = tab.get('path')
+            doc_title = tab.get('doc_title', '')
+        return tab_label.display_name(path, doc_title, fallback)
+
+    def _tab_label_text(self, tab, active):
+        import tab_label
+        title = self._tab_full_name(tab, active)
+        if active:
             saved = not self._dirty
         else:
-            title = tab_title(tab)
             saved = bool(tab.get('saved', True))
-        if len(title) > self.TAB_TITLE_MAX:
+        if tab_label.enabled():
+            # 全部のタブが窓の幅に収まらない時だけ切る（_fit_tab_labels が上限を決める）
+            title = tab_label.shorten(title, getattr(self, '_tab_char_limit', None))
+        elif len(title) > self.TAB_TITLE_MAX:
             title = title[:self.TAB_TITLE_MAX] + '…'
         return ('' if saved else '● ') + title
+
+    TAB_NAMES_DELAY_MS = 250
+
+    def _queue_tab_names(self):
+        """タイトルを打ち替えた: タブの名前を少し後でまとめて付け直す（打つたびには付け直さない）。"""
+        if getattr(self, '_tab_names_job', None) is not None:
+            return
+        try:
+            self._tab_names_job = self.root.after(self.TAB_NAMES_DELAY_MS, self._apply_tab_names)
+        except Exception:
+            self._tab_names_job = None
+
+    def _apply_tab_names(self):
+        self._tab_names_job = None
+        self._refresh_tab_bar()
+
+    def _queue_tab_fit(self, event=None):
+        if getattr(self, '_tab_fit_job', None) is not None:
+            return
+        try:
+            self._tab_fit_job = self.root.after_idle(self._fit_tab_labels)
+        except Exception:
+            self._tab_fit_job = None
+
+    def _fit_tab_labels(self):
+        """全部のタブが窓の幅に収まらない時は、名前を字の幅（全角＝2・半角＝1）で切る（収まる所まで下げる・最小
+        tab_label.MIN_WIDTH＝デバッグのパラメータ・末尾に「…」は付けない）。
+        収まる時は切らない。窓の幅を変えた時・タブを足した・閉じた時・名前が変わった時に見直す（2026-11-16 うにさん）。"""
+        self._tab_fit_job = None
+        import tab_label
+        if not tab_label.enabled():
+            return
+        cache = getattr(self, '_tab_widgets', None)
+        viewport = getattr(self, '_tab_viewport', None)
+        tabs = self.session.tabs or []
+        if not cache or viewport is None or len(cache) != len(tabs):
+            return
+        try:
+            import tkinter.font as tkfont
+            available = viewport.winfo_width()
+            if available <= 1:
+                return
+            label = cache[0]['label']
+            font = tkfont.Font(font=label.cget('font'))
+            active_i = max(0, min(self.session.active, len(tabs) - 1))
+            names = [self._tab_full_name(tab, i == active_i) for i, tab in enumerate(tabs)]
+            marks = ['' if (not self._dirty if i == active_i else bool(tab.get('saved', True))) else '● '
+                     for i, tab in enumerate(tabs)]
+            pad = 2 * int(float(str(label.cget('padx'))))
+            others = [w['close'].winfo_reqwidth() + 3 for w in cache]
+            plus = self._tab_plus.winfo_reqwidth() if getattr(self, '_tab_plus', None) is not None else 0
+
+            def width_of(shown):
+                return plus + sum(font.measure(m + s) + pad + o for m, s, o in zip(marks, shown, others))
+            limit = tab_label.fit_limit(names, width_of, available)
+        except Exception:
+            return
+        if limit != getattr(self, '_tab_char_limit', None):
+            self._tab_char_limit = limit
+            self._refresh_tab_bar()
 
     def _refresh_tab_bar(self):
         """
@@ -9295,6 +9400,7 @@ class CorrectNoteApp:
                     for _b in _wc.winfo_children():
                         _b.configure(bg=PANEL, fg=INK)
                 self._queue_tab_reveal()
+                self._queue_tab_fit()
                 return
             except Exception:
                 pass    # 壊れていたら作り直しに落ちる
@@ -9343,8 +9449,8 @@ class CorrectNoteApp:
             # 同じ——文字・✕・その周りの枠の3つに掛ける（学び22）
             for _w in (f, lb, x):
                 _w.bind('<MouseWheel>', self._scroll_tab_bar)
-                _w.bind('<Enter>',lambda e:self._tab_hover_hint(e,True))
-                _w.bind('<Leave>',lambda e:self._tab_hover_hint(e,False))
+                _w.bind('<Enter>',lambda e,k=i:self._tab_hover_hint(e,True,k))
+                _w.bind('<Leave>',lambda e,k=i:self._tab_hover_hint(e,False,k))
                 _w.bind('<Button-3>',
                         lambda e, k=i: self._on_tab_right_press(e, k))
                 _w.bind('<ButtonRelease-3>', self._on_tab_right_release)
@@ -9357,6 +9463,7 @@ class CorrectNoteApp:
         self._tab_plus = plus
         plus.bind('<MouseWheel>', self._scroll_tab_bar)
         self._queue_tab_reveal()
+        self._queue_tab_fit()
 
     # ------------------------------------------------------------
     # タブのドラッグによる並べ替え（実機からの要望・2026-08-10）
@@ -9581,6 +9688,13 @@ class CorrectNoteApp:
 
     def _load_active_tab_core(self, initial=False):
         self._cancel_autoscan()      # 前のタブのドラッグの自動スクロールを持ち越さない
+        # 前のタブで「真ん中に寄せる」ために足した上下の余白（navigation_head／tail）を外す。本文の欄は入れ替えで字ごと
+        # 消えるが、補正欄は変わった所だけ書き直すので、1行目の頭の字に余白のタグが残り、左右の行の高さをそろえる所
+        # （text_layout.align_rows）が本文の1行目にも同じ高さの空きを足していた（2026-11-15 うにさん「タブ移動の時に、
+        # 1行目が縦に長く表示されることがある」・目次から下のほうへ飛んだ後）。CN_TAB_NAV_CLEAR=0 で前の動き
+        if os.environ.get('CN_TAB_NAV_CLEAR') != '0':
+            self._navigation_padding_active = True
+            self._clear_navigation_padding()
         self._editor_view_seen = self._result_view_seen = None      # 同じ割合でも別の本文
         tab_undo = getattr(self, '_tab_undo', None)
         if tab_undo is not None:
@@ -9857,6 +9971,19 @@ class CorrectNoteApp:
         self._view_change_until = time.monotonic() + 0.25
         self._note_interaction()
 
+    def _title_holds_cursor(self):
+        """本文の中のタイトルの行にカーソルがあるか（2026-11-17 うにさん「タイトルにカーソルを置いていたのに、本文に
+        フォーカスが意図せず移るときがある」）。裏の仕事（解析の答えの反映・打った行の描き直し・自動の補正）が本文の
+        カーソルを置き直すと、見えないカーソルが本文の1行目へ移り、次の打鍵が本文へ入っていた。その間は置き直さない
+        （利用者の操作で本文へ移る時は title_inline.leave_title が先に外す）。CN_TITLE_KEEP_FOCUS=0 で前の形"""
+        if os.environ.get('CN_TITLE_KEEP_FOCUS') == '0':
+            return False
+        toc = getattr(self, '_title_toc', None)
+        try:
+            return bool(toc is not None and getattr(toc, 'inline', False) and toc.has_cursor())
+        except Exception:
+            return False
+
     def _view_changing(self):
         return (self._window_dragging()
                 or time.monotonic() < getattr(self, '_view_change_until', 0.0))
@@ -9917,7 +10044,7 @@ class CorrectNoteApp:
         tab = sess.tabs[index]
         if not is_blank(tab) and not tab.get('saved', True):
             if not self.ask_yes_no(
-                    f'「{tab_title(tab)}」には保存していない内容が'
+                    f'「{self._tab_full_name(tab)}」には保存していない内容が'
                     f'あります。\nタブを閉じると失われます。\n\n'
                     f'閉じますか？',
                     yes='閉じる', no='キャンセル'):
@@ -11496,10 +11623,19 @@ class CorrectNoteApp:
                 self._make_dropdown(self._tab_menu_items(index), x, y + 12)
         return 'break'
 
-    def _tab_hover_hint(self,event,active):
-        self._toolbar_hover_hint(event,active,
-            'タブ：右クリックでメニュー、ホイールで隣のタブへ移動。'
-            '右クリックを押しながらホイールを回すと、マウスがタブの外でも移動できます')
+    def _tab_hover_hint(self,event,active,index=None):
+        hint=('タブ：右クリックでメニュー、ホイールで隣のタブへ移動。'
+              '右クリックを押しながらホイールを回すと、マウスがタブの外でも移動できます')
+        # 名前を切っている時は、名前の全体を頭に出す（2026-11-16）
+        tabs=self.session.tabs or []
+        if index is not None and 0<=index<len(tabs) and getattr(self,'_tab_char_limit',None):
+            try:
+                import tab_label
+                full=self._tab_full_name(tabs[index])
+                if tab_label.text_width(full)>self._tab_char_limit:hint=f'{full}　｜　{hint}'
+            except Exception:
+                pass
+        self._toolbar_hover_hint(event,active,hint)
 
     def _bookmark_hover_hint(self, event, active):
         self._toolbar_hover_hint(event, active,
@@ -12143,6 +12279,22 @@ class CorrectNoteApp:
                 self.result_view, a, b))
         self.result_gutter.pack(side='left', fill='y')
         self.result_view.pack(side='left', fill='both', expand=True)
+        # タッチの1本指のなぞりを、本文の欄・補正欄そのものでもスクロールに（字の上・絵のないテーマで選択になっていた・
+        # 2026-11-16 うにさん「1本指ドラッグでスクロールにならず、範囲選択になりました」・paper_window）。CN_TEXT_TOUCH=0 で前の形
+        if sys.platform == 'win32':
+            try:
+                import paper_window as _paper_window
+                for _pane in (self.editor, self.result_view):
+                    _paper_window.attach_text_touch(int(_pane.winfo_id()))
+            except Exception:
+                pass
+        # 本文の欄・補正欄は折り返すので、横にずれる理由が無い。ただ、折り返さない長い行（4,000字を超える行など・
+        # text_links が画面の幅で切って見せる）の行末へカーソルを置いて見せると、Tk が欄を横へ送り、どの行も1字目が
+        # 隠れた（起動の時はカーソルを戻して見せるので毎回・2026-11-17 うにさん「起動時、1文字目の表示が消えています」）。
+        # 横にずれたら左端へ戻す。CN_PIN_X=0 で前の形
+        if os.environ.get('CN_PIN_X') != '0':
+            for _pane in (self.editor, self.result_view):
+                _pin_left(_pane)
         # 補正された箇所だけ薄い赤。それ以外は通常の黒文字のまま。
         self.result_view.tag_configure('fixed', foreground=FIXED_FG)
         # ユーザーが選び直した語
@@ -14223,7 +14375,11 @@ class CorrectNoteApp:
     _SZ_KEEP = 12
 
     def _sz_note_key(self, event):
-        """メモ欄への KeyPress を12件だけ控える（項目48-SZ）。"""
+        """メモ欄への KeyPress を12件だけ控える（項目48-SZ）。削除の記録がオフの時は取らない（2026-11-17・控えを
+        使うのは _sz_log だけ）"""
+        if not self._deletion_log_on():
+            self._sz_keys = None
+            return
         try:
             import time as _t
             buf = getattr(self, '_sz_keys', None)
@@ -14244,13 +14400,10 @@ class CorrectNoteApp:
 
     def _deletion_log_on(self):
         """削除の記録（deletion_log.txt・項目48-TM）を書くか（2026-11-14: 既定はオフ）。本文の断片と打鍵が入るので、
-        デバッグメニューの「削除の記録」か CN_DELETION_LOG=1 の時だけ書く。オフでも今あるファイルは消さない"""
-        if os.environ.get('CN_DELETION_LOG') == '1':
-            return True
-        try:
-            return bool(self.settings.get('debug_deletion_log'))
-        except Exception:
-            return False
+        CN_DELETION_LOG=1 の時だけ書く。オフでも今あるファイルは消さない（起動・保存の時の突き合わせの掃除は今のまま）。
+        2026-11-17 うにさん「直近で起きていないので、項目を外してください」: デバッグメニューの項目を外したので、
+        設定 debug_deletion_log は保存されていても見ない"""
+        return os.environ.get('CN_DELETION_LOG') == '1'
 
     def _sz_snapshot(self):
         try:
@@ -17244,6 +17397,12 @@ class CorrectNoteApp:
         work=input_work.token(self)
         self._analyze_job = self.root.after(gap,lambda: self._analyze_chunk()
             if input_work.token(self)==work else self._analyze())
+        # 表示準備中の見張り（2026-11-17 うにさん「タブを移動したら表示準備中から一向に進まない」・view_prep_watch）
+        try:
+            import view_prep_watch
+            view_prep_watch.arm(self)
+        except Exception:
+            pass
 
     def _typed_row_pending(self):
         """子がいま計算しているのが、いま打った行か。"""
@@ -17263,6 +17422,12 @@ class CorrectNoteApp:
         # _analyze_if_changedが同じ本文なら再開、違う本文なら差分を作る。
         # 矢印キーでもこの確認を通るため、ここで本文全体を取得しない。
         if getattr(self, '_after_id', None) is not None:
+            # 確かめが済むまで進めないのは前のまま。ただ、ここで抜けるだけだと、確かめの側が進めない時（タブの切り替えの
+            # 準備中など）に続きが二度と予約されず、「表示準備中」が打鍵まで止まった（2026-11-17 うにさん「タブを移動
+            # したら表示準備中から一向に進まない」「キーを打ったら解析が始まった」）。続きを予約して待つ
+            # （CN_VIEW_PREP_WATCH=0 で前の形）
+            if os.environ.get('CN_VIEW_PREP_WATCH') != '0':
+                self._schedule_analysis_chunk()
             return
         if self._view_changing():
             self._schedule_analysis_chunk()
@@ -17379,6 +17544,13 @@ class CorrectNoteApp:
         if done < total:
             try:
                 label = '表示準備中' if getattr(self, '_analyze_units_only', False) else '解析中'
+                # 控えに済んでいない行が残ったタブは、表示準備の途中でその行を1行ずつ補正する（1行に数秒）。その間は
+                # 「解析中」と出す（2026-11-17 うにさん「表示準備中で止まりました」: 補正していたのに表示の準備に見えた）。
+                # CN_VIEW_PREP_LABEL=0 で前の形
+                _pending = getattr(self, '_async_request', None)
+                if (label == '表示準備中' and os.environ.get('CN_VIEW_PREP_LABEL') != '0' and _pending
+                        and _pending[0][0] == 'line' and len(_pending[0]) > 5 and not _pending[0][5]):
+                    label = '解析中'
                 shown_done, shown_total = done, total
                 if not getattr(self, '_analyze_units_only', False):
                     shown_total = len(self._prev_lines)
@@ -18172,7 +18344,7 @@ class CorrectNoteApp:
                 self._schedule_whitespace_paint(delay=1)
         except Exception:
             pass
-        if saved_cursor is not None:
+        if saved_cursor is not None and not self._title_holds_cursor():
             try:
                 self.editor.mark_set('insert', saved_cursor)
                 if had_focus:
@@ -18367,7 +18539,7 @@ class CorrectNoteApp:
                 self._schedule_whitespace_paint(delay=1)
             except Exception:
                 pass
-        if saved_cursor is not None:
+        if saved_cursor is not None and not self._title_holds_cursor():
             try:
                 self.editor.mark_set('insert', saved_cursor)
                 if had_focus:
@@ -19382,7 +19554,7 @@ class CorrectNoteApp:
                     elif src_line and src_line != text:
                         self._autofix_remember(row, text, src_line, units)
             for (row, text, _units, _rec) in applied:
-                if row != cursor_row:
+                if row != cursor_row or self._title_holds_cursor():
                     continue
                 src_line = self.line_results[row - 1].get('original') or ''
                 self.editor.mark_set('insert', f'{row}.0+{map_column(src_line, text, cursor_col)}c')
@@ -20376,7 +20548,8 @@ class CorrectNoteApp:
                 elif tag == 'candidate_focus':
                     stale_candidate = True
             widget.tag_raise(tag)
-        widget.mark_set('insert', cursor)
+        if not (widget is self.editor and self._title_holds_cursor()):
+            widget.mark_set('insert', cursor)
         if stale_candidate:
             self._close_dropdown()
 
@@ -25357,13 +25530,16 @@ class CorrectNoteApp:
         if unified or widget is self.result_view:
             units_all = self.line_units
             if 0 <= i < len(units_all):
-                line_units = units_all[i]
+                # 頭・尻の助詞「を」は切り離して渡り歩く（f5_units・2026-11-16）
+                import f5_units
+                line_units = f5_units.split_wo(units_all[i])
             else:
                 return 'break'
         else:
             # 分割レイアウトでは line_units が補正後の位置を持つので、
             # メモ欄の文字の上での単位を組み立て直して使う。
-            line_units = self._editor_line_units(row)
+            import f5_units
+            line_units = f5_units.split_wo(self._editor_line_units(row))
             if not line_units:
                 # この行に語が無い（空行など）。前の行の末尾へ。
                 found = self._f2_last_word_before(row, target_widget)
@@ -25468,11 +25644,12 @@ class CorrectNoteApp:
             return None
         if i >= len(self.line_results):
             return []
+        import f5_units      # 頭・尻の助詞「を」は切り離して渡り歩く（2026-11-16 うにさん「単語の前のをが単語に付いてきた」）
         if self._layout_is_unified() or widget is self.result_view:
             if 0 <= i < len(self.line_units):
-                return self.line_units[i]
+                return f5_units.split_wo(self.line_units[i])
             return []
-        return self._editor_line_units(row)
+        return f5_units.split_wo(self._editor_line_units(row))
 
     def _f2_last_word_before(self, row, widget=None):
         """
@@ -25821,11 +25998,11 @@ class CorrectNoteApp:
         # 補正の提案（detail）を持つ記号（文頭の「?」等）は
         # 語と同じように止まれる（2026-08-10）。
         for _ in range(len(self.line_results) + 1):
-            while 0 <= idx < len(units) and not (
+            while 0 <= idx < len(units) and (units[idx].get('f5_skip') or not (
                     _f2_word_re.search(units[idx].get('text', ''))
                     or units[idx].get('detail')
-                    or is_symbol_word(units[idx].get('text', ''))):
-                idx += delta
+                    or is_symbol_word(units[idx].get('text', '')))):
+                idx += delta        # f5_skip: 語から切り離した助詞「を」（f5_units）はいつも飛ばす
             if 0 <= idx < len(units):
                 return row, idx, units
             next_row = row + (1 if delta > 0 else -1)

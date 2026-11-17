@@ -45,6 +45,85 @@ def _head_ok(line):
     return _rank(getattr(nx, 'base_form', '') or nx.surface) < RARE or _rank(nx.surface) < RARE
 
 
+_SMALL = str.maketrans('ぁぃぅぇぉっゃゅょゎ', 'あいうえおつやゆよわ')
+
+
+def _small_toggle(line, got, i2, j1, j2):
+    """元の行の頭から直した所の語の終わりまでの読みと、直した行の同じ所の読みが、小書きと並のかなの違い1つだけか"""
+    try:
+        from morphology import tokenize
+        lt, gt = list(tokenize(line)), list(tokenize(got))
+    except Exception:
+        return False
+    kl = next((t.end for t in lt if t.start < i2 <= t.end), None)
+    if kl is None:
+        return False
+    kg = kl - i2 + j2
+    if kg <= 0 or line[kl:] != got[kg:] or not any(t.end == kg for t in gt):
+        return False
+    rl = ''.join(getattr(t, 'reading', '') or '' for t in lt if t.end <= kl)
+    rg = ''.join(getattr(t, 'reading', '') or '' for t in gt if t.end <= kg)
+    if not rl or not rg or len(rl) != len(rg) or rl == rg:
+        return False
+    diff = [k for k in range(len(rl)) if rl[k] != rg[k]]
+    return len(diff) == 1 and rl[diff[0]].translate(_SMALL) == rg[diff[0]].translate(_SMALL)
+
+
+def _intrusion_drop(line, got, i2, j1, j2):
+    """元の行の頭から直した所の語の終わりまでの読みから、隣のキーのかなを1字抜くと直した行の読みになるか
+    （も｜みと → もと: み は も の隣のキーを一緒に押した巻き込み）。"""
+    try:
+        from morphology import tokenize
+        import kana_layout as K
+        lt, gt = list(tokenize(line)), list(tokenize(got))
+    except Exception:
+        return False
+    kl = next((t.end for t in lt if t.start < i2 <= t.end), None)
+    if kl is None:
+        return False
+    kg = kl - i2 + j2
+    if kg <= 0 or line[kl:] != got[kg:] or not any(t.end == kg for t in gt):
+        return False
+    hira = lambda x: ''.join(chr(ord(c) - 0x60) if 'ァ' <= c <= 'ヶ' else c for c in x)
+    rl = hira(''.join(getattr(t, 'reading', '') or '' for t in lt if t.end <= kl))
+    rg = hira(''.join(getattr(t, 'reading', '') or '' for t in gt if t.end <= kg))
+    if not rl or not rg or len(rl) != len(rg) + 1:
+        return False
+    for k in range(len(rl)):
+        if rl[:k] + rl[k + 1:] != rg:
+            continue
+        for c, end in ((rl[k - 1:k], -1), (rl[k + 1:k + 2], 0)):
+            try:
+                if c and 0 < K.intrusion_key_distance(K.keystrokes(rl[k])[0], K.keystrokes(c)[end]) <= 1.0:
+                    return True
+            except Exception:
+                continue
+    return False
+
+
+COST_GAP = 2.0
+
+
+def _keyslip_rest_broken(line, got, result):
+    """前の行から続きうる行でも、1キーの打ち違いの窓の直し（行の頭の の＋日 → 残）で、元の行から頭の助詞を外した
+    残り（日っています）が、直した行（残っています）より解析の費用で COST_GAP 倍より高い（語の並びとして読めない）なら、
+    続きの文の助詞ではなく打ち違いの跡（2026-11-17 うに: 前の行が名詞で終わると直らず、別のタブでは直った）。
+    CN_HEAD_KEYSLIP_COST=0 で前のまま"""
+    if os.environ.get('CN_HEAD_KEYSLIP_COST') == '0':
+        return False
+    head = [d for d in (result.get('details') or ()) if isinstance(d, (list, tuple)) and len(d) > 2
+            and isinstance(d[0], str) and line.startswith(d[0])]
+    if not head or not all(str(d[2]).startswith(KEYSLIP_REASON) for d in head):
+        return False
+    try:
+        import morphology
+        rest = morphology.path_cost(line[1:])
+        new = morphology.path_cost(got)
+    except Exception:
+        return False
+    return bool(new) and rest > COST_GAP * new
+
+
 _UNKNOWN = object()
 
 
@@ -61,6 +140,26 @@ def keep_head(line, result, previous_line=_UNKNOWN):
         except Exception:
             fresh = False
     got = result.get('corrected') or line
+    if got == line and _head_ok(line) and os.environ.get('CN_HEAD_PARTICLE_PAIR') != '0':
+        # 書き換えの無い行で、行の頭の助詞と後ろの語の組だけを理由にした紫（「を」と「発動」は続けて置けない）は、
+        # 前の行から続く書き方・語句の切り出しで、打ち違いの跡ではない（1行前が空でも同じ。2026-11-16 うに: を発動した に紫）。
+        # CN_HEAD_PARTICLE_PAIR=0 で前のまま
+        pair = '「%s」と「' % line[0]
+        drop = set()
+        for x in result.get('odd_spans') or ():
+            if x[0] != 0:
+                continue
+            why = [r[2] for r in result.get('odd_reasons') or () if len(r) >= 3 and r[0] < x[1] and x[0] < r[1]]
+            if why and all(isinstance(w, str) and w.startswith(pair) and w.endswith('は続けて置けない') for w in why):
+                drop.add(tuple(x[:2]))
+        if drop:
+            out = dict(result)
+            out['odd_spans'] = [x for x in result.get('odd_spans') or () if tuple(x[:2]) not in drop]
+            out['odd_reasons'] = [r for r in result.get('odd_reasons') or ()
+                                  if not any(r[0] < b and a < r[1] for a, b in drop)]
+            if 'unsure_spans' in result:
+                out['unsure_spans'] = [x for x in result.get('unsure_spans') or () if tuple(x[:2]) not in drop]
+            return out
     if got == line or not _head_ok(line):
         return result
     ops = difflib.SequenceMatcher(None, line, got, autojunk=False).get_opcodes()
@@ -76,6 +175,18 @@ def keep_head(line, result, previous_line=_UNKNOWN):
                 and isinstance(d[0], str) and line.startswith(d[0])]
         if head and all(str(d[2]).startswith(KEYSLIP_REASON) for d in head):
             return result
+        if os.environ.get('CN_HEAD_SMALL_TOGGLE') != '0' and _small_toggle(line, got, i2, j1, j2):
+            # 行の頭の助詞と後ろの語の読みをつなぐと、小書きのかな1つ（シフトの押し忘れ: にゆう → にゅう）だけで直した語の
+            # 読みになる直しは、打ち違いの跡がはっきりしているので通す（2026-11-16 うに 未解決タブ: に有力ミス）。
+            # CN_HEAD_SMALL_TOGGLE=0 で前のまま
+            return result
+        if os.environ.get('CN_HEAD_INTRUSION_DROP') != '0' and _intrusion_drop(line, got, i2, j1, j2):
+            # 行の頭の助詞と後ろの語の読みをつなぐと、隣のキーのかな1字の巻き込み（も｜みと の み）を抜くだけで直した語の
+            # 読みになる直しは、打ち違いの跡がはっきりしているので通す（2026-11-16 うに: 以前は直っていた行）。
+            # CN_HEAD_INTRUSION_DROP=0 で前のまま
+            return result
+    if not fresh and _keyslip_rest_broken(line, got, result):
+        return result
     fixed = line[i1:i2] + got[j2:]
     out = dict(result)
     lops = [o for o in difflib.SequenceMatcher(None, line, fixed, autojunk=False).get_opcodes() if o[0] != 'equal']

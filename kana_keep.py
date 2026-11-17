@@ -46,6 +46,26 @@ def _kata(c):
     return 'ァ' <= c <= 'ヶ' or c == 'ー'
 
 
+def _loan_runs(line, fixed):
+    """fixed の片仮名の並び（2字以上）のうち、line の同じ位置の平仮名をそのまま片仮名にした所で、並び全体が外来語
+    （native_katakana が False）のものの (始め, 終わり)。行の長さが同じ所だけ見る"""
+    if len(line) != len(fixed):
+        return []
+    out, i = [], 0
+    while i < len(fixed):
+        if not _kata(fixed[i]) or fixed[i] == 'ー':
+            i += 1
+            continue
+        j = i
+        while j < len(fixed) and _kata(fixed[j]):
+            j += 1
+        hira = ''.join(chr(ord(c) - 0x60) if 'ァ' <= c <= 'ヶ' else c for c in fixed[i:j])
+        if j - i >= 2 and line[i:j] == hira and not native_katakana(fixed[i:j], hira):
+            out.append((i, j))
+        i = j
+    return out
+
+
 def native_katakana(face, reading):
     """片仮名だけの表記で、読みが和語（活用する語の形: ずれる の ずれ）か。外来語（てれび・こんぴゅーた）は False。"""
     if not face or not all(_kata(c) for c in face):
@@ -237,6 +257,12 @@ def wago_kana_respell(line, fixed):
         try:
             if is_kango(fixed[s:e], rd):
                 continue
+            if os.environ.get('CN_RESPELL_WAGO_KANA_TOKENS') != '0':
+                # 直した所が漢語＋助詞（返事を）にわたると、助詞の字で和語に見えていた（へんじほ → へんじを とかなに戻した。
+                # 2026-11-17 補正担当・未解決タブ）。漢字を含む語ごとに見て、どれも漢語なら漢字のまま
+                kan = [t for t in cover if any(_kanji(c) for c in t.surface)]
+                if kan and all(is_kango(t.surface, _reading(t.surface) or '') for t in kan):
+                    continue
         except Exception:
             continue
         new = new[:s] + rd + new[e:]
@@ -253,9 +279,14 @@ def repair_line(line, result, decided=()):
         convs = _conversions(line, fixed)
     except Exception:
         return result
+    loan = _loan_runs(line, fixed) if os.environ.get('CN_KANA_KEEP_LOAN_RUN') != '0' else []
     back = []
     for a, b, s, e in convs:
         if any(x < b and a < y for x, y in (decided or ())):
+            continue
+        # 片仮名の並び全体（ミス｜っても の ミス）が外来語なら、解析が並びを切った部分（ミ・スっ）を和語と見て戻さない
+        # （2026-11-17 うにの未解決タブ みすっても）。CN_KANA_KEEP_LOAN_RUN=0 で前のまま
+        if any(x < e and s < y for x, y in loan):
             continue
         try:
             face = fixed[s:e]

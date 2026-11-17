@@ -93,7 +93,7 @@ _LAST_BY_FRAME = [False]
 
 
 
-def choose(rd, prev_noun=None, prev_particle=None):
+def choose(rd, prev_noun=None, prev_particle=None, no_object=False):
     """表記を1つ選ぶ（決まらなければ None）。前の 名詞＋助詞 の組で決めたときは _LAST_BY_FRAME[0] が True。"""
     import ime_reconvert as R
     _LAST_BY_FRAME[0] = False
@@ -127,6 +127,15 @@ def choose(rd, prev_noun=None, prev_particle=None):
         if os.environ.get('CN_WAGO_VERB_TOTALS') == '0':
             return None
         tot = _base_totals()
+        if no_object and os.environ.get('CN_WAGO_VERB_INTRANSITIVE') != '0':
+            # 行の中で を の付く語が前に無い動詞（あけまして）は、目的語を取らない使い方。例文の組の数で、を の組が半分に
+            # 満たない表記（明ける: が の組だけ）が1つだけなら、それに決める（開ける は を の組がほとんど。2026-11-17 うに:
+            # あけましておめでとう → 開けまして）。CN_WAGO_VERB_INTRANSITIVE=0 で前のまま
+            intr = [f for f in faces if _intransitive(_base(f) or _base_masu(f) or '')]
+            if len(intr) == 1 and R._rank(intr[0]) <= COMMON + GAP:
+                return intr[0]
+            if intr:
+                return None
         cnt = sorted(((tot.get(_base(f) or '', 0), f) for f in faces), reverse=True)
         if cnt and cnt[0][0] >= TOTAL_MIN and (len(cnt) == 1 or cnt[0][0] >= DOMINANT * max(cnt[1][0], 1)):
             if R._rank(cnt[0][1]) <= COMMON:
@@ -136,7 +145,40 @@ def choose(rd, prev_noun=None, prev_particle=None):
 
 
 TOTAL_MIN = 20
+INTR_MIN = 5
 _TOTALS = []
+_PARTS = []
+
+
+def _base_masu(face):
+    """連用形だけでは名詞と読まれる表記（明け）の動詞の基本形を、ます を付けて引く。"""
+    try:
+        from morphology import tokenize
+        t = list(tokenize(face + 'ます'))
+        return t[0].base_form if len(t) == 2 and t[0].pos == '動詞' and t[0].surface == face else None
+    except Exception:
+        return None
+
+
+def _intransitive(base):
+    """例文の組で、その動詞の組が INTR_MIN 以上あり、を の組が半分に満たないか（明ける: が 16）。"""
+    if not _PARTS:
+        out = {}
+        try:
+            import pair_choice
+            tab = pair_choice._table()
+            for k, v in (tab[0] if tab else {}).items():
+                parts = k.split('\t')
+                if len(parts) == 3:
+                    d = out.setdefault(parts[2], [0, 0])
+                    d[0] += v
+                    if parts[0] == 'を':
+                        d[1] += v
+        except Exception:
+            pass
+        _PARTS.append(out)
+    n, wo = _PARTS[0].get(base, (0, 0))
+    return n >= INTR_MIN and wo * 2 < n
 
 
 def _base_totals():
@@ -313,7 +355,8 @@ def repair_line(line, result):
                         pn, pp = tk[-1].surface, before[1]
                 except Exception:
                     pass
-            pick = choose(rd, pn, pp)
+            no_obj = not any(x[2] == '助詞' and x[1] == 'を' for x in prev) and not (i > 0 and done[:i].rstrip().endswith('を'))
+            pick = choose(rd, pn, pp, no_object=no_obj)
             if end_noun and not _LAST_BY_FRAME[0]:
                 pick = None
             # 組（手紙を書く）で決めた表記は、同じ読みの名詞（下記）より確か。名詞との比べは組の無い時だけ

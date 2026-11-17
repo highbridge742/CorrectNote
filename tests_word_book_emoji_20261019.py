@@ -55,6 +55,7 @@ class WordBookEmojiTests(unittest.TestCase):
         book.colors = lambda: ('#f0f0ed', '#1c2b2d', '#3366aa')
         book.sets = [['旧登録😀', '単語'], [], [], []]; book.active_set = 0
         book.width = 200
+        book.work_area = None      # WordBook.__init__ の既定（2026-10-22 から render が下の端の寄せで見る）
         book.window = tk.Toplevel(self.root); book.window.withdraw()
         book.header = tk.Frame(book.window); book.minimize_button = tk.Button(book.header)
         book.canvas = tk.Canvas(book.window); book.scroll = tk.Scrollbar(book.window)

@@ -31,7 +31,8 @@ class WordBookMaximizeTests(unittest.TestCase):
                                    _editor_font=lambda: ('Yu Gothic UI', 10),
                                    _start_word_book_add=lambda: None, _pick_mode=None,
                                    _set_window_icons_win32=lambda win: None)
-        placing = patch.object(WordBook, '_place', lambda book: book.window.geometry('+420+120'))
+        # WordBook._place(near_pointer=False) の形に合わせる（マウスの近くに出す引数が増えた・試験の作り物が古かった）
+        placing = patch.object(WordBook, '_place', lambda book, near_pointer=False: book.window.geometry('+420+120'))
         placing.start()
         self.addCleanup(placing.stop)
         self.book = WordBook(self.app, self.path, lambda: tuple(self.colors), lambda: 220)

@@ -69,17 +69,39 @@ class DeletionLog(unittest.TestCase):
         a._sz_snapshot.assert_not_called()            # 見張りもしない（書く道に入らない）
         self.assertIsNone(a._sz_shadow)
 
-    def test_setting_or_switch_turns_it_on(self):
+    def test_only_the_switch_turns_it_on(self):
+        # 2026-11-17 うにさん「直近で起きていないので、項目を外してください」: デバッグメニューの項目を外した。
+        # 設定 debug_deletion_log が True で保存されていても、もう見ない（前は設定でもオンになった）
         a = self.fake(True)
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop('CN_DELETION_LOG', None)
-            self.assertTrue(app.CorrectNoteApp._deletion_log_on(a))
+            self.assertFalse(app.CorrectNoteApp._deletion_log_on(a))
         b = self.fake(False)
         with mock.patch.dict(os.environ, {'CN_DELETION_LOG': '1'}):
             self.assertTrue(app.CorrectNoteApp._deletion_log_on(b))
             b._deletion_log_on = lambda: app.CorrectNoteApp._deletion_log_on(b)
             app.CorrectNoteApp._sz_check_shrink(b, None)
         b._sz_snapshot.assert_called_once()
+
+    def test_keys_are_not_kept_when_off(self):
+        a = self.fake(True)
+        a._sz_keys = [('old',)]
+        a.editor = mock.Mock()
+        a._deletion_log_on = lambda: app.CorrectNoteApp._deletion_log_on(a)
+        ev = SimpleNamespace(keysym='a', keycode=65, char='a', state=0)
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('CN_DELETION_LOG', None)
+            app.CorrectNoteApp._sz_note_key(a, ev)
+        self.assertIsNone(a._sz_keys)                 # オフ: 打鍵を控えない・本文の欄に問い合わせない
+        a.editor.tag_ranges.assert_not_called()
+        with mock.patch.dict(os.environ, {'CN_DELETION_LOG': '1'}):
+            app.CorrectNoteApp._sz_note_key(a, ev)
+        self.assertEqual(len(a._sz_keys), 1)
+
+    def test_debug_menu_has_no_item(self):
+        import inspect
+        import debug_menu
+        self.assertNotIn('debug_deletion_log', inspect.getsource(debug_menu))
 
     def test_setting_is_kept_across_save_and_load(self):
         with tempfile.TemporaryDirectory() as d:

@@ -210,7 +210,8 @@ def spots(line):
             o = pairs[c]
             if depth.get(o, 0):
                 depth[o] -= 1
-            elif k > 0 and k + 1 < len(line) and line[k + 1] not in _STOP and line[k - 1] not in _STOP \
+            elif os.environ.get('CN_POS_SEQ_CLOSE_BRACKET') != '0' and k > 0 and k + 1 < len(line) \
+                    and line[k + 1] not in _STOP and line[k - 1] not in _STOP \
                     and not any(a <= k < b for a, b, _ in out):
                 out.append((k, k + 1, f'「{c}」の前に「{o}」がありません'))
     return out

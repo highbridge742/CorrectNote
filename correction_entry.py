@@ -508,7 +508,7 @@ def _odd_run_key(a, k):
     return (a[0] if a else k.get('text'), id(store_), id(di), rest, kw)
 
 
-REOPEN_VARIANT_CAP = 2000   # 紫の塊の受け皿で、手の変種を変換して試す数の上限（1回の _reopen_odd_chunk ごと）
+REOPEN_VARIANT_CAP = 4000   # 紫の塊の受け皿で、手の変種を変換して試す数の上限（1回の _reopen_odd_chunk ごと）。2026-11-17 2000→4000（うに: 以前直った 札ん港になる→参考になる が 2000 で届かず紫に戻った）
 _REOPEN_COUNT = _memo_cv.ContextVar('cn_reopen_variant_count', default=None)
 
 
@@ -1279,6 +1279,27 @@ def _frame_guard(line, result):
         toks = list(morphology.tokenize(done))
         allops = difflib.SequenceMatcher(None, line, done, autojunk=False).get_opcodes()
         bad = []
+        same_ops = []
+
+        def _same(op):
+            tag, i1, i2, j1, j2 = op
+            src_k = ''.join(chr(ord(c) - 0x60) if 'ァ' <= c <= 'ヶ' else c for c in line[i1:i2])
+            if not (src_k and all('ぁ' <= c <= 'ゖ' or c == 'ー' for c in src_k)):
+                return False
+            try:
+                hira = lambda x: ''.join(chr(ord(c) - 0x60) if 'ァ' <= c <= 'ヶ' else c for c in x)
+                cov = [t for t in morphology.tokenize(done) if t.start < j2 and j1 < t.end]
+                if not cov:
+                    return False
+                s0, e0 = cov[0].start, cov[-1].end
+                a, b = i1 - (j1 - s0), i2 + (e0 - j2)
+                if a < 0 or b > len(line) or line[a:i1] != done[s0:j1] or line[i2:b] != done[j2:e0]:
+                    return False
+                rd = hira(''.join(t.reading or '' for t in cov))
+                return rd == hira(line[a:b])
+            except Exception:
+                return False
+        same_pre = [o for o in allops if o[0] != 'equal' and _same(o)]
         for op in allops:
             tag, i1, i2, j1, j2 = op
             if tag == 'equal':
@@ -1292,6 +1313,7 @@ def _frame_guard(line, result):
                 except Exception:
                     rd = None
                 if rd == src_k:
+                    same_ops.append(op)
                     continue
             hit = False
             for k in range(len(toks) - 2):
@@ -1319,6 +1341,15 @@ def _frame_guard(line, result):
                         continue
                     if _frame_place_ni(n, p):
                         continue
+                    if not v_touched and os.environ.get('CN_FRAME_KANA_VERB_BACK') != '0':
+                        # 動詞は打ったかなを同じ読みの漢字にしただけ（はなす → 話す）なら、組が例文に無いのは動詞の
+                        # 表記の選び方のせい。名詞の直しは残し、動詞だけ打ったかなに戻して紫にする（2026-11-16 うに:
+                        # 以前は 続きをはなす に直っていた）。CN_FRAME_KANA_VERB_BACK=0 で前のまま
+                        vop = next((o for o in same_pre if o[3] < v.end and v.start < o[4]), None)
+                        if vop is not None:
+                            if vop not in bad:
+                                bad.append(vop)
+                            continue
                     hit = True
                     break
             if hit:
@@ -3101,6 +3132,14 @@ def _unknown_word_guard(line, result, decisions, input_method='kana'):
         nf = done[new[0].start:new[-1].end]
         if not lost or not kan(nf) or R._rank(nf) < 800 or (len(new) == 1 and new[0].has_reading):
             return result
+        if os.environ.get('CN_UNKNOWN_WORD_SUFFIX') != '0':
+            # 直した並びが、前の普通の名詞（最大）に付く接尾の語だけ（化｜時）なら、名詞＋接尾の合成語（最大化時）で、
+            # 知られていない並びではない。副詞のように使う名詞（昨日）の後ろの 化 は合成語にならないので戻す
+            # （2026-11-16 うに: タブ最大家事に が以前は タブ最大化時に に直っていた）
+            prev = [t for t in dt if t.end == new[0].start]
+            if (prev and prev[-1].pos == '名詞' and (prev[-1].pos_sub or '') in ('一般', 'サ変接続')
+                    and prev[-1].start < j1 and all(t.has_reading and (t.pos_sub or '').startswith('接尾') for t in new)):
+                return result
         merged = _split_merge_check(line, done, old, new, nf, input_method)
         if merged == 'keep':
             return result
@@ -3417,6 +3456,7 @@ def _line_stages_now(line, plain, store, dict_index, decisions, context_vec, inp
     result = _mark_keeps_next(line, result)
     result = _float_mark_choice(line, result)
     result = _mark_swapped_back(line, result)
+    result = _mark_replaced_back(line, result, input_method)
     result = _swapped_particle_kanji(line, result, decisions, input_method)
     result = _kanji_swap_guard(line, result)
     result = _pos_seq_odd(line, result, dict_index, decisions)
@@ -3926,6 +3966,26 @@ def _lone_kanji_tail(line, result):
     return out
 
 
+def _kana_nominal(surface):
+    """かなで書いた動詞の連用形が、同梱の表で一番安い表記が名詞として読める語か（さしこみ → 差し込み）。それなら
+    後ろの で は格助詞（差し込みで）として続く。2026-11-17 補正担当（うに: 以前直った さしこみ゛て、 が紫に戻った）。
+    CN_FIX_RENYOU_NOMINAL=0 で前のまま"""
+    import os
+    if os.environ.get('CN_FIX_RENYOU_NOMINAL') == '0' or not surface or not all('ぁ' <= c <= 'ゖ' for c in surface):
+        return False
+    try:
+        corrector._table_readings_for_surface('仮名')
+        got = (corrector._TABLE_SURFACES or {}).get(surface) or ()
+        if not got:
+            return False
+        best = min(got)[1]
+        import morphology
+        toks = list(morphology.tokenize(best))
+        return len(toks) == 1 and toks[0].pos == '名詞'
+    except Exception:
+        return False
+
+
 def _bad_pair(x, y):
     """隣り合う2語が日本語の文の形として続かない組か（直した行にだけ当てる・2026-11-06 うに「自然かどうかは都度判断」）。"""
     xf = x.infl_form or ''
@@ -3961,7 +4021,7 @@ def _bad_pair(x, y):
     if x.pos == '動詞' and xf.startswith('基本形') and y.pos == '助動詞' and y.base_form in ('き', 'けり'):
         return True          # ある｜き（古い き は連用形に付く）
     if (x.pos == '動詞' and xf == '連用形' and y.pos == '助詞' and y.surface == 'で'
-            and (y.pos_sub or '').startswith('接続助詞')):
+            and (y.pos_sub or '').startswith('接続助詞') and not _kana_nominal(x.surface)):
         return True          # 癒え｜で（接続の で は 読ん・泳い の形にだけ付く）
     if x.pos == '動詞' and y.surface.startswith('ー'):
         return True          # くっつき｜ー（伸ばし ー は外来語の中の字。動詞には続かない）
@@ -4812,6 +4872,29 @@ def _numerals_in_words(line, i1, i2):
     return all(in_word(p) for p in pos)
 
 
+def _numeral_same_reading(src, rep):
+    """src（漢数字を含む）と rep（数を含まない）が同じ読みか。読みは語に切って辞書の読みをつないだもの。"""
+    try:
+        from morphology import tokenize
+
+        def yomi(x):
+            got = ''.join(t.reading if t.reading and t.reading != '*' else t.surface for t in tokenize(x))
+            return ''.join(chr(ord(c) - 0x60) if 'ァ' <= c <= 'ヶ' else c for c in got)
+        a, b = yomi(src), yomi(rep)
+        if not (a and a == b and all('ぁ' <= c <= 'ゖ' or c == 'ー' for c in a)):
+            return False
+        # 数の字の読みが、直した側では平仮名の助詞・送り仮名になる（二 → に）ときだけ。同じ読みの漢字の語への
+        # 替え（五人 → 誤認）は、数を言い換えた形とも読めるので守ったまま
+        if src[0] not in _NUM_CHARS or not ('ぁ' <= rep[0] <= 'ゖ'):
+            return False
+        num = yomi(src[0])
+        rest = rep[len(num):]
+        # 残りの語の頭が助数詞（に本・に回）なら、数＋助数詞を割っただけの形なので守る
+        return bool(num) and rep.startswith(num) and bool(rest) and rest[0] not in _COUNTERS
+    except Exception:
+        return False
+
+
 def _keep_numerals(line, result, input_method=None):
     """漢数字の並び（三十五度・二十・二階）の中の字や、その並びにじかに接する字を抜いたり替えたりする直し
     （差十五度 → 十五度・三十g度 → 三十旅）は戻して紫にする。数は打ち違いの戻しで読みを合わせても、元の数に戻る
@@ -4856,6 +4939,12 @@ def _keep_numerals(line, result, input_method=None):
                         and all(c.isascii() or 'Ａ' <= c <= 'ｚ' for c in src))))
                 or (i2 in num and src[-1:] not in '、。 　')
                 or (i1 - 1 in num and any(c in _COUNTERS for c in src)))
+            if (touch and tag == 'replace' and fixed[j1:j2] and not any(c in _NUM_CHARS for c in fixed[j1:j2])
+                    and os.environ.get('CN_KEEP_NUMERALS_SAME_READING') != '0'
+                    and _numeral_same_reading(src, fixed[j1:j2])):
+                # 数の字の所を、同じ読みの数でない語に選び直しただけ（時二階席 → 時に解析: じにかいせき のまま）。
+                # 数は打った字ではなく IME の区切りの選び違いなので守らない（2026-11-16 うに: 以前は直っていた）
+                touch = False
             if touch and tag == 'replace':
                 # 数の字が、かな入力の打ち違いで IME が数に変えた字（貸す九人: 打った かすくにん → 確認）なら守らない
                 # （keyslip_window.numeral_slip・2026-11-08 手分けB。CN_NUMERAL_SLIP=0 で前のまま）
@@ -6532,6 +6621,8 @@ def _far_kana_respell(line, result, out, input_method):
             return False
         if _o._key_distance(_o._keys(rb), _o._keys(ra)) < RESPELL_KANA_FAR:
             return False
+        if os.environ.get('CN_RESPELL_KANA_FAR_SURFACE') != '0' and _near_by_surface(before, after, _o):
+            return False
         if os.environ.get('CN_HAND_SHIFT') != '0':
             # 手の位置のずれ1つ（続く2〜4打が揃って同じ向きに1列: おらよ → おせわ）で説明できる直しは、別の語への
             # 置き換えではなく1つの所の打ち違いの戻し（hand_shift・2026-11-06）
@@ -6545,6 +6636,47 @@ def _far_kana_respell(line, result, out, input_method):
         return True
     except Exception:
         return False
+
+
+def _near_by_surface(before, after, _o):
+    """行の読みでは3打以上離れて見えても、記号の交じる元の行を表記から読み直し（記号は同じキーのかな: ） は ょ のキー）、
+    直した行の漢字の並びを表の読み（行番号＝ぎょうばんごう）で読めば3打未満なら真。解析の読みは記号を読まず、漢字1字を
+    語の外の読み（行＝くだり）で読むので、1つの所の打ち違いの戻しを別の語への置き換えに見ていた（2026-11-17 補正担当:
+    うに「゜ は巻き込み、） は ょ を変換すると出る」）。CN_RESPELL_KANA_FAR_SURFACE=0 で前のまま"""
+    import re
+    if not any(not ('ぁ' <= c <= 'ゖ' or 'ァ' <= c <= 'ヺ' or c in 'ー゛゜' or '一' <= c <= '鿿' or c.isspace())
+               for c in before):
+        return False
+    try:
+        import corrector
+    except Exception:
+        return False
+    ops = [o for o in difflib.SequenceMatcher(None, before, after, autojunk=False).get_opcodes() if o[0] != 'equal']
+    if not ops:
+        return False
+    i1, i2, j1, j2 = ops[0][1], ops[-1][2], ops[0][3], ops[-1][4]
+    kan = lambda c: '一' <= c <= '鿿' or c == '々'
+    # 直した所に続く漢字（行｜番号）までを1つの語として読む
+    while i2 < len(before) and j2 < len(after) and before[i2] == after[j2] and kan(after[j2]):
+        i2, j2 = i2 + 1, j2 + 1
+    while i1 > 0 and j1 > 0 and before[i1 - 1] == after[j1 - 1] and kan(after[j1 - 1]):
+        i1, j1 = i1 - 1, j1 - 1
+    before, after = before[i1:i2], after[j1:j2]
+    if not before or not after:
+        return False
+    rbs = _o._surface_readings(before) or []
+    parts = []
+    for m in re.finditer(r'[一-鿿々]+|[^一-鿿々]+', after):
+        w = m.group()
+        if '一' <= w[0] <= '鿿' or w[0] == '々':
+            rs = [r for r in (corrector._table_readings_for_surface(w) or ()) if isinstance(r, str)]
+            got = _o._line_reading(w)
+            parts.append(list(dict.fromkeys([_o._hira(r) for r in rs] + ([got] if got else [])))[:3] or [''])
+        else:
+            parts.append([_o._line_reading(w) or w])
+    import itertools
+    ras = [''.join(x) for x in itertools.islice(itertools.product(*parts), 9)]
+    return any(rb and ra and _o._key_distance(_o._keys(rb), _o._keys(ra)) < RESPELL_KANA_FAR for rb in rbs for ra in ras)
 
 
 def _impossible_after_fix(line, result, out):
@@ -7306,6 +7438,43 @@ def _mark_swapped_back(line, result):
             else:
                 parts.append(done[c:d])
         if not rev:
+            return result
+        new = ''.join(parts)
+    except Exception:
+        return result
+    out = dict(result)
+    nops = [o for o in difflib.SequenceMatcher(None, line, new, autojunk=False).get_opcodes() if o[0] != 'equal']
+    out.update({'corrected': new, 'changed': bool(nops), 'spans': [[o[3], o[4]] for o in nops],
+                'original_spans': [[o[1], o[2]] for o in nops],
+                'details': [x for x in (result.get('details') or ()) if not (len(x) > 1 and x[1] in rev)],
+                'odd_spans': sorted(set(tuple(x[:2]) for x in (result.get('odd_spans') or ())) | set(hits))})
+    return out
+
+
+def _mark_replaced_back(line, result, input_method):
+    """かな入力で、付く先の無い ゛゜ のキーを別のかなに替えた直し（て゛んじ → てけんじ＝堅持）は、゛ の隣のキーが
+    いくつもある（け・せ・へ）ので、打ち違いの戻しとして1つに決められないことが多い（odd_respell._mark_replaced と同じ見方:
+    正しく直った行は印を残すか抜いていた）。その所の直しだけ戻して紫にする。後ろの読み直し（_stray_mark_repair）が
+    並ぶ形を比べ、はっきりした形が1つなら直す（2026-11-17 補正担当: PC で 返事 の所が 堅持 になった）。
+    CN_MARK_REPLACED_BACK=0 で前のまま"""
+    import os
+    if os.environ.get('CN_MARK_REPLACED_BACK') == '0' or input_method != 'kana' or not isinstance(result, dict):
+        return result
+    done = result.get('corrected') or line
+    if done == line or ('゛' not in line and '゜' not in line):
+        return result
+    try:
+        import odd_respell as _o
+        parts, rev, hits = [], [], []
+        for tag, a, b, c, d in difflib.SequenceMatcher(None, line, done, autojunk=False).get_opcodes():
+            if (tag == 'replace' and any(ch in '゛゜' for ch in line[a:b])
+                    and _o._mark_replaced(line, line[:a] + done[c:d] + line[b:])):
+                parts.append(line[a:b])
+                rev.append(done[c:d])
+                hits.append((a, b))
+            else:
+                parts.append(line[a:b] if tag == 'equal' else done[c:d])
+        if not hits:
             return result
         new = ''.join(parts)
     except Exception:

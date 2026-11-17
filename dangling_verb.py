@@ -25,7 +25,18 @@ def dangling(text):
     from morphology import tokenize
     return [(t.start, t.end) for t in tokenize(text)
             if t.pos == '動詞' and t.infl_form == '連用タ接続' and not text[t.end:].startswith(_FOLLOW)
-            and not _inside_kana_word(text, t.start, t.end) and not _exclaim_tsu(text, t.start, t.end)]
+            and not _inside_kana_word(text, t.start, t.end) and not _exclaim_tsu(text, t.start, t.end)
+            and not _lone_tsu(text, t.start, t.end)]
+
+
+def _lone_tsu(text, s, e):
+    """っ 1字だけを動詞と切った所で、前も後ろもかな（ら｜っ｜ぴー・は｜っ｜ぴ）なら、かなの語の中の促音で、
+    動詞の音便ではない（2026-11-17 うに 誤判定: かなの名前に紫）。CN_DANGLING_LONE_TSU=0 で前のまま"""
+    if os.environ.get('CN_DANGLING_LONE_TSU') == '0' or text[s:e] != 'っ' or s == 0 or e >= len(text):
+        return False
+    def kana(c):
+        return 'ぁ' <= c <= 'ゖ' or 'ァ' <= c <= 'ヶ'
+    return kana(text[s - 1]) and kana(text[e])
 
 
 def _exclaim_tsu(text, s, e):
