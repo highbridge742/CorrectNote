@@ -13,7 +13,8 @@ class InputPendingTests(unittest.TestCase):
         functions=[n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name in wanted]
         import analysis_async
         import analysis_work_app as input_work
-        cls.scope={'analysis_async':analysis_async,'input_work':input_work}
+        import os
+        cls.scope={'analysis_async':analysis_async,'input_work':input_work,'os':os}
         exec(compile(ast.Module(body=functions,type_ignores=[]),'app.py','exec'),cls.scope)
 
     def test_recent_input_does_not_pause_the_worker_transport(self):
@@ -37,11 +38,24 @@ class InputPendingTests(unittest.TestCase):
                 self.assertEqual(calls,['defer'])
 
     def test_old_slice_stops_until_input_check(self):
+        # 入力の確かめが予約中なら旧解析へ進まない。2026-11-17 から続きを予約して待つ（表示準備中で止まらないように・
+        # view_prep_watch）。CN_VIEW_PREP_WATCH=0 なら前の形（予約しない）
+        import os
         def forbidden():self.fail('入力確認前に旧解析へ進んだ')
-        h=SimpleNamespace(_analyze_job='chunk',_after_id='input-check',_view_changing=forbidden)
-        self.scope['_analyze_chunk'](h)
-        self.assertIsNone(h._analyze_job)
-        self.assertEqual(h._after_id,'input-check')
+        for watch,want in ((None,['chunk queued']),('0',[])):
+            saved=os.environ.pop('CN_VIEW_PREP_WATCH',None)
+            if watch is not None:os.environ['CN_VIEW_PREP_WATCH']=watch
+            try:
+                calls=[]
+                h=SimpleNamespace(_analyze_job='chunk',_after_id='input-check',_view_changing=forbidden,
+                                  _schedule_analysis_chunk=lambda:calls.append('chunk queued'))
+                self.scope['_analyze_chunk'](h)
+                self.assertIsNone(h._analyze_job)
+                self.assertEqual(h._after_id,'input-check')
+                self.assertEqual(calls,want)
+            finally:
+                os.environ.pop('CN_VIEW_PREP_WATCH',None)
+                if saved is not None:os.environ['CN_VIEW_PREP_WATCH']=saved
 
     def test_same_text_resumes_unfinished_work_without_reanalysis(self):
         calls=[]
