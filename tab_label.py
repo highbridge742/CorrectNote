@@ -6,7 +6,8 @@
 2. タイトルが空なら、ファイル名＋拡張子。
 3. 拡張子を除いたファイル名とタイトルが同じなら、ファイル名＋拡張子。
 4. ただし拡張子が .txt なら（大文字小文字は問わない）拡張子は出さない。
-5. まだ保存していない（ファイル名の無い）タブは今の名前のまま（fallback）。
+5. まだ保存していない（ファイル名の無い）タブは、タイトルが入っていればタイトルの字、空なら今の名前（無題・fallback）
+   （2026-11-17 うにさん。前は今の名前のまま。CN_TAB_LABEL_UNSAVED_TITLE=0 で前の形）。
 CN_TAB_LABEL_TITLE=0 で前の名前（fallback）。
 
 全部のタブが窓に収まらない時だけ、名前を字の幅で切る（全角＝2・半角＝1。末尾に「…」は付けない）。いちばん短くても
@@ -30,7 +31,15 @@ def _one_line(text):
 
 def display_name(path, doc_title, fallback, environ=None):
     """タブに出す名前（切る前の全体）。path: 保存したファイルの道（無ければ未保存）。"""
-    if not enabled(environ) or not path:
+    if not enabled(environ):
+        return fallback
+    if not path:
+        # まだ保存していないタブ: タイトルが入っていればタイトルの字、空なら今の名前（無題）（2026-11-17 うにさん。
+        # 前は今の名前のまま。CN_TAB_LABEL_UNSAVED_TITLE=0 で前の形）
+        title = _one_line(doc_title)
+        env = os.environ if environ is None else environ
+        if title and env.get('CN_TAB_LABEL_UNSAVED_TITLE') != '0':
+            return title
         return fallback
     base = os.path.basename(path)
     stem, ext = os.path.splitext(base)

@@ -81,6 +81,16 @@ _REWRITE_PAIR = re.compile(r'「([^「」]+)」を「([^「」]+)」に(?:直|�
 # A bare quote, or an ordinary change of state, stays correctable.
 _CHANGE_REPORT_PAIR = re.compile(r'「([^「」]+)」(?:が|は)「([^「」]+)」(?:に|へ)'
     r'(?:誤?(?:補正|変換)|置き換わ|書き換わ|(?:なる|なった|なってしまう|変わる|変わった)例)')
+# 2026-11-17: 「A」は「B」に補正します is the writer declaring the
+# correction to make, not reporting a wrong one. Only the target side is
+# the writer's chosen spelling; the source side stays correctable.
+# CN_CHANGE_REPORT_DECLARED=0 restores protecting both sides.
+_DECLARED_TAIL = re.compile(r'(?:補正|変換)(?:します|しましょう|する(?:$|[。、]))')
+def _declared_correction(line,match):
+    import os
+    if os.environ.get('CN_CHANGE_REPORT_DECLARED','1')=='0':return False
+    if line[match.start():match.end()].endswith('誤補正') or '誤変換' in match.group(0):return False
+    return bool(_DECLARED_TAIL.match(line,match.end()-2))
 _JUDGED_REWRITE_PAIR = re.compile(
     r'[×✕✖]\s*「([^「」]+)」\s*[→⇒]\s*[○〇◯]\s*「([^「」]+)」')
 
@@ -405,6 +415,8 @@ def protected_ranges(line):
     found.extend(m.span(1) for m in _BARE_NAME.finditer(line))
     for pattern in (_REWRITE_PAIR,_JUDGED_REWRITE_PAIR,_CHANGE_REPORT_PAIR):
         for match in pattern.finditer(line):
+            if pattern is _CHANGE_REPORT_PAIR and _declared_correction(line,match):
+                found.append(match.span(2));continue
             found.extend((match.span(1),match.span(2)))
     found.extend(_unquoted_error_ranges(line,quoted))
     found.extend(_unquoted_label_ranges(line,quoted,_SPELLING_AFTER,field_bound=True))

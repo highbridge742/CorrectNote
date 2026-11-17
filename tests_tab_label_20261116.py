@@ -26,9 +26,16 @@ class Names(unittest.TestCase):
         self.assertEqual(L.display_name(r'C:\memo\NOTE.TXT', 'NOTE', 'NOTE.TXT', {}), 'NOTE')
         self.assertEqual(L.display_name(r'C:\memo\note.txt', '旅', 'note.txt', {}), '旅')
 
-    def test_unsaved_tab_keeps_its_name(self):                                # 5
-        self.assertEqual(L.display_name(None, '旅の計画', '無題', {}), '無題')
-        self.assertEqual(L.display_name('', '旅の計画', 'メモ', {}), 'メモ')
+    def test_unsaved_tab_uses_the_title(self):                                # 5
+        # 仕様変更（2026-11-17 うにさん「保存していないファイルタブは、タイトルが空欄なら無題とするが、タイトルが
+        # 入っている場合はタイトルの文字列を入れる」）。前は未保存なら今の名前のままだった
+        self.assertEqual(L.display_name(None, '旅の計画', '無題', {}), '旅の計画')
+        self.assertEqual(L.display_name(None, '', '無題', {}), '無題')
+        self.assertEqual(L.display_name(None, '  ', '無題', {}), '無題')
+        self.assertEqual(L.display_name(None, '旅の\n計画', '無題', {}), '旅の 計画')
+        self.assertEqual(L.display_name(None, '旅の計画', '無題', {'CN_TAB_LABEL_UNSAVED_TITLE': '0'}), '無題')
+        self.assertEqual(L.display_name('', '旅の計画', 'メモ', {}), '旅の計画')     # 道が空でも未保存（前は「メモ」）
+        self.assertEqual(L.display_name('', '', 'メモ', {}), 'メモ')
 
     def test_switch_back_to_the_old_name(self):
         self.assertEqual(L.display_name(r'C:\memo\note.txt', '旅の計画', 'note.txt', {'CN_TAB_LABEL_TITLE': '0'}),

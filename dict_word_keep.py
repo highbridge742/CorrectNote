@@ -151,6 +151,18 @@ def _request_frame(text, j2):
     return rest.startswith(('お願い', '願い', '願う', '願え', 'ねがい'))
 
 
+def _set_phrase_frame(text, j1, j2):
+    """語の組の直しが、節の頭の名詞1語で、すぐ後ろが いたす・です の決まった言い方（承知いたしました・幸いです）か。
+    語の組の段の「続」の組（名詞の直後の いたす・です）で決めた直しで、使われやすさの差だけの直しとは違う
+    （2026-11-17 うに: ローマ字入力で以前は直っていた行がそのままになっていた）。CN_DICT_WORD_KEEP_SET_PHRASE=0 で前のまま"""
+    if os.environ.get('CN_DICT_WORD_KEEP_SET_PHRASE') == '0' or not isinstance(text, str):
+        return False
+    head = text[:j1].rstrip()
+    if head and head[-1] not in '。、，．,.!?！？「『（(・ 　→-':
+        return False
+    return text[j2:].startswith(('いたし', 'いたす', '致し', '致す', 'です', 'でし', 'でござ'))
+
+
 def _same_reading(src, dst):
     """語の組の直しで、元の語と直し先が同じ読みの漢字の語（IME の表記の選び違い: しりょう の 飼料／資料）か。
     （リスとヒョウ／リスト表 のように元が片仮名・かな交じりでも、直し先に漢字があり読みが同じなら同じ）。
@@ -184,7 +196,7 @@ def _rare_to_common(line, text, hit, j1, j2):
     return bool(new) and max(R._token_rarity(t) for t in new) <= R.KEY_FIX_COMMON
 
 
-def keep(line, result):
+def keep(line, result, input_method='kana'):
     if not _on() or not isinstance(line, str) or not isinstance(result, dict):
         return result
     text = result.get('corrected')
@@ -215,7 +227,13 @@ def keep(line, result):
             continue
         if all(d[2] == '語の組' for d in mine) and all(_same_reading(d[0], d[1]) for d in mine):
             continue
-        if all(d[2] == '語の組' for d in mine) and _request_frame(text, j2):
+        if all(d[2] == '語の組' for d in mine) and (_request_frame(text, j2) or _set_phrase_frame(text, j1, j2)):
+            continue
+        # ローマ字入力の語の組の直しは、語の組の段がローマ字の1打の戻しで確かめた形（mittei → nittei）。ローマ字は1字の隣の
+        # キーが少なく、1打で別の語になる組は打ち違いの跡（かなの配列のように何にでもなるのとは違う）。戻さない
+        # （2026-11-17 うに: ローマ字入力で以前は直っていた 会議の密偵 などがそのままに）。CN_DICT_WORD_KEEP_ROMAJI=0 で前のまま
+        if (input_method == 'romaji' and all(d[2] == '語の組' for d in mine)
+                and os.environ.get('CN_DICT_WORD_KEEP_ROMAJI') != '0'):
             continue
         others = [d for d in details if d[2] not in _weak() and d[0] and d[0] in line[max(0, i1 - 2):i2 + 2]]
         if others:
@@ -287,7 +305,8 @@ def keep(line, result):
 def correct_line(line, *args, **kwargs):
     result = _orig['correct_line'](line, *args, **kwargs)
     try:
-        return keep(line, result)
+        im = kwargs.get('input_method', args[3] if len(args) > 3 else 'kana')
+        return keep(line, result, input_method=im)
     except Exception:
         return result
 
