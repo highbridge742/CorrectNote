@@ -41,6 +41,7 @@ NOUNISH = frozenset((100, 101, 103, 105, 109, 117))   # 名詞の類（この後
 PARTICLE = 0                             # 助詞・助動詞・語尾
 HONORIFICS = ('さん', '様', '君', '氏', 'ちゃん', 'くん', '先生', '課長', '部長', '係長', '社長', '殿')
 REASON = 'IME が辞書の語として読めなかった所'
+REASON_SHORT = '名詞に付く字なのに、打ったかなの読みが付く時の読みと違います。打ち違いかもしれません'
 
 _orig = {}
 _words_provider = [None]     # 試験・束の比べ用: 文 → IME の語の並び（PC で取った記録）
@@ -249,6 +250,89 @@ def _own_word(text, a, b):
             and (toks[0].pos_sub or '').startswith(('一般', 'サ変接続')) and toks[0].has_reading)
 
 
+def _plain_here(text, a, b):
+    """こちらの解析で、IME が読めなかった所がふつうの書き方と読める形（2026-11-20 補正担当、うに 誤判定タブの正しい文）。
+    - 言い切りの動詞・助動詞のすぐ後ろで記号・行末の前の終助詞（来たぞ、）
+    - 記号・名詞のすぐ後ろの副助詞（。など の）。語句を取り上げて書いた所
+    - 行がそのかな1字だけ（何の打ち違いかを決める前後が無い）
+    - 漢字1字の形容詞の語幹＋動詞の連用形（浅＋煎り）。名詞の複合語で、IME が読みを取り違えただけ
+    CN_IME_CLASS_PLAIN=0 で前のまま"""
+    if os.environ.get('CN_IME_CLASS_PLAIN') == '0':
+        return False
+    if text.strip() == text[a:b] and b - a == 1:
+        return True
+    try:
+        from morphology import tokenize
+        toks = list(tokenize(text))
+    except Exception:
+        return False
+    hit = [k for k, t in enumerate(toks) if t.start < b and a < t.end]
+    if len(hit) != 1 or toks[hit[0]].start != a or toks[hit[0]].end != b:
+        return False
+    k = hit[0]
+    t = toks[k]
+    p = toks[k - 1] if k > 0 else None
+    q = toks[k + 1] if k + 1 < len(toks) else None
+    sub = t.pos_sub or ''
+    if t.pos == '助詞' and sub.startswith('終助詞') and p is not None and p.end == a and p.pos in ('動詞', '助動詞', '形容詞') \
+            and (q is None or q.pos == '記号'):
+        return True
+    if t.pos == '助詞' and sub.startswith('副助詞') and p is not None and p.end == a and p.pos in ('記号', '名詞'):
+        return True
+    if (t.pos == '形容詞' and len(t.surface) == 1 and '一' <= t.surface <= '鿿' and q is not None and q.start == b
+            and q.pos == '動詞' and (q.infl_form or '').startswith('連用') and t.has_reading and q.has_reading):
+        return True
+    return False
+
+
+def _hira(s):
+    return ''.join(chr(ord(c) - 0x60) if 'ァ' <= c <= 'ヶ' else c for c in s)
+
+
+def _kanji1(c):
+    return '一' <= c <= '鿿'
+
+
+def _mazegaki(text, a, b):
+    """切れ端のかなが漢字1字に隣り合い、その漢字の読み＋かな（かな＋読み）が辞書の身近な語の読みで、その語が同じ漢字で
+    始まる（終わる）なら、漢字の一部をかなで書いた交ぜ書き（作った例: 破たん・補てん）で、打ち違いの跡ではない
+    （2026-11-23 補正担当、うに 誤判定タブ: 交ぜ書きの語の かな の所が「IME が辞書の語として読めなかった所」の紫）。
+    CN_IME_CLASS_MAZEGAKI=0 で前のまま"""
+    if os.environ.get('CN_IME_CLASS_MAZEGAKI') == '0' or not (1 <= b - a <= 2):
+        return False
+    frag = text[a:b]
+    if not all('ぁ' <= c <= 'ゖ' or 'ァ' <= c <= 'ヶ' for c in frag):
+        return False
+    try:
+        import ime_reconvert as RC
+        import kanji_onkun as KO
+    except Exception:
+        return False
+    sides = []
+    if a > 0 and _kanji1(text[a - 1]) and not (a > 1 and _kanji1(text[a - 2])):
+        sides.append((text[a - 1], True))
+    if b < len(text) and _kanji1(text[b]) and not (b + 1 < len(text) and _kanji1(text[b + 1])):
+        sides.append((text[b], False))
+    for kan, before in sides:
+        try:
+            rds = {_hira(r if isinstance(r, str) else r[0]) for r in KO.readings_of(kan) or ()}
+        except Exception:
+            continue
+        for rd in rds:
+            reading = rd + _hira(frag) if before else _hira(frag) + rd
+            try:
+                faces = RC._dict_faces(reading, 50) or ()
+            except Exception:
+                continue
+            for f in faces:
+                if not all(_kanji1(c) for c in f) or not (f.startswith(kan) if before else f.endswith(kan)):
+                    continue
+                if len(f) < 2 or RC._rank(f) > RC.DOUBT_MARK:
+                    continue
+                return True
+    return False
+
+
 def fallen_spans(text, words):
     """IME の語の並びから、辞書の語として読めなかった所（始め, 終わり）を拾う。"""
     out = []
@@ -269,6 +353,10 @@ def fallen_spans(text, words):
             continue
         if _own_word(text, a, b):
             continue
+        if _plain_here(text, a, b):
+            continue
+        if _mazegaki(text, a, b):
+            continue
         prev = words[k - 1] if k else None
         nxt = words[k + 1] if k + 1 < len(words) else None
         if kind in NAME:
@@ -280,6 +368,78 @@ def fallen_spans(text, words):
         if kind in SINGLE and prev is not None and prev[1] == a and prev[4] in NOUNISH:
             continue        # 名詞の後ろに付く1字（加湿器 の 器 の類）
         out.append((a, b))
+    out += [sp for sp in _short_suffix_spans(text, words) if not any(x < sp[1] and sp[0] < y for x, y in out)]
+    out += [sp for sp in _single_pair_spans(text, words) if not any(x < sp[1] and sp[0] < y for x, y in out)]
+    return out
+
+
+def _single_pair_spans(text, words):
+    """IME が漢字1字の名詞2つに分けて並べた所（助詞の後ろ・行頭から、助詞か行末の前まで）で、2字をつないだ形が
+    辞書の普通の語（固有名詞でない）でない所（作った例: あめが を打ち違えて「手目が」）。正しい2字の語は IME が
+    1語で読むか辞書に在る。PC の IME の記録で正しい文823行に当たり0、作った誤字の行2万5千のうち500行。
+    2026-11-20 補正担当。CN_IME_CLASS_SINGLE_PAIR=0 で前のまま。"""
+    if os.environ.get('CN_IME_CLASS_SINGLE_PAIR') == '0':
+        return []
+    out = []
+    for k in range(1, len(words)):
+        a, b = words[k - 1], words[k]
+        if len(a) < 5 or len(b) < 5 or not (0 <= a[0] < a[1] <= len(text) and 0 <= b[0] < b[1] <= len(text)):
+            continue
+        if not (a[1] - a[0] == 1 and b[1] - b[0] == 1 and a[1] == b[0]):
+            continue
+        if not all('\u4e00' <= c <= '\u9fff' for c in text[a[0]:b[1]]) or a[4] not in NOUNISH or b[4] not in NOUNISH:
+            continue
+        nx = words[k + 1] if k + 1 < len(words) else None
+        if nx is not None and not (nx[0] == b[1] and nx[4] == PARTICLE):
+            continue
+        # 後ろに助詞が無い（行末・記号の前の）2字は、見出しや用語を並べた形（作った例: 前置き・後置き の行）で、
+        # 文の中で使った形ではない。打ち違いの跡と分ける手がかりが無いので紫にしない（2026-11-22 うに: 誤判定タブで
+        # 3日前から付いた紫）。CN_IME_CLASS_SINGLE_PAIR_BARE=1 で前のまま
+        if nx is None and os.environ.get('CN_IME_CLASS_SINGLE_PAIR_BARE') != '1':
+            continue
+        pv = words[k - 2] if k >= 2 else None
+        if pv is not None and pv[1] == a[0] and pv[4] != PARTICLE:
+            continue
+        try:
+            from morphology import dictionary_inflections
+            rows = dictionary_inflections(text[a[0]:b[1]]) or ()
+        except Exception:
+            continue
+        if any(not str(r[0]).startswith('名詞,固有名詞') for r in rows):
+            continue
+        out.append((a[0], b[1]))
+    return out
+
+
+def _short_suffix_spans(text, words):
+    """名詞のすぐ後ろに IME が別の語として置いた漢字1字で、IME の読みが1字のかななのに、その字を名詞に付けた時の
+    読み（辞書の接尾の読み）がどれも2字以上の所（作った例: 見出しめい と打つ所を みだしな と打つと「見出し名」の
+    形になり、名 は な と読まれている）。接尾として付いたなら読みは めい のはずで、1字の読みは打ったかなが別の語の
+    つもりだった跡。2026-11-20 補正担当。CN_IME_CLASS_SHORT_SUFFIX=0 で前のまま。"""
+    if os.environ.get('CN_IME_CLASS_SHORT_SUFFIX') == '0':
+        return []
+    out = []
+    for k in range(1, len(words)):
+        w, prev = words[k], words[k - 1]
+        a, b = w[0], w[1]
+        if not (0 <= a < b <= len(text)) or b - a != 1 or len(w) < 5:
+            continue
+        ch = text[a]
+        if not ('\u4e00' <= ch <= '\u9fff') or w[4] not in NOUNISH or w[3] - w[2] != 1:
+            continue
+        if prev[1] != a or prev[4] not in NOUNISH or prev[1] - prev[0] < 2:
+            continue
+        nxt = words[k + 1] if k + 1 < len(words) else None
+        if nxt is not None and not (nxt[0] == b and nxt[4] == PARTICLE):
+            continue
+        try:
+            from morphology import dictionary_inflections
+            rows = dictionary_inflections(ch) or ()
+        except Exception:
+            continue
+        suf = [r[3] for r in rows if str(r[0]).startswith('名詞,接尾') and len(r) > 3 and r[3] not in ('*', '')]
+        if suf and all(len(x) >= 2 for x in suf):
+            out.append((a, b))
     return out
 
 
@@ -329,7 +489,9 @@ def _mark(line, result):
     out = dict(result)
     out['odd_spans'] = sorted(list(result.get('odd_spans') or ()) + add, key=lambda x: tuple(x[:2]))
     # 理由は（始め, 終わり, 文）の並び
-    out['odd_reasons'] = sorted(list(result.get('odd_reasons') or ()) + [(s, e, REASON) for s, e in add],
+    short = set(_short_suffix_spans(text, words)) if text == line else set()
+    out['odd_reasons'] = sorted(list(result.get('odd_reasons') or ()) + [
+        (s, e, REASON_SHORT if (s, e) in short else REASON) for s, e in add],
                                 key=lambda x: tuple(x[:2]))
     STATS['marked'] += len(add)
     return out

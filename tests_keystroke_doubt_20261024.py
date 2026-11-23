@@ -81,7 +81,16 @@ class PresumeTest(unittest.TestCase):
         self.assertEqual(self.run_({'あめろ': 5000, 'あめ': 5800, 'あろ': 9000}), ('あめ', 'fix'))
 
     def test_drop_refused_when_much_worse(self):
-        self.assertEqual(self.run_({'あめろ': 5000, 'あめ': 7000, 'あろ': 9000}), ('あめろ', None))
+        # うに 11-08 03:42Z「打鍵間隔は優先してチェック」: 既定では、抜いた形がずっと悪くても先に1字減らす
+        self.assertEqual(self.run_({'あめろ': 5000, 'あめ': 7000, 'あろ': 9000}), ('あめ', 'fix'))
+        # CN_KD_FIRST=0（前のまま）では、PRESUME_TOLERANCE を超えて悪い形は採らない
+        old = os.environ.get('CN_KD_FIRST')
+        os.environ['CN_KD_FIRST'] = '0'
+        try:
+            self.assertEqual(self.run_({'あめろ': 5000, 'あめ': 7000, 'あろ': 9000}), ('あめろ', None))
+        finally:
+            if old is None: os.environ.pop('CN_KD_FIRST', None)
+            else: os.environ['CN_KD_FIRST'] = old
 
     def test_old_gate_still_available(self):
         r = KD.repair_with_doubts('あめろ', 'あめろ', ['あろ', 'あめ'], lambda t: (t, False),

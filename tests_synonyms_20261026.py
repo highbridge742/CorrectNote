@@ -113,6 +113,22 @@ class SynonymMenuTests(unittest.TestCase):
         cb()
         self.assertEqual(chosen, ['食った'])
 
+    # 2026-11-21 07:34Z うにさん「類語に … が出るのは何」: 意味の組の区切りは、選べない見出し「― 別の意味 ―」
+    def test_sense_separator_is_a_heading(self):
+        import os
+        from unittest import mock
+        a = self.a
+        unit = dict(text='単体', start=0, end=2, kind='word')
+        import analysis_async
+        with mock.patch.object(analysis_async, 'ask_child', lambda app, task: [['体', '個体'], ['単身', '単線']]):
+            items = a._synonym_menu_items(unit, print)
+            self.assertIn((a.SYNONYM_SENSE_HEAD, None), items)                    # 選べない（cb は None）
+            self.assertNotIn(('  ･･･', None), items)
+            with mock.patch.dict(os.environ, {'CN_SYNONYM_SENSE_HEAD': '0'}):
+                self.assertIn(('  ･･･', None), a._synonym_menu_items(unit, print))    # 前の形
+        import ui_lang_en
+        self.assertIn("'%s'" % a.SYNONYM_SENSE_HEAD, open(ui_lang_en.__file__, encoding='utf-8').read())   # 英語の表示
+
     def test_no_section_for_particles_ranges_and_english(self):
         a = self.a
         self.assertEqual(a._synonym_menu_items(dict(text='は', functional=True), print), [])

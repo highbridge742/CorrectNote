@@ -252,6 +252,22 @@ def propose(text):
     return found
 
 
+def _prefix_noun(text, s, e):
+    """直す所が、お・ご＋辞書の身近な名詞（ご｜厚意）にちょうどなっているなら替えない。丁寧の接頭詞が付いた正しい語で、
+    巻き込みの1打の跡ではない（2026-11-20 正しい文の見直し: ご厚意に → 合意に）。CN_ROLLIN_PREFIX_NOUN=0 で前のまま。"""
+    if os.environ.get('CN_ROLLIN_PREFIX_NOUN') == '0':
+        return False
+    try:
+        from morphology import tokenize
+        import ime_reconvert as R
+        hit = [t for t in tokenize(text) if t.start < e and s < t.end]
+    except Exception:
+        return False
+    return (len(hit) == 2 and hit[0].start == s and hit[-1].end == e and hit[0].pos == '接頭詞'
+            and hit[0].surface in ('お', 'ご', '御') and hit[1].pos == '名詞' and getattr(hit[1], 'has_reading', True)
+            and R._rank(hit[1].surface) <= 720)
+
+
 def repair_line(line, result, decided=()):
     """correction_entry の結果 result に、この段の直し・紫を足す。"""
     if not _on() or not isinstance(result, dict):
@@ -272,6 +288,8 @@ def repair_line(line, result, decided=()):
     # 後ろから置く（前の位置がずれない）
     for s, e, face in sorted(marks, key=lambda m: -m[0]):
         if any(x < e and s < y for x, y in list(decided or ())):
+            continue
+        if face and _prefix_noun(done, s, e):
             continue
         if face:
             new = new[:s] + face + new[e:]

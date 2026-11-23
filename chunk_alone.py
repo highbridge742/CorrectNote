@@ -174,6 +174,34 @@ def _splice(line, result, s, e, new):
     return out
 
 
+def _changes_glossed(chunk, new, kana_chunks):
+    """chunk の漢字の語（漢字だけの字句の続き）のうち、読みが kana_chunks のどれかと同じ語が、new では残っていないか。"""
+    if os.environ.get('CN_CHUNK_ALONE_GLOSSED') == '0' or not kana_chunks:
+        return False
+    try:
+        from morphology import tokenize
+        toks = list(tokenize(chunk))
+    except Exception:
+        return False
+    kan = lambda t: bool(t.surface) and all('\u4e00' <= c <= '\u9fff' or c == '々' for c in t.surface)
+    i = 0
+    while i < len(toks):
+        if not kan(toks[i]):
+            i += 1
+            continue
+        j = i
+        while j + 1 < len(toks) and toks[j + 1].start == toks[j].end and kan(toks[j + 1]):
+            j += 1
+        grp = toks[i:j + 1]
+        rd = ''.join(t.reading or '' for t in grp)
+        rd = ''.join(chr(ord(c) - 0x60) if 'ァ' <= c <= 'ヶ' else c for c in rd)
+        face = chunk[grp[0].start:grp[-1].end]
+        if rd in kana_chunks and face not in new:
+            return True
+        i = j + 1
+    return False
+
+
 def _review(line, result, call, calcs=()):
     found = chunks(line)
     if calcs and os.environ.get('CN_CHUNK_ALONE_CALC') != '0':
@@ -207,6 +235,7 @@ def _review(line, result, call, calcs=()):
     if not todo:
         return result
     STATS['lines'] += 1
+    kana_chunks = {line[a:b].strip() for a, b, _q in found if _kana_only(line[a:b].strip())}
     out = result
     for s, e in sorted(todo[:MAX_CHUNKS], reverse=True):      # 後ろから置く（前の語句の位置がずれない）
         STATS['tries'] += 1
@@ -222,6 +251,11 @@ def _review(line, result, call, calcs=()):
             # CN_CHUNK_ALONE_TWIN=1 で前のまま
             if os.environ.get('CN_CHUNK_ALONE_TWIN') != '1':
                 continue
+        if new != line[s:e] and _changes_glossed(line[s:e], new, kana_chunks):
+            # 語句の中の漢字の語の読みが、同じ行に かな の語句として書き添えてある（よるかつ — 夜活／夜の活動）。書き手が
+            # 読みと表記を両方示した語なので、単体の答えで別の表記に替えない（2026-11-20 うにの誤判定タブ: 夜活→悪活）。
+            # CN_CHUNK_ALONE_GLOSSED=0 で前のまま
+            continue
         nxt = _splice(line, out, s, e, new)
         if nxt is None or (nxt['corrected'] == out['corrected'] and len(nxt.get('odd_spans') or ()) == len(out.get('odd_spans') or ())):
             continue

@@ -254,7 +254,15 @@ class _SliceFiles:
         if self.dir is None:
             if not self.swept:
                 self.swept = True
-                _sweep_old_dirs(tempfile.gettempdir())
+                # 一時フォルダ全体をなめるので、起動の主スレッドで待たない（2026-11-21 軽量化: 起動で約36ms。
+                # 一時フォルダの物が多い PC ではもっと）。ファイルの片付けだけで Tk に触らないので、裏のスレッドで。
+                # CN_DECOR_SWEEP_THREAD=0 で前の形（その場で）
+                if os.environ.get('CN_DECOR_SWEEP_THREAD') != '0':
+                    import threading
+                    threading.Thread(target=_sweep_old_dirs, args=(tempfile.gettempdir(),), daemon=True,
+                                     name='decor-sweep').start()
+                else:
+                    _sweep_old_dirs(tempfile.gettempdir())
             # 日本語や空白を含まない場所（Tk の読み込みのため）
             self.dir = tempfile.mkdtemp(prefix=DIR_PREFIX)
             atexit.register(shutil.rmtree, self.dir, True)

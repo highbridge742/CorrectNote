@@ -83,6 +83,44 @@ def _suffix_alone(line, toks, i):
     return not (nx is None or nx.pos in ('助詞', '助動詞', '記号'))
 
 
+def _te_suffix(toks, i):
+    """(q) て・で（接続助詞・非自立の て）のすぐ後ろの、漢字の接尾だけの名詞（電池が着せてて｜系｜が）。
+    て の後ろは句の始まりで、名詞に付く接尾は立たない（janome は て の後ろの1語の名詞を 一般 と読む: 急いで用を）。
+    接尾と別の読みで1語の名詞になる字（後＝あと・側＝そば）は除く。
+    例文24万文で当たり1（後を引く・除く読みで0）。2026-11-20 補正担当。CN_POS_SEQ_TE_SUFFIX=0 で前のまま。"""
+    if os.environ.get('CN_POS_SEQ_TE_SUFFIX') == '0':
+        return False
+    t, p = toks[i], toks[i - 1]
+    if not (t.pos == '名詞' and (t.pos_sub or '').startswith('接尾') and t.surface
+            and all('\u4e00' <= c <= '\u9fff' for c in t.surface)):
+        return False
+    if not (p.surface in ('て', 'で') and ((p.pos == '助詞' and (p.pos_sub or '').startswith('接続助詞'))
+                                         or (p.pos == '動詞' and (p.pos_sub or '').startswith('非自立')))):
+        return False
+    try:
+        from morphology import dictionary_inflections
+        rows = dictionary_inflections(t.surface) or ()
+    except Exception:
+        return False
+    # 接尾と別の読みで1語の名詞にもなる字（後＝あと・側＝そば）は、て の後ろの1語の名詞の見込みが在るので除く
+    own = t.reading if getattr(t, 'has_reading', True) else None
+    return not any(str(r[0]).startswith(('名詞,一般', '名詞,副詞可能')) and len(r) > 3 and r[3] != own for r in rows)
+
+
+_TE_SUFFIX_SPANS = []   # spots が最後に見つけた (q) の所（mark_line が読み直しを当てない印に使う）
+
+
+def _te_phrase_start(toks, i):
+    """(q) の紫の始まり: て の前の動詞から（どこが打ち違いかは決めない。て の数を変えるだけの直しを採らせない）。"""
+    j = i - 1
+    while j > 0 and toks[j - 1].end == toks[j].start and toks[j - 1].surface in ('て', 'で') \
+            and toks[j - 1].pos in ('助詞', '動詞'):
+        j -= 1
+    if j > 0 and toks[j - 1].end == toks[j].start and toks[j - 1].pos == '動詞':
+        j -= 1
+    return toks[j].start
+
+
 def spots(line):
     """[(start, end, 理由)]"""
     from morphology import tokenize
@@ -94,6 +132,9 @@ def spots(line):
         if (t.pos == '名詞' and (t.pos_sub or '').startswith('接尾') and p is not None and p.pos == '助詞'
                 and p.end == t.start and _suffix_alone(line, toks, i)):
             out.append((t.start, t.end, f'「{p.surface}」のすぐ後ろに接尾の「{t.surface}」は続きません'))
+        elif (p is not None and p.end == t.start and _te_suffix(toks, i)):
+            out.append((_te_phrase_start(toks, i), t.end, f'「{p.surface}」のすぐ後ろに接尾の「{t.surface}」は続きません'))
+            _TE_SUFFIX_SPANS.append(out[-1][:2])
         elif t.pos == '感動詞' and len(t.surface) == 1 and _hira(t.surface) and not head:
             out.append((t.start, t.end, f'文の途中の「{t.surface}」は前後の語とつながりません'))
         elif (p is not None and p.pos == '助動詞' and p.surface in ('です', 'だ') and p.end == t.start
@@ -146,7 +187,12 @@ def spots(line):
             # 一方で（名詞の使い方）・だからって は除く。辞書が一般名詞としても持つ語（ただ＋で: 無料の意味）も除く
             out.append((p.start, t.end, f'接続詞「{p.surface}」のすぐ後ろに「{t.surface}」は続きません'))
         elif (p.pos == '助動詞' and p.surface == 'ます' and t.surface in ('は', 'を', 'に', 'の') and t.pos == '助詞'
-              and (i + 1 == len(toks) or toks[i + 1].surface in _STOP)):
+              and (i + 1 == len(toks) or toks[i + 1].surface in _STOP)
+              # 〜ますの「…」（言い方そのものを名前に挙げて、その中の字を言う書き方）は除く（2026-11-22 補正担当、
+              # うに 誤判定タブの正しい文）。CN_POS_SEQ_MASU_QUOTE=0 で前のまま
+              and not (t.surface == 'の' and i + 1 < len(toks) and toks[i + 1].start == t.end
+                       and str(toks[i + 1].pos_sub or '') == '括弧開'
+                       and os.environ.get('CN_POS_SEQ_MASU_QUOTE') != '0')):
             out.append((p.start, t.end, f'「ます」のすぐ後ろに「{t.surface}」は続きません'))
     # (p) 動詞に付く助動詞が名詞・助詞のすぐ後ろ（相談｜た・駆使｜まし・まで｜る）。
     # 正しい文1,004行と例文（Tatoeba）8万文で当たり0〜1・作った誤字の文で約45（2026-11-07）
@@ -290,9 +336,11 @@ def mark_line(line, result, dict_index=None, decisions=None):
     if (result.get('corrected') or line) != line:
         return result
     try:
+        del _TE_SUFFIX_SPANS[:]
         found = spots(line)
     except Exception:
         return result
+    te_suffix = list(_TE_SUFFIX_SPANS)
     # かなの語の読みの中に立った印は外す（このお店でとんかつを: とん｜かつ＋を・2026-11-07 例文 Tatoeba）
     found = [f for f in found if not _in_world_kana_word(line, f[0], f[1], dict_index)]
     keep = _left_alone(line, decisions)
@@ -305,6 +353,11 @@ def mark_line(line, result, dict_index=None, decisions=None):
     out['odd_spans'] = sorted(set(taken) | {(a, b) for a, b, _ in add}) if not result.get('unsure_spans') else \
         list(result.get('odd_spans') or ()) + [(a, b) for a, b, _ in add]
     out['odd_reasons'] = list(result.get('odd_reasons') or ()) + add
+    q = [(a, b) for a, b, _ in add if (a, b) in te_suffix]
+    if q:
+        # (q) は打ち違いの所が決まらない（て の前の動詞か・て の数か・接尾か）。1打の戻しを当てると て を1つ消して
+        # 別の文にする（着せてて系→着せて時計）ので、読み直しを当てない（te_dropped と同じ face_doubt_spans）
+        out['face_doubt_spans'] = list(result.get('face_doubt_spans') or ()) + q
     return out
 
 

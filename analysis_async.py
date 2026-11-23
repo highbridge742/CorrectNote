@@ -427,7 +427,8 @@ def line_step(app,count):
         # Restoring from the saved values builds only the display units; a row the saved values left
         # unfinished (a tab saved part-way, analysis_cache partial・2026-10-27) is corrected here in full
         from tab_analysis import reusable_result
-        units_only=getattr(app,'_analyze_units_only',False) and reusable_result(res)
+        # 新しい段取りに持ち越した「組むだけ」の行（app._units_only_rows・2026-11-20）も同じ
+        units_only=(getattr(app,'_analyze_units_only',False) or i in (getattr(app,'_units_only_rows',None) or ())) and reusable_result(res)
         from literal_lines import literal_only,result as literal_result,units as literal_units
         if literal_only(lines[i]):
             res=literal_result(lines[i])

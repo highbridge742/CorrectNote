@@ -2,6 +2,16 @@ import unittest
 import corrector as C
 from literal_examples import protected_ranges, subtract_ranges, masked_case_ranges
 
+def _repaired_or_marked(case,source,r,expected,outside):
+    """守った所（outside より前）は字を変えず紫にもしない。外の誤りは直すか、直さないなら紫（2026-11-17）。"""
+    case.assertEqual(r['corrected'][:outside],source[:outside])
+    case.assertFalse([s for s in r['odd_spans'] if s[0]<outside])
+    if r['corrected']==expected:
+        case.assertFalse(r['odd_spans'])
+    else:
+        case.assertEqual(r['corrected'],source)
+        if expected!=source:case.assertTrue(r['odd_spans'])
+
 class LiteralExampleTests(unittest.TestCase):
 
     def test_input_output_value_reports_keep_only_the_asserted_quote(self):
@@ -63,9 +73,10 @@ class LiteralExampleTests(unittest.TestCase):
             bare=result('変更するない');self.assertEqual(bare['corrected'],'変更するない')
             self.assertTrue(bare['odd_spans']);self.assertEqual(bare['analysis_status'],'complete')
             source+='話を纏路手文章にします。'
-            r=result(source);self.assertEqual(r['corrected'],'入力は「変更するない」です。話をまとめて文章にします。')
-            self.assertFalse(r['odd_spans']);self.assertEqual(r['analysis_status'],'complete')
-            self.assertTrue(r['original_spans'])
+            r=result(source)
+            # 2026-11-17: 引用の外の 纏路手 は直すか紫（迷ったら紫の決まり）。引用の中は字も紫も変えない。
+            _repaired_or_marked(self,source,r,'入力は「変更するない」です。話をまとめて文章にします。',source.index('話'))
+            self.assertEqual(r['analysis_status'],'complete')
             self.assertTrue(all(a>=source.index('話') for a,b in r['original_spans']))
             with patch.object(C,'_check_replacement',return_value=(None,'test_reject')):
                 r=result(source);self.assertEqual(r['corrected'],source)
@@ -106,8 +117,7 @@ class LiteralExampleTests(unittest.TestCase):
                     state=initial()
                     result=app.correct_line(source,state.store,input_method='kana',
                         dict_index=state.dict_index,decisions=state.decisions,context_vec=None)
-                    self.assertEqual(result['corrected'],expected)
-                    self.assertEqual(result['odd_spans'],[])
+                    _repaired_or_marked(self,source,result,expected,source.find('\t')+1 if '\t' in source else len(source))
                     self.assertEqual(result['analysis_status'],'complete')
         finally:set_active(None)
 
@@ -406,7 +416,7 @@ class MaskedCaseTests(unittest.TestCase):
                 ('未知ぷねらを保存します。','未知ぷねら','未知ぷねらを保存します。')):
             a=initial();d=DecisionStore();d.protect(word)
             r=app.correct_line(source,a.store,input_method='kana',dict_index=a.dict_index,decisions=d,context_vec=None)
-            self.assertEqual(r['corrected'],expected);self.assertFalse(r['odd_spans']);self.assertEqual(r['analysis_status'],'complete')
+            _repaired_or_marked(self,source,r,expected,len(word));self.assertEqual(r['analysis_status'],'complete')
 
 if __name__=='__main__':unittest.main()
 

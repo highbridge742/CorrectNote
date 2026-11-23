@@ -379,6 +379,32 @@ def explicit_link_ranges(line):
     return result
 
 
+_KANA_QUOTE = re.compile(r'「([ぁ-ゖ゛゜ー]+)」')
+_KANA_TYPED_AFTER = re.compile(r'\s*(?:の)?\s*(?:入力|打鍵|表記|綴り)')
+
+
+def _kana_pair_quotes(line):
+    """かな（゛゜を含む）だけのかぎ括弧の語句が打った字そのものの話である形（2026-11-19 うに 誤判定タブ:
+    「さいでいか」は「さいて゛いか」入力の… の 「さいでいか」 を 最大化 に直していた。判断役 H）:
+    H1 閉じ括弧のすぐ後ろが 入力・打鍵・表記・綴り（「…」入力の）。H2 1行に2つ在り、互いに同じ読みか2字までの違い
+    （浮いた ゛゜ を前の字に合わせて比べる）で、表記を比べている。どちらも括弧の中を守る。CN_LITERAL_KANA_PAIR=0 で前のまま"""
+    import os
+    if os.environ.get('CN_LITERAL_KANA_PAIR')=='0':return []
+    found=[m for m in _KANA_QUOTE.finditer(line)]
+    out=[m.span(1) for m in found if _KANA_TYPED_AFTER.match(line,m.end())]
+    if len(found)>=2:
+        import unicodedata,difflib
+        def norm(t):
+            return unicodedata.normalize('NFC',t.replace('゛','\u3099').replace('゜','\u309a'))
+        for i,a in enumerate(found):
+            for b in found[i+1:]:
+                x,y=norm(a.group(1)),norm(b.group(1))
+                diff=sum(max(i2-i1,j2-j1) for tag,i1,i2,j1,j2 in difflib.SequenceMatcher(None,x,y,autojunk=False).get_opcodes() if tag!='equal')
+                if diff<=2 and max(len(x),len(y))>=3:
+                    out.extend((a.span(1),b.span(1)))
+    return out
+
+
 def protected_ranges(line):
     """記述対象のコードポイント範囲。閉じていない引用や裸の括弧は対象外。"""
     if not isinstance(line,str) or not line:
@@ -418,6 +444,7 @@ def protected_ranges(line):
             if pattern is _CHANGE_REPORT_PAIR and _declared_correction(line,match):
                 found.append(match.span(2));continue
             found.extend((match.span(1),match.span(2)))
+    found.extend(_kana_pair_quotes(line))
     found.extend(_unquoted_error_ranges(line,quoted))
     found.extend(_unquoted_label_ranges(line,quoted,_SPELLING_AFTER,field_bound=True))
     found.extend(_unquoted_form_ranges(line,quoted))

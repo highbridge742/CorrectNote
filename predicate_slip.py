@@ -84,6 +84,25 @@ def _sub(t):
     return (getattr(t, 'pos_sub', '') or '').split(':')[0]
 
 
+_ASPECT = frozenset(('終える', '終わる', '始める', '続ける', '直す', '出す', '込む', '切る', '合う', '返す', '過ぎる'))
+ASPECT_COMMON = 520   # 前の動詞がこれより身近（ime_reconvert の段）なら
+
+
+def _aspect_pair(t, u):
+    """身近な動詞の連用形＋漢字で書いた始まり・終わり・続きの補助の動詞（書き｜終える・読み｜始める）か。どの動詞にも
+    付く組み立てなので、1語として表に無いことは打ち違いの跡にならない（2026-11-20 正しい文の見直し: 手紙を
+    書き終えた → 抱えた の紫）。CN_PS_ASPECT_AUX=0 で前のまま。"""
+    if os.environ.get('CN_PS_ASPECT_AUX') == '0':
+        return False
+    if u.base_form not in _ASPECT or not any(_kanji(c) for c in u.surface) or not (t.infl_form or '').startswith('連用'):
+        return False
+    try:
+        import ime_reconvert as R
+        return R._rank(t.base_form or t.surface) <= ASPECT_COMMON
+    except Exception:
+        return False
+
+
 def _runs(toks, fresh=()):
     """[(最初の字句, 最後の字句, 元の述語の形, 'verb'|'suru')]。
     verb: 漢字を含む自立の動詞＋すぐ後ろの非自立の動詞（去り＋かかる）。
@@ -115,6 +134,8 @@ def _runs(toks, fresh=()):
                     and os.environ.get('CN_PREDICATE_CONTRACTED') != '0':
                 # ている・ておく・てしまう の縮まった形（動い＋てる・書い＋とく・食べ＋ちゃう）は話し言葉の正しい形。
                 # 打ち違いの述語と見ない（2026-11-05 うに「解決していたものが戻った」）
+                continue
+            if j == i + 1 and _aspect_pair(t, toks[j]):
                 continue
             if (j == i and j + 1 < n and toks[j + 1].start == toks[j].end and toks[j + 1].pos == '動詞'
                     and _all_hira(toks[j + 1].surface) and (t.infl_form or '').startswith('連用')

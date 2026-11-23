@@ -26,7 +26,45 @@ def dangling(text):
     return [(t.start, t.end) for t in tokenize(text)
             if t.pos == '動詞' and t.infl_form == '連用タ接続' and not text[t.end:].startswith(_FOLLOW)
             and not _inside_kana_word(text, t.start, t.end) and not _exclaim_tsu(text, t.start, t.end)
-            and not _lone_tsu(text, t.start, t.end)]
+            and not _lone_tsu(text, t.start, t.end) and not _particle_then_adverb(text, t.start, t.end)
+            and not _mimetic_n_to(text, t.start, t.end) and not _quoted_alone(text, t.start, t.end)]
+
+
+_QUOTE_PAIRS = {'「': '」', '『': '』', '（': '）', '(': ')', '“': '”', '"': '"', '【': '】', '〈': '〉', '《': '》'}
+
+
+def _quoted_alone(text, s, e):
+    """括弧の中がその語だけ（「いっ」）なら、打った字や読みをそのまま挙げた所で、文の続きを待つ動詞ではない。足して
+    直さない（「いっ」になった → いっそ にしていた・2026-11-22 うに）。CN_DANGLING_QUOTED=0 で前のまま"""
+    if os.environ.get('CN_DANGLING_QUOTED') == '0' or s == 0 or e >= len(text):
+        return False
+    return _QUOTE_PAIRS.get(text[s - 1]) == text[e]
+
+
+def _particle_then_adverb(text, s, e):
+    """音便の形の頭の1字が助詞（も・は・が）で、残りと後ろの かな が辞書の副詞（少し｜も｜じっと を 少し｜もじっ｜と と
+    切った所）になるなら、て・た の抜けた動詞ではない（2026-11-20 正しい文の見直し）。CN_DANGLING_PARTICLE_ADV=0 で前のまま"""
+    if os.environ.get('CN_DANGLING_PARTICLE_ADV') == '0' or e - s < 2 or text[s] not in 'もはがをにで' or s == 0:
+        return False
+    try:
+        from morphology import dictionary_inflections
+    except Exception:
+        return False
+    for k in range(e, min(len(text), e + 3) + 1):
+        piece = text[s + 1:k]
+        if len(piece) >= 2 and all('ぁ' <= c <= 'ゖ' for c in piece) and any(
+                str(r[0]).startswith('副詞') for r in dictionary_inflections(piece) or ()):
+            return True
+    return False
+
+
+def _mimetic_n_to(text, s, e):
+    """平仮名だけの ん で終わる形＋と（くるんと・ころんと）は、様子を言う語（擬態語＋と）で、て・た の抜けた動詞の
+    音便ではない（2026-11-20 正しい文の見直し: くるんとしてる → くるんたとしてる）。CN_DANGLING_MIMETIC=0 で前のまま。"""
+    if os.environ.get('CN_DANGLING_MIMETIC') == '0' or e - s < 2:
+        return False
+    return (text[e - 1] == 'ん' and text[e:e + 1] == 'と'
+            and all('ぁ' <= c <= 'ゖ' for c in text[s:e]))
 
 
 def _lone_tsu(text, s, e):

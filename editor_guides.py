@@ -1,4 +1,5 @@
 """Per-tab logical-row rulers and transient cursor navigation guides."""
+import os
 import tkinter as tk
 
 
@@ -6,6 +7,46 @@ NAVIGATION_KEYS=frozenset(('Left','Right','Up','Down','Home','End','Prior','Next
     'KP_Left','KP_Right','KP_Up','KP_Down','KP_Home','KP_End','KP_Prior','KP_Next'))
 FLASH_COLOR='#ee963e'
 FLASH_MS=180
+# 地の明るい配色での強調（2026-11-23 うにさん「ライトモードでのオレンジのカーソル強調が見えにくいので、白に合わせた調整を
+# 入れる」）。#ee963e は白地とのコントラスト比が約2.3で見えにくかった。濃いめのオレンジ（白地で約6.0・ライトの配色の欄の地で
+# 4.5 以上）にし、強調の間だけ入力カーソルを太くする。ダーク系は今のまま。地の色の明るさで決める（配色の名前に頼らない）。
+# CN_CARET_FLASH_LIGHT=0 で前の形
+FLASH_COLOR_LIGHT='#b13a0a'
+FLASH_WIDTH_LIGHT=3
+
+
+def _luminance(widget,color):
+    r,g,b=(c/65535.0 for c in widget.winfo_rgb(color))
+    def lin(c):return c/12.92 if c<=0.03928 else ((c+0.055)/1.055)**2.4
+    return 0.2126*lin(r)+0.7152*lin(g)+0.0722*lin(b)
+
+
+def contrast(widget,a,b):
+    la,lb=sorted((_luminance(widget,a),_luminance(widget,b)),reverse=True)
+    return (la+0.05)/(lb+0.05)
+
+
+def flash_style(pane):
+    """(強調の色, 強調の間の入力カーソルの幅 or None)。地が明るい欄は濃いめのオレンジと太いカーソル。"""
+    import os
+    if os.environ.get('CN_CARET_FLASH_LIGHT')=='0':return FLASH_COLOR,None
+    try:light=_luminance(pane,pane.cget('background'))>=0.5
+    except (tk.TclError,ValueError):light=False
+    if not light:return FLASH_COLOR,None
+    try:width=max(int(pane.cget('insertwidth')),FLASH_WIDTH_LIGHT)
+    except (tk.TclError,ValueError):width=FLASH_WIDTH_LIGHT
+    return FLASH_COLOR_LIGHT,width
+# ルーラーの線の太さ（px）。2026-11-20 うにさん「ルーラーが見えにくい。目次と本文の境目の線は見えやすい…今の太さと
+# 境目の線の太さの中間にする」: 色は境目の線と同じ RULE で、違いは太さだけ（ルーラー 1px・境目の線 約3px）。中間の 2px。
+# デバッグのパラメータ（debug_menu の ruler_width）。CN_RULER_THIN=1 で前の 1px
+RULER_WIDTH=2
+RULER_WIDTH_MAX=6
+
+
+def ruler_width():
+    import os
+    if os.environ.get('CN_RULER_THIN')=='1':return 1
+    return max(1,int(RULER_WIDTH))
 
 
 class EditorGuides:
@@ -38,6 +79,16 @@ class EditorGuides:
         if observers is not None:
             observers.setdefault('undo_hooks',[]).append(self.undo_step)
             observers.setdefault('changed',[]).append(self._text_changed)
+        # ルーラーは欄に置いた枠なので、字と一緒には動かない。字が変わった・行の高さが変わった（品詞の字・行の高さ揃え・
+        # 補正欄の描き直し）時に、前の高さに残って字に重なっていた（2026-11-23 うにさん「ルーラーも帯が重なってました。
+        # 27行目 何秒もずっと」）。字が変わったら、その行から下の線をその場で隠して描き直しを予約し、行の高さが変わった
+        # 知らせ（<<WidgetViewSync>>）でも描き直す（描くたびに今の位置へ引き直す）。CN_GUIDES_VIEW_SYNC=0 で前の形
+        if os.environ.get('CN_GUIDES_VIEW_SYNC')!='0':
+            for pane in self.panes:
+                obs=getattr(pane,'_correctnote_observers',None)
+                if obs is not None:
+                    obs.setdefault('changed',[]).append(lambda args=None,pane=pane:self._pane_changed(pane,args))
+                pane.bind('<<WidgetViewSync>>',self.queue_draw,add=True)
 
     def _cancel(self,name):
         job=getattr(self,name);setattr(self,name,None)
@@ -69,21 +120,27 @@ class EditorGuides:
         if self._flash is not None and self._flash[0] is not pane:self.restore()
         self._cancel('_restore_job')
         if self._flash is None:
-            self._flash=(pane,pane.cget('insertbackground'),pane.cget('insertofftime'))
+            color,width=flash_style(pane)
+            self._flash=(pane,pane.cget('insertbackground'),pane.cget('insertofftime'),color,
+                         (pane.cget('insertwidth'),width) if width else None)
             # Only as the flash begins: configure makes Tk lay out and draw the whole pane again, and each arrow key
             # paid 40ms for a colour it already had (2026-11-05 うにさん「左右キーでのカーソル移動が重い」)
-            pane.configure(insertbackground=FLASH_COLOR,insertofftime=0)
+            if width:pane.configure(insertbackground=color,insertofftime=0,insertwidth=width)
+            else:pane.configure(insertbackground=color,insertofftime=0)
         self._restore_job=self.root.after(FLASH_MS,self.restore)
 
     def restore(self):
         self._cancel('_restore_job')
         saved,self._flash=self._flash,None
         if saved is None:return
-        pane,color,off=saved
+        pane,color,off=saved[:3]
+        shown=saved[3] if len(saved)>3 else FLASH_COLOR
+        widths=saved[4] if len(saved)>4 else None
         try:
             # A theme change may already have installed its new color.
-            if str(pane.cget('insertbackground'))==FLASH_COLOR:pane.configure(insertbackground=color)
+            if str(pane.cget('insertbackground'))==shown:pane.configure(insertbackground=color)
             if int(pane.cget('insertofftime'))==0:pane.configure(insertofftime=off)
+            if widths and int(pane.cget('insertwidth'))==int(widths[1]):pane.configure(insertwidth=widths[0])
         except tk.TclError:pass
 
     def _focus_out(self,event):
@@ -192,6 +249,19 @@ class EditorGuides:
             # A new edit ends what can be redone, as for text.
             self.redo.clear()
 
+    def _pane_changed(self,pane,args=None):
+        """字が変わった欄の、変わった行から下のルーラーをその場で隠し、字を並べ直した後に引き直す。"""
+        if self._closed or not self.lines:return
+        try:
+            first=int(str(pane.index(args[1])).split('.')[0]) if args and len(args)>1 else 1
+        except Exception:
+            first=1
+        for (widget,row),line in tuple(self.lines.items()):
+            if widget is pane and row>=first:
+                try:line.place_forget()
+                except tk.TclError:pass
+        self.queue_draw()
+
     def queue_draw(self,event=None):
         if not self._closed and self._draw_job is None:
             self._draw_job=self.root.after_idle(self.draw)
@@ -225,7 +295,8 @@ class EditorGuides:
                     # logical row, independent of the insertion mark.
                     info=pane.dlineinfo(str(row)+'.end')
                     if info is None:continue
-                    y=info[1]+info[3]-1
+                    width=ruler_width()
+                    y=info[1]+info[3]-width
                     if not 0<=y<pane.winfo_height():continue
                     key=(pane,row);line=self.lines.get(key)
                     if line is None:
@@ -234,7 +305,7 @@ class EditorGuides:
                                     '<ButtonPress-3>','<B3-Motion>','<ButtonRelease-3>','<MouseWheel>'):
                             line.bind(seq,lambda e,s=seq,w=pane:self._forward(e,s,w))
                     line.configure(bg=self.color())
-                    line.place(x=2,y=y,width=max(1,pane.winfo_width()-4),height=1,bordermode='outside')
+                    line.place(x=2,y=y,width=max(1,pane.winfo_width()-4),height=width,bordermode='outside')
                     line.lift()
             except tk.TclError:pass
 

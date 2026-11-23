@@ -42,6 +42,10 @@ ITEMS = (
     Item('CorrectNote_説明書.html', None,
          'メニューの「説明書をHTMLで展開」が出せなくなる',
          True),
+    # 英語の説明書（2026-11-23）。英語で起動した時・英語で説明書を押した時だけ書き出す（app.py の CN_MANUAL_EN）
+    Item('CorrectNote_manual_en.html', None,
+         '英語の画面で説明書を押した時に英語の説明書が出せず、日本語の説明書を開く',
+         False),
     Item('familiarity.json', 'familiarity',
          '書籍を基準にした並べ替えが丸ごと効かなくなる（新聞基準に戻る）',
          False),

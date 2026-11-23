@@ -19,6 +19,11 @@ class EndingInbox(queue.Queue):
 
 
 class QuickPrepareCancellationTests(unittest.TestCase):
+    def setUp(self):
+        # 2026-11-07 の速さの直しで、子は新しい頼みを POLL_GAP_S（2ms）に1回だけ見に行く（答えは同じ・新しい頼みに
+        # 気づくのが最大 2ms 遅れる）。作り物の表の読み込みは一瞬で終わるので、境目で置いた取り消しを 2ms の間に
+        # 見落とし、3つとも読んでいた（試験が古い・2026-11-20）。ここでは毎回見に行く形にして、境目で止まることを確かめる
+        gap=patch.object(W,'POLL_GAP_S',0.0);gap.start();self.addCleanup(gap.stop)
     def loads(self,stack,calls,after=None):
         def run(name):
             def invoke(*args):

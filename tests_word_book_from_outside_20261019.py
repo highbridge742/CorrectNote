@@ -384,6 +384,8 @@ def child():
 @unittest.skipUnless(sys.platform == 'win32', 'Windows activation')
 class FromOutsideAppTests(unittest.TestCase):
     def test_word_book_opened_from_outside_leaves_the_other_app_in_front(self):
+        if not __import__('offscreen_window').real_focus_allowed():
+            self.skipTest('本当に窓を前へ出す試験は CN_TEST_REAL_FOCUS=1 の時だけ（見えない机で回す run_on_desktop が立てる・うにさんの焦点を取らない・2026-11-21）')
         import json
         import shutil
         import subprocess

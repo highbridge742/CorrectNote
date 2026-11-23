@@ -327,6 +327,13 @@ class DocumentWindow:
             except tk.TclError:
                 pass
         self.text = text
+        try:      # 別の窓の本文の絵文字を色付きで（emoji_widgets・2026-11-21 うにさん）
+            if not getattr(text, '_cn_emoji_installed', False):
+                import emoji_widgets
+                emoji_widgets.text(text)
+                text._cn_emoji_installed = True
+        except Exception:
+            pass
         text.configure(yscrollcommand=self._scrolled)
         self.bar.configure(command=text.yview)
         text.pack(side='left', fill='both', expand=True)

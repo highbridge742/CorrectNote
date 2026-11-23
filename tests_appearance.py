@@ -132,6 +132,35 @@ class AppearanceDataTests(unittest.TestCase):
 
 
 class SliceFileTests(unittest.TestCase):
+    # 2026-11-21（軽量化）: 一時フォルダの古い切れ端の片付けは、起動の主スレッドで待たず裏のスレッドで
+    # （CN_DECOR_SWEEP_THREAD=0 で前の形・その場で）
+    def test_sweep_runs_in_a_thread(self):
+        import os
+        import threading
+        from unittest import mock
+        started, swept = [], []
+        real_thread = threading.Thread
+
+        class FakeThread:
+            def __init__(self, target=None, args=(), daemon=None, name=None):
+                self.target, self.args = target, args
+                started.append(name)
+
+            def start(self):
+                self.target(*self.args)
+        with mock.patch.object(ap, '_sweep_old_dirs', lambda base: swept.append(base)),                 mock.patch.object(threading, 'Thread', FakeThread):
+            files = ap._SliceFiles()
+            files.solid()
+            self.assertEqual(started, ['decor-sweep'])
+            self.assertEqual(len(swept), 1)
+            with mock.patch.dict(os.environ, {'CN_DECOR_SWEEP_THREAD': '0'}):
+                started.clear(); swept.clear()
+                files2 = ap._SliceFiles()
+                files2.solid()
+                self.assertEqual(started, [])                                   # 前の形: その場で
+                self.assertEqual(len(swept), 1)
+        self.assertIs(threading.Thread, real_thread)
+
     def test_trim_forgets_old_slices_and_removes_files_little_by_little(self):
         files = ap._SliceFiles()
         files.LIMIT = 50
@@ -1108,7 +1137,11 @@ def child():
             assert app.BG == matcha['BG'] and app.FIXED_FG == ap.THEMES['matcha']['fixed_fg']
             assert a.editor.tag_cget('autofixed', 'foreground') == app.FIXED_FG
             assert a.theme_var.get() == 'matcha' and a.decor_var.get() == 'sakura'
-            assert a.editor._correctnote_paper.decor == 'sakura'
+            assert a.editor._correctnote_paper.decor == 'sakura', (a.editor._correctnote_paper.decor, a.decor_var.get(), a.theme_var.get())
+            # 行番号の欄の模様は欄を描く時に付く。決まった時間ではなく、付くまで待つ（2026-11-22）
+            waited = time.monotonic()
+            while not a.editor_gutter.find_withtag('cn_backdrop') and time.monotonic() - waited < 10:
+                settle(0.05)
             assert a.editor_gutter.find_withtag('cn_backdrop')
             assert any(s[2] for s in a.editor._correctnote_paper._slots)
             # 外見のメニューは色の塗り直しの名簿に入っている（チェックの印が見える）
@@ -1418,10 +1451,14 @@ class AppAppearanceTests(unittest.TestCase):
                 if p.is_file() and (p.suffix == '.py' or p.name in NAMES):
                     shutil.copyfile(p, dest / p.name)
             (dest / '.appearance-isolated').touch()
+            # 分割表示では左のメモ欄の装飾を消すようになった（2026-11-20・CN_SPLIT_DECOR_RIGHT_ONLY・tests_split_decor_20261120）。
+            # この試験は左のメモ欄と行番号の欄に装飾を描く所を見るので、左にも描く前の形で回す（2026-11-20 から落ちていた
+            # のはこの切り替えのため）
+            env = dict(os.environ, CN_SPLIT_DECOR_RIGHT_ONLY='0')
             run = subprocess.run([sys.executable, '-B', '-u', '-X', 'utf8',
                                   str(dest / Path(__file__).name), '--child'],
                                  cwd=dest, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                 encoding='utf8', errors='replace', timeout=240)
+                                 encoding='utf8', errors='replace', timeout=240, env=env)
             print(run.stdout[-4000:], flush=True)
             self.assertEqual(run.returncode, 0, run.stdout[-4000:])
             self.assertIn('APPEARANCE_APP_OK', run.stdout)

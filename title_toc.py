@@ -224,6 +224,24 @@ def split_loaded(content, metadata, path, folder, fmt):
 
 
 # --- 欄 ----------------------------------------------------------------------
+
+def _emoji_label(link):
+    """目次の行の絵文字を色付きで（emoji_widgets・2026-11-21 うにさん「絵文字を白黒で見せないようにする」）。"""
+    try:
+        import emoji_widgets
+        emoji_widgets.label(link)
+    except Exception:
+        pass
+
+
+def _emoji_text(text):
+    """タイトルの欄の絵文字を色付きで（emoji_widgets・2026-11-21）。"""
+    try:
+        import emoji_widgets
+        emoji_widgets.text(text)
+    except Exception:
+        pass
+
 class TitleToc:
     def __init__(self, app):
         self.app = app
@@ -236,6 +254,7 @@ class TitleToc:
         self.title = tk.Text(self.frame, height=1, wrap='none', relief='flat', bd=0, highlightthickness=0,
                              padx=14, pady=0, undo=False, width=1)
         self.title.pack(fill='x', pady=(0, 4))
+        _emoji_text(self.title)
         self.toc = tk.Frame(self.frame, bd=0, highlightthickness=0)
         self.toc.pack(fill='x', padx=14, pady=(0, 4))
         # 目次の下の区切りの線（目次が無い時は出さない）
@@ -251,6 +270,19 @@ class TitleToc:
         self._loading = False
         self.title.bind('<Return>', lambda e: 'break')
         self.title.bind('<KP_Enter>', lambda e: 'break')
+        # タイトルの行の Tab は何もしない（2026-11-20: Tk の Text の既定がタイトルにタブの字を入れ、本文の中の見出しの形では
+        # その手続きの「focus」で焦点が補正欄へ飛んでいた）。Shift+Tab も焦点を動かさない。Ctrl+Tab は本文と同じ文書の
+        # タブの切り替えだけ（焦点はそのまま）。CN_TITLE_TAB=0 で前の形
+        if os.environ.get('CN_TITLE_TAB') != '0':
+            def _switch(step):
+                go = getattr(self.app, '_next_tab', None)
+                if go is not None:
+                    go(step)
+                return 'break'
+            self.title.bind('<Tab>', lambda e: 'break')
+            self.title.bind('<Shift-Tab>', lambda e: 'break')
+            self.title.bind('<Control-Tab>', lambda e: _switch(1))
+            self.title.bind('<Control-Shift-Tab>', lambda e: _switch(-1))
         self.title.bind('<<Paste>>', self._paste)
         self.title.bind('<<Modified>>', self._modified)
         self.title.bind('<FocusIn>', lambda e: setattr(self, '_title_last', True), add=True)
@@ -565,6 +597,11 @@ class TitleToc:
             pass
 
     def jump(self, row):
+        try:      # 目次で飛んだ後は予測の候補を出さない（2026-11-21 14:13Z うにさん・CN_AUTO_SKIP_JUMPS）
+            import auto_candidates as _AC
+            _AC.jumped(self.app)
+        except Exception:
+            pass
         go = getattr(self.app, '_goto_line', None)
         if go is not None:
             go(row)
@@ -698,6 +735,7 @@ class TitleToc:
         font = tkfont.Font(family=self._family(), size=self._toc_size(), underline=True)
         for link in self.links:
             link.configure(bg=bg, fg=color, font=font)
+            _emoji_label(link)
         self._link_font = font
         self._mirror_call('restyle')
 
@@ -925,6 +963,7 @@ class Mirror:
         self.title = tk.Text(self.frame, height=1, wrap='none', relief='flat', bd=0, highlightthickness=0,
                              padx=14, pady=0, width=1, cursor='xterm', takefocus=0, state='disabled')
         self.title.pack(fill='x', pady=(0, 4))
+        _emoji_text(self.title)
         self.toc_frame = tk.Frame(self.frame, bd=0, highlightthickness=0)
         self.toc_frame.pack(fill='x', padx=14, pady=(0, 4))
         self.rule = tk.Frame(self.frame, height=1, bd=0, highlightthickness=0)
@@ -1036,6 +1075,7 @@ class Mirror:
         color = self.toc._link_color()
         for link in self.links:
             link.configure(bg=bg, fg=color, **({'font': font} if font is not None else {}))
+            _emoji_label(link)
 
     def place(self, dx, total):
         """右の欄の1行目の余白に、中身を dx だけ左へずらして置く（左の欄の続きに見える）。"""

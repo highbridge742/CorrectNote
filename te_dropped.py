@@ -77,6 +77,21 @@ def _kana_noun_split(text, a):
     return False
 
 
+def _noun_form(face):
+    """face（動詞の連用形）が名詞としても辞書・読みの表に在るか（違い・ちがい）"""
+    try:
+        from morphology import dictionary_inflections
+        if any(str(r[0]).startswith('名詞') for r in dictionary_inflections(face) or ()):
+            return True
+        if all('ぁ' <= c <= 'ゖ' for c in face):
+            import reading_lattice as lat
+            lat.load()
+            return any(p == '名詞' for _f, _l, _r, _c, p in lat._table.get(face, ()))
+    except Exception:
+        return False
+    return False
+
+
 def propose(text):
     """[(位置, 'て' か None)] 位置は連用形の終わり。None は紫だけ（範囲は連用形の語と補助の動詞）。"""
     from morphology import tokenize, dictionary_inflections
@@ -116,6 +131,23 @@ def propose(text):
         # 付いていた・2026-11-07）。CN_TE_O_KUDASAI=0 で前のまま
         if ((b.base_form or '') in ('くださる', '下さる') and i and toks[i - 1].end == a.start
                 and toks[i - 1].surface in ('お', 'ご', '御') and os.environ.get('CN_TE_O_KUDASAI') != '0'):
+            continue
+        # 連用形が名詞としても辞書に在り（ちがい＝違い）、後ろが ある なら、名詞＋ある（にちがいありません）の正しい形
+        # （2026-11-20 正しい文の見直し）。CN_TE_NOUN_ARU=0 で前のまま
+        if (b.base_form or '') == 'ある' and os.environ.get('CN_TE_NOUN_ARU') != '0' and _noun_form(a.surface):
+            continue
+        # お・ご＋連用形＋いただく（お求めいただき・お越しいただく）も同じ敬語の形（2026-11-20 正しい文の見直し）。
+        # CN_TE_O_ITADAKU=0 で前のまま
+        if ((b.base_form or '') in ('いただく', '頂く') and i and toks[i - 1].end == a.start
+                and toks[i - 1].surface in ('お', 'ご', '御') and os.environ.get('CN_TE_O_ITADAKU') != '0'):
+            continue
+        # かなの連用形が お で始まり、残りが辞書の動詞の連用形（おこし＝お＋越し）で、後ろが ください・いただく なら、
+        # 解析が お を語の頭に読んだだけの敬語の形（2026-11-20 正しい文の見直し: おこしください → おこしてください）。
+        # CN_TE_O_JOINED=0 で前のまま
+        if ((b.base_form or '') in ('くださる', '下さる', 'いただく', '頂く') and a.surface[:1] == 'お'
+                and len(a.surface) >= 2 and os.environ.get('CN_TE_O_JOINED') != '0'
+                and any(str(r[0]).startswith('動詞,') and str(r[1] or '').startswith('連用')
+                        for r in dictionary_inflections(a.surface[1:]) or ())):
             continue
         # かなの続きの切り方が崩れた所（ひ｜ら｜が｜なで｜あり）: 連用形のかなの頭の字までを前のかなとつなぐと辞書の名詞の
         # 読み（ひらがな）になるなら、その動詞は名詞の切れ端で、て の脱字ではない（2026-11-14 未解決タブの正しい文）。

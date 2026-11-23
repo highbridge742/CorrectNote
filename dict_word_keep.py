@@ -24,7 +24,7 @@ import os
 
 _orig = {}
 
-WEAK = ('紫の所の打ち違い', '意味の分類', 'IMEの選び違い', '語の組')
+WEAK = ('紫の所の打ち違い', '意味の分類', 'IMEの選び違い', '語の組', '語の中の1字の抜き')
 
 
 # 広げる試し（2026-11-14 全体評価の頼み）: かな入力・脱字 の直しにも同じ考えを当てる。既定は当てない
@@ -196,13 +196,158 @@ def _rare_to_common(line, text, hit, j1, j2):
     return bool(new) and max(R._token_rarity(t) for t in new) <= R.KEY_FIX_COMMON
 
 
+DROP_TAG = '語の中の1字の抜き'
+
+
+def _drop_weak(line, d):
+    """かな入力の直しで1字を抜くだけのもの（そこら→そこ）のうち、抜いた字を含む元の語が3字以上のかなの辞書の語なら、
+    弱い根拠の直しとして見る（抜いた字は余分な打鍵でなく語の一部）。2026-11-20 補正担当・例文の正しい文の誤り。
+    CN_DICT_WORD_KEEP_DROP=0 で前のまま。"""
+    if (os.environ.get('CN_DICT_WORD_KEEP_DROP') == '0' or d[2] != 'かな入力' or d[1] != ''
+            or not isinstance(d[0], str) or len(d[0]) != 1 or not ('ぁ' <= d[0] <= 'ゖ')):
+        return d
+    try:
+        from morphology import tokenize
+        for t in tokenize(line):
+            if (len(t.surface) >= 3 and all('ぁ' <= c <= 'ゖ' for c in t.surface) and d[0] in t.surface
+                    and t.pos in ('名詞', '副詞', '連体詞') and _dict_word(t)):
+                return (d[0], d[1], DROP_TAG) + tuple(d[3:])
+    except Exception:
+        pass
+    return d
+
+
+def _pair_outweighs(line, text, i1, j1, j2):
+    """意味の分類の直しが、名詞＋助詞＋動詞の動詞を同じ読みの別の動詞に替え、直した組が例文に元の組のはるかに多く
+    在る（絵を書く 10 回・絵を描く 80 回: semantic_fit の PAIR_OUTWEIGH）なら、使われやすさだけの直しではない。戻さない
+    （2026-11-20 うに: 絵を書く が直らなくなった）。CN_DICT_WORD_KEEP_PAIR_OUTWEIGH=0 で前のまま。"""
+    if os.environ.get('CN_DICT_WORD_KEEP_PAIR_OUTWEIGH') == '0':
+        return False
+    try:
+        from morphology import tokenize
+        import semantic_fit as F
+        old = list(tokenize(line))
+        new = list(tokenize(text))
+    except Exception:
+        return False
+    k = next((n for n, t in enumerate(new) if t.start <= j1 < t.end), None)
+    ko = next((n for n, t in enumerate(old) if t.start <= i1 < t.end), None)
+    if k is None or ko is None or k < 2 or ko < 2:
+        return False
+    v, vo, p, n = new[k], old[ko], new[k - 1], new[k - 2]
+    if v.pos != '動詞' or vo.pos != '動詞' or p.pos != '助詞' or n.pos != '名詞':
+        return False
+    nb, ob = v.base_form or v.surface, vo.base_form or vo.surface
+    if _borrow_outweighs(F, vo, p, n, ob, nb, v):
+        return True
+    # 打った動詞のほうが珍しい表記（観る・聴く）なら、書き手がわざわざ選んだ表記。替えない（テレビを観ながら）
+    if F._rank(ob) >= F._rank(nb):
+        return False
+    have = F._pair_count(p.surface, n.surface, ob)
+    got = F._pair_count(p.surface, n.surface, nb)
+    return got >= max(F.PAIR_OUTWEIGH_MIN, have * F.PAIR_OUTWEIGH)
+
+
+def _borrow_outweighs(F, vo, p, n, ob, nb, v):
+    """元の動詞の例が少なく借りた仲間で見た直し（semantic_fit._borrowed_mark: 言葉を離す → 話す）で、元と直した動詞の
+    意味の分類が重ならない（表記の揺れ 観る・見る ではなく別の動詞）なら、使われやすさだけの直しではない。戻さない
+    （2026-11-21 うに 検討タブ）。CN_DICT_WORD_KEEP_BORROW=0 で前のまま"""
+    if os.environ.get('CN_DICT_WORD_KEEP_BORROW') == '0':
+        return False
+    a, b = F._verb_codes(ob), F._verb_codes(nb)
+    if not a or not b or a & b:
+        return False
+    try:
+        m = F._borrowed_mark(vo, p, n, ob)
+    except Exception:
+        return False
+    return bool(m) and m[2] == v.surface
+
+
+def _hira1(c):
+    return 'ぁ' <= c <= 'ゖ'
+
+
+MAZEGAKI_RANK = 720
+
+
+def _mazegaki(line, result):
+    """直しの元が、辞書の語の漢字の一部をかなで書いた形（交ぜ書き: ひっ越し ← 引っ越し）なら、別の語に書き換えず
+    その辞書の語にする。元の所（直した所を含む語）の読みが辞書の語の読みと同じで、長さも同じ、違う字はどれも
+    辞書の語の側が漢字・元の側が平仮名。書き換えが1か所だけの行で見る（2026-11-20 正しい文の見直し:
+    村にひっ越して → 筆記して）。CN_DICT_WORD_KEEP_MAZEGAKI=0 で前のまま。"""
+    if os.environ.get('CN_DICT_WORD_KEEP_MAZEGAKI') == '0':
+        return None
+    text = result.get('corrected')
+    ops = [o for o in difflib.SequenceMatcher(None, line, text, autojunk=False).get_opcodes() if o[0] != 'equal']
+    if len(ops) != 1:
+        return None
+    _tag, i1, i2, _j1, _j2 = ops[0]
+    try:
+        from morphology import tokenize
+        import reading_lattice as lat
+        lat.load()
+    except Exception:
+        return None
+    toks = list(tokenize(line))
+    hit = [t for t in toks if t.start < max(i2, i1 + 1) and i1 < t.end]
+    if not hit or any(not t.reading or t.reading == '*' or not getattr(t, 'has_reading', True) for t in hit):
+        return None
+    # 1語で辞書に読める所（思い・重い）は、それ自体が語。交ぜ書きは辞書の語が2つ以上に割れた所（ひっ｜越し）だけ
+    # （2026-11-20 うに: 荷物が思い → 思井 の書き換え）
+    if len(hit) < 2:
+        return None
+    a, b = hit[0].start, hit[-1].end
+    src = line[a:b]
+    if not (any(_hira1(c) for c in src) and any(_kanji(c) for c in src)):
+        return None
+    rd = ''.join(t.reading for t in hit)
+    rd = ''.join(chr(ord(c) - 0x60) if 'ァ' <= c <= 'ヶ' else c for c in rd)
+    faces = []
+    for f, _l, _r, _c, _p in lat._table.get(rd, ()):
+        if f in faces or len(f) != len(src) or f == src:
+            continue
+        diff = [(x, y) for x, y in zip(f, src) if x != y]
+        if diff and all(_kanji(x) and _hira1(y) for x, y in diff):
+            faces.append(f)
+    if len(faces) != 1:
+        return None
+    # 交ぜ書きの先は身近な語だけ（引っ越し）。表に無い・珍しい語（茶宇・思井）は、前の段の正しい直し（入力茶う →
+    # 入力中）を消してまで置く語ではない（2026-11-20 うに: 隣接キータブ 入力茶う → 入力茶宇）
+    try:
+        import ime_reconvert as R
+        if R._rank(faces[0]) > MAZEGAKI_RANK:
+            return None
+    except Exception:
+        return None
+    new = line[:a] + faces[0] + line[b:]
+    out = dict(result)
+    ops2 = [o for o in difflib.SequenceMatcher(None, line, new, autojunk=False).get_opcodes() if o[0] != 'equal']
+    keep_x = lambda x: not (len(x) >= 2 and isinstance(x[0], int) and x[0] < b and a < x[1])
+    out.update({'corrected': new, 'changed': True, 'spans': [[o[3], o[4]] for o in ops2],
+                'original_spans': [[o[1], o[2]] for o in ops2],
+                'details': [(src, faces[0], '交ぜ書きの語')]})
+    for key in ('odd_spans', 'unsure_spans', 'odd_reasons'):
+        if key in result:
+            out[key] = [x for x in result.get(key) or () if keep_x(x)]
+    return out
+
+
 def keep(line, result, input_method='kana'):
     if not _on() or not isinstance(line, str) or not isinstance(result, dict):
         return result
+    if isinstance(result.get('corrected'), str) and result.get('corrected') != line:
+        try:
+            mz = _mazegaki(line, result)
+        except Exception:
+            mz = None
+        if mz is not None:
+            return mz
     text = result.get('corrected')
     details = [d for d in result.get('details') or () if isinstance(d, (list, tuple)) and len(d) >= 3]
     if not isinstance(text, str) or text == line or not details:
         return result
+    details = [_drop_weak(line, d) for d in details]
     weak_src = {d[0] for d in details if d[2] in _weak() and isinstance(d[0], str) and d[0]}
     if not weak_src and not (os.environ.get('CN_DICT_WORD_KEEP_CODE') != '0' and any(c.isdigit() for c in line)
                              and _code_any(line)):
@@ -235,8 +380,15 @@ def keep(line, result, input_method='kana'):
         if (input_method == 'romaji' and all(d[2] == '語の組' for d in mine)
                 and os.environ.get('CN_DICT_WORD_KEEP_ROMAJI') != '0'):
             continue
+        # 紫の所の打ち違いの直しも、ローマ字ではローマ字の打鍵の戻しで決めた形（oisieて → oshiete）。同じ理由で戻さない
+        # （2026-11-19 うに: ローマ字で以前は 教えて下さい に直っていた行が おいし得て下さい に）。CN_DICT_WORD_KEEP_ROMAJI_ODD=0 で前のまま
+        if (input_method == 'romaji' and all(d[2] == '紫の所の打ち違い' for d in mine)
+                and os.environ.get('CN_DICT_WORD_KEEP_ROMAJI_ODD') != '0'):
+            continue
         others = [d for d in details if d[2] not in _weak() and d[0] and d[0] in line[max(0, i1 - 2):i2 + 2]]
         if others:
+            continue
+        if all(d[2] == '意味の分類' for d in mine) and _pair_outweighs(line, text, i1, j1, j2):
             continue
         hit = [t for t in toks if t.start < max(i2, i1 + 1) and i1 < t.end]
         if not hit or not all(_dict_word(t) for t in hit):
@@ -291,7 +443,9 @@ def keep(line, result, input_method='kana'):
                 'original_spans': [[o[1], o[2]] for o in ops2],
                 'details': [d for d in result.get('details') or ()
                             if not (isinstance(d, (list, tuple)) and len(d) >= 3 and d[2] in _weak()
-                                    and isinstance(d[1], str) and d[1] and d[1] not in new)]})
+                                    and isinstance(d[1], str) and d[1] and d[1] not in new)
+                            and not (isinstance(d, (list, tuple)) and len(d) >= 3 and len(new) == len(line)
+                                     and _drop_weak(line, d)[2] == DROP_TAG)]})
     near = [(u[4], u[5]) for u in undo]
 
     def far(x):
@@ -299,6 +453,30 @@ def keep(line, result, input_method='kana'):
     for key in ('odd_spans', 'unsure_spans', 'odd_reasons'):
         if key in result:
             out[key] = [x for x in result.get(key) or () if far(x)]
+    # I: 書き換えを戻した所の語に、漢字1字の名詞か固有名詞が在るなら（田部井｜号｜して）、辞書の語の並びとは言い切れない。
+    # 書き換えの入口だった疑いは残っているので紫を戻す（2026-11-20 補正担当、判断 POLICY.md I。直した後の文に付けた紫を
+    # 外す方は、束で本当の誤字の紫を1行失ったので入れない）。CN_DICT_WORD_KEEP_RESTORE=0 で前のまま
+    if os.environ.get('CN_DICT_WORD_KEEP_RESTORE') != '0':
+        add = []
+        for u in undo:
+            hit = [t for t in toks if t.start < u[5] and u[4] < t.end]
+            if not hit:
+                continue
+            one = lambda t: (t.pos == '名詞' and len(t.surface) == 1 and _kanji(t.surface)
+                             and not str(t.pos_sub or '').startswith(('数', '接尾:助数詞', '非自立')))
+            bad = [t for t in hit if one(t) or str(t.pos_sub or '').startswith('固有名詞')]
+            # すぐ前・すぐ後ろの漢字1字の名詞も見る（入口の紫は 号｜し のように戻した所の隣の語に掛かっていた）
+            k0, k1 = toks.index(hit[0]), toks.index(hit[-1])
+            if k0 > 0 and toks[k0 - 1].end == hit[0].start and one(toks[k0 - 1]):
+                bad.insert(0, toks[k0 - 1])
+            if k1 + 1 < len(toks) and toks[k1 + 1].start == hit[-1].end and one(toks[k1 + 1]):
+                bad.append(toks[k1 + 1])
+            if bad:
+                add.append((min(u[4], bad[0].start), max(u[5], bad[-1].end)))
+        if add:
+            out['odd_spans'] = sorted(list(out.get('odd_spans') or ()) + add, key=lambda x: tuple(x[:2]))
+            out['odd_reasons'] = list(out.get('odd_reasons') or ()) + [
+                (a, b, '直し先を決められず元の語に戻しました。打ち違いかもしれません') for a, b in add]
     return out
 
 

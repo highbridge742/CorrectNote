@@ -74,6 +74,42 @@ class TkDouble(unittest.TestCase):
         self.assertIsNone(a._r3_scrolled_at)
 
 
+class TabWheelThenDouble(unittest.TestCase):
+    """2026-11-21 06:34Z うにさん「右クリックホイールでタブ移動後すぐに、右ダブルクリックしても縮小しません」: タブを移した
+    右の押し下げで付けた「スクロールだった」印が、次の新しい押し下げで捨てられず、二度押しの2回目が普通の押し下げに
+    なっていた。新しい押し下げ（二度押しの1回目）で印を捨てる（_r3_fresh_press・CN_R3_FRESH_PRESS=0 で前の形）"""
+    def app(self):
+        a = mock.MagicMock()
+        a.RIGHT_AFTER_SCROLL_S = App.RIGHT_AFTER_SCROLL_S
+        a.RIGHT_DOUBLE_MS = 500
+        a.RIGHT_DOUBLE_PX = 5
+        a._r3_last = None
+        a._r3_scrolled_at = app_module.time.monotonic()        # 右クリックホイールでタブを移した
+        a.editor = object()
+        a._right_press_is_double = lambda e, w: App._right_press_is_double(a, e, w)
+        a._r3_fresh_press = lambda: App._r3_fresh_press(a)
+        a._on_right_double = lambda e, w: App._on_right_double(a, e, w)
+        return a
+
+    def double(self, a):
+        import overview_fast
+        with mock.patch.object(overview_fast, 'enabled', lambda app: False),                 mock.patch.object(app_module, '_input_message_time', lambda: None):
+            App._on_editor_right_press(a, NS(time=1000, x_root=100, y_root=100))
+            App._on_editor_right_press(a, NS(time=1150, x_root=100, y_root=100))
+
+    def test_double_right_after_a_tab_wheel_enters_the_overview(self):
+        a = self.app()
+        self.double(a)
+        a._overview_enter.assert_called_once()
+
+    def test_switch_back(self):
+        import os
+        a = self.app()
+        with mock.patch.dict(os.environ, {'CN_R3_FRESH_PRESS': '0'}):
+            self.double(a)
+        a._overview_enter.assert_not_called()                  # 前の形（縮小にならない）
+
+
 class MinimumShow(unittest.TestCase):
     def app(self, shown_ago, moved=0, count=0):
         a = mock.MagicMock()

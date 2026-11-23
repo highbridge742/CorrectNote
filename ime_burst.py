@@ -16,6 +16,7 @@ Windows の Tk は確定した文字列を1字ずつのキーとして渡す。�
 確定でない普通の打鍵はここを通らず今までどおり。語を拾う・括弧・F2 の最中は、字ごとに見る意味があるので
 まとめない（「＝」の字も同じ）。打鍵の記録（stroke_keys・_on_editor_typed）は別の束縛なので字ごとのまま。"""
 import sys
+import os
 import time
 
 WAIT_MS = 120
@@ -103,6 +104,9 @@ def _cancel(app):
             pass
 
 
+_KEEP_ALIVE = []        # 外せなかった見張り（窓が消えるまで呼び先を生かす）
+
+
 def install_quick(app, win):
     """簡易入力の窓に見張りを付ける（窓を開くたび。窓が消えると見張りも外れる）。"""
     try:
@@ -116,6 +120,18 @@ def close_quick(app):
     job = getattr(app, '_quick_burst_job', None)
     app._quick_burst_job = None
     app._quick_burst_event = None
+    watch = getattr(app, '_quick_burst_watch', None)
+    if watch is not None and os.environ.get('CN_IME_BURST_CLOSE_WATCH') != '0':
+        # 窓を壊す前に、窓に掛けた手続きを外す。外さずに手放すと、Python の呼び先が解放された後に、壊す時の知らせ
+        # （WM_NCDESTROY など）で解放済みの所が呼ばれ、時々 0xC000041D で落ちていた（2026-11-23・
+        # tests_quick_focus_return の子が簡易入力の窓の destroy の中で消えた）。外せなかった時は呼び先を生かしておく。
+        # CN_IME_BURST_CLOSE_WATCH=0 で前の形
+        try:
+            watch.close()
+        except Exception:
+            pass
+        if getattr(watch, 'hwnd', 0):
+            _KEEP_ALIVE.append(watch)
     app._quick_burst_watch = None
     if job is not None:
         try:

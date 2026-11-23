@@ -198,6 +198,10 @@ def style(widget, family, link_size, link_color, rule_color):
     _raw(widget, 'tag', 'configure', TAG_TITLE_BLANK, '-font', (family, T.TITLE_SIZE), '-wrap', 'none', *hide)
     _raw(widget, 'tag', 'configure', TAG_LINK_BLANK, '-font', (family, link_size), '-wrap', 'none', *hide)
     _raw(widget, 'tag', 'configure', TAG_RULE_BLANK, '-font', (family, 1), *hide)
+    # 目次と本文の境目の線は、補正欄（右）にも同じ位置・同じ見た目で引く（2026-11-20 うにさん「目次と本文の境目の線は、
+    # 補正欄側にも表示する」）。右の見出しは同じ高さの空の行なので、その行の地を線の色にするだけ。CN_TOC_RULE_RIGHT=0 で前の形
+    if os.environ.get('CN_TOC_RULE_RIGHT') != '0':
+        _raw(widget, 'tag', 'configure', TAG_RULE_BLANK, '-background', rule_color)
 
 
 def copy_pos_tags(widget, source, blank=False):

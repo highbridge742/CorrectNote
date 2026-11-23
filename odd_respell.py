@@ -1700,6 +1700,12 @@ def _bad_join(done, fixed):
         if (x.pos in ('動詞', '形容詞') and (getattr(x, 'infl_form', '') or '') == '基本形'
                 and y.surface == 'ば' and y.pos == '助詞'):
             return True
+        # 接続助詞の つつ は連用形に付く（書きつつ）。終止形の動詞・形容詞の後ろには付かない
+        # （2026-11-22 補正担当。CN_BAD_JOIN_TSUTSU=0 で前のまま）
+        if (x.pos in ('動詞', '形容詞') and (getattr(x, 'infl_form', '') or '') == '基本形'
+                and y.surface == 'つつ' and y.pos == '助詞'
+                and os.environ.get('CN_BAD_JOIN_TSUTSU') != '0'):
+            return True
         # 格助詞の が・を のすぐ後ろの格助詞（がの・をが・がを）、に のすぐ後ろの が・を は続かない
         if (x.pos == '助詞' and y.pos == '助詞' and (x.pos_sub or '').startswith('格助詞')
                 and ((x.surface in ('が', 'を') and y.surface in ('の', 'が', 'を', 'に'))
@@ -2957,9 +2963,49 @@ ATTEMPT_LIMIT = 0
 RANK_STATS_ON = False
 RANK_LATE = 8
 RANK_SAMPLES_MAX = 200   # 原文を残す数の上限（古いものから捨てる）
+RANK_LINES_MAX = 3000    # 行ごとの記録の上限（古いものから捨てる）
 _RANK_COUNTS = {}        # 何回目 → 採った数（'?' は採った行が通した候補と一致しない形）
 _RANK_TRIED = {}         # 通した回数 → 行の数（その行で何回通したか）
 _RANK_SAMPLES = []       # [(何回目, 通した回数, 元の行, 採った行)]
+# 行ごとの記録（うに 2026-11-20「同じ行をまとめて、候補の種類も残す」）。元の行 → [何回目, 通した回数, 採った行,
+# [候補ごとの種類…]]。同じ行は最後の1回だけ残す（何度補正し直しても1行と数える）
+_RANK_LINES = {}
+
+
+def _hira_reading(text):
+    """text の読み（ひらがな）。読みの無い字句は字のまま。"""
+    try:
+        from morphology import tokenize
+        out = []
+        for t in tokenize(text):
+            r = t.reading if getattr(t, 'reading', None) and t.reading != '*' else t.surface
+            out.append(''.join(chr(ord(c) - 0x60) if 'ァ' <= c <= 'ヶ' else c for c in r))
+        return ''.join(out)
+    except Exception:
+        return text
+
+
+def candidate_kind(line, cand):
+    """打った行 line に対する候補の行 cand の種類: 変えた所の読みを比べる。同じ読み（表記だけ替えた）・
+    1字置き換え・1字抜き・1字足し・入れ替え（隣り合う2字）・2字以上。"""
+    import difflib
+    ops = [o for o in difflib.SequenceMatcher(None, line, cand, autojunk=False).get_opcodes() if o[0] != 'equal']
+    if not ops:
+        return '同じ行'
+    i1, i2, j1, j2 = ops[0][1], ops[-1][2], ops[0][3], ops[-1][4]
+    a, b = _hira_reading(line[i1:i2]), _hira_reading(cand[j1:j2])
+    if a == b:
+        return '同じ読み'
+    if len(a) == len(b):
+        d = [k for k in range(len(a)) if a[k] != b[k]]
+        if len(d) == 1:
+            return '1字置き換え'
+        if len(d) == 2 and d[1] == d[0] + 1 and a[d[0]] == b[d[1]] and a[d[1]] == b[d[0]]:
+            return '入れ替え'
+    for x, y, name in ((a, b, '1字抜き'), (b, a, '1字足し')):
+        if len(x) == len(y) + 1 and any(x[:k] + x[k + 1:] == y for k in range(len(x))):
+            return name
+    return '2字以上'
 
 
 def set_attempt_limit(n):
@@ -2977,9 +3023,11 @@ def set_rank_stats(on):
 
 def take_rank_stats():
     """集計を渡して手元を空にする。何も無ければ None。{'rank': {n: 数}, 'tried': {n: 数}, 'late': [[n, 回数, 元, 採った]]}"""
-    if not (_RANK_COUNTS or _RANK_TRIED or _RANK_SAMPLES):
+    if not (_RANK_COUNTS or _RANK_TRIED or _RANK_SAMPLES or _RANK_LINES):
         return None
-    out = {'rank': dict(_RANK_COUNTS), 'tried': dict(_RANK_TRIED), 'late': [list(x) for x in _RANK_SAMPLES]}
+    out = {'rank': dict(_RANK_COUNTS), 'tried': dict(_RANK_TRIED), 'late': [list(x) for x in _RANK_SAMPLES],
+           'lines': {k: list(v) for k, v in _RANK_LINES.items()}}
+    _RANK_LINES.clear()
     _RANK_COUNTS.clear()
     _RANK_TRIED.clear()
     del _RANK_SAMPLES[:]
@@ -3002,6 +3050,8 @@ def _counting_run(run, book, limit):
         if limit and book['n'] >= limit:
             return None
         book['n'] += 1
+        if RANK_STATS_ON:
+            book.setdefault('texts', []).append(text)
         g = run(text, *a, **k)
         if isinstance(g, dict):
             book['order'].setdefault(g.get('corrected') or text, book['n'])
@@ -3025,6 +3075,25 @@ def _note_rank(line, result, out, book):
         del _RANK_SAMPLES[:-RANK_SAMPLES_MAX]
 
 
+def _note_line(line, result, out, book):
+    """行ごとの記録（何回目・通した回数・採った行・候補の種類）。直さなかった行も、候補を通したなら残す。"""
+    if not book['n']:
+        return
+    before = (result.get('corrected') if isinstance(result, dict) else None) or line
+    after = (out.get('corrected') if isinstance(out, dict) else None) or before
+    rank = book['order'].get(after, '?') if after != before else 0
+    texts = book.get('texts') or ()
+    if rank == '?':
+        # 後ろの段が表記だけ替えた形（もとに戻ります → 元に戻ります）は、読みが同じ候補を採ったと見る
+        want = _hira_reading(after)
+        rank = next((i + 1 for i, t in enumerate(texts) if _hira_reading(t) == want), '?')
+    kinds = [candidate_kind(line, t) for t in texts]
+    _RANK_LINES.pop(line, None)
+    _RANK_LINES[line] = [rank, book['n'], after, kinds]
+    while len(_RANK_LINES) > RANK_LINES_MAX:
+        _RANK_LINES.pop(next(iter(_RANK_LINES)))
+
+
 def repair_line(line, result, run, store, dict_index, context_vec=None, decided=(), input_method='kana'):
     """結合用・半角・空白＋結合の ゛゜ を ゛゜ 1字にしてから見る。直さなかった所の字は元のまま返す。"""
     outer = getattr(_LINE_MEMO, 'lattice', None)
@@ -3039,10 +3108,14 @@ def repair_line(line, result, run, store, dict_index, context_vec=None, decided=
     try:
         out = _repair_line_norm(line, result, run, store, dict_index, context_vec, decided, input_method)
         out = _lone_kanji_noun_guard(result, _kana_verb_guard(result, _homophone_guard(result, out, line), line), line)
+        out = _inner_delete_guard(result, _typed_words_guard(result, out, line), line)
+        out = _long_mark_word_guard(result, out, line)
+        out = _kana_word_reading_guard(result, out, line)
         if RANK_STATS_ON and depth == 0:
             # 候補の行を補正に通す中で呼ばれた読み直し（入れ子）は数えない。数えるのは打った行の読み直しだけ
             try:
                 _note_rank(line, result, out, book)
+                _note_line(line, result, out, book)
             except Exception:
                 pass
         return out
@@ -3066,6 +3139,196 @@ def _ends_on_conjunction(text, j1, j2):
 
 
 _NOUN_PARTICLES = frozenset('はがをにもでへとの')
+
+TYPED_WORDS_RANK = 720       # 打った漢字の語がこれより身近（段が小さい）なら、確かに選んで確定した語と見る
+_TYPED_PARTICLES = frozenset('はがをにもでへとのや')
+
+
+
+
+_VOWEL_OF = {}
+for _vw, _row in (('あ', 'あかさたなはまやらわがざだばぱぁゃ'), ('い', 'いきしちにひみりぎじぢびぴぃ'),
+                  ('う', 'うくすつぬふむゆるぐずづぶぷぅゅ'), ('え', 'えけせてねへめれげぜでべぺぇ'),
+                  ('お', 'おこそとのほもよろをごぞどぼぽぉょ')):
+    for _c in _row:
+        _VOWEL_OF[_c] = _vw
+
+
+def _long_mark_word_guard(result, out, line):
+    """ひらがなの後ろの伸ばし棒（ばーちゃん・じーちゃん）を、その字の母音に置いた行（ばあちゃん）で辞書の1語になる所を、
+    読み直しで書き替えない（解析が ば｜ー｜ちゃん に崩して紫の無い正しい語を バー茶なら にしていた・2026-11-20 例文の
+    正しい文）。CN_RESPELL_LONG_MARK_WORD=0 で前のまま。"""
+    try:
+        if (os.environ.get('CN_RESPELL_LONG_MARK_WORD') == '0' or not isinstance(out, dict) or out is result
+                or 'ー' not in line):
+            return out
+        got = out.get('corrected') or line
+        if got == line:
+            return out
+        marks = [i for i in range(1, len(line)) if line[i] == 'ー' and line[i - 1] in _VOWEL_OF]
+        if not marks:
+            return out
+        norm = ''.join(_VOWEL_OF[line[i - 1]] if i in marks else c for i, c in enumerate(line))
+        from morphology import tokenize
+        words = [(t.start, t.end) for t in tokenize(norm)
+                 if any(t.start < i < t.end for i in marks) and t.pos == '名詞'
+                 and getattr(t, 'has_reading', True) and len(t.surface) >= 3]
+        if not words:
+            return out
+        import difflib
+        for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, line, got, autojunk=False).get_opcodes():
+            if tag != 'equal' and any(a <= i2 and i1 <= b for a, b in words):
+                return result
+        return out
+    except Exception:
+        return out
+
+
+def _kana_word_reading_guard(result, out, line):
+    """ひらがなだけの所を別のひらがなに替える読み直しで、替えた所を含む内容語の並び（助詞・助動詞を除いた ひらがなの
+    字句の続き: もくせ｜い）の読みが辞書の語の読み（もくせい: 木犀）なのに、替えた後の同じ所の読み（みくらい）が辞書の
+    語の読みでないなら、替えない（紫は残る・2026-11-20 例文の正しい文）。CN_RESPELL_KANA_WORD_READING=0 で前のまま。"""
+    try:
+        if (os.environ.get('CN_RESPELL_KANA_WORD_READING') == '0' or not isinstance(out, dict) or out is result):
+            return out
+        got = out.get('corrected') or line
+        if got == line:
+            return out
+        import difflib
+        from morphology import tokenize
+        import ime_reconvert
+        toks = list(tokenize(line))
+        hira = lambda x: bool(x) and all('ぁ' <= c <= 'ゖ' for c in x)
+        for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, line, got, autojunk=False).get_opcodes():
+            if tag == 'equal':
+                continue
+            if not (hira(line[i1:i2]) and hira(got[j1:j2])):
+                continue
+            ks = [k for k, t in enumerate(toks) if t.start < max(i2, i1 + 1) and i1 < t.end]
+            if not ks:
+                continue
+            lo, hi = ks[0], ks[-1]
+            while lo > 0 and hira(toks[lo - 1].surface) and toks[lo - 1].pos not in ('助詞', '助動詞') \
+                    and toks[lo - 1].end == toks[lo].start:
+                lo -= 1
+            while hi + 1 < len(toks) and hira(toks[hi + 1].surface) and toks[hi + 1].pos not in ('助詞', '助動詞') \
+                    and toks[hi + 1].start == toks[hi].end:
+                hi += 1
+            seg = toks[lo:hi + 1]
+            if not all(hira(t.surface) and t.pos not in ('助詞', '助動詞') for t in seg) or len(seg) < 2:
+                continue
+            a, b = seg[0].start, seg[-1].end
+            if not (a <= i1 and i2 <= b):
+                continue
+            old_rd, new_rd = line[a:b], line[a:i1] + got[j1:j2] + line[i2:b]
+            if len(old_rd) < 3 or not ime_reconvert._dict_faces(old_rd, 4):
+                continue
+            if not ime_reconvert._dict_faces(new_rd, 4):
+                return result
+        return out
+    except Exception:
+        return out
+
+
+def _inner_delete_guard(result, out, line):
+    """読み直しが字を消すだけで、消す所が元の行の辞書の1語（読みがある3字以上の語）の中なら採らない（ぐっすり
+    おやすみ → ぐっすりやすみ の お）。辞書どおりの語の中の1字を打ち過ぎと見る決め手が無い。
+    CN_RESPELL_INNER_DELETE=0 で前のまま。"""
+    if (os.environ.get('CN_RESPELL_INNER_DELETE') == '0' or not isinstance(out, dict)
+            or not isinstance(result, dict) or out is result):
+        return out
+    before = result.get('corrected') or line
+    after = out.get('corrected') or line
+    if after == before or before != line:
+        return out
+    ops = [o for o in difflib.SequenceMatcher(None, before, after, autojunk=False).get_opcodes() if o[0] != 'equal']
+    if not ops or any(o[0] != 'delete' for o in ops):
+        return out
+    try:
+        from morphology import tokenize
+        toks = list(tokenize(before))
+    except Exception:
+        return out
+    for o in ops:
+        if not any(t.start <= o[1] and o[2] <= t.end and t.end - t.start >= 3 and t.has_reading
+                   and t.pos != '記号' and t.pos_sub != '固有名詞' for t in toks):
+            return out
+    return result
+
+def _typed_words_guard(result, out, line):
+    """読み直しが替えた所が、元の行で身近な漢字の語（と助詞）だけで出来ている（今｜彼｜の・殴る｜蹴る・時化｜で）なら
+    採らない。どの語も辞書に読みがあり、漢字を含む内容語は身近（TYPED_WORDS_RANK 以内）で、固有名詞・1字の かな の語
+    （札｜ん｜港 の ん）が無いので、打った人が選んで確定した語の並び。読みを打ち違いと見て別の語にする決め手が無い
+    （紫は前の段のまま）。2026-11-20 正しい文の見直し: 今彼の → これかの・殴る蹴る → 殴れる・時化で → 死刑へ。
+    CN_RESPELL_TYPED_WORDS=0 で前のまま。"""
+    if (os.environ.get('CN_RESPELL_TYPED_WORDS') == '0' or not isinstance(out, dict)
+            or not isinstance(result, dict) or out is result):
+        return out
+    before = result.get('corrected') or line
+    after = out.get('corrected') or line
+    if after == before or before != line:
+        return out               # 前の段が書き換えた行（打った字のままでない所）は見ない
+    ops = [o for o in difflib.SequenceMatcher(None, before, after, autojunk=False).get_opcodes() if o[0] != 'equal']
+    if not ops:
+        return out
+    a, b = ops[0][1], ops[-1][2]
+    try:
+        from morphology import tokenize
+        import ime_reconvert as R
+    except Exception:
+        return out
+    all_toks = list(tokenize(before))
+    cover = [t for t in all_toks if t.start < max(b, a + 1) and a < t.end]
+    if not cover:
+        return out
+    content = 0
+    for k, t in enumerate(cover):
+        if not t.has_reading or t.pos_sub == '固有名詞':
+            return out
+        if t.pos in ('名詞', '動詞', '形容詞'):
+            if not any(_kanji(c) for c in t.surface):
+                return out
+            # 名詞が助詞を挟まず名詞に続く所（血｜初夏｜化・秋｜者）は、IME が崩れた読みを字ごとに当てた跡のことがある。
+            # 前が時の名詞（今｜彼: 副詞可能）のときだけ守る
+            n = all_toks.index(t)
+            if any(x.pos == '名詞' and y.pos == '名詞' and x.end == y.start
+                   and not str(x.pos_sub or '').startswith('副詞可能')
+                   for x, y in ([(all_toks[n - 1], t)] if n else []) + ([(t, all_toks[n + 1])] if n + 1 < len(all_toks) else [])):
+                return out
+            # 助詞の後ろの漢字1字の名詞がすぐ動詞に続く所（に｜居｜置い）も同じ（形容詞などに修飾された 甘い｜物｜食べ は守る）
+            if t.pos == '名詞' and len(t.surface) == 1:
+                n = all_toks.index(t)
+                if (n + 1 < len(all_toks) and all_toks[n + 1].pos == '動詞' and all_toks[n + 1].start == t.end
+                        and (n == 0 or all_toks[n - 1].pos in ('助詞', '記号'))):
+                    return out
+            # 用言の連用形のすぐ後ろの名詞・動詞（出かけ｜塔・燃え｜髪・居｜置い）も、崩れた読みに字を当てた跡のことがある
+            # （隣の語は替えた所の外でも見る）
+            n = all_toks.index(t)
+            nb = [(all_toks[n - 1], t)] if n else []
+            if n + 1 < len(all_toks):
+                nb.append((t, all_toks[n + 1]))
+            if any(x.pos in ('動詞', '形容詞') and '連用' in str(x.infl_form or '') and x.end == y.start
+                   and y.pos in ('名詞', '動詞') for x, y in nb):
+                return out
+            try:
+                rk = R._rank(t.base_form if t.pos != '名詞' and t.base_form and t.base_form != '*' else t.surface)
+            except Exception:
+                return out
+            if rk > TYPED_WORDS_RANK:
+                return out
+            content += 1
+        elif t.pos == '助詞':
+            if t.surface not in _TYPED_PARTICLES:
+                return out
+            # 行の頭・記号の後ろの助詞（も｜水戸）は、前に付く語が無く、崩れた読みの頭の跡
+            n = all_toks.index(t)
+            if n == 0 or all_toks[n - 1].pos == '記号':
+                return out
+        elif t.pos == '助動詞' and k and cover[k - 1].pos in ('動詞', '形容詞', '助動詞') and cover[k - 1].end == t.start:
+            pass                 # 用言に付いた助動詞（食べ｜たい）
+        else:
+            return out
+    return result if content else out
 
 
 def _lone_kanji_noun_guard(result, out, line):
@@ -3238,11 +3501,19 @@ def _kana_verb_guard(result, out, line):
         # （ねり｜さし の ねり）も打ち違いの一部（うに 11-10 08:09Z ねりさし→ものさし）。CN_SHIFT_PASS_VERB_GUARD=0 で前のまま
         return out
     kept = dict(result)
+    # 紫の所に用言の外の英字（母にrたのまれて の r）が在るなら、その紫は用言のせいではないので残す（2026-11-20 補正担当、
+    # 束の打ち違いの行で紫も消えていた）。CN_KANA_VERB_GUARD_LATIN=0 で前のまま
+    _latin = lambda c: ('a' <= c <= 'z' or 'A' <= c <= 'Z' or 'ａ' <= c <= 'ｚ' or 'Ａ' <= c <= 'Ｚ')
+    def _foreign(x):
+        return (os.environ.get('CN_KANA_VERB_GUARD_LATIN') != '0'
+                and any(_latin(before[k]) and not any(s <= k < e for s, e in verbs)
+                        for k in range(max(0, x[0]), min(len(before), x[1]))))
     for key in ('odd_spans', 'unsure_spans'):
         if result.get(key):
-            kept[key] = [x for x in result[key] if not any(x[0] < e and s < x[1] for s, e in verbs)]
+            kept[key] = [x for x in result[key] if _foreign(x) or not any(x[0] < e and s < x[1] for s, e in verbs)]
     if result.get('odd_reasons'):
-        kept['odd_reasons'] = [r for r in result['odd_reasons'] if not any(r[0] < e and s < r[1] for s, e in verbs)]
+        kept['odd_reasons'] = [r for r in result['odd_reasons']
+                               if _foreign(r) or not any(r[0] < e and s < r[1] for s, e in verbs)]
     return kept
 
 
@@ -3758,6 +4029,22 @@ def _romaji_key_repairs(rd, drop_only=None):
     out = []
     seen = set()
     for sp in _romaji_spellings(rd):
+        tries = _romaji_tries(sp, near)
+        for t, drop in tries:
+            for k in R._to_kanas(t):
+                if not k or not _is_hira(k):
+                    continue
+                if drop_only is not None:
+                    drop_only[k] = drop_only.get(k, True) and drop
+                if k not in seen:
+                    seen.add(k)
+                    out.append(k)
+    return out
+
+
+def _romaji_tries(sp, near):
+    """綴り sp の1打の戻しの綴り [(綴り, 抜きか)]（入れ替え・隣のキー・巻き込みの1打の抜き・手の位置のずれ）。"""
+    if True:
         tries = []
         for i in range(len(sp)):
             if i + 1 < len(sp) and sp[i] != sp[i + 1]:
@@ -3772,16 +4059,67 @@ def _romaji_key_repairs(rd, drop_only=None):
             # 手の位置のずれ（同じ手の続く2〜4打が揃って隣のキー）を戻す綴り（hand_shift・2026-11-06）
             import hand_shift
             tries.extend((t, False) for t in hand_shift.romaji_shifts(sp))
-        for t, drop in tries:
-            for k in R._to_kanas(t):
-                if not k or not _is_hira(k):
-                    continue
-                if drop_only is not None:
-                    drop_only[k] = drop_only.get(k, True) and drop
-                if k not in seen:
-                    seen.add(k)
-                    out.append(k)
+        return tries
+
+
+def _romaji_two_key_repairs(rd):
+    """英字の残る打った読みで、1打の戻しでは英字が残る時の、2打の戻し（入れ替えの上に巻き込みの1打: tenikgtaii →
+    tenkigaii）で英字の残らない読み。英字が残るのは打ち違いの確かな跡なので、2打まで見る（2026-11-19 うに: ローマ字の
+    手にkg大尉 が 天気がいい に直らない）。CN_ROMAJI_TWO_KEY=0 で見ない"""
+    if os.environ.get('CN_ROMAJI_TWO_KEY') == '0':
+        return []
+    import romaji_swap_repair as R
+    import keyboard_layout as KB
+    near = {}
+    for x, y in KB.letter_intrusion_pairs():
+        near.setdefault(x, set()).add(y)
+        near.setdefault(y, set()).add(x)
+    out, seen = [], set()
+    for sp in _romaji_spellings(rd):
+        if len(sp) > 14:
+            continue
+        for t1, _d in _romaji_tries(sp, near):
+            for t2, _d2 in _romaji_tries(t1, near):
+                for k in R._to_kanas(t2):
+                    if k and _is_hira(k) and k not in seen:
+                        seen.add(k)
+                        out.append(k)
     return out
+
+
+_IME_LINE = {}
+
+
+def _ime_line_slice(done, s, e):
+    """行を IME で読み直した読み（打った読みに一番近い: 黄合木 → きあいぎ。解析の読みは きごうき）の [s, e) の所。
+    IME の語の区切りが s・e に在る時だけ。IME が無い・区切りが合わないなら None（2026-11-19 うに: ローマ字で
+    会議 を kiaigi と打った 黄合木 が直らない）。CN_ROMAJI_IME_READING=0 で前のまま"""
+    if os.environ.get('CN_ROMAJI_IME_READING') == '0':
+        return None
+    if done not in _IME_LINE:
+        got = None
+        try:
+            from ime_language import JapaneseIME
+            with JapaneseIME() as ime:
+                if ime.available:
+                    got = ime.reverse_words(done)
+        except Exception:
+            got = None
+        if len(_IME_LINE) > 64:
+            _IME_LINE.clear()
+        _IME_LINE[done] = got
+    got = _IME_LINE[done]
+    if not got or not isinstance(got[0], str):
+        return None
+    starts = {w[0]: w[2] for w in got[1]}
+    ends = {w[1]: w[3] for w in got[1]}
+    if s not in starts or e not in ends:
+        return None
+    # 雲の代わりの辞書（dict_ime）は種類を返さない（全部 0）。種類の無い答えは本物の IME の読みではない
+    if not any(w[4] for w in got[1]):
+        return None
+    r = _hira(got[0][starts[s]:ends[e]])
+    return r if _is_hira(r) else None
 
 
 def _romaji_spans(done, a, b, letters=True, widen=_ROMAJI_WIDEN):
@@ -3813,6 +4151,10 @@ def _romaji_spans(done, a, b, letters=True, widen=_ROMAJI_WIDEN):
             if not rds:
                 # 打った読みの記録が無ければ、語ごとの読み（英字はそのまま1打・漢字は語の読み）を並べる
                 rds = [r for r in _romaji_token_readings(toks[i:j + 1], need_letters=letters) if len(r) <= MAX_READ + 4]
+                if not letters:
+                    ir = _ime_line_slice(done, s, e)
+                    if ir and ir not in rds and len(ir) <= MAX_READ + 4:
+                        rds.insert(0, ir)
             if rds:
                 out.append((s, e, rds))
     return out
@@ -3883,6 +4225,37 @@ def _romaji_token_readings(toks, limit=4, need_letters=True):
     return [r for r in out if not need_letters or any('a' <= c <= 'z' for c in r)]
 
 
+def _romaji_one_key_elsewhere(cur, text, fx, s, e):
+    """補正し直しで読みが替わった所が、戻した所 [s, e) の外の1語だけで、その語の読みのローマ字1打の戻し
+    （隣のキー・入れ替え: みってい → にってい）になっているか。行に2つ在る打ち違いのもう1つ（紫の付いていない方）が
+    直った形として数える（2026-11-19 うに: kiaiginomittei の 黄合木の密偵 が 会議の日程 に直らない）。
+    CN_ROMAJI_ONE_KEY_ELSEWHERE=0 で前のまま"""
+    if os.environ.get('CN_ROMAJI_ONE_KEY_ELSEWHERE') == '0':
+        return False
+    shift = len(text) - len(cur)
+    tail = e + shift
+    ops = [o for o in difflib.SequenceMatcher(None, text, fx, autojunk=False).get_opcodes() if o[0] != 'equal']
+    if len(ops) != 1:
+        return False
+    _tag, i1, i2, j1, j2 = ops[0]
+    if i1 < tail and s < max(i2, i1 + 1):
+        return False
+    try:
+        from morphology import tokenize
+        old = [t for t in tokenize(text) if t.start < max(i2, i1 + 1) and i1 < t.end]
+        new = [t for t in tokenize(fx) if t.start < max(j2, j1 + 1) and j1 < t.end]
+    except Exception:
+        return False
+    if len(old) != 1 or len(new) != 1 or not old[0].has_reading or not new[0].has_reading:
+        return False
+    if old[0].start < tail and s < old[0].end:
+        return False
+    ro, rn = _hira(old[0].reading), _hira(new[0].reading)
+    if ro == rn or not _is_hira(ro) or not _is_hira(rn):
+        return False
+    return rn in _romaji_key_repairs(ro)
+
+
 def _fixes_other_odd(cur, text, fx, s, e, spans):
     """補正し直しで読みが替わった所が、戻した所 [s, e) の外で、元の行のほかの紫（もう1つの打ち違い: おひりゅ と パス板）
     の上かその隣だけなら、重ねた別の直しではなく、行に2つ在る打ち違いのもう1つが直った形として数える。CN_ROMAJI_OTHER_ODD_FIX=0
@@ -3929,6 +4302,12 @@ def _has_letters(text):
     return any(c in _FULL_LETTERS or 'a' <= c.lower() <= 'z' for c in text)
 
 
+# 文の形の段の紫（correction_entry._shape_respell）は語の途中で切れる（遊び｜ましちゃ）。ひらがなだけの紫でも左右へ1語
+# 広げて見る（遊びました）。その段の時だけ。
+import contextvars as _cv_shape
+SHAPE_WIDEN = _cv_shape.ContextVar('cn_shape_widen', default=False)
+
+
 def _romaji_repair_once(line, result, run, store, dict_index, context_vec=None, decided=()):
     import morphology
     cur = result.get('corrected') or line
@@ -3946,10 +4325,10 @@ def _romaji_repair_once(line, result, run, store, dict_index, context_vec=None, 
         elif os.environ.get('CN_ROMAJI_PLAIN') != '0' and any(not _is_hira(c) for c in cur[x:y]):
             # 英字の残らない打ち違い（かけよう を kakeyuo と打って 出かけ湯尾）も、紫の所の打った読みを打鍵に戻して見る
             spans.append((x, y, False, _ROMAJI_WIDEN))
-        elif os.environ.get('CN_ROMAJI_PLAIN') != '0' and any(_kanji(c) for c in cur):
+        elif os.environ.get('CN_ROMAJI_PLAIN') != '0' and (any(_kanji(c) for c in cur) or SHAPE_WIDEN.get()):
             # ひらがなだけの紫（がいにおで: IME が仮名のまま残した打ち違い）は、行のどこかを漢字に変換した行で、
             # 紫の語だけを見る（左右へ広げると重い: 挙動関連担当の測り 11-03 で止まった後に33秒。かなだけの行は見ない）
-            spans.append((x, y, False, 0))
+            spans.append((x, y, False, 1 if SHAPE_WIDEN.get() else 0))
     if not spans:
         return result
     base = morphology.path_cost(cur)
@@ -3971,6 +4350,13 @@ def _romaji_repair_once(line, result, run, store, dict_index, context_vec=None, 
                         tried.add(r)
                         reps.append(r)
                         src[r] = rd
+            if letters and not reps:
+                for rd in rds:
+                    for r in _romaji_two_key_repairs(rd):
+                        if r not in tried:
+                            tried.add(r)
+                            reps.append(r)
+                            src[r] = rd
             try:
                 placed = _placed(cur, s, e, reps, store, dict_index, context_vec, src, tried)
             except Exception:
@@ -4010,7 +4396,8 @@ def _romaji_repair_once(line, result, run, store, dict_index, context_vec=None, 
             for fx, v in _judge(cur, s, e, [text], run, other, True).items():
                 # 補正し直しで読みまで替わった形（1打の戻しの上に別の直しが重なった: あたrさひい→おもねっらしい）は見ない
                 if (want is not None and fx != text and _line_reading(fx) != want
-                        and not _fixes_other_odd(cur, text, fx, s, e, spans)):
+                        and not _fixes_other_odd(cur, text, fx, s, e, spans)
+                        and not _romaji_one_key_elsewhere(cur, text, fx, s, e)):
                     continue
                 if fx not in seen or v[0] < seen[fx][0]:
                     seen[fx] = v

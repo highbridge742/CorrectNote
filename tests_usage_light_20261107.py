@@ -19,6 +19,27 @@ def grew(before, after):
 
 
 class UsageLight(unittest.TestCase):
+    def setUp(self):
+        # 2026-11-20 うにさん「チェックボックスを付ける（既定オフ。オフの間は数えない）」: 数えるのはチェックがオンの時だけ
+        # になった（子には頼みに載せて渡す）。この試験は数える時の決まりを見るので、オンにして確かめる
+        self._was = usage_counts.ON
+        usage_counts.ON = True
+        self.addCleanup(setattr, usage_counts, 'ON', self._was)
+
+    def test_off_counts_nothing(self):
+        usage_counts.ON = False
+        a = initial(); worker = analysis_worker.Worker()
+        try:
+            state = analysis_worker.snapshot(a)
+            line = 'あしたのかいぎはじゅうじからでつ'
+            prepared = wait(worker, worker.submit(dict(kind='prepare', lines=[line]), state))
+            before = counted()
+            wait(worker, worker.submit(dict(kind='line', line=line, context=prepared['context'], input_method='kana',
+                                            attested=prepared['attested'])))
+            self.assertEqual(grew(before, counted()), {})                 # オフ: 何も数えない
+        finally:
+            worker.close()
+
     def test_light_answers_are_not_counted(self):
         a = initial(); worker = analysis_worker.Worker()
         try:

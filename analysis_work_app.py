@@ -331,6 +331,19 @@ def line_readings(app,index,lines):
     return doc.row_readings(index,lines[index])
 
 
+def quick_line_readings(app,index,lines):
+    """簡易入力の欄の、その行の打った読み（IME の確定の記録・本文の line_readings と同じ形）。2026-11-20 うにさん
+    「簡易入力で、からと打って空に変換し、再入力変換したら、くう、になった」: 再入力変換は簡易入力の打った記録を
+    見ていなかった。まだ受け取っていない確定の知らせも先に取り込む"""
+    widget=getattr(app,'_quick_text',None)
+    if widget is None:return ()
+    try:drain_quick_readings(app)
+    except Exception:pass
+    doc=getattr(app,'_quick_calculation_document',None)
+    if doc is None or doc.owner is not widget or not 0<=index<len(lines):return ()
+    return doc.row_readings(index,lines[index])
+
+
 def background_valid(app,state):
     from tab_analysis import background_compatible
     # The active editor's generation is unrelated to another document.

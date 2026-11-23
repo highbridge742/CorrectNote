@@ -112,6 +112,8 @@ class LiveCompositionWindowsTests(unittest.TestCase):
     """Own windows only: a Tk Text here with a conversion left in its IME context, and a
     child process window that comes to the front."""
     def test_left_conversion_in_a_window_behind(self):
+        if not __import__('offscreen_window').real_focus_allowed():
+            self.skipTest('本当に窓を前へ出す試験は CN_TEST_REAL_FOCUS=1 の時だけ（見えない机で回す run_on_desktop が立てる・うにさんの焦点を取らない・2026-11-21）')
         import ctypes as C
         from ctypes import wintypes as W
         import tkinter as tk

@@ -222,7 +222,19 @@ def _conversions(line, fixed):
                 if rd != t.surface:
                     parts.append((at, at + len(rd), t.start, t.end))
                 at += len(rd)
-            if ok and at == b and parts and any(all(_kata(c) for c in fixed[x:y]) for _p, _q, x, y in parts):
+            # 漢語の名詞と和語の語が続けて置かれた所（にゅうりょくみ → 入力見）も語ごとに見る。まとめると漢語＋和語の
+            # 並びが漢語にならず、漢語の所までかなに戻っていた（2026-11-20 うにの解決タブ）。CN_KANA_KEEP_PER_KANGO=0 で前のまま
+            if ok and at == b and parts and any(
+                    all(_kata(c) for c in fixed[x:y])
+                    or (os.environ.get('CN_KANA_KEEP_PER_KANGO') != '0' and len(parts) > 1
+                        and (is_kango(fixed[x:y], line[p_:q_]) or is_kango_sahen(fixed[x:y], line[p_:q_])))
+                    for p_, q_, x, y in parts):
+                # 漢語の名詞と一緒に置かれた動詞（入力｜見ています の 見）は、和語の名詞ではないので戻さない
+                # （和語の動詞は漢字。1語の動詞だけを置いた所は今まで通り）
+                if os.environ.get('CN_KANA_KEEP_PER_KANGO') != '0' and not any(
+                        all(_kata(c) for c in fixed[x:y]) for _p, _q, x, y in parts):
+                    verbs = {(t.start, t.end) for t in cover if t.pos == '動詞'}
+                    parts = [pt for pt in parts if (pt[2], pt[3]) not in verbs]
                 out.extend(parts)
                 continue
         out.append((a, b, s, e))
@@ -269,6 +281,41 @@ def wago_kana_respell(line, fixed):
     return new
 
 
+def _in_kango_compound(fixed, line, item, back, kept=()):
+    """戻そうとした和語の名詞（奥行）が、漢字のまま残る漢語の名詞（固定）とすぐ続いて1つの複合語になっているか
+    （奥行｜固定）。和語だけかなに戻すと おくゆき固定 のような かなと漢字の混ざった複合語になり、文として崩れる
+    （2026-11-21 うに 隣接キータブ: 【奥行固定】）。ひらがなのまま通す一覧の語（ひらがな）は今まで通り戻す。
+    CN_KANA_KEEP_COMPOUND=0 で前のまま"""
+    a, b, s, e = item
+    try:
+        import kana_keep_list
+        if line[a:b] in kana_keep_list.words():
+            return False
+        from morphology import tokenize
+        toks = list(tokenize(fixed))
+    except Exception:
+        return False
+    mine = [t for t in toks if s <= t.start and t.end <= e]
+    if not mine or any(t.pos != '名詞' for t in mine):
+        return False
+    gone = [(x[2], x[3]) for x in back]
+    for t in toks:
+        if not (t.start == e or t.end == s):
+            continue
+        # 漢字のまま残すと決めた和語の名詞（横幅 の 幅）の隣の和語（横）も同じ複合語として残す
+        if (t.pos == '名詞' and any(x[2] <= t.start and t.end <= x[3] for x in kept)
+                and all('一' <= c <= '鿿' for c in t.surface)):
+            return True
+        if t.pos != '名詞' or len(t.surface) < 2 or not all('一' <= c <= '鿿' for c in t.surface):
+            continue
+        if not (t.start == e or t.end == s):
+            continue
+        if any(x < t.end and t.start < y for x, y in gone):
+            continue
+        return True
+    return False
+
+
 def repair_line(line, result, decided=()):
     if not isinstance(result, dict):
         return result
@@ -298,6 +345,14 @@ def repair_line(line, result, decided=()):
         except Exception:
             continue
         back.append((a, b, s, e))
+    if back and os.environ.get('CN_KANA_KEEP_COMPOUND') != '0':
+        kept = []
+        while True:
+            more = [x for x in back if x not in kept and _in_kango_compound(fixed, line, x, back, kept)]
+            if not more:
+                break
+            kept += more
+            back = [x for x in back if x not in more]
     if not back:
         return result
     new = fixed

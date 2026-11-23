@@ -104,8 +104,10 @@ class ScrollTrace(unittest.TestCase):
         moves = got['moves']
         self.assertTrue(moves, got)
         last = moves[-1]
-        self.assertTrue(any('_goto_line' in c for c in last['by']['callers']) or
-                        any('_center_navigation_line' in c for c in last['by']['callers']), last)
+        # 飛んだ後に品詞のフォントが付いて、カーソルの行を同じ高さに残す動き（boundary_colors の _keep_cursor_y・
+        # CN_POS_PAINT_KEEP_CURSOR_ROW・2026-11-22）が後に続くことがある。飛んだ動きが記録の中にあればよい
+        self.assertTrue(any(any('_goto_line' in c or '_center_navigation_line' in c for c in m['by']['callers'])
+                            for m in moves), moves)
         self.assertIsNotNone(last['since']['right_release'], last)
         self.assertLess(last['since']['right_release'], 10.0, last)
         self.assertTrue(any(m['top_after'] > m['top_before'] for m in moves), moves)

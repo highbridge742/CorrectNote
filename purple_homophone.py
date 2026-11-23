@@ -91,6 +91,42 @@ def _chosen_rare(tok):
         return False
 
 
+RANK_GAP = 40   # 替える表記が打った語よりこれだけ身近（段が小さい）でなければ替えない
+
+
+def _near_rank(src, face):
+    """替える表記の身近さが打った語と変わらない（段の差が RANK_GAP 未満: 発送 488・発想 476）なら替えない。IME は同じ読みの
+    身近な方を先に出すので、身近さの並ぶ語を選んだのは書き手（2026-11-20 正しい文の見直し: 賞品の発送 → 発想）。
+    切り替え CN_PURPLE_HOMOPHONE_NEAR_RANK=0 で前のまま"""
+    if os.environ.get('CN_PURPLE_HOMOPHONE_NEAR_RANK') == '0':
+        return False
+    try:
+        import ime_reconvert as R
+        return R._rank(src) - R._rank(face) < RANK_GAP
+    except Exception:
+        return False
+
+
+def _na_before_suru(text, tok, face):
+    """替える表記 face が形容動詞の語幹（好調・綺麗）で、打った語のすぐ後ろが する の活用（し・す・さ・せ）なら替えない。
+    形容動詞の語幹に する は付かない（好調した とは言わない）ので、紫が消えても文の形にならない
+    （2026-11-20 正しい文の見直し: 顔が高潮した → 好調した）。打った語も形容動詞の語幹なら見ない。
+    切り替え CN_PURPLE_HOMOPHONE_NA_SURU=0 で前のまま"""
+    if os.environ.get('CN_PURPLE_HOMOPHONE_NA_SURU') == '0':
+        return False
+    try:
+        from morphology import tokenize
+        nxt = [t for t in tokenize(text) if t.start == tok.end]
+        if not nxt or nxt[0].pos != '動詞' or nxt[0].base_form != 'する':
+            return False
+        if str(tok.pos_sub or '') == '形容動詞語幹':
+            return False
+        ft = list(tokenize(face))
+        return len(ft) == 1 and str(ft[0].pos_sub or '') == '形容動詞語幹'
+    except Exception:
+        return False
+
+
 def _clean(res, new):
     return (isinstance(res, dict) and (res.get('corrected') or new) == new
             and not res.get('odd_spans') and not res.get('unsure_spans'))
@@ -127,6 +163,8 @@ def respell(line, result, run):
         for f in _candidates(tok):
             if tries >= MAX_TRIES:
                 break
+            if _na_before_suru(text, tok, f):
+                continue
             tries += 1
             new = text[:tok.start] + f + text[tok.end:]
             try:
@@ -135,11 +173,40 @@ def respell(line, result, run):
                 continue
             if _clean(res, new):
                 ok.append(f)
-        if len(ok) != 1:
+        if len(ok) == 1 and _variant(tok, ok[0]):
+            out = _drop_purple(out, tok)
+            continue
+        if len(ok) != 1 or _near_rank(tok.surface, ok[0]):
             continue
         f = ok[0]
         text = text[:tok.start] + f + text[tok.end:]
         out = _rebuild(line, out, text, tok, f)
+    return out
+
+
+def _variant(tok, face):
+    """face が打った語 tok の別の書き方（奇麗・綺麗: 同じ読みの同じ品詞で、漢字を共に持つ）か。別の書き方に替えると
+    紫は消えるが、書き手の選んだ表記を替える理由にならない。そのときは表記を替えず、その語の紫を外す（2026-11-20
+    正しい文の見直し: 奇麗ではありません → 綺麗）。CN_PURPLE_HOMOPHONE_VARIANT=0 で前のまま"""
+    if os.environ.get('CN_PURPLE_HOMOPHONE_VARIANT') == '0':
+        return False
+    kanji = lambda c: '\u4e00' <= c <= '\u9fff'
+    if not (set(c for c in tok.surface if kanji(c)) & set(c for c in face if kanji(c))):
+        return False
+    try:
+        from morphology import tokenize
+        ft = list(tokenize(face))
+    except Exception:
+        return False
+    return (len(ft) == 1 and ft[0].pos == tok.pos and ft[0].pos_sub == tok.pos_sub
+            and ft[0].reading == tok.reading and len(face) == len(tok.surface))
+
+
+def _drop_purple(result, tok):
+    out = dict(result)
+    inside = lambda x: tok.start <= x[0] and x[1] <= tok.end
+    out['odd_spans'] = [x for x in result.get('odd_spans') or () if not inside(x)]
+    out['odd_reasons'] = [r for r in result.get('odd_reasons') or () if not (len(r) >= 2 and inside(r))]
     return out
 
 

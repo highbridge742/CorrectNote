@@ -15,6 +15,7 @@
 特定の語や文字列には合わせない（品詞と読みだけで見る）。
 """
 import difflib
+import os
 
 _QUESTION_READINGS = ('なに', 'なん', 'だれ', 'どこ', 'どれ', 'どちら', 'どっち', 'どの', 'なぜ', 'いくつ',
                       'いくら', 'どんな', 'どなた')
@@ -102,6 +103,13 @@ def unanswered_question_spans(text):
             continue
         if any(x.surface in ('か', 'の', 'かな', 'かしら', 'っけ') and x.pos == '助詞' for x in sent):
             continue
+        # 言い切りの形のすぐ後ろの か を、解析が後ろの字と1語に読んだ所（できる｜かお｜約束: できるか＋お約束）も、
+        # 疑問の語を受ける か として見る（2026-11-20 補正担当・例文の正しい文）。CN_QUESTION_KA_JOINED=0 で前のまま
+        if os.environ.get('CN_QUESTION_KA_JOINED') != '0' and any(
+                k > 0 and x.surface.startswith('か') and len(x.surface) >= 2 and sent[k - 1].end == x.start
+                and sent[k - 1].pos in ('動詞', '形容詞', '助動詞') and (sent[k - 1].infl_form or '') == '基本形'
+                for k, x in enumerate(sent)):
+            continue
         for j, x in enumerate(sent):
             if not _is_question_word(x):
                 continue
@@ -114,7 +122,17 @@ def unanswered_question_spans(text):
             rest = sent[k:]
             if rest and rest[0].pos == '助詞' and rest[0].surface in ('も', 'でも', 'か', 'やら', 'ぞ'):
                 continue
+            # 何＋助数詞 のすぐ後ろの も を、解析が後ろと1語（何｜年｜もの｜間）に読んだ所も、数の多さの も（何年も）。
+            # （2026-11-20 正しい文の見直し）。CN_QUESTION_NUM_MO=0 で前のまま
+            if (k > j + 1 and rest and rest[0].surface.startswith('も') and rest[0].start == sent[k - 1].end
+                    and os.environ.get('CN_QUESTION_NUM_MO') != '0'):
+                continue
             if any(r.surface in ('ても', 'でも') or (r.surface == 'も' and r.pos == '助詞') for r in rest):
+                continue
+            # 疑問の語＋（格助詞）＋だって（誰にだって・何だって）も、も・でも と同じ「どれでも」の形（2026-11-20 例文の
+            # 正しい文）。CN_QUESTION_DATTE=0 で前のまま
+            if (os.environ.get('CN_QUESTION_DATTE') != '0'
+                    and any(r.surface == 'だって' and r.pos == '助詞' for r in rest[:2])):
                 continue
             out.append((x.start, sent[-1].end))
             break

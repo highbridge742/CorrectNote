@@ -117,6 +117,22 @@ def choose(rd, prev_noun=None, prev_particle=None, no_object=False):
                     return None
         except Exception:
             pass
+    # 表記の候補の漢字が意味で分かれ（止める・辞める）、例文の組で かな の基本形（やめる 489）が漢字の表記の合計
+    # （284）以上なら、かなで書くのが普通の語。どの漢字にも決めない（もうやめてもいい → 辞めても にしていた・
+    # 2026-11-20 補正担当・例文の正しい文）。CN_WAGO_VERB_KANA_USUAL=0 で前のまま
+    if os.environ.get('CN_WAGO_VERB_KANA_USUAL') != '0':
+        try:
+            tot = _base_totals()
+            kb = {_base(f) or _base_masu(f) or '' for f in faces} - {''}
+            used = [b for b in kb if tot.get(b, 0) > 0]
+            hb = {_hira_base(b, f) for f in faces for b in [_base(f) or _base_masu(f) or ''] if b} - {''}
+            cs = sorted((tot.get(b, 0) for b in used), reverse=True)
+            # 意味で分かれる: 2番目の表記も漢字の表記の合計の SPLIT_SHARE 以上（分かる 559・解る 12 は分かれない）
+            if (len(cs) >= 2 and cs[1] >= SPLIT_SHARE * sum(cs) and hb
+                    and max(tot.get(h, 0) for h in hb) >= sum(cs)):
+                return None
+        except Exception:
+            pass
     ranked = sorted(faces, key=R._rank)
     best = R._rank(ranked[0])
     if best > COMMON:
@@ -144,6 +160,21 @@ def choose(rd, prev_noun=None, prev_particle=None, no_object=False):
     return ranked[0]
 
 
+def _hira_base(base, face):
+    """漢字の基本形（辞める）の かな の基本形（やめる）。読みは表記の読みの漢字の所を当てる。"""
+    try:
+        from morphology import dictionary_inflections
+        for r in dictionary_inflections(base) or ():
+            if str(r[0]).startswith('動詞') and len(r) > 3 and r[2] == base and r[3] not in ('*', ''):
+                stem = r[3]
+                tail = ''.join(c for c in base if '\u3041' <= c <= '\u3096')
+                return stem + tail if not stem.endswith(tail) else stem
+    except Exception:
+        pass
+    return ''
+
+
+SPLIT_SHARE = 0.25
 TOTAL_MIN = 20
 INTR_MIN = 5
 _TOTALS = []

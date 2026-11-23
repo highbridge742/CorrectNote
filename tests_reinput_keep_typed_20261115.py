@@ -82,6 +82,29 @@ class KeepTyped(unittest.TestCase):
         self.r._keep_typed(self.r.state)
         self.assertNotIn((0, 1, 'ひ', 'ひ', KEYS), self.occ())
 
+    # 2026-11-21 07:48Z うにさん「再入力変換で一度変更した後、その範囲を再入力変換を掛けたが平仮名にならなかった」:
+    # 終えた範囲の終わりにカーソルがあるまま Ctrl の2回押し → その範囲を開く（右の語ではなく）
+    def test_ctrl_twice_again_opens_the_same_range(self):
+        os.environ.pop('CN_REINPUT_KEEP_TYPED', None)
+        self.open_first()
+        self.r.convert_next()                 # 火
+        self.r.finish()
+        self.text.mark_set('insert', '1.1')   # 終えた範囲の終わり
+        self.assertTrue(self.r.start())
+        self.assertEqual(self.r.current(), 'ひ')
+        self.r.cancel()
+        self.r.finish() if self.r.state else None
+
+    def test_ctrl_twice_again_switch(self):
+        os.environ.pop('CN_REINPUT_KEEP_TYPED', None)
+        self.open_first()
+        self.r.convert_next()
+        self.r.finish()
+        self.text.mark_set('insert', '1.1')
+        with mock.patch.dict(os.environ, {'CN_REINPUT_AGAIN_SAME': '0'}):
+            self.r.start()
+            self.assertNotEqual(self.r.current() if self.r.state else None, 'ひ')   # 前の形（右の語の規則）
+
     def test_switch_off_is_the_old_form(self):
         with mock.patch.dict(os.environ, {'CN_REINPUT_KEEP_TYPED': '0'}):
             self.open_first()

@@ -138,13 +138,26 @@ def _label_line(toks):
     """行が名詞・接頭・数・記号だけで出来ていて（見出し・ラベルの書き方）、どの語も辞書の語として読めるか
     （全体評価の方針 v2 の P）。1字の切れ端は名詞か接尾として立つ時だけ"""
     words = [t for t in toks if t.pos != '記号']
+    if os.environ.get('CN_ODD_REASON_DECIMAL') != '0':
+        # 数字に挟まれた小数点（4.5 の .）は数の一部。解析が名詞と読んでも語として見ない（2026-11-22 補正担当、
+        # うに 誤判定タブの正しい文 星n中x.y）。CN_ODD_REASON_DECIMAL=0 で前のまま
+        words = [t for k, t in enumerate(toks) if t.pos != '記号' and not (
+            t.surface in ('.', '．') and 0 < k < len(toks) - 1 and toks[k - 1].end == t.start
+            and toks[k + 1].start == t.end and toks[k - 1].surface[-1:].isdigit() and toks[k + 1].surface[:1].isdigit())]
     if not words or not all(t.pos in ('名詞', '接頭詞') for t in words):
         return False
     for t in words:
         sub = str(t.pos_sub or '')
+        # 数字だけの数（4.5 の 4・5）は読みの表が無くても数（CN_ODD_REASON_DECIMAL=0 で前のまま）
+        if (sub.startswith('数') and t.surface.isdigit()
+                and os.environ.get('CN_ODD_REASON_DECIMAL') != '0'):
+            continue
         if not getattr(t, 'has_reading', True):
             return False
         if sub.startswith('数'):
+            continue
+        # 数字で始まる語（5つ・9本）は辞書に無くても数（B2。CN_ODD_REASON_NUM_START=0 で前のまま）
+        if t.surface[:1].isdigit() and os.environ.get('CN_ODD_REASON_NUM_START') != '0':
             continue
         if any(c.isascii() and c.isalpha() or 'ａ' <= c <= 'ｚ' or 'Ａ' <= c <= 'Ｚ' for c in t.surface):
             return False
@@ -153,6 +166,123 @@ def _label_line(toks):
         if not _dict_entries(t.surface):
             return False
     return True
+
+
+_KANJI_NUM = set('一二三四五六七八九十百千')
+
+
+def _noun_count(toks, a, b):
+    """[a, b) がちょうど 辞書の名詞1つ＋数の語（五つ・三本・5つ: 漢数字か数字で始まる、辞書の語か数）か。
+    物と数を並べた数え方（星五つ・林檎二つ）。前後は行の端・助詞・記号・空白"""
+    hit = [t for t in toks if t.start < b and a < t.end]
+    if len(hit) != 2 or hit[0].start != a or hit[1].end != b or hit[0].end != hit[1].start:
+        return False
+    x, y = hit
+    if x.pos != '名詞' or str(x.pos_sub or '').startswith(('固有名詞', '数', '接尾', '非自立')):
+        return False
+    if not getattr(x, 'has_reading', True) or not _dict_entries(x.surface):
+        return False
+    if not (y.surface[:1] in _KANJI_NUM or y.surface[:1].isdigit()) or y.pos != '名詞':
+        return False
+    if not (str(y.pos_sub or '').startswith('数') or _dict_entries(y.surface)):
+        return False
+    n = toks.index(x)
+    for z in toks[max(0, n - 1):n] + toks[n + 2:n + 3]:
+        if z.pos not in ('助詞', '記号') and z.surface.strip():
+            return False
+    return True
+
+
+def _unit_suffix(toks, a, b):
+    """[a, b) の語がどれも接尾の漢字（科｜医）で、前の語とつないだ頭の所が表の1語（片仮名を交ぜた書き方の語＋科 の型）になり、
+    その後ろが接尾の漢字だけなら、1語＋接尾の複合語。前後は行の端・助詞・助動詞・記号"""
+    hit = [t for t in toks if t.start < b and a < t.end]
+    if not hit or not all(str(t.pos_sub or '').startswith('接尾') and t.surface and all(
+            '一' <= c <= '鿿' for c in t.surface) for t in hit):
+        return False
+    n0, n1 = toks.index(hit[0]), toks.index(hit[-1])
+    nx = toks[n1 + 1] if n1 + 1 < len(toks) else None
+    if nx is not None and nx.start == hit[-1].end and nx.pos not in ('助詞', '助動詞', '記号'):
+        return False
+    try:
+        import seed_japanese
+    except Exception:
+        return False
+    for i in range(n0 - 1, max(-1, n0 - 4), -1):
+        if any(toks[k].end != toks[k + 1].start for k in range(i, n0)):
+            break
+        if toks[i].pos not in ('名詞', '接頭詞'):
+            break
+        pv = toks[i - 1] if i > 0 else None
+        if pv is not None and pv.end == toks[i].start and pv.pos not in ('助詞', '記号'):
+            continue
+        face = ''.join(t.surface for t in toks[i:n0 + 1])
+        if seed_japanese.is_unit(face) is True:
+            return True
+    return False
+
+
+_QUOTE_VERBS = ('なる', 'いう', '言う', '思う', '考える', '書く', '聞く', '答える')
+
+
+def _wa_quote(toks, a, b):
+    """[a, b) がちょうど 係助詞の は＋引用の と で、と のすぐ後ろが言う・思う・なる の動詞か（言いかけの文を引いた形:
+    これはと思った）"""
+    hit = [t for t in toks if t.start < b and a < t.end]
+    if len(hit) != 2 or hit[0].start != a or hit[1].end != b:
+        return False
+    x, y = hit
+    if not (x.surface == 'は' and str(x.pos_sub or '').startswith('係助詞') and y.surface == 'と'
+            and str(y.pos_sub or '').endswith('引用') and x.end == y.start):
+        return False
+    k = toks.index(y)
+    nx = toks[k + 1] if k + 1 < len(toks) else None
+    return (nx is not None and nx.start == y.end and nx.pos == '動詞'
+            and (getattr(nx, 'base_form', '') or '') in _QUOTE_VERBS)
+
+
+_LONE_PARTICLES = set('はがをにとでのもへや')
+
+
+def _kana_list_run(line, toks, a, b):
+    """紫の所に、解析が読めなかったひらがなの語（すす｜ぎとつけおきは）が在り、その語が「ひらがなのまま通す語の一覧」の
+    3字以上の語を含み、その語を含むひらがなの並び全体が、一覧の語・表の語・辞書の語（2字以上）・助詞1字に切り分けられるか"""
+    try:
+        import kana_keep_list
+        ws = [w for w in kana_keep_list.words() if len(w) >= 3]
+        import seed_japanese
+        from morphology import dictionary_inflections
+    except Exception:
+        return False
+    bad = [t for t in toks if t.start < b and a < t.end and not getattr(t, 'has_reading', True)
+           and t.surface and all(_hira_c(c) for c in t.surface)]
+    for t in bad:
+        hit = [w for w in ws if w in t.surface]
+        if not hit:
+            continue
+        s0, e0 = t.start, t.end
+        while s0 > 0 and _hira_c(line[s0 - 1]):
+            s0 -= 1
+        while e0 < len(line) and _hira_c(line[e0]):
+            e0 += 1
+        run = line[s0:e0]
+        if not any(w in run for w in hit):
+            continue
+        wset = set(ws)
+
+        def word(x):
+            if len(x) == 1:
+                return x in _LONE_PARTICLES
+            return x in wset or seed_japanese.is_unit(x) is True or bool(dictionary_inflections(x))
+        ok = [True] + [False] * len(run)
+        for j in range(1, len(run) + 1):
+            for i in range(max(0, j - 8), j):
+                if ok[i] and word(run[i:j]):
+                    ok[j] = True
+                    break
+        if ok[-1]:
+            return True
+    return False
 
 
 def _plain_dict_span(line, toks, a, b):
@@ -174,6 +304,304 @@ def _plain_dict_span(line, toks, a, b):
     if K._verb_run(toks[max(0, n0 - 1):n1 + 2]):
         return False
     return not K._breaks(line, hit[0].start, hit[-1].end)
+
+
+def _affix_compound(toks, a, b):
+    """[a, b) を含む漢字・片仮名・数字の続きが接辞の形（affix_form）で、すぐ後ろが崩れた形でないか（B1）"""
+    try:
+        import affix_form
+    except Exception:
+        return False
+    if not affix_form.affix_run(toks, a, b):
+        return False
+    i, j = affix_form.run_bounds(toks, a, b)
+    nx = toks[j + 1] if j + 1 < len(toks) else None
+    if nx is not None and nx.start == toks[j].end:
+        s = nx.surface or ''
+        nn = toks[j + 2] if j + 2 < len(toks) else None
+        # する の活用として立たない形（喜怒すれ・下達せれ の型。すれば は立つ）
+        if s in ('すれ', 'せれ') and not (nn is not None and nn.surface == 'ば'):
+            return False
+        # かな1字の自立語（解析が切れ端を語と見た所）
+        if (len(s) == 1 and 'ぁ' <= s <= 'ゖ' and nx.pos in ('名詞', '動詞', '形容詞', '副詞', '感動詞', '連体詞')):
+            return False
+    return True
+
+
+_E_TO_A = dict(zip('えけげせぜてでねへべぺめれ', 'あかがさざただなはばぱまら'))
+_E_TO_O = dict(zip('えけげせぜてでねへべぺめれ', 'おこごそぞとどのほぼぽもろ'))
+
+
+def _hira_c(c):
+    return '\u3041' <= c <= '\u3096' or c == 'ー'
+
+
+_VOWEL_ROWS = ('あかさたなはまやらわがざだばぱぁゃゎ', 'いきしちにひみりぎじぢびぴぃ', 'うくすつぬふむゆるぐずづぶぷぅゅ',
+               'えけせてねへめれげぜでべぺぇ', 'おこそとのほもよろをごぞどぼぽぉょ')
+
+
+def _unstretch(line):
+    """ひらがなの後ろの伸ばす音（ー・〜・～）を、その字の母音のかな（お段は う: しよー → しよう）に置き換えた行。字数は同じ。
+    伸ばす音が無ければ None"""
+    out, hit = list(line), False
+    for k in range(1, len(line)):
+        if line[k] in 'ー〜～' and _hira_c(line[k - 1]):
+            for v, row in zip('あいうえう', _VOWEL_ROWS):
+                if line[k - 1] in row:
+                    out[k] = v
+                    hit = True
+                    break
+    return ''.join(out) if hit else None
+
+
+def _stretch_pair(line, a, b, texts):
+    """「A」と「B」は続けて置けない だけの紫で、行の伸ばす音を母音のかなに戻して解析し直すと、紫の所に A｜B の並びが
+    もう無いなら、話し言葉の伸ばす音で解析が切り違えた所（作った正しい文: 班分けしよー）"""
+    import re
+    norm = _unstretch(line)
+    if norm is None or not texts:
+        return False
+    pairs = []
+    for t in texts:
+        m = re.search('「([^」]+)」と「([^」]+)」は続けて置けない', t)
+        if not m:
+            return False
+        pairs.append(m.groups())
+    try:
+        from morphology import tokenize
+        nt = list(tokenize(norm))
+    except Exception:
+        return False
+    # 伸ばす音が紫のすぐ近く（後ろ3字まで）に在ること
+    if not any(norm[k] != line[k] for k in range(a, min(len(line), b + 3))):
+        return False
+    for x, y in zip(nt, nt[1:]):
+        if x.start < b and a < y.end and (x.surface, y.surface) in pairs:
+            return False
+    hit = [t for t in nt if t.start < b and a < t.end]
+    return bool(hit) and all(getattr(t, 'has_reading', True) for t in hit)
+
+
+def _spoken_kana_words(line):
+    """[(始め, 終わり)]: かなの語の作り方として紫の理由にならない所（2026-11-20 補正担当、うに 誤判定タブの正しい文。
+    判断 POLICY.md F2・F3）。
+    F2 CN_KANA_REDUP: 2字以上の同じかなの並びを繰り返した語（わうわう・もふもふ）。同じ打ち違いを2度続ける見込みは低い。
+    F3 CN_SPOKEN_EE_ADJ: え段のかな＋ぇ・え・ー で終わる語を、あい・おい で終わる形に戻すと形容詞1語になるもの
+    （おもしれぇ → おもしろい・すげぇ → すごい）。話し言葉の音の変化"""
+    out = []
+    runs = []
+    k = 0
+    while k < len(line):
+        if _hira_c(line[k]):
+            j = k
+            while j < len(line) and _hira_c(line[j]):
+                j += 1
+            runs.append((k, j))
+            k = j
+        else:
+            k += 1
+    redup = os.environ.get('CN_KANA_REDUP') != '0'
+    ee = os.environ.get('CN_SPOKEN_EE_ADJ') != '0'
+    for s0, e0 in runs:
+        w = line[s0:e0]
+        if redup:
+            # 並びの頭からの繰り返し（もふもふ｜だ）。後ろに残る所は助詞・助動詞だけ
+            done_r = False
+            for L in range(len(w), 3, -1):
+                v = w[:L]
+                for n in range(2, L // 2 + 1):
+                    if L % n == 0 and v[:n] * (L // n) == v and len(set(v[:n])) > 1:
+                        if L < len(w):
+                            try:
+                                from morphology import tokenize
+                                rest = list(tokenize(w[L:]))
+                            except Exception:
+                                rest = None
+                            if not rest or not all(t.pos in ('助詞', '助動詞') for t in rest):
+                                continue
+                        out.append((s0, s0 + L))
+                        done_r = True
+                        break
+                if done_r:
+                    break
+        if ee:
+            q = len(w)
+            while q > 0 and w[q - 1] in 'ぇえー':
+                q -= 1
+            if 0 < q < len(w) and w[q - 1] in _E_TO_A:
+                try:
+                    from morphology import tokenize
+                except Exception:
+                    continue
+                for st in range(0, q):
+                    hit = False
+                    for tab in (_E_TO_O, _E_TO_A):
+                        cand = w[st:q - 1] + tab[w[q - 1]] + 'い'
+                        tk = list(tokenize(cand))
+                        if len(tk) == 1 and tk[0].pos == '形容詞' and tk[0].surface == cand:
+                            out.append((s0 + st, e0))
+                            hit = True
+                            break
+                    if hit:
+                        break
+    return out
+
+
+def _rengo_case(toks, a, b):
+    hit = [k for k, t in enumerate(toks) if t.start < b and a < t.end]
+    if len(hit) != 2 or hit[1] != hit[0] + 1:
+        return False
+    t, q = toks[hit[0]], toks[hit[1]]
+    return ((t.pos_sub or '').endswith('連語') and t.pos == '助詞' and q.pos == '助詞'
+            and q.surface in ('は', 'も', 'を', 'が', 'の') and q.start == t.end)
+
+
+def _reading_beside(line, toks, a, b):
+    hit = [t for t in toks if t.start < b and a < t.end]
+    if not hit or hit[0].start < a or hit[-1].end > b or not any(_kanji(t.surface) for t in hit):
+        return False
+    if any(not getattr(t, 'has_reading', True) for t in hit):
+        return False
+    rd = ''.join(t.reading or '' for t in hit)
+    rd = ''.join(chr(ord(c) - 0x60) if 'ァ' <= c <= 'ヶ' else c for c in rd)
+    if len(rd) < 2 or not all('ぁ' <= c <= 'ゖ' or c == 'ー' for c in rd):
+        return False
+    k = line.find(rd)
+    while k >= 0:
+        l0 = line[k - 1] if k > 0 else ''
+        r0 = line[k + len(rd)] if k + len(rd) < len(line) else ''
+        sep = lambda c: c == '' or not (c.isalnum() or '\u3041' <= c <= '\u30ff' or '\u4e00' <= c <= '\u9fff')
+        if (k + len(rd) <= a or b <= k) and sep(l0) and sep(r0):
+            return True
+        k = line.find(rd, k + 1)
+    return False
+
+
+def _kana_reading_of_beside(line, toks, a, b):
+    """紫の [a, b) が記号・空白で区切られたひらがなだけの並びで、同じ行に記号・空白で区切られて在る漢字の語
+    （漢字を含む字句の続き）の読みとちょうど同じか（よるかつ — 夜活: 読みを書き添えた かな の側）。"""
+    run = line[a:b]
+    if len(run) < 2 or not all('ぁ' <= c <= 'ゖ' or c == 'ー' for c in run):
+        return False
+    sep = lambda c: c in ('', '・') or not (c.isalnum() or '\u3041' <= c <= '\u30ff' or '\u4e00' <= c <= '\u9fff')
+    if not (sep(line[a - 1] if a > 0 else '') and sep(line[b] if b < len(line) else '')):
+        return False
+    i = 0
+    while i < len(toks):
+        if not _kanji(toks[i].surface) or toks[i].start < b and a < toks[i].end:
+            i += 1
+            continue
+        j = i
+        while j + 1 < len(toks) and toks[j + 1].start == toks[j].end and _kanji(toks[j + 1].surface):
+            j += 1
+        grp = toks[i:j + 1]
+        s0, e0 = grp[0].start, grp[-1].end
+        if (sep(line[s0 - 1] if s0 > 0 else '') and sep(line[e0] if e0 < len(line) else '')
+                and all(getattr(t, 'has_reading', True) and t.reading for t in grp)):
+            rd = ''.join(chr(ord(c) - 0x60) if 'ァ' <= c <= 'ヶ' else c for c in ''.join(t.reading for t in grp))
+            if rd == run:
+                return True
+        i = j + 1
+    return False
+
+
+def _letter_counter(line, toks, a, b):
+    """紫の [a, b) の中に、前後に英数字の無い英字1字が在り、そのすぐ後ろが数の接尾（番目・回・個・n文字目 の 目）の
+    並びか: 数を表す文字（n番目・x回目・n文字目）で、打ち残しの英字ではない。"""
+    for i, t in enumerate(toks):
+        c = t.surface
+        if not (t.start < b and a < t.end and len(c) == 1 and (c.isascii() and c.isalpha() or 'ａ' <= c <= 'ｚ' or 'Ａ' <= c <= 'Ｚ')):
+            continue
+        l0 = line[t.start - 1] if t.start > 0 else ''
+        if l0 and (l0.isascii() and l0.isalnum() or 'ａ' <= l0 <= 'ｚ' or 'Ａ' <= l0 <= 'Ｚ' or '０' <= l0 <= '９'):
+            continue
+        nxt = toks[i + 1:i + 3]
+        if not nxt or nxt[0].start != t.end:
+            continue
+        if str(nxt[0].pos_sub or '').startswith('接尾:助数詞') or nxt[0].surface == '目':
+            return True
+        if (len(nxt) == 2 and nxt[0].pos == '名詞' and nxt[1].start == nxt[0].end
+                and str(nxt[1].pos_sub or '').startswith('接尾') and nxt[1].surface == '目'):
+            return True
+    return False
+
+
+GENERIC_LINK = '前後の語とのつながりが辞書で確かめられません'
+COMMON_NOUN_RANK = 720
+COMMON_NOUN_MARGIN = 50   # 同音同種の表記がこれだけ以上身近な時だけ、打ち違いかもしれないと見る（死霊 595・資料 433）   # odd_respell.TYPED_WORDS_RANK と同じ: これより身近な表記なら、確かに選んで確定した語
+
+
+def _common_noun_slot(line, toks, a, b):
+    """紫の [a, b) がちょうど1つの漢字だけの名詞（固有名詞・接尾でない、辞書に読みの在る、身近な表記）で、
+    すぐ後ろが名詞の後ろに来る助詞（の・が・は・を・に・も・で・と・へ・から・まで）か。"""
+    hit = [t for t in toks if t.start < b and a < t.end]
+    if len(hit) != 1 or hit[0].start != a or hit[0].end != b:
+        return False
+    t = hit[0]
+    sub = str(t.pos_sub or '')
+    if (t.pos != '名詞' or len(t.surface) < 2 or not all('一' <= c <= '鿿' for c in t.surface)
+            or sub.startswith(('固有名詞', '接尾', '数')) or not getattr(t, 'has_reading', True)):
+        return False
+    nxt = [u for u in toks if u.start == b]
+    if not nxt:
+        return False
+    u = nxt[0]
+    slot = (u.pos == '助詞' and u.surface in ('の', 'が', 'は', 'を', 'に', 'も', 'で', 'と', 'へ', 'から', 'まで'))
+    if not slot and os.environ.get('CN_ODD_REASON_COMMON_NOUN_WIDE') != '0':
+        # 名詞・形容動詞の語幹の後ろの だ・な・です（律儀な・高慢だった）と、サ変の名詞の後ろの する（洋行して）も
+        # 名詞の置き場所（2026-11-20 例文の正しい文の紫）。CN_ODD_REASON_COMMON_NOUN_WIDE=0 で前のまま
+        slot = ((u.pos == '助動詞' and u.surface in ('だ', 'な', 'です', 'でし', 'だっ', 'でしょ', 'だろ'))
+                or (u.pos == '動詞' and getattr(u, 'base_form', '') == 'する' and sub.startswith('サ変')))
+    if not slot:
+        return False
+    try:
+        import ime_reconvert
+        from morphology import tokenize
+        mine = ime_reconvert._rank(t.surface)
+        if mine > COMMON_NOUN_RANK:
+            return False
+        # 同じ読みで同じ種類の名詞のもっと身近な表記が在るなら、打ち違い・変換違いかもしれない（死霊 → 資料）。
+        # 種類の違う同音（先年 と 専念: 時の名詞とサ変の名詞）は比べない
+        rd = ''.join(chr(ord(c) - 0x60) if 'ァ' <= c <= 'ヶ' else c for c in (t.reading or ''))
+        for f in ime_reconvert._dict_faces(rd, 12) if rd else ():
+            if f == t.surface or ime_reconvert._rank(f) >= mine - COMMON_NOUN_MARGIN:
+                continue
+            ft = list(tokenize(f))
+            if len(ft) == 1 and ft[0].pos == '名詞' and str(ft[0].pos_sub or '') == sub:
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def _attr_verb_kata(toks, a, b):
+    """紫の [a, b) が 形容動詞の語幹＋な＋動詞の連用形（幸運な死に）で終わり、すぐ後ろが 方（死に方: 動詞の連用形＋方 は
+    名詞）か。な は名詞の前に置く形で、連用形＋方 はその名詞なので、正しい並び。"""
+    inside = [t for t in toks if a <= t.start and t.end <= b]
+    if len(inside) < 3 or inside[0].start != a or inside[-1].end != b:
+        return False
+    x, na, v = inside[-3], inside[-2], inside[-1]
+    nxt = [u for u in toks if u.start == b]
+    return (bool(nxt) and nxt[0].surface == '方' and str(nxt[0].pos_sub or '').startswith('接尾')
+            and v.pos == '動詞' and v.infl_form == '連用形' and str(v.pos_sub or '').startswith('自立')
+            and na.surface == 'な' and na.pos == '助動詞'
+            and str(x.pos_sub or '').startswith('形容動詞語幹')
+            and x.end == na.start and na.end == v.start)
+
+
+def _ime_one_noun(line, toks, a, b):
+    hit = [t for t in toks if t.start < b and a < t.end]
+    if (len(hit) != 2 or hit[0].start != a or hit[1].end != b or hit[0].end != hit[1].start
+            or not all(len(t.surface) == 1 and _kanji(t.surface) and t.pos == '名詞' for t in hit)):
+        return False
+    try:
+        import ime_class_mark
+        words = ime_class_mark._ime_words(line)
+    except Exception:
+        return False
+    if not words:
+        return False
+    return any(w[0] == a and w[1] == b and w[4] in ime_class_mark.NOUNISH for w in words)
 
 
 def _on():
@@ -213,7 +641,18 @@ def _suru_form(line, toks, a, b):
     last = inside[-1]
     if last.pos != '動詞' or last.base_form != 'する':
         return False
-    return all(_dict_stem(t) for t in inside[:-1])
+    stems = inside[:-1]
+    # 漢字1字の名詞が2つ以上に切れた並び（資料｜乳｜力｜し）は、1字ずつは辞書の語でも、つないだ形が辞書に無ければ IME が
+    # 崩れた読みを字ごとに当てた跡（2026-11-20 簡易入力の試験 資料乳力します の紫が外れていた）。CN_ODD_REASON_SURU_PIECES=0 で前のまま
+    if (os.environ.get('CN_ODD_REASON_SURU_PIECES') != '0' and len(stems) >= 2
+            and sum(1 for t in stems if t.pos == '名詞' and len(t.surface) == 1 and _kanji_c(t.surface)) >= 2
+            and not _dict_noun(''.join(t.surface for t in stems))):
+        return False
+    return all(_dict_stem(t) for t in stems)
+
+
+def _kanji_c(c):
+    return '一' <= c <= '鿿' or c == '々'
 
 
 _SEP = '・･'
@@ -304,6 +743,18 @@ def fill(line, result):
     if not odd:
         return result
     reasons = [x for x in result.get('odd_reasons') or () if len(x) >= 2 and isinstance(x[0], int)]
+    # K（前）: 連語の格助詞＋を の「続けて置けない」の理由は、重なる紫の理由に数えない
+    if os.environ.get('CN_ODD_REASON_RENGO_CASE') != '0' and (result.get('corrected') or line) == line:
+        try:
+            from morphology import tokenize as _tk
+            _tks = list(_tk(line))
+            _gone = {tuple(x[:2]) for x in reasons if len(x) >= 3 and isinstance(x[2], str) and 'は続けて置けない' in x[2]
+                     and _rengo_case(_tks, x[0], x[1])}
+            reasons = [x for x in reasons if tuple(x[:2]) not in _gone]
+        except Exception:
+            _gone = set()
+    else:
+        _gone = set()
     why = {}
     for x in reasons:
         if len(x) >= 3 and isinstance(x[2], str) and x[2]:
@@ -316,9 +767,68 @@ def fill(line, result):
         return result
     drop, add, narrowed = set(), [], []
     label_line = done == line and _label_line(toks)
+    spoken = _spoken_kana_words(line) if done == line else []
     for x in odd:
         a, b = x[0], x[1]
         key = (a, b)
+        # K: 連語の格助詞（について・に関して・として）のすぐ後ろの は・も・を・が・の に掛かる「続けて置けない」だけの紫は、
+        # 〜について を名詞のように扱う普通の書き方（2026-11-20 補正担当、判断 POLICY.md K）。CN_ODD_REASON_RENGO_CASE=0 で前のまま
+        _tx = why.get(key, [])
+        if (done == line and _tx and all('は続けて置けない' in t for t in _tx)
+                and os.environ.get('CN_ODD_REASON_RENGO_CASE') != '0' and _rengo_case(toks, a, b)):
+            drop.add(key)
+            continue
+        # B5: 紫の漢字の語の読みと同じかなの並びが、同じ行に記号・空白で区切られて在るなら、書き手が読みを書き添えた語
+        # （よるかつ—夜活）。理由が無いか弱い理由だけの時（2026-11-20 補正担当、判断 POLICY.md B5）。CN_READING_BESIDE=0 で前のまま
+        if (done == line and os.environ.get('CN_READING_BESIDE') != '0' and _all_weak(_tx)
+                and _reading_beside(line, toks, a, b)):
+            drop.add(key)
+            continue
+        # 数を表す英字1字＋数の接尾（そのn文字目・x回目・n番目）に掛かる弱い理由だけの紫は外す（2026-11-20 うにの
+        # 誤判定タブ）。CN_ODD_REASON_LETTER_COUNTER=0 で前のまま
+        if (done == line and os.environ.get('CN_ODD_REASON_LETTER_COUNTER') != '0' and _all_weak(_tx)
+                and _letter_counter(line, toks, a, b)):
+            drop.add(key)
+            continue
+        # 身近な漢字の名詞1語（先年・罫線）がそのまま名詞の置き場所（の・が・を…の前）に在り、理由が「つながりが辞書で
+        # 確かめられない」だけの紫は外す。辞書の語を珍しさだけで紫にしない（うに: 日常語を珍しい語扱いしない・
+        # 2026-11-20 誤判定タブ）。CN_ODD_REASON_COMMON_NOUN=0 で前のまま
+        if (done == line and os.environ.get('CN_ODD_REASON_COMMON_NOUN') != '0'
+                and all(t == GENERIC_LINK for t in _tx) and _common_noun_slot(line, toks, a, b)):
+            drop.add(key)
+            continue
+        # 形容動詞の語幹＋な＋動詞の連用形＋方（幸運な死に方・楽な死に方）の「つながりが辞書で確かめられない」だけの紫は外す。
+        # 連用形＋方 は名詞（2026-11-20 補正担当の例文の正しい文）。CN_ODD_REASON_ATTR_VERB_KATA=0 で前のまま
+        if (done == line and os.environ.get('CN_ODD_REASON_ATTR_VERB_KATA') != '0'
+                and all(t == GENERIC_LINK for t in _tx) and _attr_verb_kata(toks, a, b)):
+            drop.add(key)
+            continue
+        # B5 の かな の側: 紫の かな の並びが、同じ行に区切って書いた漢字の語の読みそのもの（よるかつ — 夜活）。
+        # 書き手が読みを書き添えた所で、打ち違いではない（2026-11-20 うにの誤判定タブ）。CN_READING_BESIDE_KANA=0 で前のまま
+        if (done == line and os.environ.get('CN_READING_BESIDE_KANA') != '0'
+                and _kana_reading_of_beside(line, toks, a, b)):
+            drop.add(key)
+            continue
+        if key in _gone:
+            drop.add(key)
+            continue
+        # A3: 漢字1字＋1字の名詞の並び（残｜件）に掛かる弱い理由だけの紫は、PC の IME がその2字をちょうど1つの名詞として
+        # 読むなら、IME の辞書に在る語（2026-11-20 補正担当、判断 POLICY.md A3）。IME が2字に割る並び（隣｜欄）は今のまま。
+        # IME の無い所では何もしない。CN_ODD_REASON_IME_NOUN_PAIR=0 で前のまま
+        if (done == line and os.environ.get('CN_ODD_REASON_IME_NOUN_PAIR') != '0' and _all_weak(_tx) and _tx
+                and _ime_one_noun(line, toks, a, b)):
+            drop.add(key)
+            continue
+        # F2・F3: 繰り返しのかなの語（わうわう・もふもふ）と、話し言葉の音の変化（おもしれぇ・すげぇ）の中の紫は外す
+        if any(s0 <= a and b <= e0 for s0, e0 in spoken):
+            drop.add(key)
+            continue
+        # F4: 伸ばす音（しよー）で解析が切り違えた「続けて置けない」の紫（2026-11-22 補正担当、うに 誤判定タブの正しい文）。
+        # CN_ODD_REASON_STRETCH_PAIR=0 で前のまま
+        if (done == line and _tx and all('は続けて置けない' in t for t in _tx)
+                and os.environ.get('CN_ODD_REASON_STRETCH_PAIR') != '0' and _stretch_pair(line, a, b, _tx)):
+            drop.add(key)
+            continue
         texts = why.get(key, [])
         # 重なる紫の理由も見る（同じ所に具体の見立てが在れば外さない）
         over = [t for (s0, e0), ts in why.items() if s0 < b and a < e0 for t in ts]
@@ -328,8 +838,11 @@ def fill(line, result):
             drop.add(key)
             continue
         if os.environ.get('CN_ODD_REASON_WEAK_ONLY') != '0' and not _all_weak(over):
-            # 外さない紫でも、理由の文が無ければ一般の理由を付ける（重なる紫の理由はその紫のもの）
-            if not texts:
+            # 外さない紫でも、理由の文が無ければ一般の理由を付ける（重なる紫の理由はその紫のもの）。
+            # 重なる理由が IME の欄だけなら付けない（後の narrow_ime_field がその欄として狭める。2026-11-20 補正担当、
+            # CN_ODD_REASON_IME_ONLY_NO_GENERIC=0 で前のまま）
+            if not texts and not (over and all(t == IME_FIELD for t in over)
+                                  and os.environ.get('CN_ODD_REASON_IME_ONLY_NO_GENERIC') != '0'):
                 add.append(key)
             continue
         # 書き換えた所に掛かる紫は、元の行の形では見ない
@@ -346,6 +859,15 @@ def fill(line, result):
             narrowed += _wide_slips(toks, a, b)
             continue
         reasonless = not texts
+        # B1: 書き換えの無い行で、理由が無いか弱い理由（辞書で確かめられない・続けて置けない・異様だと見たが）だけの紫が、
+        # 語の作り方どおりの複合語（打鍵ミス・1打鍵・先年・可変状態・行間幅・星5つ。漢字1字の語は端に1つまで）の中なら、
+        # 表に無い・珍しいことだけが根拠なので紫にしない。続きのすぐ後ろが崩れた形（すれ・せれ・かな1字の自立語）なら残す
+        # （2026-11-20 補正担当、うに 誤判定タブの正しい文。判断 POLICY.md B1・B2）。CN_ODD_REASON_AFFIX_COMPOUND=0 で前のまま
+        if (done == line and os.environ.get('CN_ODD_REASON_AFFIX_COMPOUND') != '0'
+                and all(t == GENERIC or 'は続けて置けない' in t or '異様だと見たが' in t for t in over)
+                and _affix_compound(toks, a, b)):
+            drop.add(key)
+            continue
         joyo_only = bool(texts) and all(_JOYO_OUT in t for t in texts) and _all_weak(over)
         if reasonless and os.environ.get('CN_ODD_REASON_SURU') != '0' and _suru_form(line, toks, a, b):
             drop.add(key)
@@ -436,6 +958,31 @@ def fill(line, result):
         # AA: 「A」と「B」は続けて置けない の紫が、名詞＋動詞の連用形の漢字で出来た語（様子見）＋する だけに掛かるなら、
         # その名詞はする を付けて使う（2026-11-16 うに: かなで打った正しい文の紫）。CN_ODD_REASON_VERB_TAIL_SURU=0 で前のまま
         if (texts and all('は続けて置けない' in t for t in texts) and done == line and _verb_tail_suru(toks, a, b)):
+            drop.add(key)
+            continue
+        # AG: 弱い理由だけの紫が、ちょうど 辞書の名詞＋数の語（星五つ）に掛かるなら、物と数を並べた数え方
+        # （2026-11-22 補正担当、うに 誤判定タブの正しい文）。CN_ODD_REASON_NOUN_COUNT=0 で前のまま
+        if (texts and _all_weak(texts) and done == line and len(odd) == 1
+                and os.environ.get('CN_ODD_REASON_NOUN_COUNT') != '0' and _noun_count(toks, a, b)):
+            drop.add(key)
+            continue
+        # AH: 弱い理由だけの紫が、表の1語（片仮名を交ぜた書き方を含む）に続く接尾の漢字だけに掛かるなら、1語＋接尾の
+        # 複合語（2026-11-22 補正担当、うに 誤判定タブの正しい文）。CN_ODD_REASON_UNIT_SUFFIX=0 で前のまま
+        if (texts and _all_weak(texts) and done == line
+                and os.environ.get('CN_ODD_REASON_UNIT_SUFFIX') != '0' and _unit_suffix(toks, a, b)):
+            drop.add(key)
+            continue
+        # AI: 理由が無いか「つながりが辞書で確かめられません」だけの紫が、は＋引用の と（＋言う・思う・なる）だけに掛かるなら、言いかけの
+        # 文を引いた形（2026-11-22 補正担当、うに 誤判定タブの正しい文）。CN_ODD_REASON_WA_QUOTE=0 で前のまま
+        if ((reasonless or all(t == GENERIC for t in texts)) and done == line
+                and os.environ.get('CN_ODD_REASON_WA_QUOTE') != '0' and _wa_quote(toks, a, b)):
+            drop.add(key)
+            continue
+        # AJ: 弱い理由だけの紫が、一覧の語（つけおき）を含むのに解析が読めなかったひらがなの語に掛かり、その並びが語に
+        # 切り分けられるなら、日常語を解析が知らないだけ（2026-11-23 補正担当、うに 誤判定タブの正しい文・
+        # 日常語を珍しい語として扱わない）。CN_ODD_REASON_KANA_LIST_RUN=0 で前のまま
+        if ((reasonless or _all_weak(texts)) and done == line
+                and os.environ.get('CN_ODD_REASON_KANA_LIST_RUN') != '0' and _kana_list_run(line, toks, a, b)):
             drop.add(key)
             continue
         # AF: 「AとBは続けて置けない」だけの紫が、2つの名詞をつないだ読みが同梱の表の1語の読み（表記違い: 鍵括弧 →
@@ -575,6 +1122,9 @@ def _glued_kata(toks):
             continue
         if not (_kata(t.surface) and _han(p.surface) and _han(q.surface)):
             continue
+        # 表の片仮名の語（3字以上）＋漢字1字の接尾（テロップ｜風）は外来語の複合語の書き方
+        if _known_loan(t.surface) and len(q.surface) == 1 and str(q.pos_sub or '').startswith('接尾'):
+            continue
         try:
             if _dict_entries(p.surface + t.surface + q.surface) or _dict_entries(p.surface + t.surface):
                 continue
@@ -582,6 +1132,42 @@ def _glued_kata(toks):
             continue
         out.append((p.start, q.end))
     return out
+
+
+def _known_loan(face):
+    """表に在る片仮名の語（3字以上: オンマウス・スクロールバー）。解析が読みを付けられないだけで、疑わしい語ではない
+    （2026-11-20 補正担当、うに 誤判定タブの正しい文）。CN_ODD_REASON_IME_FIELD_LOAN=0 で前のまま"""
+    if os.environ.get('CN_ODD_REASON_IME_FIELD_LOAN') == '0' or len(face) < 3 or not _kata(face):
+        return False
+    try:
+        import corrector
+        import seed_japanese
+        kk = corrector._katakana_known_or_compound
+        if kk(face):
+            return True
+        # 身近な片仮名の語2つをつないだ形（オン＋マウス・スクロール＋バー）。表の1語というだけ（シュア・チェン）では見ない
+        import ime_reconvert
+
+        def part(x):
+            return kk(x) or (seed_japanese.is_unit(x) is True and ime_reconvert._rank(x) <= 530)
+        return seed_japanese.is_unit(face) is True and any(
+            part(face[:k]) and part(face[k:]) for k in range(2, len(face) - 1))
+    except Exception:
+        return False
+
+
+def _listed_in_compound(t, toks):
+    """珍しいが表に在る語（行間 618。表に無い 800 の 風位 は別）が、接辞の形の複合語（行間｜幅）の中に在る。
+    IME の欄の紫を狭める時に疑わしい語に数えない（2026-11-20 補正担当、PC の 行間幅）。CN_ODD_REASON_IME_FIELD_COMPOUND=0 で前のまま"""
+    if os.environ.get('CN_ODD_REASON_IME_FIELD_COMPOUND') == '0':
+        return False
+    try:
+        import ime_reconvert as R
+        if R._token_rarity(t, toks) >= 800:
+            return False
+    except Exception:
+        return False
+    return _affix_compound(toks, t.start, t.end)
 
 
 def _lone_mark(t):
@@ -602,6 +1188,36 @@ def _nominalizer(t):
 
 
 def narrow_ime_field(line, result):
+    """下の _narrow_ime_field_core の前に、連語の格助詞＋を の「続けて置けない」の理由（K）を外す。その理由が
+    IME の欄の紫の中の小さな紫として残ると、欄が狭まっても紫が広く残る（PC: 育ちについてを… の行の後ろ全部）。
+    CN_ODD_REASON_RENGO_CASE=0 で前のまま"""
+    if (os.environ.get('CN_ODD_REASON_RENGO_CASE') != '0' and isinstance(result, dict)
+            and (result.get('corrected') or line) == line and result.get('odd_reasons')):
+        try:
+            from morphology import tokenize
+            toks = list(tokenize(line))
+            gone = {(r[0], r[1]) for r in result.get('odd_reasons') or ()
+                    if len(r) >= 3 and isinstance(r[2], str) and 'は続けて置けない' in r[2] and _rengo_case(toks, r[0], r[1])}
+            # B1 も同じ: IME の欄の紫の中の、接辞の形の複合語に掛かる弱い理由（行間｜幅）は小さな紫として残さない
+            # （2026-11-20 PC: 雲では外れた 行間幅 が、IME の欄の紫に包まれて fill で外れず残った）
+            if os.environ.get('CN_ODD_REASON_AFFIX_COMPOUND') != '0':
+                gone |= {(r[0], r[1]) for r in result.get('odd_reasons') or ()
+                         if len(r) >= 3 and isinstance(r[2], str)
+                         and (r[2] == GENERIC or 'は続けて置けない' in r[2] or '異様だと見たが' in r[2])
+                         and not any(len(y) >= 3 and (y[0], y[1]) == (r[0], r[1]) and y[2] != r[2]
+                                     and not (y[2] == GENERIC or 'は続けて置けない' in y[2] or '異様だと見たが' in y[2])
+                                     for y in result.get('odd_reasons') or ())
+                         and _affix_compound(toks, r[0], r[1])}
+        except Exception:
+            gone = set()
+        if gone:
+            result = dict(result)
+            result['odd_reasons'] = [r for r in result['odd_reasons'] if not (len(r) >= 2 and (r[0], r[1]) in gone)]
+            result['odd_spans'] = [x for x in result.get('odd_spans') or () if (x[0], x[1]) not in gone]
+    return _narrow_ime_field_core(line, result)
+
+
+def _narrow_ime_field_core(line, result):
     """I: 「IME候補に原文があり、復元した読みの接続が異様です」だけの紫が、書き換えの無い行の中身全部に掛かる時は、
     行の中の疑わしい語（解析が読みを付けられない語・助詞でも助動詞でもない1字のかな）だけに狭める。無ければ外す。
     この理由は「今の形が IME の候補に在る」（今の形を支える）と「読みを戻すと接続が異様」（疑う）が同居していて、
@@ -637,12 +1253,13 @@ def narrow_ime_field(line, result):
                 continue
             part_only = True
         bad = [t for t in toks if a <= t.start and t.end <= b and (_lone_mark(t) or t.pos != '記号' and (
-            (not getattr(t, 'has_reading', True) and not any(c.isascii() or 'ａ' <= c.lower() <= 'ｚ' for c in t.surface))
+            (not getattr(t, 'has_reading', True) and not any(c.isascii() or 'ａ' <= c.lower() <= 'ｚ' for c in t.surface)
+             and not _known_loan(t.surface))
             or (len(t.surface) == 1 and 'ぁ' <= t.surface <= 'ゖ' and t.pos not in ('助詞', '助動詞')
                 and not _inflected_one(t) and not _nominalizer(t))
             # 珍しい語（風位）も疑わしい語（ime_reconvert の紫の門 DOUBT_MARK 以上。2026-11-15 PC の release_check:
             # 添付の風位目 の紫を外して誤字の印を失った）
-            or _rare_token(t, toks)))]
+            or (_rare_token(t, toks) and not _known_loan(t.surface) and not _listed_in_compound(t, toks))))]
         got = [(t.start, t.end) for t in bad]
         if part_only and (got or any(g0 < b and a < g1 for g0, g1 in _glued_kata(toks))):
             continue

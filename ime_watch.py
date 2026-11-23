@@ -160,6 +160,33 @@ COMPOSITION_FIELDS = (
 )
 
 
+def wide_input(hwnd):
+    """いま全角で打つ形か（IME が開いていて、かな・カナ・全角英数のどれか）。開いていない・半角英数なら False。
+    分からなければ None。読むだけ（IME を切り替えない・キーを送らない）。F5 予測のカスタム候補の選び分けに使う
+    （2026-11-21 16:52Z うにさん「IMEが全角モードの時は全角用のものを出し、半角モードの時は半角のものを出す」）。"""
+    if not HAS_SUPPORT or not hwnd:
+        return None
+    try:
+        import ctypes
+        imm = _imm32()
+        himc = imm.ImmGetContext(hwnd)
+        if not himc:
+            return None
+        try:
+            if not imm.ImmGetOpenStatus(himc):
+                return False
+            conv = ctypes.c_ulong(0)
+            sent = ctypes.c_ulong(0)
+            if not imm.ImmGetConversionStatus(himc, ctypes.byref(conv), ctypes.byref(sent)):
+                return None
+            IME_CMODE_NATIVE, IME_CMODE_FULLSHAPE = 0x0001, 0x0008
+            return bool(conv.value & (IME_CMODE_NATIVE | IME_CMODE_FULLSHAPE))
+        finally:
+            imm.ImmReleaseContext(hwnd, himc)
+    except Exception:
+        return None
+
+
 def composition_active(hwnd):
     """
     そのウィンドウで IME がいま変換（未確定文字の入力）中かを返す。
@@ -237,6 +264,22 @@ def app_behind():
     """True when another app's window is in front (False when it cannot be told)."""
     front = _foreground_process()
     return front is not None and front != os.getpid()
+
+
+def virtual_key(hwnd):
+    """IME が受け取ったキー（VK_PROCESSKEY・Tk の keycode 229）の、元の仮想キー。分からなければ None（2026-11-23）。"""
+    if not HAS_SUPPORT or not hwnd:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        imm = ctypes.WinDLL('imm32')
+        imm.ImmGetVirtualKey.argtypes = [wintypes.HWND]
+        imm.ImmGetVirtualKey.restype = wintypes.UINT
+        vk = int(imm.ImmGetVirtualKey(hwnd))
+        return vk if vk and vk != 229 else None
+    except Exception:
+        return None
 
 
 def complete_composition(hwnd):

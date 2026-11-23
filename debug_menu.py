@@ -67,6 +67,9 @@ ITEMS = (
     # 表示の倍率（2026-10-23 うにさん。待ちではないが、ここで試して決める）
     ('copy_emphasis', 'コピーした範囲（行の一部だけのとき）の文字の大きさ',
      'app', 'COPY_EMPHASIS_PERCENT', '%', 100, '100％は元の大きさ（大きくしない）。それより小さくはしない'),
+    # 再入力変換で開いている範囲（2026-11-23 うにさん「再入力変換中の範囲を、フォントサイズ1.4倍にして、パラメータに出す」）
+    ('reinput_emphasis', '再入力変換で開いている範囲の文字の大きさ',
+     'app', 'REINPUT_EMPHASIS_PERCENT', '%', 100, '100％は元の大きさ（大きくしない）。それより小さくはしない'),
     ('find_emphasis', '検索の窓が出ている間の、見つかった文字の大きさ',
      'app', 'FIND_EMPHASIS_PERCENT', '%', 100, '100％は元の大きさ（大きくしない）。それより小さくはしない'),
     ('copy_frame_scale', 'コピーした範囲の白い枠：縮み始める大きさ',
@@ -99,6 +102,30 @@ ITEMS = (
      'title_toc', 'TITLE_SIZE', 'pt', 8, '8pt より小さくはしない（本文より小さい題は読みにくい）'),
     ('toc_size', '目次の字の大きさ（0 は本文の字の大きさから決める）',
      'title_toc', 'TOC_POINT', 'pt', 0, '0 は今の決め方（本文の字の 0.85 倍＋1・9〜12pt）'),
+    # 長押しで語を選ぶまでの時間（2026-11-18 うにさん・drag_move）
+    ('long_press', '長押しで語を選ぶまでの時間',
+     'drag_move', 'LONGPRESS_MS', 'ms', 100, '100ms より短いと、ふつうのクリックで選んでしまう'),
+    ('drag_edge', '選んだ範囲の端で、掴まずに今までのクリックにする幅',
+     'drag_move', 'EDGE_PX', 'px', 1, '字の幅の 1/4 より広くはしない'),
+    # ドラッグで移す間、欄の上端・下端で送り続ける（2026-11-20 うにさん）
+    ('drag_scroll_band', 'ドラッグで移す時に、端で送り続ける帯の幅（0 は1行の高さ）',
+     'drag_move', 'AUTOSCROLL_BAND_PX', 'px', 0, '0 は本文の字の1行の高さ'),
+    ('drag_scroll_ms', 'ドラッグで移す時に、端で送る間隔',
+     'drag_move', 'AUTOSCROLL_MS', 'ms', 10, '10ms より短くはしない'),
+    # オンマウスの候補を入力カーソルの近くに限定する時の上下の行数（2026-11-23 うにさん「デフォルトを10。上限は100」）。
+    # 効くのはオプションの「オンマウスで候補を出すのは入力カーソルの近くに限定」がオンの時だけ
+    ('hover_near_rows', 'オンマウスで候補を出す範囲：入力カーソルの上下の行数（近くに限定がオンの時）',
+     'auto_candidates', 'HOVER_NEAR_ROWS', '行', 0, '0 は入力カーソルの行だけ'),
+    # ルーラーと最終行の下の二重罫線の太さ（2026-11-20 うにさん「見えにくい」）
+    ('ruler_width', 'ルーラーの線の太さ',
+     'editor_guides', 'RULER_WIDTH', 'px', 1, '目次と本文の境目の線は約3px'),
+    ('end_rule_width', '最終行の下の二重罫線：線の太さ',
+     'app', 'END_RULE_WIDTH', 'px', 1, ''),
+    ('end_rule_gap', '最終行の下の二重罫線：2本の間',
+     'app', 'END_RULE_GAP', 'px', 0, ''),
+    # 俯瞰でブックマークのある行の字（2026-11-20 うにさん「縮小時に、ブックマークがある行は、一回り大きく」）
+    ('overview_bookmark', '俯瞰でブックマークのある行の字の大きさ',
+     'overview_fast', 'BOOKMARK_SIZE', 'pt', 5, '俯瞰の字は 5pt'),
 )
 # 持ち主に `<名前>_MAX` が無い項目の上限（既定が 0＝上限なしの項目は、既定を上限にできない）
 _MAX = {'respell_attempts': 30}
@@ -113,7 +140,8 @@ KEYS = tuple(item[0] for item in ITEMS)
 # うにさんの指定で窓から外した（コードの値はそのまま）。
 SECTIONS = (('ime_quiet', '【解析】'), ('tab_wheel_step', '【タブ移動】'), ('copy_emphasis', '【表示】'),
             ('backup_keep', '【保存】'), ('respell_attempts', '【紫の所の読み直し】'),
-            ('tab_name_min', '【タブの名前】'), ('title_size', '【タイトルと目次】'))
+            ('tab_name_min', '【タブの名前】'), ('title_size', '【タイトルと目次】'), ('long_press', '【マウス】'),
+            ('ruler_width', '【線】'))
 _BY_KEY = {item[0]: item for item in ITEMS}
 _ORIGINAL = {}   # 書き換えたモジュールの定数の、書き換える前の値
 
@@ -249,6 +277,74 @@ def set_value(app, key, value, save=True):
     return value
 
 
+def slider_drag_on(environ=None):
+    """スライダーの溝を押したら、つまみをそこへ動かしてそのまま引ける形（CN_DEBUG_SLIDER_DRAG=0 で前の形）。"""
+    import os
+    environ = os.environ if environ is None else environ
+    return environ.get('CN_DEBUG_SLIDER_DRAG') != '0'
+
+
+def no_reset_close_on(environ=None):
+    """下の「すべてデフォルトに戻す」「閉じる」を出さない（2026-11-23 うにさん・窓の×で閉じる）。
+    CN_DEBUG_NO_RESET_CLOSE=0 で前の形。"""
+    import os
+    environ = os.environ if environ is None else environ
+    return environ.get('CN_DEBUG_NO_RESET_CLOSE') != '0'
+
+
+def jump_and_drag(event):
+    """溝（つまみの外）を押した時: Tk の Windows の作りでは1目盛り動くだけで、そのまま横へ引いても動かなかった
+    （2026-11-23 うにさん「デバッグのスライダーが動かしづらくなった。クリックしてすぐ左右にドラッグしても動かない」）。
+    押した所の値へつまみを動かし、つまみを押したのと同じ形で引き始める。つまみの上を押した時は今までどおり。"""
+    w = event.widget
+    try:
+        if str(w.cget('state')) == 'disabled' or str(w.identify(event.x, event.y)) == 'slider':
+            return None
+        w.set(float(w.tk.call(w._w, 'get', event.x, event.y)))
+        w.update_idletasks()
+        w.tk.call('tk::ScaleButtonDown', w._w, event.x, event.y)
+    except tk.TclError:
+        return None
+    return 'break'
+
+
+# 窓の高さ（2026-11-23 うにさん「デバッグメニューの上にボタンが入った分、パラメータが縦に狭いので、ウインドウを縦に広げて。
+# 最小化ボタンも付ける」）。前は 640x620 で transient（Windows では transient の窓に最小化ボタンが出ない）。
+# 新しい既定は 880。本体のあるモニターの作業領域（タスクバーを除く）の高さから枠のぶんを引いた所で上限。
+# CN_DEBUG_WINDOW_TALLER=0 で前の形
+OLD_HEIGHT = 620
+WINDOW_HEIGHT = 880
+
+
+def taller_on(environ=None):
+    import os
+    environ = os.environ if environ is None else environ
+    return environ.get('CN_DEBUG_WINDOW_TALLER') != '0'
+
+
+def window_height(app, height=None):
+    """窓の中身の高さ（作業領域に収まる所まで・前の既定より小さくはしない）。"""
+    import sys
+    height = WINDOW_HEIGHT if height is None else int(height)
+    root = getattr(app, 'root', None)
+    limit = None
+    mod = sys.modules.get(type(app).__module__)
+    try:
+        area = mod.monitor_work_area(root.winfo_rootx() + root.winfo_width() // 2,
+                                     root.winfo_rooty() + root.winfo_height() // 2)
+        frame = mod.window_frame_size(root)
+        if area:
+            limit = area[3] - area[1] - frame[1]
+    except Exception:
+        limit = None
+    if limit is None:
+        try:
+            limit = root.winfo_screenheight() - 80
+        except Exception:
+            limit = height
+    return max(min(height, int(limit)), min(OLD_HEIGHT, int(limit)))
+
+
 def open_window(app, colors=None):
     """項目ごとに 名前・数値の欄・スライダー・「デフォルトに戻す」を並べた窓。"""
     colors = dict(colors or {})
@@ -270,20 +366,33 @@ def open_window(app, colors=None):
     app._debug_window = dlg
     dlg.title('デバッグメニュー')
     dlg.configure(bg=bg)
-    try:
-        dlg.transient(app.root)
-    except tk.TclError:
-        pass
+    taller = taller_on()
+    if not taller:
+        try:
+            dlg.transient(app.root)
+        except tk.TclError:
+            pass
     place = getattr(app, '_place_dialog', None)
     if place is not None:
-        place(dlg, 640, 620)
+        place(dlg, 640, window_height(app) if taller else OLD_HEIGHT)
     tk.Label(dlg, text='補正が始まるまでの待ち（とタブのホイール・表示の倍率）を、その場で変えて試せます。'
              '待ちの最大はおおむね今の既定です。補正の答えは変わりません。',
              bg=bg, fg=ink, justify='left', wraplength=600,
              font=('Yu Gothic UI', 9)).pack(anchor='w', padx=12, pady=(10, 6))
     # 補正の段の使われ方（usage_counts・2026-10-24）
-    tk.Button(dlg, text='補正の段の使われ方…', command=lambda: open_usage_window(app, colors)).pack(
-        anchor='w', padx=12, pady=(0, 6))
+    # 2026-11-20 うにさん「他の記録の項目と同じ形のチェックボックスを付ける（既定オフ。オフの間は数えない＝処理を軽く）」
+    usage_on = tk.BooleanVar(master=dlg, value=bool(app.settings.get('debug_usage_counts')))
+    usage_row = tk.Frame(dlg, bg=bg)
+    usage_row.pack(anchor='w', padx=12, pady=(0, 6))
+    tk.Checkbutton(usage_row, text='補正の段の使われ方を数える（オフの間は数えない）',
+                   variable=usage_on, command=lambda: choose_usage_counts(app, usage_on.get()),
+                   bg=bg, fg=ink, selectcolor=panel, activebackground=bg,
+                   font=('Yu Gothic UI', 9)).pack(side='left')
+    tk.Button(usage_row, text='補正の段の使われ方…', command=lambda: open_usage_window(app, colors)).pack(
+        side='left', padx=(8, 0))
+    dlg._usage_on = usage_on
+    # 俯瞰の速い形の項目は外した（2026-11-23 うにさん「デバッグメニューから俯瞰の項目を削除し、チェックオンとして以降処理します」）。
+    # いつも速い形（overview_fast.enabled）。CN_OVERVIEW_FAST=0 の時だけ今の形
     # 候補の何回目で採ったかの集計（2026-11-10 うにさん「チェックボックスを用意。デフォルトはオフ」）
     import respell_stats
     rank_on = tk.BooleanVar(master=dlg, value=bool(app.settings.get(respell_stats.SETTING)))
@@ -296,6 +405,17 @@ def open_window(app, colors=None):
     tk.Button(rank_row, text='集計を見る…', command=lambda: open_rank_window(app, colors)).pack(
         side='left', padx=(8, 0))
     dlg._rank_on = rank_on
+    # F5 の予測の記号の並べ方（打つ手間の表・f5_predict.EFFORT）。2026-11-21 うにさん「自動で並べ替えはしないので、ボタンと
+    # 判定は不要です」: ボタンを外した。CN_F5_FIXED_ORDER=0 で前の形（ボタンを出す）
+    import f5_predict
+    if not f5_predict.fixed_order():
+        tk.Button(dlg, text='F5 予測の記号の手間…', command=lambda: open_f5_effort_window(app, colors)).pack(
+            anchor='w', padx=12, pady=(0, 6))
+    # 行の状態（字の中身は出さない・読むだけ・row_state・2026-11-20）。CN_ROW_STATE_TOOL=0 で出さない
+    import row_state
+    if row_state.enabled():
+        tk.Button(dlg, text='行の状態…', command=lambda: row_state.open_window(app, colors)).pack(
+            anchor='w', padx=12, pady=(0, 6))
     # 削除の記録（deletion_log.txt）の項目は外した（2026-11-17 うにさん「直近で起きていないので、項目を外してください」）。
     # 記録は CN_DELETION_LOG=1 の時だけ（app._deletion_log_on）
     # 解析の記録（項目48-LO・メモリの中の最新40件）。2026-11-09 うにさん「再解析のデバッグは一旦外したまま……一旦外して」：
@@ -419,6 +539,8 @@ def open_window(app, colors=None):
         def reset(key=key, commit=commit):
             commit(default(key, app))
         scale.configure(command=from_scale)
+        if slider_drag_on() and not fixed:
+            scale.bind('<ButtonPress-1>', jump_and_drag)
         entry.bind('<Return>', from_entry)
         entry.bind('<FocusOut>', from_entry)
         button.configure(command=reset)
@@ -428,10 +550,11 @@ def open_window(app, colors=None):
     def reset_all():
         for key in KEYS:
             rows[key]['reset']()
-    foot = tk.Frame(dlg, bg=bg)
-    foot.pack(fill='x', padx=12, pady=(0, 10))
-    tk.Button(foot, text='すべてデフォルトに戻す', command=reset_all).pack(side='left')
-    tk.Button(foot, text='閉じる', command=dlg.destroy).pack(side='right')
+    if not no_reset_close_on():
+        foot = tk.Frame(dlg, bg=bg)
+        foot.pack(fill='x', padx=12, pady=(0, 10))
+        tk.Button(foot, text='すべてデフォルトに戻す', command=reset_all).pack(side='left')
+        tk.Button(foot, text='閉じる', command=dlg.destroy).pack(side='right')
 
     def forget(event=None):
         if event is None or event.widget is dlg:
@@ -573,6 +696,59 @@ def open_rank_window(app, colors=None):
     return dlg
 
 
+def choose_usage_counts(app, on):
+    """補正の段の使われ方を数えるか（設定 debug_usage_counts に保存・本体の usage_counts.ON。子は頼みに載せて渡す）。"""
+    try:
+        app.settings.set('debug_usage_counts', bool(on))
+        app.settings.save()
+    except Exception:
+        pass
+    try:
+        import usage_counts
+        usage_counts.ON = bool(on)
+    except Exception:
+        pass
+
+
+def reset_usage_counts(app):
+    """数えた分を 0 に戻す（メモリの数と、書き出した数のファイル）。"""
+    try:
+        import usage_counts
+        usage_counts.reset()
+    except Exception:
+        pass
+    try:
+        import os
+        import app as app_module
+        path = getattr(app_module, 'USAGE_COUNTS_FILE', None)
+        if path and os.path.exists(path):
+            os.remove(path)
+        app._usage_saved = None
+    except Exception:
+        pass
+
+
+def open_f5_effort_window(app, colors=None):
+    """F5 の予測の記号を並べる手間の表（f5_predict.EFFORT）を見るだけの窓。"""
+    import f5_predict
+    colors = dict(colors or {})
+    bg = colors.get('bg', '#f6f4ee')
+    ink = colors.get('ink', '#1c2b2d')
+    panel = colors.get('panel', bg)
+    dlg = tk.Toplevel(app.root)
+    dlg.title('F5 予測の記号の手間')
+    dlg.configure(bg=bg)
+    place = getattr(app, '_place_dialog', None)
+    if place is not None:
+        place(dlg, 720, 260)
+    text = tk.Text(dlg, bg=panel, fg=ink, relief='flat', wrap='word', font=('Yu Gothic UI', 10), height=10)
+    text.pack(fill='both', expand=True, padx=8, pady=8)
+    text.insert('1.0', f5_predict.effort_text())
+    text.configure(state='disabled')
+    dlg._f5_text = text
+    return dlg
+
+
 def open_usage_window(app, colors=None):
     """補正の段の使われ方（usage_counts.table）を見るだけの窓。"""
     colors = dict(colors or {})
@@ -593,6 +769,16 @@ def open_usage_window(app, colors=None):
     place = getattr(app, '_place_dialog', None)
     if place is not None:
         place(dlg, 760, 620)
+    def reset():
+        reset_usage_counts(app)
+        text.configure(state='normal')
+        text.delete('1.0', 'end')
+        text.insert('1.0', usage_text())
+        text.configure(state='disabled')
+    top = tk.Frame(dlg, bg=bg)
+    top.pack(side='top', fill='x')
+    dlg._usage_reset = tk.Button(top, text='リセット（数えた分を0に戻す）', command=reset)
+    dlg._usage_reset.pack(side='left', padx=8, pady=6)
     bar = tk.Scrollbar(dlg)
     bar.pack(side='right', fill='y')
     text = tk.Text(dlg, bg=panel, fg=ink, relief='flat', wrap='none', font=('Consolas', 9),

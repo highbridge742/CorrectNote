@@ -125,6 +125,68 @@ def propose(text):
     return res
 
 
+KANA_WINDOW = 8
+
+
+def propose_kana(text, odd):
+    """かなだけの並びの紫の所で、゛゜ を1つ隣の字へ動かすと身近な語の読みになる所（だたしい → 正しい）。
+    窓は紫に重なる ひらがな の続きの中だけ。[(開始, 終了, 置く表記)]。CN_DAKUTEN_SHIFT_KANA=0 で見ない
+    （2026-11-20 うにの誤判定タブ）。"""
+    if os.environ.get('CN_DAKUTEN_SHIFT_KANA') == '0' or not odd:
+        return []
+    try:
+        import ime_reconvert as R
+        from morphology import path_cost
+    except Exception:
+        return []
+    base_cost = path_cost(text)
+    if base_cost is None:
+        return []
+    hira = lambda c: '\u3041' <= c <= '\u3096' or c == 'ー'
+    out = []
+    for a, b in odd:
+        if not any(hira(c) for c in text[a:b]):
+            continue
+        s0, e0 = a, b
+        while s0 > 0 and hira(text[s0 - 1]):
+            s0 -= 1
+        while e0 < len(text) and hira(text[e0]):
+            e0 += 1
+        cands = []
+        for ws in range(s0, e0):
+            for we in range(ws + 3, min(e0, ws + KANA_WINDOW) + 1):
+                if not (ws < b and a < we) or not all(hira(c) for c in text[ws:we]):
+                    continue
+                for v in shifts(text[ws:we]):
+                    for face in R._dict_faces(v, 5) or ():
+                        if not any('一' <= ch <= '鿿' for ch in face):
+                            continue
+                        if R._rank(face) > COMMON and _verb_rank(face) > COMMON:
+                            continue
+                        if not _one_word(face) or not _reads(face, v):
+                            continue
+                        line = text[:ws] + face + text[we:]
+                        c = path_cost(line)
+                        if c is None or c > base_cost - MARGIN:
+                            continue
+                        cands.append((c, ws, we, face))
+        if not cands:
+            continue
+        cands.sort()
+        best = cands[0]
+        # 窓の切り方が違っても出来る行が同じ（正し｜い と 正しい）なら1つと数える
+        if len({text[:x[1]] + x[3] + text[x[2]:] for x in cands if x[0] - best[0] < MARGIN}) > 1:
+            continue
+        best = max((x for x in cands if text[:x[1]] + x[3] + text[x[2]:] == text[:best[1]] + best[3] + text[best[2]:]),
+                   key=lambda x: x[2] - x[1])
+        out.append((best[1], best[2], best[3]))
+    res = []
+    for x in out:
+        if not any(y[0] < x[1] and x[0] < y[1] for y in res):
+            res.append(x)
+    return res
+
+
 def _reads(face, v):
     """置く表記が、動かした読みそのままに読めるか（公地 の くぢ を ぐち と読み替えて 口 を置かない）。"""
     try:
@@ -177,18 +239,26 @@ def repair_line(line, result, decided=(), input_method='kana'):
         props = propose(text)
     except Exception:
         return result
+    try:
+        odd0 = [tuple(o[:2]) for o in (result.get('odd_spans') or [])]
+        more = propose_kana(text, odd0)
+        props = props + [p for p in more if not any(q[0] < p[1] and p[0] < q[1] for q in props)]
+    except Exception:
+        pass
     props = [p for p in props if not any(a < p[1] and p[0] < b for a, b in decided)]
     if not props:
         return result
     new = text
     odd = [list(o) for o in (result.get('odd_spans') or [])]
     fixes = []
+    fixed_at = []
     for s, e, face in sorted(props, reverse=True):
         if face is None:
             if [s, e] not in odd:
                 odd.append([s, e])
             continue
         fixes.append((text[s:e], face))
+        fixed_at.append((s, e))
         new = new[:s] + face + new[e:]
         odd = [o for o in odd if not (o[0] < e and s < o[1])]
     out = dict(result)
@@ -201,6 +271,15 @@ def repair_line(line, result, decided=(), input_method='kana'):
                     return j1 + min(i - i1, j2 - j1)
             return i
         odd = [[mv(a), mv(b)] for a, b in odd]
+        # 紫の理由も同じに: 直した所に掛かる理由は外し、残りは直した後の位置へ（2026-11-23 補正担当、うに 誤判定タブの
+        # 正しく直った行に古い理由だけが残っていた）。CN_DAKUTEN_SHIFT_REASONS=0 で前のまま
+        if os.environ.get('CN_DAKUTEN_SHIFT_REASONS') != '0' and result.get('odd_reasons'):
+            rs = []
+            for r in result.get('odd_reasons') or ():
+                if any(r[0] < e and s < r[1] for s, e in fixed_at):
+                    continue
+                rs.append([mv(r[0]), mv(r[1])] + list(r[2:]))
+            out['odd_reasons'] = rs
         ops2 = [o for o in difflib.SequenceMatcher(None, line, new, autojunk=False).get_opcodes() if o[0] != 'equal']
         out['corrected'] = new
         out['changed'] = True

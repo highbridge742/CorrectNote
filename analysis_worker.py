@@ -982,6 +982,16 @@ def _take_usage():
         return None
 
 
+def usage_setting():
+    """In the main process: whether the children count the correction stages (usage_counts.ON, the debug menu's
+    check, 2026-11-20: off by default, and while off nothing is counted)."""
+    try:
+        import usage_counts
+        return bool(usage_counts.counting())
+    except Exception:
+        return False
+
+
 def respell_setting():
     """In the main process: the respell debug values to send with each request (odd_respell's switches in this
     process, set by the debug menu): (rank stats on, attempt limit). None while odd_respell is not loaded here."""
@@ -1140,6 +1150,11 @@ def _serve_requests(inbox,outbox,connection_owner,pause_flag=None):
             pending_state=None;request.pop('state',None)
             if request['task']['kind']=='cancel':continue
             _apply_respell(request.get('respell'))
+            try:
+                import usage_counts
+                usage_counts.ON=bool(request.get('usage'))       # 本体のチェックのとおりに数える・数えない
+            except Exception:
+                pass
             _EARLY['sink']=(outbox,request['id']);_EARLY['sent']=True
             if request['task']['kind'] in ('quick','quick_prepare','line','units','prepare','warmup','candidates','plans','synonyms','explain_pos','explain_reason','odd_run'):
                 # Preserve the next request/state while the old read-only
@@ -1252,7 +1267,7 @@ class Worker:
     def submit(self,task,state=None):
         if self.closed:raise RuntimeError('Analysis worker is closed')
         self.serial+=1
-        self.inbox.put_nowait(dict(id=self.serial,task=task,state=state,usage=True,respell=respell_setting()))
+        self.inbox.put_nowait(dict(id=self.serial,task=task,state=state,usage=usage_setting(),respell=respell_setting()))
         return self.serial
     def poll(self,request_id):
         while True:

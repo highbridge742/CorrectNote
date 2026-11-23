@@ -76,7 +76,7 @@ def child():
         with patch.object(app, 'GlobalHotkeys', return_value=Mock()), \
                 patch.object(app.CorrectNoteApp, '_learn_now', lambda *v: None), \
                 patch.object(app.CorrectNoteApp, '_first_run_setup', lambda *v: None):
-            a = app.CorrectNoteApp(root); root.geometry('1100x500+-6000+-6000'); root.deiconify(); complete()
+            a = app.CorrectNoteApp(root); __import__('offscreen_window').hold(root, '1100x500'); complete()   # 画面の外（どの画面の置き方でも）
             a._make_dropdown = lambda items, x, y, **k: shown.append(list(items))
             words = [(row, u) for row in (1, 2, 3) for u in a._units_for_row(row)
                      if not u.get('functional') and u.get('text', '').strip() not in ('', '。')]

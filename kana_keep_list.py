@@ -95,10 +95,10 @@ BUILTIN_DEFAULT = {
         'くる', 'こども', 'ごはん', 'ごま', 'ごめんなさい', 'さすが', 'さっそく', 'さつまいも', 'さば', 'さびしい', 'さまざま', 'さらに', 'さんま',
         'しいたけ', 'しめじ', 'しょうゆ', 'しょっぱい', 'しれない', 'じゃがいも', 'すいか', 'すきやき', 'すぎない', 'すこし', 'すごい', 'すっぱい', 'すでに',
         'せんべい', 'そうめん', 'そば', 'たくさん', 'ただし', 'たとえば', 'たのしい', 'たべる', 'たまねぎ', 'ため', 'だいふく', 'だれ', 'ちがいない',
-        'ちなみに', 'ちょうど', 'ちょっと', 'つけもの', 'てんぷら', 'できる', 'とおり', 'とき', 'ところ', 'ともだち', 'とりあえず', 'どこ', 'なお', 'なに',
+        'ちなみに', 'ちょうど', 'ちょっと', 'つけおき', 'つけもの', 'つらたん', 'てんぷら', 'できる', 'とおり', 'とき', 'ところ', 'ともだち', 'とりあえず', 'どこ', 'なお', 'なに',
         'にがい', 'にんじん', 'にんにく', 'のむ', 'ひらがな', 'ふりかけ', 'ぶどう', 'ぶり', 'ほうれんそう', 'ほか', 'ほしい', 'ほとんど', 'まいる', 'まさに',
         'ますます', 'まるで', 'まんじゅう', 'みかん', 'みそ', 'みそしる', 'みりん', 'みる', 'みんな', 'むしろ', 'むずかしい', 'むだ', 'もっとも', 'もつ',
-        'もも', 'やきとり', 'やさしい', 'ようかん', 'よろしく', 'りんご', 'わかめ', 'わかる', 'わけ', 'わさび', 'わずか', 'わたし',
+        'もも', 'やきとり', 'やっほー', 'やさしい', 'ようかん', 'よろしく', 'りんご', 'わかめ', 'わかる', 'わけ', 'わさび', 'わずか', 'わたし',
     ],
 }
 
@@ -510,6 +510,9 @@ def keep(line, result):
     return out
 
 
+_UNDECIDED_FIX = '直しは決め手が無いので、紫だけにしました'
+
+
 def drop_weak(line, result):
     """一覧の有効な語は、かなのままが正しい形。元の行でかなで打たれたその語に掛かる紫のうち、理由が弱いもの
     （品詞として識別できない・組が例文に無い・あまり使わない語 など、odd_reason_fill の弱い理由）だけを外す。
@@ -524,13 +527,45 @@ def drop_weak(line, result):
     try:
         from morphology import tokenize
         import odd_reason_fill as F
-        hits = [(t.start, t.end) for t in tokenize(line)
+        toks = list(tokenize(line))
+        hits = [(t.start, t.end) for t in toks
                 if not _has_kanji(t.surface) and t.surface and (_hira(t.reading or t.surface) in ws or _base_reading(t) in ws)]
     except Exception:
         return result
+    # 解析が一覧の語を1語に切れない時（やっほー → やっ｜ほ｜ー）も、行の中で一覧の語の字の並びが解析の語の切れ目から
+    # 切れ目までにちょうど当たれば、その所を一覧の語とする（語の途中から始まる・途中で終わる並びは見ない: 2026-11-22
+    # うに「ひらがなの語の表に追加したらよいのでは」）。その所では、直そうとして戻した紫（直すと文の形に説明が付かない）も
+    # 弱い理由とする（一覧の語は直さないのが正しい形なので）。CN_KANA_KEEP_WORD_SPAN=0 で前のまま
+    spans_on = os.environ.get('CN_KANA_KEEP_WORD_SPAN') != '0'
+    by_span = []
+    if spans_on:
+        starts = {t.start for t in toks}
+        ends = {t.end for t in toks}
+        for w in ws:
+            if len(w) < 2 or _has_kanji(w):
+                continue
+            i = line.find(w)
+            while i >= 0:
+                j = i + len(w)
+                if i in starts and j in ends and (i, j) not in hits:
+                    by_span.append((i, j))
+                i = line.find(w, i + 1)
+        hits = hits + by_span
     if not hits:
         return result
     reasons = [r for r in result.get('odd_reasons') or () if len(r) > 2]
+
+    def weak(texts, a, b):
+        if F._all_weak(texts):
+            return True
+        if spans_on and any(s <= a and b <= e for s, e in by_span):
+            return all(F._all_weak([t]) or 'は直すと文の形に説明が付かない' in t
+                       or (_UNDECIDED_FIX in t and os.environ.get('CN_KANA_KEEP_UNDECIDED_FIX') != '0') for t in texts)
+        # 一覧の語の中の「決め手が無いので紫だけ」（直し先を決められなかった）も、一覧の語は直さないのが正しい形なので弱い
+        # 理由とする（2026-11-23 補正担当: かなで打った つけおき の中の字の紫）。CN_KANA_KEEP_UNDECIDED_FIX=0 で前のまま
+        if os.environ.get('CN_KANA_KEEP_UNDECIDED_FIX') != '0' and any(s <= a and b <= e for s, e in hits):
+            return all(F._all_weak([t]) or _UNDECIDED_FIX in t for t in texts)
+        return False
 
     def drop(x):
         a, b = x[0], x[1]
@@ -542,7 +577,7 @@ def drop_weak(line, result):
         elif not any(s < b and a < e for s, e in hits):
             return False
         over = [r[2] for r in reasons if r[0] < b and a < r[1]]
-        return bool(over) and F._all_weak(over)
+        return bool(over) and weak(over, a, b)
     gone = [tuple(x[:2]) for x in result['odd_spans'] if drop(x)]
     if not gone:
         return result
@@ -553,10 +588,64 @@ def drop_weak(line, result):
     return out
 
 
+def keep_typed_inside(line, result):
+    """かなで打った一覧の語（3字以上）の中の字だけを書き換えた直し（つけおき → 付け焼き）は、打った語へ戻す。語の外へ
+    はみ出す直しは触らない。行が元のとおりに戻れば、書き換えが在ったから付いた紫（直した後の文の費用）も外す
+    （2026-11-23 補正担当、うに 誤判定タブの正しい文・日常語を解析が知らない時）。CN_KANA_KEEP_TYPED_INSIDE=0 で前のまま"""
+    if (os.environ.get('CN_KANA_KEEP_TYPED_INSIDE') == '0' or os.environ.get('CN_KANA_KEEP_LIST') == '0'
+            or not isinstance(result, dict)):
+        return result
+    text = result.get('corrected')
+    if not isinstance(text, str) or text == line:
+        return result
+    occ = []
+    for w in words():
+        if len(w) < 3 or _has_kanji(w):
+            continue
+        k = line.find(w)
+        while k >= 0:
+            occ.append((k, k + len(w)))
+            k = line.find(w, k + 1)
+    if not occ:
+        return result
+    import difflib
+    ops = difflib.SequenceMatcher(None, line, text, autojunk=False).get_opcodes()
+    parts, back = [], False
+    for tag, i1, i2, j1, j2 in ops:
+        if tag != 'equal' and any(p0 <= i1 and i2 <= p1 and (i1 < i2 or p0 < i1 < p1) for p0, p1 in occ):
+            parts.append(line[i1:i2])
+            back = True
+        else:
+            parts.append(text[j1:j2])
+    if not back:
+        return result
+    new = ''.join(parts)
+    if new != line:
+        return result      # 一部だけ戻すと残りの直しの位置がずれる。全部戻る時だけ
+    why = set()
+    for mod in ('fixed_still_odd', 'rewrite_doubt'):
+        try:
+            why.add(__import__(mod).REASON)
+        except Exception:
+            pass
+    rest = [r for r in result.get('odd_reasons') or () if not (len(r) > 2 and r[2] in why)]
+    keep_sp = {tuple(r[:2]) for r in rest}
+    gone = {tuple(r[:2]) for r in result.get('odd_reasons') or () if len(r) > 2 and r[2] in why} - keep_sp
+    out = dict(result)
+    out.update({'corrected': line, 'changed': False, 'spans': [], 'original_spans': [], 'details': [],
+                'odd_reasons': rest,
+                'odd_spans': [x for x in result.get('odd_spans') or () if tuple(x[:2]) not in gone]})
+    return out
+
+
 def correct_line(line, *args, **kwargs):
     result = _orig['correct_line'](line, *args, **kwargs)
     try:
         result = keep(line, result)
+    except Exception:
+        pass
+    try:
+        result = keep_typed_inside(line, result)
     except Exception:
         pass
     try:

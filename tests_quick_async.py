@@ -90,21 +90,32 @@ class QuickAsyncTests(unittest.TestCase):
         self.assertEqual(self.worker.submit.call_args[0],({'kind':'quick_prepare'},{'model':2}))
         self.worker.close.assert_not_called()
 
+    # 2026-11-08 うにさんのカード「60秒で外へ出し10分で閉じる」で、閉じた後の子は memory_usage.queue_release が
+    # 預かる形に変わった（60秒でメモリを外へ出す trim・10分で閉じる release。前は quick_analysis が60秒で閉じていた・
+    # _quick_idle_after_id）。試験をその形に合わせた（2026-11-20）
+    def after_calls(self):
+        return {args[0]:args[1] for args,_kw in self.app.root.after.call_args_list}
     def test_idle_worker_expiry_releases_memory_when_window_stays_closed(self):
+        import memory_usage as M
         Q.start(self.app);self.worker.poll.return_value=self.completed();Q.start(self.app)
+        self.app.root.after.reset_mock()
         Q.close(self.app,keep_idle_worker=True)
-        milliseconds,release=self.app.root.after.call_args[0]
-        self.assertEqual(milliseconds,60000)
-        self.app._quick_text=None;release()
+        calls=self.after_calls()
+        self.assertIn(M.IDLE_TRIM_MS,calls);self.assertIn(M.IDLE_RELEASE_KEPT_MS,calls)
+        self.app._quick_text=None
+        calls[M.IDLE_TRIM_MS]()                                     # 60秒: メモリを外へ出すだけ（閉じない）
+        self.worker.trim_memory.assert_called_once();self.worker.close.assert_not_called()
+        calls[M.IDLE_RELEASE_KEPT_MS]()                             # 10分: 閉じる
         self.worker.close.assert_called_once();self.assertIsNone(self.app._quick_worker)
-        self.assertIsNone(self.app._quick_idle_after_id)
+        self.assertIsNone(getattr(self.app,'_memory_quick_job',None))
     def test_reopening_cancels_old_expiry_without_releasing_reused_worker(self):
+        import memory_usage as M
         Q.start(self.app);self.worker.poll.return_value=self.completed();Q.start(self.app)
+        self.app.root.after.reset_mock()
         Q.close(self.app,keep_idle_worker=True)
-        identifier=self.app._quick_idle_after_id;release=self.app.root.after.call_args[0][1]
-        self.app.root.after_cancel.reset_mock()
-        Q.schedule_prepare(self.app)
-        self.app.root.after_cancel.assert_called_once_with(identifier)
+        release=self.after_calls()[M.IDLE_RELEASE_KEPT_MS]
+        self.app.root.after.reset_mock()
+        Q.schedule_prepare(self.app)                                # 開き直した: 準備が控えている間は使っている
         release();self.worker.close.assert_not_called()
         self.assertIs(self.app._quick_worker,self.worker)
 

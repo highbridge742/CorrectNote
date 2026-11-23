@@ -2080,3 +2080,79 @@ def finish(line,result,store,tokenize,dictionary,decisions=None):
             if not any(a<hi and lo<b for lo,hi in resolved_fields)]
         completed=engine._line_result_contract(line,completed,tokenize,dictionary)
     return _restore_unresolved_shift_fields(line,completed,store,dictionary)
+
+
+# ------------------------------------------------------------
+# 機能語だけの かな を名詞の漢字にしない（2026-11-20 補正担当: 例文 持続するからだ → 持続する身体）。
+# 打った かな が解析で 助詞・助動詞 だけに読めている所（から｜だ）を、同じ読みの名詞（身体）に置き換えた形は戻す。
+# CN_SPELLING_FUNCTION_WORDS=0 で前のまま
+# ------------------------------------------------------------
+_finish_core = finish
+
+
+def _function_words_only(line, a, b):
+    try:
+        from morphology import tokenize
+        toks = list(tokenize(line))
+    except Exception:
+        return False
+    hit = [t for t in toks if t.start < b and a < t.end]
+    if not (hit and hit[0].start == a and hit[-1].end == b and all(t.pos in ('助詞', '助動詞') for t in hit)):
+        return False
+    # 機能語として読めるのは、すぐ前に用言・助動詞が在る時だけ（行頭の から｜だ｜が は 体 の読み違えでありうる）
+    k = toks.index(hit[0])
+    return k > 0 and toks[k - 1].end == a and toks[k - 1].pos in ('動詞', '形容詞', '助動詞')
+
+
+def _adverb_function_tail(line, a, b):
+    """替えたかなが 副詞＋機能語（そう｜な｜ん: そうなんだ を 遭難だ にしていた）だけか。副詞は辞書の読みの在る語、
+    残りは助動詞・助詞・非自立の名詞（ん・の）で、2語以上（2026-11-20 補正担当の作った正しい文）。
+    CN_SPELLING_ADVERB_TAIL=0 で使わない。"""
+    import os
+    if os.environ.get('CN_SPELLING_ADVERB_TAIL') == '0':
+        return False
+    try:
+        from morphology import tokenize
+        toks = list(tokenize(line))
+    except Exception:
+        return False
+    hit = [t for t in toks if t.start < b and a < t.end]
+    if not (len(hit) >= 2 and hit[0].start == a and hit[-1].end == b):
+        return False
+    return (hit[0].pos == '副詞' and hit[0].has_reading
+            and all(t.pos in ('助詞', '助動詞') or (t.pos == '名詞' and (t.pos_sub or '').startswith('非自立'))
+                    # 副詞＋する（どう｜しよ｜う: どうしよう を 銅使用 にしていた）も同じ（2026-11-20 例文の正しい文）。
+                    # CN_SPELLING_ADVERB_SURU=0 で前のまま
+                    or (t.pos == '動詞' and t.base_form == 'する' and t is hit[1]
+                        and os.environ.get('CN_SPELLING_ADVERB_SURU') != '0')
+                    for t in hit[1:]))
+
+
+def finish(line, result, *args, **kwargs):
+    out = _finish_core(line, result, *args, **kwargs)
+    import os
+    if os.environ.get('CN_SPELLING_FUNCTION_WORDS') == '0' or not isinstance(out, dict):
+        return out
+    done = out.get('corrected') or line
+    if done == line:
+        return out
+    import difflib
+    ops = difflib.SequenceMatcher(None, line, done, autojunk=False).get_opcodes()
+    back = []
+    for tag, i1, i2, j1, j2 in ops:
+        if (tag == 'replace' and i2 > i1 and all('ぁ' <= c <= 'ゖ' for c in line[i1:i2])
+                and any('一' <= c <= '鿿' for c in done[j1:j2])
+                and (_function_words_only(line, i1, i2) or _adverb_function_tail(line, i1, i2))):
+            back.append((i1, i2, j1, j2))
+    if not back:
+        return out
+    new = done
+    for i1, i2, j1, j2 in sorted(back, key=lambda x: -x[2]):
+        new = new[:j1] + line[i1:i2] + new[j2:]
+    res = dict(out)
+    gone = {done[j1:j2] for _i1, _i2, j1, j2 in back}
+    ops2 = [o for o in difflib.SequenceMatcher(None, line, new, autojunk=False).get_opcodes() if o[0] != 'equal']
+    res.update({'corrected': new, 'changed': bool(ops2), 'spans': [[o[3], o[4]] for o in ops2],
+                'original_spans': [[o[1], o[2]] for o in ops2],
+                'details': [d for d in out.get('details') or () if not (isinstance(d, (list, tuple)) and len(d) > 1 and d[1] in gone)]})
+    return res

@@ -1472,13 +1472,34 @@ def looks_like_real_word(text, store, tokenize_fn=None):
                             if 0 <= j < len(toks):
                                 tj = toks[j]
                                 if (len(tj[0]) == 1 and tj[5]
-                                        and '固有名詞' in (tj[1] or '')):
+                                        and '固有名詞' in (tj[1] or '')
+                                        and _proper_pair_ok(toks, min(idx, j))):
                                     return True
                     return False
                 if all(_ok1(idx, t) for idx, t in enumerate(toks)):
                     return True
 
     return False
+
+
+def _proper_pair_ok(toks, k):
+    """1文字の固有名詞2つ（toks[k]・toks[k+1]）の並びを実在の語の並びと見てよいか: 国の略称どうし（日＋清・米＋英）か、
+    2字が辞書の1語（日中）のとき。地名の1字どうし（集＋亜 は しゅうりょう を1打多く打った 集亜量 の頭）は守らない
+    （2026-11-22 補正担当）。CN_REAL_WORD_PAIR_NATION=0 で前のまま（どの1文字の固有名詞2つも守る）"""
+    import os
+    if os.environ.get('CN_REAL_WORD_PAIR_NATION') == '0':
+        return True
+    try:
+        a, b = toks[k], toks[k + 1]
+    except IndexError:
+        return True
+    if '地域:国' in (a[1] or '') and '地域:国' in (b[1] or ''):
+        return True
+    try:
+        from morphology import dictionary_inflections
+        return bool(dictionary_inflections(a[0] + b[0]))
+    except Exception:
+        return True
 
 
 def _seed_surfaces():

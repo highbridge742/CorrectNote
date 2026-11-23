@@ -159,6 +159,9 @@ def is_blank(tab):
     return not (tab.get('text') or '').strip()
 
 
+# 自動反映を戻した行の字の置き場（app._autofix_decline）。2つ目は 2026-11-20 から（掛けた時の字を混ぜない）
+DECLINED_KEYS = ('autofix_declined', 'autofix_declined2')
+
 class SessionStore:
     """
     編集中の内容の控え。
@@ -207,10 +210,14 @@ class SessionStore:
         current = self.tabs[i]
         if current is not tab:
             backup_id = current.get('backup_id')
+            declined = {k: current.get(k) for k in DECLINED_KEYS}
             current.clear()
             current.update(tab)
             if backup_id and not current.get('backup_id'):
                 current['backup_id'] = backup_id     # the tab's backups stay with it
+            for k, v in declined.items():
+                if v and k not in current:
+                    current[k] = v   # 自動反映を戻した行（app._autofix_decline・2026-11-18・置き場2つ）も
 
     def add_tab(self, tab=None, activate=True):
         """タブを1つ足す。戻り値はその位置。"""
@@ -333,6 +340,14 @@ class SessionStore:
                 backup_id=t.get('backup_id'),
                 doc_title=t.get('doc_title'),
             ))
+            for key in DECLINED_KEYS:
+                declined = t.get(key)
+                if isinstance(declined, list) and declined:
+                    # 自動反映を戻した行（app._autofix_decline・2026-11-18）。字の並びだけ・今の本文にある行だけ
+                    body = set(str(clean[-1].get('text') or '').split('\n'))
+                    kept = [x for x in declined if isinstance(x, str) and x in body]
+                    if kept:
+                        clean[-1][key] = kept
         if not clean:
             return False
         self.tabs = clean

@@ -257,6 +257,12 @@ WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP = 0x0200, 0x0201, 0x0202
 MI_WP_SIGNATURE, SIGNATURE_MASK = 0xFF515700, 0xFFFFFF00
 _touch_proc = None
 _touch_state = {}               # 本文の欄の窓 → dict(y, rem, gesture, down)
+# 本文の欄の窓 → 最後の左の押しが指（タッチ・ペン）から来たか（2026-11-20 うにさん「タッチモニター1本指でスクロールに
+# ならない」）。11-18 に足した長押しの語選び・範囲の掴み（drag_move）は、押しから 220ms 動かなければ語を選ぶ。指の
+# 動きはここで Tk へ渡さない（ホイールにする）ので、drag_move は「動いた」を一度も見ず、指でなぞっている間に長押しが
+# 立って語を選び、選んだ範囲の中に指を置くと掴み（'armed'）になっていた。Tk の束縛（drag_move・mouse_words）が
+# 押しの出どころを聞けるように残す。CN_TOUCH_NO_DRAG=0 で前の形（聞かれても「指ではない」と答える）
+_press_touch = {}
 
 
 def text_touch_enabled(environ=None):
@@ -268,6 +274,37 @@ def text_touch_enabled(environ=None):
 def from_touch(extra):
     """マウスの知らせが、タッチ・ペンから作られた物か（GetMessageExtraInfo の印）。"""
     return (int(extra) & SIGNATURE_MASK) == MI_WP_SIGNATURE
+
+
+def press_is_touch(widget, environ=None):
+    """widget（Tk の欄）の、いまの左の押しが指から来たか。分からなければ False（マウスと同じ扱い）。"""
+    import os
+    environ = os.environ if environ is None else environ
+    if environ.get('CN_TOUCH_NO_DRAG') == '0':
+        return False
+    try:
+        return bool(_press_touch.get(int(widget.winfo_id())))
+    except Exception:
+        return False
+
+
+def wheel_screen_xy(user32, hwnd, x, y, environ=None):
+    """欄の中の位置（WM_MOUSEMOVE の lParam）を画面の位置に（WM_MOUSEWHEEL の lParam は画面の位置・2026-11-20）。
+    前は欄の中の位置のまま送っていたので、Tk のホイールの知らせの x_root・y_root が画面の左上の辺りを指した
+    （欄の上の方をなぞると、タブの帯の上のホイール＝タブを替える、と取られうる）。CN_TOUCH_WHEEL_SCREEN=0 で前の形"""
+    import os
+    environ = os.environ if environ is None else environ
+    if environ.get('CN_TOUCH_WHEEL_SCREEN') == '0':
+        return x, y
+    try:
+        import ctypes
+        import ctypes.wintypes as wt
+        pt = wt.POINT(int(x), int(y))
+        if user32.ClientToScreen(wt.HWND(hwnd), ctypes.byref(pt)):
+            return pt.x, pt.y
+    except Exception:
+        pass
+    return x, y
 
 
 def touch_step(state, msg, y, touch, gesture_y=None):
@@ -345,15 +382,19 @@ def _touch_api():
                         return 0
             elif msg in (WM_MOUSEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP):
                 touch = from_touch(user32.GetMessageExtraInfo())
+                if msg == WM_LBUTTONDOWN:
+                    _press_touch[int(hwnd)] = touch      # 離しの後も残す（Tk の束縛は知らせより後に走る）
                 y = ctypes.c_short((lparam >> 16) & 0xFFFF).value
                 x = ctypes.c_short(lparam & 0xFFFF).value
                 delta, keep = touch_step(state, msg, y, touch)
                 if delta:
-                    post_wheel(hwnd, delta, x, y)
+                    sx, sy = wheel_screen_xy(user32, hwnd, x, y)
+                    post_wheel(hwnd, delta, sx, sy)
                 if not keep:
                     return 0
             elif msg == WM_NCDESTROY:
                 _touch_state.pop(int(hwnd), None)
+                _press_touch.pop(int(hwnd), None)
                 comctl.RemoveWindowSubclass(hwnd, _touch_proc, TOUCH_SUBCLASS_ID)
         except Exception:
             pass
@@ -372,6 +413,44 @@ def attach_text_touch(text_hwnd):
         return False
     try:
         return bool(api[2].SetWindowSubclass(text_hwnd, _touch_proc, TOUCH_SUBCLASS_ID, 0))
+    except Exception:
+        return False
+
+
+WATCH_SUBCLASS_ID = 0x4357       # 'CW'
+_watch_proc = None
+
+
+def watch_touch_press(hwnd):
+    """押しが指から来たかを覚えるだけの手続きを掛ける（知らせは全部そのまま通す）。簡易入力の欄のように、なぞりを
+    スクロールに変えない欄でも press_is_touch を答えられるように（2026-11-20 うにさん「簡易入力でも、長押し選択と
+    ドラッグ移動ができるようにする」）。掛けたら True。"""
+    global _watch_proc
+    if not hwnd:
+        return False
+    api = _touch_api()
+    if api is None:
+        return False
+    ctypes, user32, comctl = api
+    if _watch_proc is None:
+        import ctypes.wintypes as wt
+        SUBCLASSPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wt.HWND, ctypes.c_uint, ctypes.c_size_t,
+                                          ctypes.c_ssize_t, ctypes.c_size_t, ctypes.c_size_t)
+
+        def proc(h, msg, wparam, lparam, uid, data):
+            # ★ Tk を呼ばない。左の押し以外は何もせずに通す（打鍵を遅くしない）
+            if msg == WM_LBUTTONDOWN:
+                try:
+                    _press_touch[int(h)] = from_touch(user32.GetMessageExtraInfo())
+                except Exception:
+                    pass
+            elif msg == WM_NCDESTROY:
+                _press_touch.pop(int(h), None)
+                comctl.RemoveWindowSubclass(h, _watch_proc, WATCH_SUBCLASS_ID)
+            return comctl.DefSubclassProc(h, msg, wparam, lparam)
+        _watch_proc = SUBCLASSPROC(proc)
+    try:
+        return bool(comctl.SetWindowSubclass(hwnd, _watch_proc, WATCH_SUBCLASS_ID, 0))
     except Exception:
         return False
 

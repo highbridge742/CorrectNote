@@ -27,6 +27,13 @@ def _kk_rule(rid):
 MIN_RUN = 3            # 見るかなの並びの長さ（字）
 MIN_WORD = 2           # 置く語の読みの長さ
 SEG_MARGIN = 800       # 1番と2番の切り方の費用の差がこれ未満なら迷い（紫）
+_SEGMENT_ON = os.environ.get('CN_LATTICE_SEGMENT') == '1'   # 既定は切る（2026-11-21 試し: 正しい文に誤った書き換えが出る）
+_KANA_FUNC_ON = os.environ.get('CN_LATTICE_KANA_FUNC') == '1'
+_KANA_FUNC_POS = ('副詞', '連体詞', '接続詞')
+_FORMAL_NOUNS = frozenset(('こと', 'もの', 'よう', 'ため', 'ところ', 'とき', 'はず', 'わけ', 'ほう', 'まま', 'うち'))
+_SEG_LOG = None
+_BAD_RANGES = []  # 格子が語を置けなかった文節の所（propose が足す）
+_CLEARED = {}     # 外した紫（打った行 → (紫, 訳)）。purple_restore.py が見る
 _CONTENT_POS = ('名詞',)   # 置く語は名詞だけ（動詞・形容詞のかなは書くつもりのかなが多い: ひいて・こされ・ふせ。2026-10-25 測り）
 
 
@@ -306,6 +313,18 @@ def _explained_nouns(a, spans, store, dict_index, LK, before='', doubts=None):
                     continue
             except Exception:
                 pass
+        # 迷う表記がどれも漢字1字の語（ぎょう → 行・業）なら、同じ読みの1字の語はいくらでも在り、迷うのは書き手の
+        # 打ち違いではなく読みの側。かなのまま紫にしない（2026-11-20 補正担当、うに 誤判定タブの正しい文。
+        # 判断 POLICY.md F1）。CN_LATTICE_AMBIG_ONE_KANJI=0 で前のまま
+        # ただし、並びの中で前の語が内容語（かいす｜せき の 介す: 動詞）のすぐ後ろの1字の語は、打ち違いの並びを格子が
+        # 切った残りのことが多い（解析→かいすせき が紫も無く残っていた・2026-11-22 うに 147行）。前が機能語か並びの頭の
+        # 時だけ紫にしない。CN_LATTICE_ONE_KANJI_AFTER_WORD=0 で前のまま
+        if ((len(usual) > 1 or others) and os.environ.get('CN_LATTICE_AMBIG_ONE_KANJI') != '0'
+                and all(len(f) == 1 and '一' <= f <= '鿿' for f in usual + others)
+                and (os.environ.get('CN_LATTICE_ONE_KANJI_AFTER_WORD') == '0' or n == 0
+                     or spans[n - 1][4] in ('助詞', '助動詞', '記号', '接頭詞'))):
+            n += 1
+            continue
         if (len(usual) > 1 or others) and doubts is not None and fits(n, n) \
                 and os.environ.get('CN_LATTICE_AMBIG_PURPLE') != '0':
             # 表記が決まらない名詞（こうえん → 公園・講演）は、かなのまま黙らず紫（決めるか紫・うに 10-18）。
@@ -536,7 +555,15 @@ def propose(text, store, dict_index, surrounding=(), _skip=()):
                     n_ = m_
             continue
         kata = []
-        for s, e, face, rd, pos in spans:
+        seg_of, sg = [], 0
+        for _w in spans:
+            if _w[4] in ('助詞', '助動詞'):
+                sg += 1
+            seg_of.append(sg)
+        bad_seg = set()
+        for _k, (s, e, face, rd, pos) in enumerate(spans):
+            if _SEGMENT_ON and seg_of[_k] in bad_seg:
+                continue
             if (os.environ.get('CN_LATTICE_KATAKANA') != '0' and face and all('ァ' <= c <= 'ヶ' or c == 'ー' for c in face)
                     and pos == '名詞' and len(rd) >= MIN_WORD and _kata_common(face)):
                 # 外来語の名詞（にゅうりょくみす の ミス）は片仮名で置く（うに 11-01「外来語は片仮名に」）。漢字の語と
@@ -555,7 +582,15 @@ def propose(text, store, dict_index, surrounding=(), _skip=()):
                 if (pos in ('動詞', '形容詞') and os.environ.get('CN_LATTICE_KANA_VERB') != '0'
                         and all(x[4] in ('助詞', '助動詞') for x in spans if x[0] == e)):
                     continue
+                if _KANA_FUNC_ON and (pos in _KANA_FUNC_POS or (pos == '名詞' and rd in _FORMAL_NOUNS)):
+                    # かなで書くのが普通の副詞・連体詞・接続詞（ゆっくり・この）と形式名詞（こと・よう）は、かなのまま残して
+                    # 並びのほかの名詞は置く（2026-11-21 作り例の正しいかなの文: この1語のために行全体がかなのまま・紫）。
+                    # CN_LATTICE_KANA_FUNC=0 で前のまま
+                    continue
                 if pos not in ('助詞', '助動詞') and len(rd) >= MIN_WORD:
+                    if _SEGMENT_ON:
+                        bad_seg.add(seg_of[_k]); _SEG_LOG is not None and _SEG_LOG.append((1, face, rd, pos))
+                        continue
                     whole = False
                     break
                 continue
@@ -567,7 +602,13 @@ def propose(text, store, dict_index, surrounding=(), _skip=()):
                 # 用言（よむ・かい）はかなのまま（和語はかなのまま・うに 11-01）。並び全体は諦めず、続く名詞は置く
                 # （2026-11-05 挙動関連担当の PC の測り: 用言＋名詞＋助詞＋用言 の行が漢字にならない）。CN_LATTICE_VERB_KANA=0
                 continue
+            if _KANA_FUNC_ON and pos in _KANA_FUNC_POS and len(rd) >= MIN_WORD:
+                # 漢字の表記もある副詞（すこし・あらためて）は、かなのまま残して並びの名詞は置く。CN_LATTICE_KANA_FUNC=0
+                continue
             if pos not in _CONTENT_POS or len(rd) < MIN_WORD:
+                if _SEGMENT_ON:
+                    bad_seg.add(seg_of[_k]); _SEG_LOG is not None and _SEG_LOG.append((2, face, rd, pos))
+                    continue
                 whole = False
                 break
             # 表記は今までの置き方の候補（本人の語彙→辞書→身近さの門）。格子の表記はそのまま使わない
@@ -590,6 +631,9 @@ def propose(text, store, dict_index, surrounding=(), _skip=()):
                 # （漢字の語と一緒に置くときだけ・下の run_places）。2026-11-06 PC の測り: ローマ字の かなだけの行で
                 # 入力ミスを… が漢字にならない。CN_LATTICE_KATA_FALLBACK=0 で前のまま
                 if _kata_fallback(face, rd, a, s, e, kata):
+                    continue
+                if _SEGMENT_ON:
+                    bad_seg.add(seg_of[_k]); _SEG_LOG is not None and _SEG_LOG.append((3, face, rd, pos))
                     continue
                 whole = False
                 break
@@ -621,9 +665,23 @@ def propose(text, store, dict_index, surrounding=(), _skip=()):
                         continue
                 if _kata_fallback(face, rd, a, s, e, kata):
                     continue
+                if _SEGMENT_ON:
+                    bad_seg.add(seg_of[_k]); _SEG_LOG is not None and _SEG_LOG.append((4, face, rd, pos))
+                    continue
                 whole = False
                 break
             run_places.append((a + s, a + e, chosen))
+        if _SEGMENT_ON and bad_seg:
+            # 格子の語を置けなかった文節（助詞・助動詞で区切った所）だけかなのまま残し、ほかの文節の語は置く
+            # （こんどの｜どようびに｜ひっこしをします: 1語のために行全体がかなのまま・紫になっていた。2026-11-21
+            # 作り例1948行で正しいかなの文148行の半分に紫）。置けなかった文節に掛かる語は置かない
+            bad_rng = [(a + x[0], a + x[1]) for k_, x in enumerate(spans) if seg_of[k_] in bad_seg]
+            run_places = [q for q in run_places if not any(lo_ < q[1] and q[0] < hi_ for lo_, hi_ in bad_rng)]
+            if run_places:
+                _BAD_RANGES.extend(bad_rng)
+            kata = [q for q in kata if not any(lo_ < q[1] and q[0] < hi_ for lo_, hi_ in bad_rng)]
+            if not run_places:
+                whole = False
         # 名詞＋漢字1字の名詞（せいきゅう｜しょ → 請求＋署）は、つないだ読みが辞書の1語（請求書）ならそれにする
         # （1字の表記は 署・書・所 と決まらない）。CN_LATTICE_JOIN_ONE=0 で前のまま
         if whole and len(run_places) > 1 and os.environ.get('CN_LATTICE_JOIN_ONE') != '0':
@@ -946,9 +1004,69 @@ def _kata_common(face):
     return 0 < rk <= KATA_COMMON
 
 
+def _cuts_word(line, a, b):
+    """置く所 line[a:b] の端が、辞書に読みのある副詞・連体詞・接続詞の語の途中に来るか（しか｜と の しかと・
+    か｜どの の どの）。その語は解析が正しく切った語で、名詞を置くとその語を壊す（2026-11-20 正しい文の見直し:
+    しかとは → 歯科とは・死ぬかどのように → 死ぬ角のように）。CN_LATTICE_CUT_WORD=0 で前のまま。"""
+    if os.environ.get('CN_LATTICE_CUT_WORD') == '0':
+        return False
+    try:
+        from morphology import tokenize
+        for t in tokenize(line):
+            if (t.pos in ('副詞', '連体詞', '接続詞') and getattr(t, 'has_reading', True) and len(t.surface) >= 2
+                    and (t.start < a < t.end or t.start < b < t.end)):
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _not_noun_word(line, a, b):
+    """line[a:b] が1語で、辞書がその かな の語を名詞として持たない（ちょうど: 副詞だけ）か。名詞の表記を決める所ではない
+    （2026-11-20 補正担当・例文の正しい文: ちょうど私の → 紫）。CN_LATTICE_DOUBT_NOUN_ONLY=0 で前のまま。"""
+    if os.environ.get('CN_LATTICE_DOUBT_NOUN_ONLY') == '0':
+        return False
+    try:
+        from morphology import tokenize, dictionary_inflections
+        hit = [t for t in tokenize(line) if t.start < b and a < t.end]
+        if not hit or hit[0].start != a or hit[-1].end != b:
+            return False
+        if hit[0].pos == '名詞':
+            # 代名詞（いつ・どこ・これ）で始まり、後ろが助動詞・助詞だけの紫（いつ｜な｜の）も名詞の表記を決める所ではない
+            # （2026-11-20 正しい文の見直し）。CN_LATTICE_DOUBT_PRONOUN=0 で前のまま
+            return (os.environ.get('CN_LATTICE_DOUBT_PRONOUN') != '0' and len(hit) > 1
+                    and str(hit[0].pos_sub or '').startswith('代名詞')
+                    and all(getattr(t, 'has_reading', True) for t in hit)
+                    and all(t.pos in ('助動詞', '助詞') for t in hit[1:]))
+        if len(hit) > 1:
+            # 名詞でない語（もう・あの・さあ）で始まり、語の切れ目で終わる紫（もう｜ここ・あの｜ペン）も、名詞の表記を決める
+            # 所ではない。どの語も辞書に読みがあること。CN_LATTICE_DOUBT_LEAD_WORD=0 で前のまま（1語の所だけ）
+            if (os.environ.get('CN_LATTICE_DOUBT_LEAD_WORD') == '0'
+                    or any(not getattr(t, 'has_reading', True) for t in hit)
+                    # 1字の かな の語に切れる所（ぎょ｜う｜ばん｜ご｜う）は切り方が崩れた印で、語の並びではない
+                    # （2026-11-20 うに: ぎょうばんごうを が 行番号を にならなくなった）
+                    # 付属の1字（接頭詞 ご・助動詞 り: もう｜こり｜ご｜り）は語の並びの中で普通に出るので見ない
+                    or any(len(t.surface) == 1 and 'ぁ' <= t.surface <= 'ゖ'
+                           and t.pos not in ('接頭詞', '助動詞', '助詞') for t in hit)
+                    or hit[0].pos not in ('副詞', '連体詞', 'フィラー', '感動詞')):
+                return False
+        # すぐ後ろが格助詞（いと｜を）なら名詞の置き場所。副詞・連体詞に格助詞は付かない（2026-11-20 うに:
+        # いとをさっして が 意図を にならなくなった）
+        nxt = [t for t in tokenize(line) if t.start == b]
+        if len(hit) == 1 and nxt and nxt[0].pos == '助詞' and str(nxt[0].pos_sub or '').startswith('格助詞'):
+            return False
+        rows = dictionary_inflections(hit[0].surface) or ()
+        return bool(rows) and not any(str(r[0]).startswith('名詞') for r in rows)
+    except Exception:
+        return False
+
+
 def _doubt_marks(line, result, done, doubts):
     """置けなかったかなの名詞の組（表記が決まらない）に紫。ほかの補正が触った所・紫の所には付けない。"""
     if not doubts or done != line:
+        return result
+    doubts = [d for d in doubts if not _not_noun_word(line, d[0], d[1])]
+    if not doubts:
         return result
     out = dict(result)
     out['odd_spans'] = list(result.get('odd_spans') or []) + [(x, y) for x, y in doubts]
@@ -958,6 +1076,46 @@ def _doubt_marks(line, result, done, doubts):
 
 
 PURPLE_PLACE_GAIN = 3000   # 紫の上に置くのは、行の並びの費用がこれだけ下がるとき
+
+
+def _fix_places(text, places):
+    """置く語の見直し（2026-11-20 補正担当・例文の正しい文）。
+    て・で のすぐ後ろの は・も から始まる所（して｜はいかん → して配管）は、助詞の付いた用言の並びで、名詞を置く所ではない
+    （CN_LATTICE_TE_PARTICLE=0 で前のまま）。
+    接頭詞 ご・お のすぐ後ろの所（ご｜きげん → ご期限）は、接頭詞を含めた読みの辞書の語（ご機嫌）が在れば、その語の
+    残りの表記に揃える。揃える表記が1つに決まらなければ置かない（CN_LATTICE_PREFIX_WORD=0 で前のまま）。"""
+    if not places:
+        return places
+    try:
+        from morphology import tokenize
+        toks = list(tokenize(text))
+    except Exception:
+        return places
+    out = []
+    for p in places:
+        a, b, face = p[0], p[1], p[2]
+        if os.environ.get('CN_LATTICE_TE_PARTICLE') != '0':
+            k = next((i for i, t in enumerate(toks) if t.start == a), None)
+            if (k and toks[k].pos == '助詞' and toks[k].surface in ('は', 'も')
+                    and toks[k - 1].end == a and toks[k - 1].pos == '助詞' and toks[k - 1].surface in ('て', 'で')
+                    and str(toks[k - 1].pos_sub or '').startswith('接続助詞')):
+                continue
+        if (os.environ.get('CN_LATTICE_PREFIX_WORD') != '0' and a > 0 and text[a - 1] in 'ごお'
+                and all(_hira(c) for c in text[a:b])
+                and any(t.start == a - 1 and t.pos == '接頭詞' for t in toks)):
+            try:
+                import ime_reconvert
+                faces = ime_reconvert._dict_faces(text[a - 1:b], 8) or ()
+            except Exception:
+                faces = ()
+            tails = {f[1:] for f in faces if f[:1] in (text[a - 1], '御') and len(f) > 1}
+            tails = {x for x in tails if x and not all(_hira(c) for c in x)}
+            if tails and face not in tails:
+                if len(tails) != 1:
+                    continue
+                p = (a, b, next(iter(tails))) + tuple(p[3:])
+        out.append(p)
+    return out
 
 
 def _place_over_purple(line, result, store, dict_index):
@@ -984,10 +1142,13 @@ def _place_over_purple(line, result, store, dict_index):
                 return result
             moved.append(m[0])
         odd = moved
+    del _BAD_RANGES[:]
     try:
         places, _doubts = propose(done, store, dict_index)
     except Exception:
         return result
+    bad_here = list(_BAD_RANGES)
+    places = _fix_places(done, places)
     places = [p for p in places if not any(x <= p[1] and p[0] <= y for x, y in changed)]
     if not places:
         return result
@@ -1021,6 +1182,16 @@ def _place_over_purple(line, result, store, dict_index):
         except Exception:
             return result
     ops = [o for o in difflib.SequenceMatcher(None, line, new, autojunk=False).get_opcodes() if o[0] != 'equal']
+    if done == line and isinstance(_CLEARED, dict):
+        # 付け直すのは、格子が語を置けなかった文節だけ（ほかの文節は語で切れた＝表記のかな）。どの文節も置けた行は付け直さない
+        # （2026-11-21 Fable 5.2 の意見）
+        rngs = []
+        for lo_, hi_ in sorted(set(bad_here)):
+            if rngs and lo_ <= rngs[-1][1]:
+                rngs[-1] = (rngs[-1][0], max(rngs[-1][1], hi_))
+            else:
+                rngs.append((lo_, hi_))
+        _CLEARED[line] = (rngs, [])
     out = dict(result)
     out.update({'original': line, 'corrected': new, 'changed': True,
                 'details': list(result.get('details') or []) + [[done[s:e], f, '読みの区切り'] for s, e, f in places],
@@ -1333,6 +1504,7 @@ def repair_line(line, result, store, dict_index):
         places, doubts = propose(done, store, dict_index)
     except Exception:
         return result
+    places = _fix_places(done, places)
     if not doubts or os.environ.get('CN_LATTICE_ROLLIN_ANY') != '0':
         got = _rollin_delete(line, result, store, dict_index)
         if got is not None:
@@ -1352,6 +1524,8 @@ def repair_line(line, result, store, dict_index):
         # 抜いただけの所（x == y: ぎ゜ょう → ぎょう の ゜ を抜いた）も、置く語の中なら同じ
         return not (p[0] <= x and y <= p[1] and x <= y and all(_hira(c) for c in done[x:y]))
     places = [p for p in places if not any(clash(p, x, y) for x, y in changed)]
+    # 辞書が名詞として持たない1語（ちょうど: 副詞）は、名詞の表記を置く所ではない（置かず、紫も付けない）
+    places = [p for p in places if not _not_noun_word(done, p[0], p[1]) and not _cuts_word(done, p[0], p[1])]
     # 置く名詞のすぐ後ろに漢字が続き、つないだ形（結果＋式）が辞書の語でない所は、その名詞で決まらない（結婚式 の
     # 打ち違いを 結果式 にしていた・2026-11-06 かなの試験）。置かずに紫。CN_LATTICE_KANJI_AFTER=0
     if places and os.environ.get('CN_LATTICE_KANJI_AFTER') != '0':

@@ -549,6 +549,11 @@ class ReInput:
             return self._open_span(row, span, column)
         if getattr(app, '_dropdown', None) is not None:
             return False
+        again = self._done_span()
+        self._done = None
+        if again is not None:
+            row, span, column = again
+            return self._open_span(row, span, column)
         typed = self._typed_span()
         if typed is not None:
             self._waiting = typed
@@ -623,11 +628,9 @@ class ReInput:
             return None
         start = len(w.get(f'{row}.0', first))
         end = len(w.get(f'{row}.0', last))
-        if not self.quick:
+        if not self.quick or self._quick_typed_on():
             try:
-                import analysis_work_app
-                lines = w.get('1.0', 'end-1c').split('\n')
-                found = sorted(analysis_work_app.line_readings(app, row - 1, lines) or (), key=lambda x: -x.end)
+                found = sorted(self._line_readings(row) or (), key=lambda x: -x.end)
             except Exception:
                 found = ()
             for x in found:
@@ -863,6 +866,7 @@ class ReInput:
         self._remember_conversion(st)
         self._keep_typed(st)
         row = int(w.index(START).split('.')[0])
+        self._remember_done(row)
         chosen = (w.get(f'{row}.0', f'{row}.end'), st['shown'], set(), st['line_before']) if not self.quick and st['at'] >= 0 and st['shown'] != st['reading'] else None
         self._drop()
         self._chosen = chosen
@@ -874,6 +878,36 @@ class ReInput:
         if wrote:
             w.edit_separator()
         self._say('')
+
+    # 同じ範囲をもう一度（2026-11-21 07:48Z うにさん「再入力変換で一度変更した後、その範囲を再入力変換を掛けたが平仮名に
+    # ならなかった」）。終えるとカーソルは範囲の終わりにあり、Ctrl の2回押しはカーソルの語を Ctrl+左右の規則で選ぶので、
+    # 語の境目では右の語（です・を など、もう平仮名の語）を開いていた。終えた範囲を控え、そのあと何もせず（行の字も
+    # カーソルもそのまま）Ctrl の2回押しをしたら、その範囲を開く。CN_REINPUT_AGAIN_SAME=0 で前の形
+    def _remember_done(self, row):
+        w = self.widget
+        try:
+            start = len(w.get(f'{row}.0', START))
+            end = len(w.get(f'{row}.0', END))
+            self._done = (row, start, end, w.get(f'{row}.0', f'{row}.end'))
+        except Exception:
+            self._done = None
+
+    def _done_span(self):
+        import os
+        done = getattr(self, '_done', None)
+        if done is None or os.environ.get('CN_REINPUT_AGAIN_SAME') == '0':
+            return None
+        row, start, end, line = done
+        w = self.widget
+        try:
+            here = w.index('insert')
+            if int(here.split('.')[0]) != row or len(w.get(f'{row}.0', 'insert')) != end:
+                return None
+            if w.get(f'{row}.0', f'{row}.end') != line or not start < end:
+                return None
+        except Exception:
+            return None
+        return row, (start, end), end
 
     def _remember_conversion(self, st):
         """選んだ変換を、IME で確定した語と同じように本文の控えへ（読みも持つ・メモリの中だけ）。
@@ -901,12 +935,10 @@ class ReInput:
     #   CN_REINPUT_KEEP_TYPED=0 で前の形（付け直さない）
     def _typed_in(self, row, span):
         """範囲 span（行の中の位置）にまるごと入る確定 [(範囲の中の始まり, 終わり, 表記, 読み, キー, Shift)]。"""
-        if self.quick:
+        if self.quick and not self._quick_keep_on():
             return []
         try:
-            import analysis_work_app
-            lines = self.widget.get('1.0', 'end-1c').split('\n')
-            found = analysis_work_app.line_readings(self.app, row - 1, lines)
+            found = self._line_readings(row)
         except Exception:
             return []
         return [(x.start - span[0], x.end - span[0], x.surface, x.reading, tuple(getattr(x, 'strokes', ()) or ()),
@@ -918,6 +950,13 @@ class ReInput:
         """範囲（START〜END）の本文の控えでの位置 (文書, 始まり, 終わり)。END から length 字前を始まりとする。"""
         import analysis_work_app
         app, w = self.app, self.widget
+        if self.quick:
+            # 簡易入力の欄の控え（字の位置は欄のまま。observe_text が書き換えのたびに控えを今の字に合わせている）
+            doc = getattr(app, '_quick_calculation_document', None)
+            if doc is None or doc.owner is not w:
+                return None
+            end = len(w.get('1.0', END))
+            return doc, end - length, end
         doc = getattr(app, '_input_document', None)
         if doc is None or doc.owner != analysis_work_app.owner(app):
             return None
@@ -935,7 +974,7 @@ class ReInput:
 
     def _keep_typed(self, st):
         import os
-        if self.quick or not st.get('typed') or os.environ.get('CN_REINPUT_KEEP_TYPED') == '0':
+        if (self.quick and not self._quick_keep_on()) or not st.get('typed') or os.environ.get('CN_REINPUT_KEEP_TYPED') == '0':
             return
         try:
             text = self.current()
@@ -1090,8 +1129,39 @@ class ReInput:
         for got in (known, reading):
             got = _hiragana(got) if got else None
             if _reads_as_kana(got):
-                return got
+                return self._standalone(word, got)
         return self._read_gap(word)
+
+    def _standalone(self, word, got):
+        """一字の漢字を単独で開く時に、促音で終わる読み（後ろの字に続く形・「一個」の「いっ」）なら、同じ頭の促音でない読み
+        （「いち」）にする（2026-11-22 02:33Z うにさん「IMEが一に変換した。それを再変換入力で平仮名に開いた。いっ　になった」）。
+        探すのは 覚えた読み（新しい順）→ 辞書の字の読み → IME の逆変換。無ければそのまま。CN_REINPUT_NO_SOKUON_SINGLE=0 で前の形"""
+        import os
+        if (os.environ.get('CN_REINPUT_NO_SOKUON_SINGLE') == '0' or len(word) != 1 or not _is_kanji(word)
+                or not got or not got.endswith('っ') or len(got) < 2):
+            return got
+        head = got[:-1]
+        tries = []
+        try:
+            known = getattr(self.app, 'ime_readings', None)
+            tries.extend(known.readings_for(word) if known is not None else ())
+        except Exception:
+            pass
+        try:
+            tries.extend(self._char_readings(word))
+        except Exception:
+            pass
+        for other in tries:
+            other = _hiragana(other) if other else None
+            if other and _reads_as_kana(other) and other.startswith(head) and not other.endswith('っ'):
+                return other
+        try:
+            other = _hiragana(self._reverse(word) or '')
+        except Exception:
+            other = ''
+        if other and _reads_as_kana(other) and other.startswith(head) and not other.endswith('っ'):
+            return other
+        return got
 
     def _cut_word(self, word, reading, lo, hi):
         whole = self._word_reading(word, reading)
@@ -1099,17 +1169,36 @@ class ReInput:
         last = cut_column(word, whole, hi, self._char_readings)
         return None if first is None or last is None or first >= last else whole[first:last]
 
-    def _committed(self, row, column, surface):
+    def _quick_typed_on(self):
+        """簡易入力でも打った読み（簡易入力の欄の確定の記録）を使うか（2026-11-20 うにさん「簡易入力で、からと打って
+        空に変換し、再入力変換したら、くう、になった」: 簡易入力は確定の記録を見ず、辞書の読みで開いていた）。
+        CN_QUICK_REINPUT_TYPED=0 で前の形"""
+        import os
+        return os.environ.get('CN_QUICK_REINPUT_TYPED') != '0'
+
+    def _quick_keep_on(self):
+        """簡易入力でも、再入力変換の後に打った記録を付け直すか（本文の 11-15 の作りを簡易入力にも・2026-11-20。
+        同じ所を2回続けて再入力変換しても打った読みで開く）。CN_QUICK_REINPUT_KEEP=0 で前の形（付け直さない）"""
+        import os
+        return self._quick_typed_on() and os.environ.get('CN_QUICK_REINPUT_KEEP') != '0'
+
+    def _line_readings(self, row):
+        """その行の確定の記録（本文は本文の控え・簡易入力は簡易入力の控え）。"""
+        import analysis_work_app
+        lines = self.widget.get('1.0', 'end-1c').split('\n')
         if self.quick:
+            return analysis_work_app.quick_line_readings(self.app, row - 1, lines)
+        return analysis_work_app.line_readings(self.app, row - 1, lines)
+
+    def _committed(self, row, column, surface):
+        if self.quick and not self._quick_typed_on():
             return []
         return self._committed_main(row, column, surface)
 
     def _committed_main(self, row, column, surface):
         """範囲の中に丸ごと入っている確定 [(範囲の中の始まり, 終わり, 読み)]。"""
         try:
-            import analysis_work_app
-            lines = self.widget.get('1.0', 'end-1c').split('\n')
-            found = analysis_work_app.line_readings(self.app, row - 1, lines)
+            found = self._line_readings(row)
         except Exception:
             return []
         out = []
@@ -1117,20 +1206,41 @@ class ReInput:
             start, end = x.start - column, x.end - column
             if not x.reading or end <= 0 or start >= len(surface) or (out and out[-1][1] > max(start, 0)):
                 continue
+            typed = self._typed_reading(x)
             if 0 <= start and end <= len(surface):
                 if surface[start:end] == x.surface:
-                    out.append((start, end, x.reading))
+                    out.append((start, end, typed))
                 continue
             # 確定の途中で切れている: 確定の読みを字の位置で切り出す
             lo, hi = max(start, 0), min(end, len(surface))
             if x.surface[lo - start:hi - start] != surface[lo:hi]:
                 continue
-            reading = _hiragana(x.reading)
+            reading = _hiragana(typed)
             first = cut_column(x.surface, reading, lo - start, self._char_readings)
             last = cut_column(x.surface, reading, hi - start, self._char_readings)
             if first is not None and last is not None and first < last:
                 out.append((lo, hi, reading[first:last]))
         return out
+
+    def _typed_reading(self, x):
+        """確定の記録の読み。打鍵の記録（その確定で押したキー）があれば、打ったかなを最優先にする（2026-11-22 02:51Z うにさん
+        「再入力変換は、実際にどのキーを押したかという情報から、平仮名にしてください」）。打鍵の記録では変換の Space と
+        BackSpace を見分けられないので、打ったかなが確定の読み（IME の読み）と同じ字数の時だけ使う（打ち直しがあった時は
+        IME の読み）。CN_REINPUT_FROM_KEYS=0 で前の形（IME の読みだけ）"""
+        import os
+        reading = x.reading
+        strokes = tuple(getattr(x, 'strokes', ()) or ())
+        if os.environ.get('CN_REINPUT_FROM_KEYS') == '0' or not strokes:
+            return reading
+        try:
+            import typed_kana
+            method = 'romaji' if (getattr(self.app, 'settings', None) and self.app.settings.get('input_method') == 'romaji') else 'kana'
+            kana = typed_kana.from_keys(strokes, tuple(getattr(x, 'shifts', ()) or ()), method)
+        except Exception:
+            kana = None
+        if kana and len(kana) == len(_hiragana(reading or '')):
+            return kana
+        return reading
 
     def _read_gap(self, text):
         return ''.join(part if ascii_part else self._read_run(part) for ascii_part, part in _split_ascii(text))
@@ -1146,7 +1256,7 @@ class ReInput:
                 got = None
             got = _hiragana(got) if got else None
             if _reads_as_kana(got):
-                return got
+                return self._standalone(text, got)
         return plain
 
     def _remembered(self, text):

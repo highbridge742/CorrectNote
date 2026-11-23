@@ -30,6 +30,11 @@ def spans(text):
             continue
         if c.pos not in ('動詞', '形容詞'):
             continue
+        # サ変の名詞＋する（こと｜後悔｜して）は、を を省いた話し言葉の形（そのこと心配してる）。助詞の脱字が IME で
+        # 別の名詞になった跡とは見ない（2026-11-20 正しい文の見直し）。CN_FORMAL_GAP_SAHEN=0 で前のまま
+        if ((b.pos_sub or '') == 'サ変接続' and c.base_form == 'する' and c.start == b.end
+                and __import__('os').environ.get('CN_FORMAL_GAP_SAHEN') != '0'):
+            continue
         out.append((b.start, b.end))
     return out
 

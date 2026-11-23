@@ -77,6 +77,19 @@ def _strong(s):
     return any(_kanji(c) or _kata(c) for c in s)
 
 
+def _affix_compound(tokens, s, e):
+    """窓を含む漢字・片仮名・数字の続きが語の作り方どおりの複合語（タブ欄・型不一致・9本）なら、表に無い複合語で
+    あることだけを根拠に紫を付けない（2026-11-20 補正担当、うに 誤判定タブの正しい文。判断 POLICY.md A2）。
+    1字の語が2つ以上並ぶ形（IME が単漢字を並べた跡）は今のまま紫。CN_KEYSLIP_UNSURE_AFFIX=0 で前のまま"""
+    if os.environ.get('CN_KEYSLIP_UNSURE_AFFIX') == '0':
+        return False
+    try:
+        import affix_form
+        return affix_form.affix_run(tokens, s, e, okuri=True)
+    except Exception:
+        return False
+
+
 def _rank(face):
     try:
         import ime_reconvert
@@ -417,7 +430,26 @@ def _lone_kanji(t, tokens, k):
         return False
     if os.environ.get('CN_KEYSLIP_PREFIX_PLACE') != '0' and _attached(t, tokens, k):
         return False
+    if os.environ.get('CN_KEYSLIP_NUM_COUNTER') != '0' and _num_counter(t, tokens, k):
+        return False
     return True
+
+
+def _is_num(t):
+    return t is not None and t.pos == '名詞' and ((t.pos_sub or '') == '数' or t.surface[:1].isdigit())
+
+
+def _num_counter(t, tokens, k):
+    """数（一・二・9）と、そのすぐ後ろの助数詞（例・重・本）。一例・二重・9本 は語の作り方どおりの形で、1字の漢字が
+    浮いた跡ではない（2026-11-19 うに 誤判定タブ: 一例として → 一斉として の書き換え。判断役 A1）。
+    数の後ろが助数詞でない（一時｜音 の 音）なら今のまま疑う。CN_KEYSLIP_NUM_COUNTER=0 で前のまま"""
+    pv = tokens[k - 1] if k > 0 else None
+    nx = tokens[k + 1] if k + 1 < len(tokens) else None
+    if _is_num(t) and nx is not None and nx.start == t.end and (nx.pos_sub or '').startswith('接尾:助数詞'):
+        return True
+    if (t.pos_sub or '').startswith('接尾:助数詞') and _is_num(pv) and pv.end == t.start:
+        return True
+    return False
 
 
 # 名詞の後ろに付いて所を表す1字の名詞（窓枠｜奥・箱｜中）。2字以上の名詞の後ろでは、その名詞の所として読める
@@ -510,7 +542,11 @@ def _stacked_no(tokens):
         if t.surface != 'の' or (t.pos_sub or '') != '連体化':
             continue
         p = tokens[k - 1] if k else None
-        if p is None and os.environ.get('CN_KEYSLIP_HEAD_NO_COMMON') != '0' and _head_may_continue():
+        if p is None and os.environ.get('CN_KEYSLIP_HEAD_NO_COMMON') != '0' and (
+                _head_may_continue() or (os.environ.get('CN_HEAD_ALONE_NATURAL') != '0'
+                                        and os.environ.get('CN_PREV_LINE_OFF') != '0')):
+            # 行の頭の1字を上の行から続く助詞と読まない時（CN_PREV_LINE_OFF・2026-11-21）も、の＋身近な名詞（の友達・の番）は
+            # ふつうに読めるので崩れた跡とみない（CN_HEAD_ALONE_NATURAL=0 で前のまま）
             # 行の頭の の は、前の行から続く文の切れ目（…先頭｜の行は）でもふつうに出る。すぐ後ろが身近な名詞
             # （_rank が RARE 未満）なら崩れた跡とみない（2026-11-13 未解決タブの誤判定: 行の頭の の＋身近な1字の名詞を
             # 別の語に替えていた）。CN_KEYSLIP_HEAD_NO_COMMON=0 で前のまま
@@ -1369,7 +1405,8 @@ def propose(text, odd=()):
                 found.append((max(s, q - 1), q + 1, [], here, core, 0, 'unsure'))
                 continue
             if (rejected and not weak and di + dj == 0 and odd_purple() and _plain_lone(tokens[a:b], tokens[a - 1] if a > 0 else None)
-                    and not _suffix_after_common(tokens, a, b) and not _lone_after_no(tokens, a, b)):
+                    and not _suffix_after_common(tokens, a, b) and not _lone_after_no(tokens, a, b)
+                    and not _affix_compound(tokens, s, e)):
                 # 1キーの戻しで行がはっきり良くなるのに、どの戻し先も語としてきれいでない（如何｜軸・安｜さ）。
                 # 直し先は決めきれないが打ち違いの見込みは高いので、紫だけ付ける
                 found.append((s, e, [], here, core, 0, 'unsure'))
@@ -1717,18 +1754,148 @@ def _odd_in(result, line, done):
     return spans
 
 
+FAMILIAR = 330      # これ以下の身近な漢字の語は、より珍しい語へ打ち違いとして戻さない
+
+
+def _to_rarer(src, face):
+    """打ち違いの戻しが、とても身近な漢字の語（今）を、それより珍しい語（否）へ替えるか。身近な語は打ち違いで
+    出にくく、解析の読み違い（今トム を姓名と読む）で疑われただけの見込みが高い（2026-11-20 補正担当・例文の
+    正しい文の誤り）。CN_KEYSLIP_NO_RARER=0 で前のまま。"""
+    if os.environ.get('CN_KEYSLIP_NO_RARER') == '0' or not src or not face:
+        return False
+    while src and face and src[-1] == face[-1]:
+        src, face = src[:-1], face[:-1]
+    while src and face and src[0] == face[0]:
+        src, face = src[1:], face[1:]
+    if not src or not face or not all(_kanji(c) for c in src):
+        return False
+    try:
+        rs, rf = _rank(src), _rank(face)
+    except Exception:
+        return False
+    return rs <= FAMILIAR and rf > rs
+
+
+def _time_head(done, s, e):
+    """紫にする所が 時の名詞＋身近な名詞（間｜お世話に・一晩中｜雪だ）なら紫にしない。時の名詞は助詞を挟まずに後ろの
+    名詞句に続くのがふつう（common_word_purple.time_head_text と同じ決まり。2026-11-20 正しい文の見直し）。
+    CN_KEYSLIP_TIME_HEAD=0 で前のまま。"""
+    if os.environ.get('CN_KEYSLIP_TIME_HEAD') == '0':
+        return False
+    try:
+        import common_word_purple as C
+        return C.time_head_text(done[s:e], done[e:e + 1])
+    except Exception:
+        return False
+
+
+def _kana_suffix(src, face):
+    """直しの元が、名詞＋かなの接尾（子供｜ら・私｜たち）で、直しがその接尾を替えるなら替えない。名詞に付いた接尾は
+    辞書どおりの語の作り（2026-11-20 正しい文の見直し: 子供らは → 子供には）。CN_KEYSLIP_KANA_SUFFIX=0 で前のまま。"""
+    if os.environ.get('CN_KEYSLIP_KANA_SUFFIX') == '0' or not src or not face:
+        return False
+    try:
+        from morphology import tokenize
+        toks = list(tokenize(src))
+    except Exception:
+        return False
+    for k, t in enumerate(toks):
+        if (k and t.pos == '名詞' and str(t.pos_sub or '').startswith('接尾') and all('ぁ' <= c <= 'ゖ' for c in t.surface)
+                and toks[k - 1].pos == '名詞' and toks[k - 1].end == t.start and getattr(toks[k - 1], 'has_reading', True)
+                and not face.startswith(src[:t.end]) and face.startswith(src[:t.start])
+                and face.endswith(src[t.end:])):
+            return True                  # 接尾だけが替わる時に限る（春らか → 春から は接尾の外まで替わる）
+    return False
+
+
+def _whole_kana_noun(src, face):
+    """直しの元の、漢字などの後ろの3字以上の平仮名の並びが丸ごと名詞の読み（一かけら の かけら）で、直し先に
+    その平仮名が残らないなら替えない。3字の かな の名詞が丸ごと隣のキーの打ち違いで出来ることは少ない（2026-11-20
+    正しい文の見直し: 一かけらの → 初めから毛の）。CN_KEYSLIP_KANA_NOUN=0 で前のまま。"""
+    if os.environ.get('CN_KEYSLIP_KANA_NOUN') == '0' or not src or not face:
+        return False
+    try:
+        import reading_lattice as lat
+        lat.load()
+    except Exception:
+        return False
+    import re
+    for m in re.finditer('[ぁ-ゖ]{3,}', src):
+        run = m.group()
+        if run in face or m.start() == 0:
+            continue
+        try:
+            from morphology import tokenize
+            over = [t for t in tokenize(src) if t.start < m.end() and m.start() < t.end]
+        except Exception:
+            return False
+        if any(t.pos != '名詞' for t in over):
+            continue             # 用言・助詞に読める並び（見｜すぎ｜た）は名詞の丸ごとではない
+        if any(p == '名詞' for _f, _l, _r, _c, p in lat._table.get(run, ())):
+            return True
+    return False
+
+
+def _suffix_compound(text, s, e):
+    """紫に足す所が、ちょうど辞書の名詞の並びで、接尾の名詞（夏｜中・年｜半 の 年）を含むなら足さない。接尾で作る
+    語（夏中・1年半）は語の作りどおりで、隣のキーの打ち違いの跡ではない（2026-11-20 正しい文の見直し）。
+    CN_KEYSLIP_SUFFIX_COMPOUND=0 で前のまま。"""
+    if os.environ.get('CN_KEYSLIP_SUFFIX_COMPOUND') == '0':
+        return False
+    try:
+        from morphology import tokenize
+        toks = [t for t in tokenize(text) if t.start < e and s < t.end]
+    except Exception:
+        return False
+    if len(toks) < 2 or toks[0].start != s or toks[-1].end != e:
+        return False
+    if not all(t.pos == '名詞' and t.has_reading and not str(t.pos_sub or '').startswith('固有名詞') for t in toks):
+        return False
+    # 時・数の接尾（中・間・年）に限る。一般の接尾（式・性）は打ち違いの跡（夢式）でも出来るので見る
+    return any(str(t.pos_sub or '') in ('接尾:副詞可能', '接尾:助数詞') for t in toks)
+
+
+
+def _word_compound(text, s, e):
+    """紫に足す所が、ちょうど辞書の語の並び（名詞・接頭・接尾）で、1字の漢字の語が2つ続く所が無いなら足さない。
+    隣のキーの打ち違いで読みが辞書に無くなると、IME は1字ずつの漢字に分けて変換する（寺木升・素管・段代）。
+    2字以上の語を挟む並び（白｜背景｜色・行｜選択・対象｜メモ｜欄）は語の作りどおりの複合語で、打ち違いの跡ではない
+    （2026-11-22 うに「正しい文の紫の基準を見直す」・作り例と束で、外れる正しい紫は 赤トン下 の1行）。
+    CN_KEYSLIP_WORD_COMPOUND=0 で前のまま。"""
+    if os.environ.get('CN_KEYSLIP_WORD_COMPOUND') == '0':
+        return False
+    try:
+        from morphology import tokenize
+        toks = [t for t in tokenize(text) if t.start < e and s < t.end]
+    except Exception:
+        return False
+    if len(toks) < 2 or toks[0].start != s or toks[-1].end != e:
+        return False
+    if not all(t.has_reading and t.pos in ('名詞', '接頭詞') and _kanji_or_kata(t.surface) for t in toks):
+        return False
+    one = [len(t.surface) == 1 and _kanji(t.surface) for t in toks]
+    return not any(a and b for a, b in zip(one, one[1:]))
+
+
+def _kanji_or_kata(face):
+    return all(_kanji(c) or _kata(c) or c == 'ー' for c in face)
+
 def _apply(line, result, done, marks):
     out = dict(result)
     new = done
     details, odd_add, fixed = [], [], []
     for m in sorted(marks, key=lambda m: -m[0]):
         s, e, face, src = m[:4]
+        if face and (_to_rarer(src, face) or _whole_kana_noun(src, face) or _kana_suffix(src, face)):
+            continue
         if face:
             new = new[:s] + face + new[e:]
             details.append([src, face, m[4] if len(m) > 4 else 'かな入力の1キーの打ち違い'])
             fixed.append((s, e, len(face) - (e - s)))
         else:
             if any(x <= s and e <= y for x, y in _odd_in(out, line, done)):
+                continue
+            if _time_head(done, s, e) or _suffix_compound(done, s, e) or _word_compound(done, s, e):
                 continue
             odd_add.append((s, e))
     if new == done and not odd_add:

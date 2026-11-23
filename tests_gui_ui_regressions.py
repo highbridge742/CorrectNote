@@ -168,7 +168,7 @@ class FontDialogDetailsTests(unittest.TestCase):
             self.assertEqual(len(set(heights)),1)
             w.mark_set('insert','5.0');a._paint_end_rule()
             self.assertEqual(w.dlineinfo('5.0')[3],heights[0])
-            self.assertEqual(w._end_rule_line.winfo_height(),1)
+            self.assertEqual(w._end_rule_line.winfo_height(),a._end_rule_metrics()[0])   # 太さ 2px（2026-11-20）
 
 
     def test_different_wrapping_keeps_following_rows_aligned_after_font_change(self):

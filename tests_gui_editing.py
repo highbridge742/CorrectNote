@@ -9,6 +9,16 @@ import app
 
 class EditingTkTests(unittest.TestCase):
     def test_pasted_multiline_ranges_are_autofixed_without_touching_loaded_text(self):
+        # 2026-11-18 うにさん「ひとつにまとめる表示の自動反映するチェックがオンなら、補正して文字を置き換える」で、
+        # 打っていない（読み込んだ）行も置き換えるようになった。前の決まり（読み込んだ行は触らない）は
+        # CN_UNIFIED_AUTOFIX_REANALYSIS=0 の時のもの: その形で確かめる。今の決まりは下の試験
+        with patch.dict(os.environ,{'CN_UNIFIED_AUTOFIX_REANALYSIS':'0'}):
+            self._pasted_case(False)
+
+    def test_pasted_and_loaded_rows_are_autofixed_except_the_cursor_row(self):
+        self._pasted_case(True)
+
+    def _pasted_case(self,loaded_too):
         a=self.a;w=a.editor
         w.insert('1.0','遠くの原文\n既存😀\n末尾');w.mark_set('insert','2.end')
         a._sync_typed_shadow()
@@ -34,8 +44,12 @@ class EditingTkTests(unittest.TestCase):
         a._autofix_live_records=lambda:[];a._autofix_remember=Mock();a._repaint_autofix_tags=Mock()
         with patch('ime_watch.composition_active',return_value=False):
             self.assertTrue(a._apply_unified_autofix())
-        self.assertEqual(self.text(),'遠くの原文\n既存😀亜\n伊\n宇\n末尾')
-        self.assertEqual(a._autofix_remember.call_count,3)
+        if loaded_too:      # 読み込んだ1行目・5行目も置き換わる（カーソルの行は打った所だけ）
+            self.assertEqual(self.text(),'遠い原文\n既存😀亜\n伊\n宇\n終端')
+            self.assertEqual(a._autofix_remember.call_count,5)
+        else:
+            self.assertEqual(self.text(),'遠くの原文\n既存😀亜\n伊\n宇\n末尾')
+            self.assertEqual(a._autofix_remember.call_count,3)
         w.event_generate('<<Undo>>');self.assertEqual(self.text(),before)
 
     def setUp(self):

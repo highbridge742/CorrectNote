@@ -59,7 +59,8 @@ class DebugTimingsTests(unittest.TestCase):
             self.assertLessEqual(debug_menu.default(key, a), debug_menu.maximum(key, a), key)
             # 2026-11-16: タブの名前の下限・タイトルと目次の字の大きさも、待ちではない（上限は持ち主の _MAX）
             if not key.startswith(('tab_wheel', 'copy_', 'find_', 'quote_', 'backup_', 'respell_',
-                                   'tab_name_', 'title_', 'toc_')) \
+                                   'tab_name_', 'title_', 'toc_', 'long_press', 'ruler_', 'end_rule_', 'overview_', 'drag_edge',
+                                   'drag_scroll_', 'hover_near_', 'reinput_')) \
                     and key not in ('ime_quiet', 'key_quiet', 'quick_quiet'):    # 待ち以外（ホイール・表示）
                 # 待ちの上限は今の既定
                 self.assertEqual(debug_menu.maximum(key, a), debug_menu.default(key, a), key)
@@ -297,6 +298,7 @@ class DebugTimingsTests(unittest.TestCase):
             'タブを切り替えたあと、逆向きを無視する間',
             # 【表示】（2026-10-23 うにさん: コピーした範囲・検索で見つかった文字の大きさ）
             'コピーした範囲（行の一部だけのとき）の文字の大きさ',
+            '再入力変換で開いている範囲の文字の大きさ',
             '検索の窓が出ている間の、見つかった文字の大きさ',
             'コピーした範囲の白い枠：縮み始める大きさ', 'コピーした範囲の白い枠：本来の大きさへ縮むまで',
             'コピーした範囲の白い枠：線の太さ', '引用モードの間の、メモ欄・簡易入力の地の色の濃さ',
@@ -304,12 +306,25 @@ class DebugTimingsTests(unittest.TestCase):
             '紫の所の読み直し：候補を補正に通す回数の上限',
             # 2026-11-16 うにさん: タブの名前の下限・タイトルと目次の字の大きさ
             'タブの名前を切る時の、いちばん短い幅（全角1字＝2・半角1字＝1）',
-            'タイトルの字の大きさ', '目次の字の大きさ（0 は本文の字の大きさから決める）'])
-        self.assertEqual(len(debug_menu.ITEMS), 26)    # 2026-11-10: 候補を補正に通す回数の上限・2026-11-16: +3
+            'タイトルの字の大きさ', '目次の字の大きさ（0 は本文の字の大きさから決める）',
+            # 2026-11-18 うにさん: 長押しで語を選ぶ（drag_move）
+            '長押しで語を選ぶまでの時間',
+            # 2026-11-20 うにさん「2文字の単語だったが、移動できなかった」: 掴めない端の幅
+            '選んだ範囲の端で、掴まずに今までのクリックにする幅',
+            # 2026-11-20 うにさん「ドラッグ移動で、上下スクロールの端までカーソルが来たらスクロールさせる」
+            'ドラッグで移す時に、端で送り続ける帯の幅（0 は1行の高さ）', 'ドラッグで移す時に、端で送る間隔',
+            # 2026-11-23 うにさん「この近くが上下何行かのパラメータを出す。デフォルトを10。上限は100」
+            'オンマウスで候補を出す範囲：入力カーソルの上下の行数（近くに限定がオンの時）',
+            # 2026-11-20 うにさん「ルーラーが見えにくい」「最終行の下の二重罫線も見えにくい」: 線の太さ・間
+            'ルーラーの線の太さ', '最終行の下の二重罫線：線の太さ', '最終行の下の二重罫線：2本の間',
+            # 2026-11-20 うにさん「縮小時に、ブックマークがある行は、一回り大きく」
+            '俯瞰でブックマークのある行の字の大きさ'])
+        self.assertEqual(len(debug_menu.ITEMS), 36)    # 2026-11-23: +1 再入力変換の範囲の大きさ / 2026-11-23: +1 オンマウスの範囲の行数 / 2026-11-20: +2 ドラッグの端で送る帯・間隔 / 2026-11-10: 候補を補正に通す回数の上限・2026-11-16: +3・2026-11-18: +1 長押し
         self.assertEqual(debug_menu.SECTIONS, (('ime_quiet', '【解析】'), ('tab_wheel_step', '【タブ移動】'),
                                                ('copy_emphasis', '【表示】'), ('backup_keep', '【保存】'),
                                                ('respell_attempts', '【紫の所の読み直し】'),
-                                               ('tab_name_min', '【タブの名前】'), ('title_size', '【タイトルと目次】')))
+                                               ('tab_name_min', '【タブの名前】'), ('title_size', '【タイトルと目次】'),
+                                               ('long_press', '【マウス】'), ('ruler_width', '【線】')))
 
     def test_removed_items_ignore_old_saved_values(self):
         with open(self.path, 'w', encoding='utf-8') as f:
@@ -336,10 +351,10 @@ class DebugWindowTkTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.path = os.path.join(self.dir.name, 'settings.json')
-        self.root = tk.Tk(); self.root.geometry('200x100+0+0')
+        self.root = tk.Tk(); __import__('offscreen_window').hold(self.root, '200x100')      # 画面の外（どの画面の置き方でも）
         self.errors = []; self.root.report_callback_exception = lambda *a: self.errors.append(a)
         self.a = bare_app(Settings(self.path)); self.a.root = self.root
-        self.a._place_dialog = lambda dlg, w, h: dlg.geometry('%dx%d+0+0' % (w, h))
+        self.a._place_dialog = lambda dlg, w, h: __import__('offscreen_window').hold(dlg, '%dx%d' % (w, h))
 
     def tearDown(self):
         debug_menu.apply(bare_app(Settings()), {})
@@ -360,7 +375,7 @@ class DebugWindowTkTests(unittest.TestCase):
         self.settle()
         self.assertEqual(dlg.title(), 'デバッグメニュー')
         self.assertIs(self.a.open_debug_menu(), dlg)   # 2つ目は開かない
-        self.assertEqual(len(dlg._debug_rows), 26)    # tab_wheel_release was removed (2026-10-19); 5 display rows, 2 backup rows (2026-10-23); +3 tab name / title / TOC sizes (2026-11-16)
+        self.assertEqual(len(dlg._debug_rows), 36)    # +1 re-input range size (2026-11-23); +1 hover rows near the cursor (2026-11-23); +2 drag autoscroll band / interval (2026-11-20); +1 drag edge (2026-11-20);    # +1 overview bookmark size (2026-11-20);    # +3 ruler / end rule (2026-11-20);    # +1 long press (2026-11-18); tab_wheel_release was removed (2026-10-19); 5 display rows, 2 backup rows (2026-10-23); +3 tab name / title / TOC sizes (2026-11-16)
         self.assertNotIn('tab_wheel_release', dlg._debug_rows)
         # 【タブ移動】の並びと既定（2026-10-19 うにさん: 同じ向き 50・逆向き 30。2026-10-20 に同じ向き 65、2026-10-25 に 80）
         self.assertEqual([(k, dlg._debug_rows[k]['number'].get()) for k in

@@ -132,7 +132,7 @@ def child():
                 patch.object(app.CorrectNoteApp, '_learn_now', lambda *v: None), \
                 patch.object(app.CorrectNoteApp, '_first_run_setup', lambda *v: None), \
                 patch.object(analysis_async, '_request', watch):
-            a = app.CorrectNoteApp(root); root.geometry('900x400+-6000+-6000'); root.deiconify(); complete()
+            a = app.CorrectNoteApp(root); __import__('offscreen_window').hold(root, '900x400'); complete()   # 画面の外（どの画面の置き方でも）
             english = [k for line, k in sent if line.strip()]
             assert english and all(k is False for k in english), sent
             assert a.line_results[0].get('_tab_has_kana') is False, a.line_results[0]

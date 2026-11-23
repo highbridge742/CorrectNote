@@ -317,13 +317,76 @@ class BoundaryColors:
             return row not in window[1]
         return bare
 
+    def _cursor_y(self):
+        """メモ欄のカーソルの行の、画面の上からの高さ（見えていなければ None）。"""
+        if _os.environ.get('CN_POS_PAINT_KEEP_CURSOR_ROW')=='0':return None
+        w=self.widget
+        if w is not getattr(self.app,'editor',None):return None
+        try:
+            d=w.dlineinfo('insert')
+            return int(d[1]) if d else None
+        except (tk.TclError,TypeError,ValueError):return None
+
+    def _keep_cursor_y(self,before):
+        """品詞ごとのフォントを後から付けて、カーソルより上の行の高さが変わった時、カーソルの行を同じ高さに残す
+        （2026-11-22 01:56Z うにさん「最終行ボタンを押してから、文字を打ち始めると位置が動く」: 飛んだ先の行は区切りの控えが
+        後から届き、付いた所で行が伸びて、カーソルの行が最大 28px 下へずれていた）。字は変えずにタグだけを付ける間の差
+        だけを戻す。CN_POS_PAINT_KEEP_CURSOR_ROW=0 で前の形"""
+        if before is None:return
+        try:
+            d=self.widget.dlineinfo('insert')
+            if d and int(d[1])!=before:
+                self.widget.yview_scroll(int(d[1])-before,'pixels')
+        except (tk.TclError,TypeError,ValueError):pass
+
     def _paint_rows(self,rows):
         """paint_row for ascending rows, skipping clears on untagged rows."""
         rows=list(rows)
         if not rows:return
+        before=self._cursor_y()
         bare=self._bare_rows()
         for row in rows:
             self.paint_row(row,bare=bare)
+        self._keep_cursor_y(before)
+
+    def _paint_row_diff(self,row,tags,spans):
+        """品詞のタグを差分で付け外しする（2026-11-23・確定後に画面が固まる件）。タグごとに、その行に今付いている範囲と
+        新しい範囲を比べ、同じなら触らない。違う時だけその行の分を外して付け直す。前は行のタグを全部外してから付け直して
+        いたので、長い行（何十段にも折り返す行）では Tk がその行を毎回組み直していた。答えは同じ。
+        CN_POS_PAINT_DIFF=0 で前の形"""
+        w=self.widget
+        want={tag:[] for tag,_major in tags}
+        by_major={}
+        for tag,major in tags:by_major.setdefault(major,[]).append(tag)      # 大きさのタグと色のタグの両方
+        for major,a,z in spans:
+            if z>a:
+                for tag in by_major.get(major,()):want[tag].append((a,z))
+        for tag in want:
+            merged=[]
+            for a,z in sorted(want[tag]):
+                if merged and a<=merged[-1][1]:merged[-1]=(merged[-1][0],max(merged[-1][1],z))
+                else:merged.append((a,z))
+            want[tag]=merged
+        start,end=f'{row}.0',f'{row}.end'
+        for tag in want:
+            have=[]
+            index=start
+            while True:
+                found=w.tag_nextrange(tag,index,end)
+                if not found:break
+                a=str(found[0]);z=str(found[1])
+                ar,ac=(int(p) for p in a.split('.'));zr,zc=(int(p) for p in z.split('.'))
+                have.append((ac if ar==row else 0,zc if zr==row else len(w.get(start,end))))
+                index=found[1]
+            if have==want[tag]:continue
+            if have:w.tag_remove(tag,start,end)
+            if want[tag]:
+                w.tag_add(tag,*[f'{row}.0+{x}c' for pair in want[tag] for x in pair])
+        # この行の、今の段取りでは使わない品詞のタグ（大きさ・色を切った時など）は外す
+        used=set(want)
+        for tag in tuple(POS_FONT_TAGS.values())+tuple(POS_COLOR_TAGS.values()):
+            if tag not in used and w.tag_nextrange(tag,start,end):
+                w.tag_remove(tag,start,end)
 
     def _has_pos_tags(self,row):
         w=self.widget
@@ -437,7 +500,12 @@ class BoundaryColors:
                 first=where.get(a)
                 if first is None:first=len(w.get(f'{row}.0',a))
             else:first=len(w.get(f'{row}.0',a))
-            for i in range(len(w.get(a,b))):found[row,first+i]=f'{a}+{i}c'
+            # 外す時の位置も字で数えた位置にする（2026-11-22）。数の位置 a は、絵文字の後ろでは Tk 8.6.9 が1字多く数えて
+            # 返すので、そのまま渡すと1字ずれた所を外し、Ctrl を離さないまま印が残っていた（tests_boundary_colors_gui の
+            # test_marks_show_only_while_ctrl_is_held）。CN_TICK_SYMBOLIC_REMOVE=0 で前の形
+            symbolic_remove=__import__('os').environ.get('CN_TICK_SYMBOLIC_REMOVE')!='0'
+            for i in range(len(w.get(a,b))):
+                found[row,first+i]=f'{row}.0+{first+i}c' if symbolic_remove else f'{a}+{i}c'
             start=b
 
     def draw_markers(self):
@@ -660,6 +728,7 @@ class BoundaryColors:
     def _paint_visible_now(self):
         """Paint visible rows whose plan is already known, synchronously."""
         if self._closed or not self.enabled():return
+        if time.monotonic()<getattr(self,'hold_visible',0.0):return     # タブの入れ替えの途中（app が表示の位置を戻してから塗る。長くても1秒）
         try:
             if not self.widget.winfo_ismapped() or self._composing():return
             self._configure_pos_fonts()
@@ -716,6 +785,7 @@ class BoundaryColors:
             # while the sizes kept changing, the largest cost of a tab switch
             # on Windows after the painting itself.
             lo,hi=self._visible_range();hi+=self.MARGIN_ROWS
+            before=self._cursor_y() if row<=hi else None       # 見える行を付ける回だけ（カーソルの行を同じ高さに）
             while row<=len(lines) and painted<self.SWEEP_ROWS:
                 text=lines[row-1];signature=self._painted.get(row)
                 # A cached None is "no plan for this row"; repainting it on
@@ -725,6 +795,7 @@ class BoundaryColors:
                              or (signature[1] is None and cache.get(text) is not None)):
                     self.paint_row(row,bare=bare_row,draw=lo<=row<=hi);painted+=1
                 row+=1
+            self._keep_cursor_y(before)
             self._sweep_row=row
             if row<=len(lines):self._next_sweep_slice()
             elif getattr(self,'_sweep_wants_draw',False):
@@ -820,6 +891,12 @@ class BoundaryColors:
             typed=getattr(app,'_typed_row_pending',None)
             # Nor a row just typed: the question would begin it again
             if (pending is not None and pending[0][0]=='prepare') or (typed is not None and typed()):
+                self._plans_job=w.after(self.PLANS_RETRY_MS,self._ask_plans);return
+            # 子が打った行の列の行（前に打った行も）を解いている間も頼まない: 頼むとその行を取り消して始めからになり、
+            # 重い行（紫になる行・1行に数秒）では打った行の答えがその分遅れた（2026-11-23 の記録: 前に打った行の頼みを
+            # 1回取り消して出し直していた）。列が空けば頼む（裏の行は今までどおり譲る）。CN_PLANS_WAIT_ROW=0 で前の形
+            if (_os.environ.get('CN_PLANS_WAIT_ROW')!='0' and pending is not None and pending[0][0]=='line'
+                    and pending[0][4] in (getattr(app,'_typed_order',None) or ())):
                 self._plans_job=w.after(self.PLANS_RETRY_MS,self._ask_plans);return
         except tk.TclError:return
         scope=analysis_async.plans_ask(app,texts)
@@ -917,7 +994,9 @@ class BoundaryColors:
             if self._marker_indices.pop(row,None) is not None and draw:self.queue_draw()
             return
         if self._painted.get(row)==signature:return
-        if not bare:self._clear_pos_tags(f'{row}.0',f'{row}.end')
+        diff=(not bare and value is not None and len(value)>2 and _os.environ.get('CN_POS_PAINT_DIFF')!='0'
+              and bool(self._row_tags()))
+        if not bare and not diff:self._clear_pos_tags(f'{row}.0',f'{row}.end')
         self._marker_indices.pop(row,None)
         if value is not None:
             settings=getattr(self.app,'settings',None)
@@ -933,8 +1012,11 @@ class BoundaryColors:
                     if major in grouped:
                         grouped[major].extend((f'{row}.0+{a}c',
                                                f'{row}.0+{z}c'))
-                for tag,major in tags:
-                    if grouped[major]:w.tag_add(tag,*grouped[major])
+                if diff:
+                    self._paint_row_diff(row,tags,value[2])
+                else:
+                    for tag,major in tags:
+                        if grouped[major]:w.tag_add(tag,*grouped[major])
                 if w is getattr(self.app,'_quick_text',None):
                     # Sized characters can be wider than the window was made for.
                     resize=getattr(self.app,'_queue_quick_resize',None)
@@ -945,6 +1027,18 @@ class BoundaryColors:
             # The row's tab stops are measured with its sized fonts; lay
             # them again now that the sizes changed (once the app paints
             # whitespace at all).
+            schedule=getattr(self.app,'_schedule_whitespace_paint',None)
+            if callable(schedule):schedule(delay=1)
+        elif (draw and _os.environ.get('CN_POS_PAINT_REALIGN')!='0'
+              and getattr(self.app,'_ws_paint_sig',None) is not None
+              and not getattr(self.app,'_navigation_padding_active',False)
+              and w in (getattr(self.app,'editor',None),getattr(self.app,'result_view',None))):
+            # 品詞の大きさで行の高さが変わったので、左右の行の高さをそろえ直す（そろえは空白の塗りに相乗り）。
+            # タブの無い行では呼んでいなかったので、そろえた後に片方の欄だけフォントが付いた行は、前の隙間が
+            # 残って左右が 4px ずれたままになった（2026-11-23・タブを戻した後の 202〜204 行目）。
+            # 最終行ボタンなどで真ん中に寄せている間（下に余白を足している間）は呼ばない: そろえ直しでメモ欄が1行動き、
+            # 補正欄が前の位置に残った（tests_nav_edit_keep_view・2026-11-23）。余白を外す時にそろえ直される。
+            # CN_POS_PAINT_REALIGN=0 で前の形
             schedule=getattr(self.app,'_schedule_whitespace_paint',None)
             if callable(schedule):schedule(delay=1)
         self._painted[row]=signature

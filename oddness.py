@@ -3367,9 +3367,25 @@ def renyou_stray_noun_spans(text, tokenize_fn):
             # 形容詞の語幹・接頭詞（漢字だけ）＋動詞の連用形は名詞の複合語（浅＋煎り・固＋茹で・高＋跳び）で、後ろの名詞と
             # 複合語を作る（2026-10-31・補正担当）
             continue
+        # 後ろの片仮名の名詞が3字以上の表の語で、その後ろが する の活用・助詞なら、読点を省いた連用中止
+        # （数字を入れ、エンターしたら）。寝クス（2字）・出かけ牟田（漢字）は今のまま（2026-11-20 補正担当、
+        # うに 誤判定タブの正しい文。判断 POLICY.md J）。CN_RENYOU_KATA_CLAUSE=0 で前のまま
+        if (__import__('os').environ.get('CN_RENYOU_KATA_CLAUSE') != '0' and i + 2 < len(toks)
+                and re.fullmatch(r'[ァ-ヺ][ァ-ヺー]{2,}', toks[i + 1][0] or '') and _unit_word(toks[i + 1][0])
+                and ((toks[i + 2][1] or '').startswith('助詞')
+                     or ((toks[i + 2][1] or '').startswith('動詞') and (toks[i + 2][0] or '')[:1] in 'しすせさ'))):
+            continue
         if renyou_stray_noun_mismatch(toks[i], toks[i + 1], last):
             out.append((toks[i][3], toks[i + 1][4]))
     return out
+
+
+def _unit_word(face):
+    try:
+        import seed_japanese
+        return seed_japanese.is_unit(face) is True
+    except Exception:
+        return False
 
 
 def stray_katakana_letter_spans(text):

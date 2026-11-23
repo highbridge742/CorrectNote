@@ -35,6 +35,7 @@ class TabLoadClearsJumpMargins(unittest.TestCase):
         fake = NS(editor=panes[0], result_view=panes[1], _navigation_padding_active=False,
                   _cancel_autoscan=lambda: None, _unmask_navigation_margins=lambda w: None)
         fake._clear_navigation_padding = lambda: app.CorrectNoteApp._clear_navigation_padding(fake)
+        fake._drop_navigation_padding = lambda: app.CorrectNoteApp._drop_navigation_padding(fake)
 
         def stop():
             raise _Stop()

@@ -50,6 +50,10 @@ _FORMAL = {'ん', 'の', 'よう', 'こと', 'もの', 'ところ', 'わけ', '�
 _LIGHT = {'ある', 'いる', 'なる', 'する', 'できる', 'やる', 'いう', '言う', 'おく', 'くる', 'みる', 'しまう'}
 
 
+BROAD_HEADS = 25     # 述語の仲間の分類の頭（1.31 の4桁）の種類がこれ以上の述語は、仲間に無いことを紫の証にしない
+ABSENCE_KINDS = 20   # 「仲間に無い」を根拠にする組の、例の名詞の種類の数（着く 47・食べる 75 は足りる。違う 10・付く 6 は足りない）
+
+
 def enabled():
     return os.environ.get('CN_SEMANTIC_FIT') != '0'
 
@@ -410,6 +414,13 @@ def propose(text, input_method='kana'):
             # 1打違いの語はどの語にもいくらでも在る）。CN_SF_KEY_WEAK=0 で前のまま
             continue
         cand = best[0][1]
+        # 「仲間に無い」を根拠にするのは、その組の例の名詞の種類が十分多い時だけ（違う・付く のように例が少ない述語は
+        # どの名詞も取るので、仲間に無いことは証にならない）。足りない時は、候補の組そのものが例文に在る時だけ
+        # （2026-11-20 補正担当、うに 誤判定タブの正しい文。判断 POLICY.md E）。CN_SF_ABSENCE_NEEDS_SIZE=0 で前のまま
+        if (os.environ.get('CN_SF_ABSENCE_NEEDS_SIZE') != '0'
+                and not any(len(_by_pred().get(c, ())) >= ABSENCE_KINDS for c, _pr in ctxs)
+                and not any(_pair_count(c[0], cand, c[1]) for c, _pr in ctxs)):
+            continue
         # 直すのは、同じ読みの候補が1つで、元の語も直し先も2字以上で、直し先が一般の文で元の語よりよく使う語か、
         # 直し先の組そのものが例文に在るとき（1字の語・1打違いの読みは根拠が弱いので紫だけ）
         sure = (len(best) == 1 and best[0][0] >= FIX_WEIGHT and not by_key and len(t.surface) >= 2
@@ -443,6 +454,12 @@ def propose(text, input_method='kana'):
         # 例文に無い。同じ読みの1字の語は多く、分類が合うだけでは書き違いの証にならない）。CN_SF_ONE_PAIR=0 で前のまま
         if (len(t.surface) == 1 and os.environ.get('CN_SF_ONE_PAIR') != '0'
                 and not any(_pair_count(c[0], cand, c[1]) for c, _pr in ctxs)):
+            continue
+        # 紫だけの根拠は「仲間に無い」こと。述語の仲間が分類の頭（4桁）で BROAD_HEADS 種類以上に広がる述語（知る・見る・
+        # 使う・買う）は何でも取るので、仲間に無いことは証にならない（業界の動向を知る に紫→同行 にしていた・
+        # 2026-11-20 補正担当、例文の正しい文）。CN_SF_BROAD_PRED=0 で前のまま
+        if (not sure and os.environ.get('CN_SF_BROAD_PRED') != '0'
+                and all(len({str(k)[:4] for k in pr}) >= BROAD_HEADS for _c, pr in ctxs)):
             continue
         out.append((t.start, t.end, cand if sure else None))
     if os.environ.get('CN_SEMANTIC_FIT_COMPOUND') != '0':
@@ -798,7 +815,7 @@ _NOOWN = os.environ.get('CN_SF_VERB_NOOWN', '1') != '0'
 _VPURPLE = int(os.environ.get('CN_SF_VERB_PURPLE', str(FIX_WEIGHT)) or 0)
 
 
-def _verb_alternatives(t, pos='動詞'):
+def _verb_alternatives(t, pos='動詞', allow_rare=False):
     """同じ読み・同じ活用形の、漢字の違う動詞（pos='形容詞' なら形容詞）の表記 → 基本形。"""
     import reading_lattice
     from morphology import dictionary_inflections
@@ -822,7 +839,7 @@ def _verb_alternatives(t, pos='動詞'):
                 continue  # かなの部分が違う候補は区切りの違い（停｜まる→止ま）
             rows = [row for row in dictionary_inflections(face) or ()
                     if row[0].startswith(want + ',自立,') and row[1] == form]
-            if _rare_reading(face, rd, _c, pos, rows):
+            if not allow_rare and _rare_reading(face, rd, _c, pos, rows):
                 continue
             for row in rows:
                 if row[3] == rd:
@@ -978,7 +995,10 @@ def _pair_outweighed(v, p, n, base, have):
         return 'skip'
     here = _rank(base)
     hit = {}
-    for face, alt in _verb_alternatives(v).items():
+    # 例文の組がはるかに多い候補は、その読みが稀な表記（描く＝かく）でも候補に入れる。組の数そのものが選び違いの
+    # 根拠（2026-11-20 うに: 絵を書く が直らなくなった・CN_SF_ALT_MAIN_READING の後）。CN_SF_PAIR_RARE_OK=0 で前のまま
+    rare_ok = os.environ.get('CN_SF_PAIR_RARE_OK') != '0'
+    for face, alt in _verb_alternatives(v, allow_rare=rare_ok).items():
         if alt == base or [c for c in alt if _is_kanji(c)] == [c for c in base if _is_kanji(c)]:
             continue
         c = _pair_count(p.surface, n.surface, alt)
@@ -1047,6 +1067,34 @@ def _strong_fit(n, p, alt, prof):
     return bool(pa) and fit(n.surface, pa, MISS_DEPTH) >= STRONG_FIT
 
 
+BORROW_PAIR = 3     # 借りた仲間で直すのは、候補の組そのものが例文にこれだけ在るとき
+
+
+def _borrowed_mark(v, p, n, base, pos='動詞'):
+    """元の動詞の例の名詞が少ない（を離す: 手・目）時は、同じ分類の動詞の例を借りた仲間（profile）で見る。名詞が借りた
+    仲間に（頭 MISS_DEPTH 桁でも）無く、同じ読みの別の動詞の仲間ではっきり重く（STRONG_FIT）、その組が例文に在るなら選び違い
+    （言葉を離す → 話す・2026-11-21 うに 検討タブ: 上の行の語を見なくなって直らなくなった）。候補が1つで組が BORROW_PAIR 回
+    以上なら直し、ほかは何もしない。CN_SF_BORROW_OWN=0 で前のまま"""
+    if os.environ.get('CN_SF_BORROW_OWN') == '0':
+        return None
+    prof = profile(p.surface, base)
+    if prof is None or fit(n.surface, prof, MISS_DEPTH):
+        return None
+    here = _rank(base)
+    got = {}
+    for face, alt in _verb_alternatives(v, pos).items():
+        if alt == base or [c for c in alt if _is_kanji(c)] == [c for c in base if _is_kanji(c)]:
+            continue
+        if _rank(alt) > here + RANK_MARGIN or _pair_count(p.surface, n.surface, alt) < BORROW_PAIR:
+            continue
+        pa = profile(p.surface, alt)
+        if pa and fit(n.surface, pa) >= STRONG_FIT:
+            got.setdefault(alt, face)
+    if len(got) != 1:
+        return None
+    return (v.start, v.end, next(iter(got.values())))
+
+
 def _verb_mark_one(v, p, n, pos='動詞'):
     """1つの 名詞＋格助詞 で動詞 v を見る。印 (start, end, 直し or None)、この組で元の動詞が合うなら 'skip'、
     この組では決まらないなら None。"""
@@ -1064,7 +1112,7 @@ def _verb_mark_one(v, p, n, pos='動詞'):
         # その動詞がこの格助詞で例文にほとんど出ない（コートを堕す・条件を捜す）: 候補の仲間は中項目で比べる
         prof, depth = None, PURPLE_DEPTH
     else:
-        return None
+        return _borrowed_mark(v, p, n, base, pos)
     here = _rank(base)
     alts = _verb_alternatives(v, pos)
     best = []
@@ -1082,6 +1130,11 @@ def _verb_mark_one(v, p, n, pos='動詞'):
     best.sort(reverse=True)
     face = best[0][1]
     alt = alts[face]
+    # 元の動詞の例の名詞の種類が少ない（付く 6）なら、仲間に無いことは証にならない。候補の組そのものが例文に在る時だけ
+    # （2026-11-20 補正担当、判断 POLICY.md E）。CN_SF_ABSENCE_NEEDS_SIZE=0 で前のまま
+    if (prof is not None and os.environ.get('CN_SF_ABSENCE_NEEDS_SIZE') != '0' and len(own) < ABSENCE_KINDS
+            and not _pair_count(p.surface, n.surface, alt)):
+        return 'skip'
     one = len({alts[f] for _w, f in best}) == 1
     sure = (one and best[0][0] >= FIX_WEIGHT
             and (_rank(alt) <= here - FIX_RANK_GAP or _pair_count(p.surface, n.surface, alt) >= FIX_PAIR

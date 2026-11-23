@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock,patch
 import app
-from editor_guides import FLASH_COLOR,FLASH_MS
+from editor_guides import FLASH_MS,ruler_width,flash_style
 
 
 class EditorGuidesTests(unittest.TestCase):
@@ -39,7 +39,7 @@ class EditorGuidesTests(unittest.TestCase):
         self.assertEqual(line.winfo_y(),fixed_y)
         self.assertTrue(self.a._toggle_ruler());self.root.update_idletasks()
         self.assertEqual(self.guides.ruler_rows(),{1,2})
-        self.assertEqual(self.guides.lines[w,1].winfo_y(),w.dlineinfo('1.end')[1]+w.dlineinfo('1.end')[3]-1)
+        self.assertEqual(self.guides.lines[w,1].winfo_y(),w.dlineinfo('1.end')[1]+w.dlineinfo('1.end')[3]-ruler_width())   # 太さは 2px（2026-11-20 うにさん「ルーラーが見えにくい」）
         w.mark_set('insert','1.65');self.a._sync_cursor_line(w);self.root.update_idletasks()
         self.assertEqual(line.winfo_y(),fixed_y)
         self.assertFalse(self.a._toggle_ruler());self.root.update_idletasks()
@@ -74,14 +74,14 @@ class EditorGuidesTests(unittest.TestCase):
         self.owner={'ruler_rows':[1]};self.a._sync_cursor_line(w,force=True);self.root.update_idletasks()
         self.assertEqual(self.guides.ruler_rows(),{1});self.assertNotIn((w,2),self.guides.lines)
         self.root.geometry('900x360+0+0');self.root.update()
-        self.assertEqual(self.guides.lines[w,1].winfo_y(),w.dlineinfo('1.end')[1]+w.dlineinfo('1.end')[3]-1)
+        self.assertEqual(self.guides.lines[w,1].winfo_y(),w.dlineinfo('1.end')[1]+w.dlineinfo('1.end')[3]-ruler_width())   # 太さは 2px（2026-11-20 うにさん「ルーラーが見えにくい」）
         self.owner=first;self.a._sync_cursor_line(w,force=True);self.root.update_idletasks()
         self.assertEqual(self.guides.ruler_rows(),{2,3});self.assertNotIn((w,1),self.guides.lines)
 
     def test_navigation_flash_is_solid_then_restores_actual_settings(self):
         w=self.a.editor;before=w.index('insert');self.key('<KeyPress-Right>')
         self.assertNotEqual(w.index('insert'),before)
-        self.assertEqual(w.cget('insertbackground'),FLASH_COLOR);self.assertEqual(int(w.cget('insertofftime')),0)
+        self.assertEqual(w.cget('insertbackground'),flash_style(w)[0]);self.assertEqual(int(w.cget('insertofftime')),0)
         self.assertIsNotNone(self.guides._restore_job)
         self.wait_restore();self.assertEqual(w.cget('insertbackground'),'#123456')
         self.assertEqual(int(w.cget('insertofftime')),415);self.assertIsNone(self.guides._restore_job)
@@ -106,22 +106,24 @@ class EditorGuidesTests(unittest.TestCase):
             self.assertFalse(self.a._guide_navigation_allowed(SimpleNamespace(widget=w,keysym='Right',char='',state=0,keycode=39)))
         w.bind('<Control-Right>',lambda e:(w.mark_set('insert','2.0'),'break')[1])
         self.key('<Control-KeyPress-Right>');self.assertEqual(w.index('insert'),'2.0')
-        self.assertEqual(w.cget('insertbackground'),FLASH_COLOR)
+        self.assertEqual(w.cget('insertbackground'),flash_style(w)[0])
         self.guides.restore();self.key('<Shift-KeyPress-Right>')
-        self.assertTrue(w.tag_ranges('sel'));self.assertEqual(w.cget('insertbackground'),FLASH_COLOR)
+        self.assertTrue(w.tag_ranges('sel'));self.assertEqual(w.cget('insertbackground'),flash_style(w)[0])
     def test_end_rule_is_two_thin_lines_without_row_or_undo_changes(self):
         a=self.a;before={w:w.dlineinfo('4.0') for w in (a.editor,a.result_view)}
         a._configure_end_rule_tag();a._paint_end_rule();self.root.update_idletasks()
         for w in (a.editor,a.result_view):
             first=w._end_rule_line;second=w._end_rule_second_line
-            self.assertEqual(first.winfo_height(),1);self.assertEqual(second.winfo_height(),1)
-            self.assertEqual(first.winfo_y()-second.winfo_y(),3)
+            # 太さ・間は _end_rule_metrics（2026-11-20 うにさん「最終行の下の二重罫線も見えにくい」で 1px→2px）
+            width,gap=a._end_rule_metrics()
+            self.assertEqual(first.winfo_height(),width);self.assertEqual(second.winfo_height(),width)
+            self.assertEqual(first.winfo_y()-second.winfo_y(),width+gap)
             self.assertEqual(w.dlineinfo('4.0'),before[w])
             with self.assertRaises(tk.TclError):w.edit_undo()
 
     def test_theme_during_flash_keeps_the_new_color_and_original_blink(self):
         w=self.a.editor;self.key('<KeyPress-Right>')
-        self.assertEqual(w.cget('insertbackground'),FLASH_COLOR)
+        self.assertEqual(w.cget('insertbackground'),flash_style(w)[0])
         w.configure(insertbackground='#789abc')
         self.guides.theme_changed()
         self.assertEqual(w.cget('insertbackground'),'#789abc')

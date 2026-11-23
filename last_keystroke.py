@@ -1063,6 +1063,12 @@ def repair(line, result, retry, input_method='kana', decisions=None,
         if done != line and _region_reading(done, 0, len(done)) != _region_reading(line, 0, len(line)):
             # 入口がすでに直した行（すこセ氏たい→過ごしたい）には重ねない。読みを変えない置き（ばあい→場合）は別
             return None
+        if (done != line and __import__('os').environ.get('CN_LK_VOUCH_PLACED_OK') != '0'
+                and not result.get('odd_spans') and not result.get('unsure_spans') and not whole):
+            # 入口がかなの並びを同じ読みのまま語に置けた行（ねてない → 寝てない）は、和語のかなの費用が高いだけで、
+            # 打ち違いの跡ではない。費用の高さだけを入口にした組み立ての戻しは試さない（2026-11-19 うに 誤判定タブ:
+            # ねてない → 持てない。判断役 G）。CN_LK_VOUCH_PLACED_OK=0 で前のまま
+            return None
         unsure = [tuple(x[:2]) for x in (result.get('unsure_spans') or ())]
         if not whole and not usable(unsure):
             # 行（かなの並び）が丸ごと紫: 窓を費用の順に全部見る（最初に採れた窓の戻し）
@@ -1615,8 +1621,64 @@ def _conjugation_mismatch(toks):
                 or (t.pos == '助動詞' and t.surface == 'な' and t.infl_form == '体言接続'
                     and u.pos == '助詞' and u.surface in ('も', 'は', 'が', 'を', 'に', 'へ', 'と', 'で', 'や', 'から')
                     and u.start == t.end)):
+            if _stem_suru_verb(t, u) or _honor_o_kudasai(toks, i) or _adj_renyou_noun(toks, i):
+                continue
             out.add(i)
     return out
+
+
+def _honor_o_kudasai(toks, i):
+    """かなで打った お・ご＋動詞の連用形（おこし・おまち）を辞書が1語の動詞（おこす）と読み、ください が直に付いた並び。
+    お を除いた かな＋ます が動詞の連用形＋ます と読めるなら、尊敬の お＋連用形＋ください（お越しください）。
+    活用の合わない印にしない（2026-11-20 補正担当の例文の正しい文）。CN_LK_HONOR_O_KUDASAI=0 で前のまま。"""
+    import os
+    if os.environ.get('CN_LK_HONOR_O_KUDASAI') == '0' or i + 1 >= len(toks):
+        return False
+    t, u = toks[i], toks[i + 1]
+    rest = t.surface[1:]
+    if not (t.pos == '動詞' and t.infl_form == '連用形' and u.base_form == 'くださる' and t.surface[:1] in ('お', 'ご')
+            and len(rest) >= 2 and all('ぁ' <= c <= 'ゖ' for c in rest)):
+        return False
+    try:
+        import morphology
+        w = list(morphology.tokenize(rest + 'ます'))
+    except Exception:
+        return False
+    return (len(w) == 2 and w[0].surface == rest and w[0].pos == '動詞' and w[0].infl_form == '連用形'
+            and w[1].base_form == 'ます')
+
+
+def _adj_renyou_noun(toks, i):
+    """形容詞の基本形に直に付いた動詞の連用形（正しい｜こたえ を）が、すぐ後ろに格助詞・係助詞を持つなら、連用形が
+    名詞として使われた並び（正しい答えを）。活用の合わない印にしない（2026-11-20 補正担当の例文の正しい文）。
+    CN_LK_ADJ_RENYOU_NOUN=0 で前のまま。"""
+    import os
+    if os.environ.get('CN_LK_ADJ_RENYOU_NOUN') == '0' or i + 2 >= len(toks):
+        return False
+    t, u, z = toks[i], toks[i + 1], toks[i + 2]
+    return (t.pos == '形容詞' and t.infl_form == '基本形' and u.pos == '動詞' and u.infl_form == '連用形'
+            and str(u.pos_sub or '').startswith('自立') and u.end == z.start
+            and z.pos == '助詞' and str(z.pos_sub or '').startswith(('格助詞', '係助詞'))
+            and z.surface in ('を', 'が', 'は', 'も', 'に', 'の', 'で', 'と', 'へ'))
+
+
+def _stem_suru_verb(t, u):
+    """形容詞の語幹と読まれた 漢字＋し（恋し）に直に付いた て・た は、し を除いた漢字＋する が辞書の1語の動詞（恋する）
+    なら、その動詞の し＋て・た（恋して・恋した）。活用の合わない印にしない（2026-11-20 補正担当の例文の正しい文:
+    恋してしまった）。CN_LK_STEM_SURU=0 で前のまま。"""
+    import os
+    if os.environ.get('CN_LK_STEM_SURU') == '0':
+        return False
+    stem = t.surface[:-1]
+    if not (t.pos == '形容詞' and t.surface.endswith('し') and stem and all(_kanji(c) for c in stem)
+            and u.start == t.end and u.surface in ('て', 'ては', 'ても', 'た', 'たら', 'たり')):
+        return False
+    try:
+        import morphology
+        w = list(morphology.tokenize(stem + 'する'))
+    except Exception:
+        return False
+    return len(w) == 1 and w[0].pos == '動詞' and w[0].base_form == stem + 'する' and getattr(w[0], 'has_reading', True)
 
 
 def _wide_doubt_only(line, result):
@@ -1636,6 +1698,41 @@ def _wide_doubt_only(line, result):
         cover.update(range(sp[0], sp[1]))
     covered = sum(1 for i in cover if i < len(line) and ('\u3041' <= line[i] <= '\u309f' or line[i] == 'ー'))
     return covered * 2 >= kana
+
+
+def _drop_makes_word(line, text):
+    """組み立ての戻し text が line から かなを1字抜くだけで、抜いた継ぎ目を内側に含む4字以上のかなの並びが
+    同梱辞書の読みで1語の名詞になり、抜く前の並び（同じ範囲＋抜いた字）は語にならないか。かなだけの行の
+    広い迷いでも、余分な1打を抜くと辞書の語の読みがそのまま現れる戻しは崩しではない（せつさめい→せつめい）。
+    置き換え（えいがは→えいがぱ・ねてた→もてた）や、抜いても語が現れない戻しは今まで通り止める。
+    CN_LK_WIDE_DOUBT_WORD=0 で前のまま。"""
+    import os
+    if os.environ.get('CN_LK_WIDE_DOUBT_WORD') == '0' or len(text) + 1 != len(line):
+        return False
+    p = 0
+    while p < len(text) and text[p] == line[p]:
+        p += 1
+    if line[p + 1:] != text[p:] or not _hira(line[p]):
+        return False
+    try:
+        import reading_lattice
+        reading_lattice.load()
+        table = reading_lattice._table
+    except Exception:
+        return False
+    a, b = p, p
+    while a > 0 and _hira(text[a - 1]):
+        a -= 1
+    while b < len(text) and _hira(text[b]):
+        b += 1
+    for i in range(a, p):
+        for j in range(b, p, -1):
+            if j - i < 4:
+                break
+            rows = table.get(text[i:j], ())
+            if any(r[-1] == '名詞' for r in rows) and not table.get(line[i:j + 1]):
+                return True
+    return False
 
 
 _CONTRACTED_AUX = frozenset(('てる', 'でる', 'とく', 'どく', 'ちゃう', 'じゃう', 'てく', 'でく'))
@@ -4937,7 +5034,7 @@ def with_last_keystroke_repair(fn):
                            dict_index=options.get('dict_index'), vouch=True)
             if found and _in_contracted_aux(line, found[2][0], found[2][1]):
                 found = None
-            if found and _wide_doubt_only(line, result):
+            if found and _wide_doubt_only(line, result) and not _drop_makes_word(line, found[0]):
                 found = None
         if found and held and any(a < found[2][1] and found[2][0] < b for a, b in held):
             # 1打の戻しが「並ぶ戻しがあって決めない」とした所（英字を抜くか残すか・2度押しか）は、ほかの道
@@ -6202,6 +6299,16 @@ def _impossible_kana_spans(line, toks):
                                                  and __import__('os').environ.get('CN_DOUBLE_IN_PRONOUN') != '0'))
                     and u.pos in ('動詞', '形容詞', '副詞', '名詞', '連体詞', '感動詞') for u in toks):
                 continue
+            # お・ご＋名詞の形の連用（お使い・お手伝い）＋いただく・いたす は敬語の決まった形で、い が2つ並ぶのは語の字
+            # （2026-11-20 正しい文の見直し: お使いいただけます）。CN_DOUBLE_HONOR_AUX=0 で前のまま
+            if __import__('os').environ.get('CN_DOUBLE_HONOR_AUX') != '0':
+                _k = next((k for k, u in enumerate(toks) if u.start == i), None)
+                if (_k is not None and _k >= 1 and toks[_k].pos == '動詞'
+                        and (toks[_k].base_form or '') in ('いただく', 'いただける', 'いたす')
+                        and toks[_k - 1].end == i and toks[_k - 1].pos == '名詞'
+                        and (toks[_k - 1].surface[:1] in 'おご'
+                             or (_k >= 2 and toks[_k - 2].pos == '接頭詞' and toks[_k - 2].surface in ('お', 'ご', '御')))):
+                    continue
             ts2 = list(morphology.tokenize(line[:i] + line[i + 1:]))
             a = next((u for u in ts2 if u.start <= i - 1 < u.end), None)
             if a is None or not a.has_reading or not (

@@ -815,7 +815,11 @@ def find(line, input_method='kana', guard=()):
         verbs = [] if nouns or fits or p in _NOUN_PARTNER else _verb_options(line, toks, i, p, v, k, input_method)
         opts = nouns or verbs
         if sem and p not in _NOUN_PARTNER and not opts and not fits and not _joined_noun_options(line, toks, i, p, v, input_method, words):
-            nouns = opts = _class_noun_options(line, toks, i, p, v, input_method, sem)
+            # サ変の名詞＋を＋する（整頓をする）は どのサ変の名詞でも言える組。表の名詞の仲間（精神）だけを手掛かりに
+            # 替えない（2026-11-20 補正担当の例文の正しい文）。CN_COLLOC_CLASS_SAHEN=0 で前のまま
+            if not (v == 'する' and (n.pos_sub or '').startswith('サ変') and n.has_reading
+                    and __import__('os').environ.get('CN_COLLOC_CLASS_SAHEN') != '0'):
+                nouns = opts = _class_noun_options(line, toks, i, p, v, input_method, sem)
         if not opts:
             # 名詞1語の読みでは届かないとき: IME が打ち違いの読みを幾つもの語に切った形（問いも＋立ち＝といもだち）を、
             # 左の語の読みとつないで見る。確かでない組の紫の門（下）とは別の判定で、紫だけを付ける

@@ -56,8 +56,15 @@ def child():
             root.geometry('900x520+40+40'); root.attributes('-topmost', True)
             root.lift(); root.focus_force(); a.editor.focus_force()
             pump(3.0)
+            # 2026-11-20 うにさん「分割モード時、外見装飾は、右の補正欄だけにして、メモ欄の装飾を消す」: 分割表示では左の
+            # メモ欄は無地（透かしなし）・右の補正欄だけ透かす。ホイールは両方の欄で今までどおり送れること（下のループ）
+            import os as _os
+            right_only = _os.environ.get('CN_SPLIT_DECOR_RIGHT_ONLY') != '0'
             for pane in (a.editor, a.result_view):
                 paper = getattr(pane, '_correctnote_paper', None)
+                if right_only and pane is a.editor:
+                    assert paper is None or not paper._through, ('the memo pane should be plain in split', pane)
+                    continue
                 assert paper is not None and paper._through, ('the picture is not shown through', pane)
             import appearance
             went = []

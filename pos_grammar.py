@@ -271,7 +271,15 @@ _PIECES = {
         ('んだろ', 'END'), ('んだろう', 'END'),
         ('やる', 'END'), ('やろう', 'END'), ('やった', 'TA'), ('やって', 'TE'), ('やれ', 'E'), ('やり', 'R'),
         ('やら', 'MZ'), ('みなよ', 'END'), ('みな', 'END'),
-    ),
+    ) + ((
+        # て＋終助詞の よ（やめてよ・まってよ・食べてよね）は頼む言い方の普通の形（2026-11-20 補正担当の例文の
+        # 正しい文）。CN_POS_TE_YO=0 で前のまま
+        ('よ', 'END'), ('よね', 'END'), ('よお', 'END'), ('よー', 'END'),
+    ) if __import__('os').environ.get('CN_POS_TE_YO') != '0' else ()) + ((
+        # て＋間投の さ（多すぎてさ、・食べてさ）も話し言葉の普通の形（2026-11-20 補正担当の例文の正しい文: てさ を たさ に
+        # 替えていた）。CN_POS_TE_SA=0 で前のまま
+        ('さ', 'END'), ('さあ', 'END'), ('さー', 'END'),
+    ) if __import__('os').environ.get('CN_POS_TE_SA') != '0' else ()),
     'TA': (
         ('ら', 'END'), ('り', 'END'),
     ),
@@ -541,7 +549,7 @@ def is_functional_noun(token, dictionary_alternative=False):
 # 話し言葉の縮まった形を、元の形に戻して読み直す（じゃない＝ではない・らんない＝られない）。元のままで説明が
 # 付かないときだけ試す（2026-11-06 うに「縮まった形が抜けていたなら同じようなパターンがあるかもしれない」:
 # きれいじゃない・出かけらんなかった・わかんない が正しい文なのに紫）。CN_POS_COLLOQ_RETRY=0 で前のまま
-_COLLOQ_RETRY = (('じゃな', 'ではな'), ('じゃあ', 'では'), ('らんな', 'られな'), ('んない', 'らない'), ('んなかった', 'らなかった'),
+_COLLOQ_RETRY = (('じゃな', 'ではな'), ('じゃあ', 'では'), ('じゃぁ', 'では'), ('らんな', 'られな'), ('んない', 'らない'), ('んなかった', 'らなかった'),
                  ('ってて', 'っていて'), ('んでて', 'んでいて'), ('いてて', 'いていて'), ('いでて', 'いでいて'))
 
 
@@ -586,6 +594,24 @@ def _numeral_reading(s):
         if s.startswith(head) and (len(s) == len(head) or _numeral_reading(s[len(head):])):
             return True
     return False
+
+
+@__import__('functools').lru_cache(maxsize=4096)
+def _pure_adverb(word):
+    """辞書の読みの行がどれも副詞の語（だんだん）。感動詞だけの語（さあ｜こい）も文節を閉じる。
+    CN_POS_ADVERB_HEAD=0 で使わない。"""
+    if __import__('os').environ.get('CN_POS_ADVERB_HEAD') == '0' or len(word) < 2:
+        return False
+    try:
+        from morphology import dictionary_inflections
+        rows = dictionary_inflections(word) or ()
+    except Exception:
+        return False
+    if not rows:
+        return False
+    if all(str(r[0]).startswith('感動詞') for r in rows):
+        return True
+    return len(word) >= 3 and all(str(r[0]).startswith('副詞') for r in rows)
 
 
 def explain_kana_run(run, *args, **kw):
@@ -856,11 +882,26 @@ def _explain_kana_run(run, after_kanji=False, before_kanji=None,
                     stack.append((i + len(piece), st2))
             continue
         if st in ('Bf', 'Bw', 'Bk', 'Bn'):
+            # 語のすぐ後ろの終助詞 ね・よ・さ で並びが終わる形（待ち合わせ｜ね・桜｜よ）は、だ を省いた話し言葉の
+            # 言い切り（2026-11-20 補正担当の作った正しい文）。並びの最後の1字のときだけ。CN_POS_NOUN_NE=0 で前のまま
+            # 漢字の語のすぐ後ろの1字だけの並び（友達｜よ」）も同じ（CN_POS_NOUN_NE_KANJI=0 で前のまま）
+            if (st == 'Bf' and i == 0 and n == 1 and after_kanji and c in 'ねよさ' and not stems_only and not no_words
+                    and __import__('os').environ.get('CN_POS_NOUN_NE') != '0'
+                    and __import__('os').environ.get('CN_POS_NOUN_NE_KANJI') != '0'):
+                stack.append((n, 'END'))
+            if (st == 'Bw' and i == n - 1 and c in 'ねよさ' and not stems_only and not no_words
+                    and __import__('os').environ.get('CN_POS_NOUN_NE') != '0'):
+                stack.append((n, 'END'))
             if st in ('Bf','Bk') and initial_state is None and not no_words and not stems_only and c in 'おご':
                 from reading_segments import native_honorific_request_heads
                 # A real prefix and continuative can be an unfinished
                 # request. This is source grammar, not a finite candidate.
                 if native_honorific_request_heads(run[i:],allow_open=True):
+                    stack.append((n,'END'))
+                # 謙譲の お＋連用形＋し で言いさした形（ご迷惑をおかけし、）も読める（2026-11-20 例文の正しい文）。
+                # CN_POS_HUMBLE_SHI=0 で前のまま
+                elif (n - i >= 4 and run.endswith('し') and __import__('os').environ.get('CN_POS_HUMBLE_SHI') != '0'
+                        and native_honorific_request_heads(run[i:-1],allow_open=True)):
                     stack.append((n,'END'))
             # 1字の格助詞（形の変わらない品詞は、表との一致で置ける。
             # 終助詞は END からだけ——「文の間だから助詞」の場所の決まり）
@@ -894,6 +935,11 @@ def _explain_kana_run(run, after_kanji=False, before_kanji=None,
                 for ln in range(2, min(12, n - i) + 1):
                     if run[i:i + ln] in nouns:
                         stack.append((i + ln, 'Bw'))
+                        # 辞書で副詞だけの語（だんだん・ずいぶん）は、機能語の副詞（とても）と同じく次の文節の頭に
+                        # なる（だんだん｜よく なって）。名詞にもなる語は前のまま（2026-11-20 補正担当の例文の
+                        # 正しい文）。CN_POS_ADVERB_HEAD=0 で前のまま
+                        if not no_words and not stems_only and _pure_adverb(run[i:i + ln]):
+                            stack.append((i + ln, 'Bf'))
                 # 名前＋敬称（うにさん・たろうくん）
                 # 名前は**2字以上**（項目48-SQ・2026-09-06。1字＋敬称〔`せくん`〕は
                 # 名前の形ではなく、打ち間違い `くせん → せくん` を説明していた）
@@ -924,6 +970,15 @@ def _explain_kana_run(run, after_kanji=False, before_kanji=None,
                             if run.startswith(piece,j):
                                 stack.append((j+len(piece),
                                     _stems_target('R',piece,state) if stems_only else state))
+                    # 辞書の動詞の未然形（とら・いか）＋打ち消しの ぬ・ず・ずに（後れをとらぬように）。ない は機能語で
+                    # 届くので、ぬ・ず だけ（2026-11-20 補正担当の例文の正しい文）。CN_POS_MIZEN_NU=0 で前のまま
+                    if (not stems_only and len(stem) >= 2 and run.startswith(('ぬ', 'ず'), j)
+                            and __import__('os').environ.get('CN_POS_MIZEN_NU') != '0'
+                            and any(pos.startswith('動詞,自立,') and form == '未然形' and rd == stem
+                                    for pos, form, base, rd in dictionary_inflections(stem) or ())):
+                        for piece in ('ずに', 'ぬ', 'ず'):
+                            if run.startswith(piece, j):
+                                stack.append((j + len(piece), 'END'))
                     # 辞書の動詞の終止・連体形（する・くる・ある）は、その形で文節を閉じる（するような・するんだ・
                     # びっくりするでしょ）。1字の語幹の推定（干る）とは違い、辞書に在る活用の形だけ。CN_POS_BASIC_VERB=0 で前のまま
                     if (not stems_only and _POS_BASIC_VERB and len(stem) >= 2
@@ -1896,6 +1951,15 @@ def _broken_polite_end_frames(line, dict_index):
                 continue
             if _written_nominal_de_iru(line, start + k, j, tail, parts):
                 continue
+            # 書いたとおりで辞書の動詞の活用（もたら｜した を でした の崩れと見ない）: 崩れの頭の字を含む語が
+            # 辞書の読みを持つ自立の動詞で、その頭より前から始まり、残りが助動詞・助詞だけ（2026-11-20 補正担当の
+            # 例文の正しい文）。CN_PG_POLITE_END_VERB=0 で前のまま
+            if __import__('os').environ.get('CN_PG_POLITE_END_VERB') != '0':
+                _v = next((t for t in parts if t.start < start + k + 1 and start + k < t.end), None)
+                if (_v is not None and _v.pos == '動詞' and (_v.pos_sub or '') == '自立' and _v.has_reading
+                        and _v.start < start + k and len(_v.base_form or '') >= 3
+                        and all(t.pos in ('助動詞', '助詞') for t in parts if t.start >= _v.end and t.end <= j)):
+                    continue
             if not overlaps(start + k, j, protected_ranges(line)):
                 out.append((start + k, j, tail))
     return tuple(out)

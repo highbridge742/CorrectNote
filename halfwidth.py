@@ -27,6 +27,7 @@ JISかな配列の対応に従ってかなに戻す。
 戻したものが意味の通るかなになっていれば、
 それは半角モードのまま打ってしまった誤りだと判断できる。
 """
+import os
 
 # ============================================================
 # JISかな配列: 半角文字 -> かな
@@ -672,7 +673,8 @@ def correct_halfwidth(text, store, find_readings, max_dist=1.6, judge=None,
     has_symbol = any(ch in SYMBOL_KEYS for ch in text)
     min_ratio = 0.4 if has_symbol else 0.6
 
-    if makes_sense_as_japanese(kana, store, min_ratio=min_ratio):
+    # dict_words: 戻したかなをそのまま（直さずに）読む所だけ、語彙に無い身近な語も使う（直しを伴う下の道では使わない）
+    if makes_sense_as_japanese(kana, store, min_ratio=min_ratio, dict_words=True):
         # 半角モードでは日本語入力（IME）を一度も経由していないため、
         # 「ひらがなのまま入力した」という意図を読み取れない。
         # そこで語彙にある表記が分かる範囲で漢字・カタカナに変換する
@@ -1200,7 +1202,7 @@ def correct_zenkaku_input(text, store, find_readings, max_dist=1.6,
 # 変換結果が「日本語として意味を成すか」の判定
 # ============================================================
 
-def _explained_ratio(kana, store, min_word_len=2, max_word_len=12):
+def _explained_ratio(kana, store, min_word_len=2, max_word_len=12, dict_words=False):
     """
     かな列のうち、既知の語と機能語で説明できる割合を返す。
 
@@ -1262,7 +1264,7 @@ def _explained_ratio(kana, store, min_word_len=2, max_word_len=12):
         upper = min(max_word_len, n - i)
         for length in range(min_word_len, upper + 1):
             sub = kana[i:i + length]
-            if [e for e in store.lookup(sub) if e['count'] >= 2]:
+            if [e for e in store.lookup(sub) if e['count'] >= 2] or (dict_words and _common_dictionary_word(sub)):
                 j2 = i + length
                 if covered[i] + length > covered[j2]:
                     covered[j2] = covered[i] + length
@@ -1272,7 +1274,39 @@ def _explained_ratio(kana, store, min_word_len=2, max_word_len=12):
     return covered[n] / n, best_content
 
 
-def makes_sense_as_japanese(kana, store, min_ratio=0.6, min_content_len=3):
+COMMON_RANK = 500     # ja_wordfreq の順位（小さいほど身近）。これ以下を身近な語とする
+
+
+def _common_dictionary_word(sub):
+    """そのかなの並びが、辞書（reading_lattice の読みの表）で漢字2字以上の身近な語（ja_wordfreq の順位 COMMON_RANK 以下）の
+    読みか。語彙の数（2回以上使った語）だけを見ると、学習の中身で半角の戻しの判定が変わり、身近な語（返事・行動 の類）が
+    初めの語彙に無いか1回だけのため、半角のまま打った行が直らなかった（2026-11-22 補正担当）。
+    3字以上の並びだけ。CN_HALFWIDTH_DICT_WORDS=0 で前のまま"""
+    return _common_dictionary_face(sub) is not None
+
+
+def _common_dictionary_face(sub):
+    """_common_dictionary_word の表記（いちばん身近なもの）。無ければ None"""
+    if len(sub) < 3 or os.environ.get('CN_HALFWIDTH_DICT_WORDS') == '0':
+        return None
+    try:
+        import ime_reconvert
+        import reading_lattice
+        reading_lattice.load()
+        rows = reading_lattice._table.get(sub, ()) if reading_lattice._table is not None else ()
+        faces = sorted({r[0] for r in rows if len(r[0]) >= 2 and all('\u4e00' <= c <= '\u9fff' for c in r[0])
+                        and ime_reconvert._rank(r[0]) <= COMMON_RANK}, key=ime_reconvert._rank)
+        # 姓・地名など固有名詞だけの表記は採らない（英字の偶然の並びが 姓 に当たる）
+        from morphology import dictionary_inflections
+        for face in faces:
+            if any(not str(r[0]).startswith('名詞,固有名詞') for r in (dictionary_inflections(face) or ())):
+                return face
+        return None
+    except Exception:
+        return None
+
+
+def makes_sense_as_japanese(kana, store, min_ratio=0.6, min_content_len=3, dict_words=False):
     """
     このかな列は、日本語として意味を成すか。
 
@@ -1292,6 +1326,14 @@ def makes_sense_as_japanese(kana, store, min_ratio=0.6, min_content_len=3):
     if not kana:
         return False
     ratio, content_len = _explained_ratio(kana, store)
+    if ratio < min_ratio or content_len < min_content_len:
+        # 語彙に無い身近な語（辞書の表記・_common_dictionary_word）で読むときは、句読点を除いた全部を隙間なく
+        # 説明できる時だけ（英字・記号の偶然の並びが一部だけ語に当たる形を通さない）。CN_HALFWIDTH_DICT_WORDS=0 で見ない
+        core = kana.rstrip('。、．，！？!?')
+        if dict_words and core and os.environ.get('CN_HALFWIDTH_DICT_WORDS') != '0':
+            r2, c2 = _explained_ratio(core, store, dict_words=True)
+            if r2 >= 1.0 and c2 >= min_content_len:
+                return True
     if ratio < min_ratio:
         return False
     # 機能語だけで埋まった場合を除くため、
@@ -1480,7 +1522,11 @@ def kana_to_kanji_where_possible(kana, store, min_word_len=2,
                 sub = kana[i:i + length]
                 entries = [e for e in store.lookup(sub) if e['count'] >= 2]
                 if not entries:
-                    continue
+                    # 語彙に無い（か1回だけの）身近な語は辞書の表記で（_common_dictionary_face・CN_HALFWIDTH_DICT_WORDS）
+                    face = _common_dictionary_face(sub)
+                    if face is None:
+                        continue
+                    entries = [{'surface': face, 'count': 2}]
                 # 表記が1文字だけの候補は避ける。
                 # 「した」→「下」のように、活用形の一部が
                 # たまたま無関係な単漢字の読みと一致することがあり、

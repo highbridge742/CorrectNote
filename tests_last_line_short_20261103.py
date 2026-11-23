@@ -16,6 +16,8 @@ class Harness:
     _line_above_middle = App._line_above_middle
     _goto_line = App._goto_line
     _clear_navigation_padding = App._clear_navigation_padding
+    _drop_navigation_padding = App._drop_navigation_padding
+    _reseat_navigation_padding = App._reseat_navigation_padding
     _center_navigation_line = App._center_navigation_line
     _mask_navigation_margins = App._mask_navigation_margins
     _unmask_navigation_margins = App._unmask_navigation_margins

@@ -234,6 +234,11 @@ def child():
                 a._switch_tab(1);until(done)
                 a._switch_tab(0)
                 assert a.editor.tag_ranges('suspect'),'First returned frame lost colors'
+                # 分割の表示では右の補正欄は次の一瞬に作り直す（2026-11-21 うにさん「右の補正欄は遅れてよい」・
+                # split_right_later）。左の色はその場で。CN_SPLIT_RIGHT_LATER=0 なら右もその場で
+                import split_right_later
+                if split_right_later.pending(a):
+                    until(lambda: not split_right_later.pending(a))
                 assert a.result_view.tag_ranges('fixed'),'First returned result lost colors'
                 assert done(),'Completed cache was deferred to idle'
             check('cached_tab_color_visible_before_idle',cached)

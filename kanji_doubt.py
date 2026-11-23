@@ -239,6 +239,32 @@ def _fits_frame(face, frame):
         return True
 
 
+def _dict_one_word(text, s, e):
+    """[s, e) が解析の1語（読みの在る語）で、表の1語か kango_tier の層2以下の語か"""
+    try:
+        from morphology import tokenize
+        hit = [t for t in tokenize(text) if t.start < e and s < t.end]
+    except Exception:
+        return False
+    if len(hit) != 1 or hit[0].start != s or hit[0].end != e or not getattr(hit[0], 'has_reading', True):
+        return False
+    if (hit[0].pos_sub or '').startswith('固有名詞'):
+        return False
+    face = text[s:e]
+    try:
+        import seed_japanese
+        if seed_japanese.is_unit(face) is True:
+            return True
+    except Exception:
+        pass
+    try:
+        import kango_tier
+        t = kango_tier.known_usage_tier(face)
+        return t is not None and t <= 2
+    except Exception:
+        return False
+
+
 def propose(text, store, dict_index):
     """[(開始, 終了, 置く表記 or None)]。
 
@@ -272,6 +298,12 @@ def propose(text, store, dict_index):
             continue
         ranked = sorted(cands.items(), key=lambda x: -x[1])
         best, g = ranked[0]
+        # 疑った語が辞書の1語（罫線・拮抗）なら、行の自然さが悪くならないだけでは紫にしない。候補がはっきり良い
+        # （MIN_GAIN_READABLE 以上）か、後ろの 助詞＋述語 の組に候補は入り元の語は入らない時だけ
+        # （2026-11-20 補正担当、うに 誤判定タブの正しい文。判断 POLICY.md D）。CN_KD_NEED_STRONG=0 で前のまま
+        if (os.environ.get('CN_KD_NEED_STRONG') != '0' and g < N.MIN_GAIN_READABLE
+                and _dict_one_word(text, s, e) and not (frame and not _fits_frame(text[s:e], frame))):
+            continue
         face = best if (len(ranked) == 1 and g >= N.MIN_GAIN_READABLE) else None
         key = next((k for k in best_by_core if k[0] < e and s < k[1]), None)
         if key is None:

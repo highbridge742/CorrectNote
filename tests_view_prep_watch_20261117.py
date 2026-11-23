@@ -131,6 +131,47 @@ class ViewPrepWatch(unittest.TestCase):
 
     # 3回目（18:26）: 済んでいない行を補正している子（重い行は5秒を超える）の求めは取り消さない
     def test_busy_child_is_not_cancelled(self):
+        with mock.patch.dict(os.environ, {'CN_VIEW_PREP_PATIENT': '0'}):    # 前の形（休んだ5秒で取り消す）
+            self.busy_then_quiet()
+
+    # 2026-11-21 うにさん「いま解析が、何か詰まっているような状態」: 計算していた子が5秒休んだだけで取り消し、途中までの
+    # 計算を捨てていた。一度計算していたら、続けて PATIENT_IDLE_S 秒休むまで取り消さない
+    def test_child_that_was_computing_gets_patience(self):
+        a = self.a
+        a._analyze_job = self.root.after(60000, lambda: None)
+        cpu = iter([10.0, 13.0, 13.0, 13.1, 13.1, 13.2, 13.2, 13.3, 13.3, 13.3, 13.3])
+        info = dict(token_ok=True, state_ok=True, request='line', request_age=8.0, bg_paused=False,
+                    typed_pending=False, held=False)
+        now = time.monotonic()
+
+        def detail(app):
+            return dict(info, child_busy=W.child_busy(app))
+        with mock.patch.object(W, 'child_cpu', side_effect=lambda app: next(cpu)),                 mock.patch.object(W, 'detail', side_effect=detail),                 mock.patch('analysis_async.cancel_foreground_request') as cancel:
+            W.tick(a, now)                                  # 止まり始め: CPU 10
+            self.assertIsNone(W.tick(a, now + 6))           # 計算中
+            self.assertIsNone(W.tick(a, now + 12))          # 休んで6秒: まだ待つ
+            self.assertIsNone(W.tick(a, now + 18))          # 休んで12秒: まだ待つ
+            cancel.assert_not_called()
+            self.assertEqual(W.tick(a, now + 30), 'healed')  # 休んで24秒（PATIENT_IDLE_S を超えた）: 取り消す
+        cancel.assert_called_once_with(a)
+        self.assertIn('child_idle_s', self.logged())
+
+    def test_never_busy_child_is_still_cancelled_after_5s(self):
+        a = self.a
+        a._analyze_job = self.root.after(60000, lambda: None)
+        cpu = iter([10.0, 10.1, 10.1, 10.1])
+        info = dict(token_ok=True, state_ok=True, request='line', request_age=8.0, bg_paused=False,
+                    typed_pending=False, held=False)
+        now = time.monotonic()
+
+        def detail(app):
+            return dict(info, child_busy=W.child_busy(app))
+        with mock.patch.object(W, 'child_cpu', side_effect=lambda app: next(cpu)),                 mock.patch.object(W, 'detail', side_effect=detail),                 mock.patch('analysis_async.cancel_foreground_request') as cancel:
+            W.tick(a, now)
+            self.assertEqual(W.tick(a, now + 6), 'healed')  # 一度も計算していない（求めが届いていない）: 今までどおり
+        cancel.assert_called_once_with(a)
+
+    def busy_then_quiet(self):
         a = self.a
         a._analyze_job = self.root.after(60000, lambda: None)
         cpu = iter([10.0, 13.0, 13.0, 13.1, 13.1])

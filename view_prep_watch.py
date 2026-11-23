@@ -100,6 +100,18 @@ def detail(app):
 
 HEAL_S = 5.0
 BUSY_CPU_S = 0.5        # 見張りの間（5秒）に子がこれだけ CPU を使っていたら「計算している」
+# 一度計算していた子が、少し休んだだけでは取り消さない（2026-11-21 うにさん「いま解析が、何か詰まっているような状態」）。
+# 実機の記録: 表示準備中のタブで、子が5秒以上計算した後に5秒静かになると、答えの来ていない行の求めを取り消していた
+# （request_age=10秒・child_busy=False で cancel_request が 08:02〜08:04 に4回。取り消すと子は途中までの計算を捨て、
+# 同じ行を始めから解き直す）。重い行は1行10秒を超え、途中で CPU を使わない間（表を読む・ほかの段を待つ）がある。
+# 求めを出してから子が一度でも計算していたら、続けて PATIENT_IDLE_S 秒休むまで取り消さない。一度も計算していない
+# （求めが届いていない）時は今までどおり5秒で取り消す。CN_VIEW_PREP_PATIENT=0 で前の形
+PATIENT_IDLE_S = 20.0
+
+
+def patient_on(environ=None):
+    environ = os.environ if environ is None else environ
+    return environ.get('CN_VIEW_PREP_PATIENT') != '0'
 
 
 def _process_cpu(pid):
@@ -228,7 +240,8 @@ def tick(app, now=None):
     w = app.__dict__.setdefault('_view_prep_watch', dict(pos=None, since=now, drag_since=None, logged=False))
     pos = getattr(app, '_analyze_pos', 0)
     if pos != w.get('pos') or 'cpu_at_stall' not in w:
-        w.update(pos=pos, since=now, logged=False, healed=False, cpu_at_stall=child_cpu(app))
+        w.update(pos=pos, since=now, logged=False, healed=False, cpu_at_stall=child_cpu(app), was_busy=False,
+                 idle_from=None)
     did = None
     # A: 窓のドラッグの印が立ったまま（ボタンは離れている）
     dragging = bool(getattr(app, '_win_drag', None) or getattr(app, '_native_window_drag', False))
@@ -267,9 +280,19 @@ def tick(app, now=None):
             info = dict(state(app), **detail(app))
             if info.get('child_busy') is True:
                 # 子は計算している（重い行）: 止まりではない。次の5秒をまた見る
-                w.update(since=now, cpu_at_stall=child_cpu(app))
+                w.update(since=now, cpu_at_stall=child_cpu(app), was_busy=True, idle_from=None)
                 info = None
                 busy = True
+            elif info.get('child_busy') is False and w.get('was_busy') and patient_on():
+                # 計算していた子が休んでいる: 続けて PATIENT_IDLE_S 秒休むまでは取り消さない
+                idle_from = w.get('idle_from') or w.get('since', now)
+                w['idle_from'] = idle_from
+                if now - idle_from < PATIENT_IDLE_S:
+                    w.update(since=now, cpu_at_stall=child_cpu(app))
+                    info = None
+                    busy = True
+                else:
+                    info['child_idle_s'] = round(now - idle_from, 1)
         if info is not None:
             w['healed'] = True
             what = None

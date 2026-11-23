@@ -86,6 +86,8 @@ class QuickReturnRulesTests(unittest.TestCase):
 @unittest.skipUnless(sys.platform == 'win32', 'Windows focus')
 class QuickReturnWindowsTests(unittest.TestCase):
     def setUp(self):
+        if not __import__('offscreen_window').real_focus_allowed():
+            self.skipTest('本当に窓を前へ出す試験は CN_TEST_REAL_FOCUS=1 の時だけ（見えない机で回す run_on_desktop が立てる・うにさんの焦点を取らない・2026-11-21）')
         # 本物の窓で前面と焦点を戻すところまで見る。Ctrl+V は送らず、門で止めた数を見る（2026-10-27。
         # 前面が人の窓に替わっていると、本物の Ctrl+V がそちらへ行ってしまうため）
         saved = os.environ.get('CORRECTNOTE_NO_EXTERNAL_PASTE')

@@ -201,6 +201,14 @@ DEFAULTS = {
     # その前に確かめるか（2026-10-31 うにさん。どちらも既定オン・f3_search.py）
     'f3_search': True,
     'f3_search_confirm': True,
+    # 行の末尾で候補を自動で出す・オンマウスで候補を出す（2026-11-21 うにさん・どちらも既定オン・auto_candidates.py）
+    'f5_auto_line_end': True,
+    'hover_candidates': True,
+    # オンマウスで候補を出すのは入力カーソルの近くに限定（2026-11-23 うにさん・既定オフ・上下の行数はデバッグメニュー）
+    'hover_near_cursor': False,
+    # F5 の予測の行頭・文末の候補を利用者が並べたもの（2026-11-20 うにさん・f5_predict.LIST_NAMES の名前 → 字の並び）。
+    # 空なら既定の並び（打つ手間の多い順）
+    'f5_predict_lists': {},
     # ダークモード。既定はオフ（既存の見た目を変えないため）
     'dark_mode': False,
     # 外見（配色・装飾・装飾の濃さ）。配色の既定は今までと同じ（標準のライト）。
@@ -341,6 +349,10 @@ DEFAULTS = {
     # 削除の記録（deletion_log.txt・2026-11-14 既定はオフ）。2026-11-17 にデバッグメニューの項目を外したので、
     # この値はもう見ない（CN_DELETION_LOG=1 の時だけ記録する）。保存済みの設定を読めるように名前だけ残す
     'debug_deletion_log': False,
+    # デバッグメニュー「補正の段の使われ方を数える」（usage_counts・2026-11-20 うにさん「既定オフ。オフの間は数えない」）
+    'debug_usage_counts': False,
+    # 俯瞰（右ダブルクリック）の速い形・試作（overview_fast・2026-11-20 うにさん「作りを変えて試す」。既定は試作の方）
+    'overview_fast': True,
 }
 
 # 古い設定ファイルからの読み替え。
@@ -424,6 +436,12 @@ class Settings:
             elif key in ('toolbar_order', 'toolbar_hidden', 'font_favorites'):
                 if isinstance(value, list):
                     self.values[key] = [item for item in value if isinstance(item, str)][:100]
+            elif key == 'f5_predict_lists':
+                if isinstance(value, dict):
+                    self.values[key] = {k: [x for x in v if isinstance(x, str) and x][:40]
+                                        for k, v in value.items()
+                                        if k in ('head_wide', 'head_narrow', 'end_wide', 'end_narrow')
+                                        and isinstance(v, list)}
             elif key == 'recent_files':
                 from recent_files import normalized
                 self.values[key] = normalized(value)

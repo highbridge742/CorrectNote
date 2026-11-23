@@ -252,7 +252,23 @@ def tr(text):
     if len(_cache) > _CACHE_MAX:
         _cache.popitem(last=False)
     _remember(out, text)
+    if _JA.search(_KEEP.sub('', out)):
+        _log_miss(text)
     return out
+
+
+def _log_miss(text):
+    """訳に無い日本語を記録する（開発用・既定オフ）。CN_UI_LANG_LOG_MISS にファイルの道を入れると、そこへ1行ずつ足す
+    （組み立て文・messagebox の文も拾える。2026-11-23 うにさん「ボタンなど英語になってないところを翻訳して」）。"""
+    import os
+    path = os.environ.get('CN_UI_LANG_LOG_MISS')
+    if not path or path == '0':
+        return
+    try:
+        with open(path, 'a', encoding='utf-8') as f:
+            f.write(repr(text) + chr(10))
+    except Exception:
+        pass
 
 
 def original(text):

@@ -20,6 +20,20 @@
 """
 
 COUNTS = {}       # 段の名前 → [called, used, effect]
+# 数えるか（2026-11-20 うにさん「他の記録の項目と同じ形のチェックボックス。既定オフ。オフの間は数えない＝処理を軽く」）。
+# 本体はデバッグメニューのチェック（設定 debug_usage_counts）で、子は頼みに載った値（analysis_worker）で決める。
+# オフの間は包みが元の関数を呼ぶだけ（行ごとの控えも作らない）。CN_USAGE_COUNTS_ALWAYS=1 で前の形（いつも数える）
+ON = False
+
+
+def counting():
+    import os
+    return ON or os.environ.get('CN_USAGE_COUNTS_ALWAYS') == '1'
+
+
+def reset():
+    """数えた分を 0 に戻す（デバッグメニューの窓のリセット）。"""
+    COUNTS.clear()
 STAGES = []       # 包んだ段の名前（呼ばれなくても一覧に出すため）
 _DONE = set()
 _SCOPE = []       # 行の中: [{段: 出した直しの list か None（出さなかった）か True（結果の段で変えた）/False}]
@@ -99,12 +113,15 @@ def wrap(module, attr, kind='fixes', label=None):
     if kind == 'result':
         def counted(line, result, *a, **k):
             ret = fn(line, result, *a, **k)
-            _note(name, _result_changed(result, ret))
+            if _SCOPE:
+                _note(name, _result_changed(result, ret))
             return ret
     else:
         def counted(*a, **k):
             ret = fn(*a, **k)
-            if not ret or _keep_sentinel(ret):
+            if not _SCOPE:
+                pass
+            elif not ret or _keep_sentinel(ret):
                 _note(name, None)
             else:
                 _note(name, _Call((a[0] if a and isinstance(a[0], str) else None, ret)))
@@ -125,6 +142,8 @@ def _wrap_entry(module):
         return
 
     def counted(line, *a, **k):
+        if not _SCOPE and not counting():
+            return fn(line, *a, **k)            # 数えない間は、行の控えも作らない
         outer = not _SCOPE
         if outer:
             _SCOPE.append({})

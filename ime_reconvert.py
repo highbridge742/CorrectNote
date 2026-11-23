@@ -1459,6 +1459,20 @@ def _same_big_untyped(text, tokens, rw, path_cost, tokenize):
     return out
 
 
+def _also_free_noun(face):
+    """接尾の語が、辞書で1語の代名詞としても引ける（君: きみ）か。文節の頭に在っても付く先の無い接尾では
+    なく、解析がその1語を接尾に読んだだけ（2026-11-20 正しい文の見直し: 今夜、君に会いに）。代名詞だけ
+    （的・性 は一般の名詞の読みもあるが、頭に来るのは崩れの跡）。CN_RECONVERT_HEAD_SUFFIX_FREE=0 で前のまま。"""
+    if os.environ.get('CN_RECONVERT_HEAD_SUFFIX_FREE') == '0':
+        return False
+    try:
+        from morphology import dictionary_inflections
+        rows = [r for r in dictionary_inflections(face) or ()]
+    except Exception:
+        return False
+    return any(str(r[0]).startswith('名詞,代名詞') for r in rows)
+
+
 def _head_suffix_marks(text, tokens):
     """文節の頭（行頭・記号の後ろ）に接尾の語（的・性・化）が来る所は、語に付く語が付く先なしに出ていて、解析が
     読めない並び（IME の変換の崩れ: 的｜買い）。その接尾の語と、すぐ後ろに続く漢字を含む語までを紫にする
@@ -1471,6 +1485,8 @@ def _head_suffix_marks(text, tokens):
             continue
         prev = tokens[i - 1] if i else None
         if prev is not None and not (prev.pos == '記号' and prev.end == t.start):
+            continue
+        if _also_free_noun(t.surface):
             continue
         e = t.end
         if i + 1 < len(tokens) and tokens[i + 1].start == e and _strong(tokens[i + 1].surface):
@@ -2007,6 +2023,48 @@ def _undo_broken_head_fix(line, result):
     return out
 
 
+def _same_class_in_line(line, span):
+    """紫にしようとした語と、意味の分類番号（分類語彙表の細かい番号）がそのまま同じ別の語が同じ行に在るか（形容詞、動詞、
+    副詞・赤、青、黄色）。同じ仲間の語を並べた行は、その話題の語を選んで書いているので、一般の文で珍しいことは選び違いの
+    証にならない（2026-11-21 うに 誤判定タブ: 他の副詞を修飾する語 の 副詞 に紫）。CN_IME_RARE_SAME_CLASS=0 で前のまま"""
+    if os.environ.get('CN_IME_RARE_SAME_CLASS') == '0':
+        return False
+    try:
+        import semantic_class
+        from morphology import tokenize
+        toks = list(tokenize(line))
+    except Exception:
+        return False
+    a, b = span
+    mine = [t for t in toks if t.start < b and a < t.end and t.pos == '名詞']
+    if len(mine) != 1:
+        return False
+    codes = semantic_class.codes(mine[0].surface)
+    if not codes:
+        return False
+    return any(t.pos == '名詞' and t.surface != mine[0].surface and not (t.start < b and a < t.end)
+               and codes & semantic_class.codes(t.surface) for t in toks)
+
+
+def _inflection_kana(line, span):
+    """紫の所がかなだけで、こちらの解析では漢字の動詞・形容詞の活用の形の中（達し｜たら の し）。IME が語の切れ目を
+    活用の途中に置いただけで、あまり使わない語ではない（2026-11-20 補正担当、うに 誤判定タブの正しい文）。
+    CN_RECONVERT_INFLECTION_KANA=0 で前のまま"""
+    if os.environ.get('CN_RECONVERT_INFLECTION_KANA') == '0':
+        return False
+    a, b = span
+    face = line[a:b]
+    if not face or not all('ぁ' <= c <= 'ゖ' for c in face):
+        return False
+    try:
+        from morphology import tokenize
+        hit = [t for t in tokenize(line) if t.start < b and a < t.end]
+    except Exception:
+        return False
+    return (len(hit) == 1 and hit[0].pos in ('動詞', '形容詞') and hit[0].start < a and b <= hit[0].end
+            and any('一' <= c <= '鿿' for c in hit[0].surface) and getattr(hit[0], 'has_reading', True))
+
+
 def _repair_line_ime(line, result, input_method='kana', decided=()):
     if not isinstance(result, dict):
         return result
@@ -2059,6 +2117,10 @@ def _repair_line_ime(line, result, input_method='kana', decided=()):
             details.append([done[ops[0][1]:ops[-1][2]], other[ops[0][3]:ops[-1][4]], 'IMEの選び違い'])
             fixed = org
         elif not any(x < org[1] and org[0] < y for x, y in odd_now):
+            if _inflection_kana(line, org):
+                continue
+            if _same_class_in_line(line, org):
+                continue
             odd_add.append(org)
     if not odd_add and new == done:
         return result

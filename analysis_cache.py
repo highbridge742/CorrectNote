@@ -199,6 +199,17 @@ def _vocab_stamp(store):
     **語の顔ぶれと、立っているか（solid）**だけ。
     順番に依らないよう XOR で畳む（並べ替えの手間を省くため）。
     """
+    # 同じ語彙（同じ store・同じ revision）なら前の答えを使う（2026-11-20 うにさん「文字を打って確定してから、本文に
+    # 文字が反映されるまでも重い」: 打鍵のあとの段取りで、控えの指紋のために全語を1回 37ms かけて数え直していた）。
+    # revision は語彙が少しでも変わると進む（vocabulary.revision）。CN_VOCAB_STAMP_MEMO=0 で前の形（毎回数える）
+    memo_key = None
+    if os.environ.get('CN_VOCAB_STAMP_MEMO') != '0':
+        try:
+            memo_key = (id(store), store.revision())
+        except Exception:
+            memo_key = None
+        if memo_key is not None and _VOCAB_STAMP_MEMO.get('key') == memo_key:
+            return list(_VOCAB_STAMP_MEMO['value'])
     try:
         from vocabulary import entry_is_solid as _entry_is_solid
         entries = store.to_list()
@@ -217,7 +228,13 @@ def _vocab_stamp(store):
         c = 1 if _entry_is_solid(e) else 0
         total += c
         mixed ^= _crc(f"{e.get('reading')}\t{e.get('surface')}\t{c}")
+    if memo_key is not None:
+        _VOCAB_STAMP_MEMO.clear()
+        _VOCAB_STAMP_MEMO.update(key=memo_key, value=(n, total, mixed))
     return [n, total, mixed]
+
+
+_VOCAB_STAMP_MEMO = {}
 
 
 def _context_vec_stamp(context_vec):
@@ -567,6 +584,12 @@ def _pack(result):
     packed['meta'] = {key: deepcopy(result[key]) for key in _RESULT_METADATA if key in result}
     if kept_answer(result):
         packed['x'] = 1
+    # その行がタブ全体の語（文脈）のどの鍵を読んだか（analysis_context.Reads・2026-11-20）。11-08 から補正は行の中で
+    # 決めるので、ふつうは空。控えに残すと、起動し直した後に1字打っても、読んでいない行は解き直さずに済む
+    # （前は戻した行に記録が無く、文脈が少しでも動くと全部の行がやり直しになっていた）
+    evidence = result.get('_context_evidence')
+    if isinstance(evidence, dict) and evidence.get('version') == 1:
+        packed['ce'] = {key: (list(value) if isinstance(value, tuple) else value) for key, value in evidence.items()}
     return packed
 
 
@@ -594,6 +617,12 @@ def _unpack(item):
     if not isinstance(metadata, dict):
         raise ValueError('invalid analysis result metadata')
     result.update({key: deepcopy(metadata[key]) for key in _RESULT_METADATA if key in metadata})
+    evidence = item.get('ce')
+    if isinstance(evidence, dict) and evidence.get('version') == 1:
+        # restored_without_proof の見分け（_context_evidence の有無）を変えないよう、別の名前で持つ（app が文脈の
+        # 照合だけに使う）
+        result['_disk_context_evidence'] = {key: (tuple(value) if isinstance(value, list) else value)
+                                            for key, value in evidence.items()}
     return result
 
 

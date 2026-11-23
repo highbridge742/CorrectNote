@@ -54,7 +54,7 @@ class KeyCandidatesWeak(unittest.TestCase):
         self.assertEqual(SF.propose('音素が落ちたり'), [])
 
     def test_switch_off_keeps_old(self):
-        with _Env(CN_SF_KEY_WEAK='0'):
+        with _Env(CN_SF_KEY_WEAK='0', CN_SF_ABSENCE_NEEDS_SIZE='0'):
             self.assertNotEqual(SF.propose('音素が落ちたり'), [])
 
 
@@ -128,7 +128,9 @@ class Design33NoNumberOnly(unittest.TestCase):
 
 class HeadNoCommonNoun(unittest.TestCase):
     def test_head_no_with_common_noun(self):
-        self.assertEqual(KW._stacked_no(list(tokenize('の本は'))), [])
+        # 上の行から続く文を見る前の形の守り（2026-11-21 から既定は上の行を見ない: CN_PREV_LINE_OFF）
+        with _Env(CN_PREV_LINE_OFF='0'):
+            self.assertEqual(KW._stacked_no(list(tokenize('の本は'))), [])
 
     def test_switch_off_keeps_old(self):
         with _Env(CN_KEYSLIP_HEAD_NO_COMMON='0'):
@@ -426,8 +428,11 @@ class KataOneAndSymbolJoin(unittest.TestCase):
 
     def test_kata_one_switch_off(self):
         import broken_shape as B
-        with _Env(CN_KATA_ONE_COMPOUND='0'):
+        # オ段 は表の1語でもあるので、CN_KATA_ONE_KNOWN（2026-11-22）も切って前の形を見る
+        with _Env(CN_KATA_ONE_COMPOUND='0', CN_KATA_ONE_KNOWN='0'):
             self.assertTrue(any('片仮名' in x[2] for x in B.spans('音がオ段で終わる')))
+        with _Env(CN_KATA_ONE_COMPOUND='0'):
+            self.assertEqual([x for x in B.spans('音がオ段で終わる') if '片仮名' in x[2]], [])
 
     def test_symbol_join_not_merged(self):
         import symbol_join_keep as K
@@ -538,7 +543,7 @@ class DictWordKeep(unittest.TestCase):
         d = [['の日っています', '残っています', 'かな入力の1キーの打ち違い']]
         got = H.keep_head('の日っています', {'corrected': '残っています', 'details': d, 'odd_spans': []}, '本の下')
         self.assertEqual(got['corrected'], '残っています')
-        with _Env(CN_HEAD_KEYSLIP_COST='0'):
+        with _Env(CN_HEAD_KEYSLIP_COST='0', CN_PREV_LINE_OFF='0'):
             got = H.keep_head('の日っています', {'corrected': '残っています', 'details': d, 'odd_spans': []}, '本の下')
             self.assertEqual(got['corrected'], 'の日っています')
 
@@ -833,13 +838,13 @@ class Batch549(unittest.TestCase):
     def test_common_loanword_inside_sahen_compound(self):
         import broken_shape as B
         self.assertEqual(B.spans('検索キー入力'), [])
-        with _Env(CN_KATA_IN_COMPOUND='0'):
+        with _Env(CN_KATA_IN_COMPOUND='0', CN_KATA_KNOWN_NOUN='0'):
             self.assertTrue(B.spans('検索キー入力'))
 
     def test_te_not_added_inside_kana_noun(self):
         import te_dropped as T
         self.assertEqual(T.propose('ぜんぶひらがなであり'), [])
-        with _Env(CN_TE_KANA_NOUN_SPLIT='0'):
+        with _Env(CN_TE_KANA_NOUN_SPLIT='0', CN_TE_NOUN_ARU='0'):
             self.assertTrue(T.propose('ぜんぶひらがなであり'))
 
     def test_kana_dictionary_entry_generic_purple_dropped(self):
@@ -879,6 +884,14 @@ class Batch551HeadGuardPrev(unittest.TestCase):
     def _res(self):
         return {'original': 'に別の道具がある', 'corrected': '人別の道具がある', 'changed': True,
                 'details': [['に', '人', 'x']], 'spans': [[0, 1]], 'original_spans': [[0, 1]], 'odd_spans': []}
+
+    def setUp(self):
+        # 上の行を見る前の形の試験（2026-11-21 から既定は上の行を見ない: CN_PREV_LINE_OFF）
+        self._env = _Env(CN_PREV_LINE_OFF='0')
+        self._env.__enter__()
+
+    def tearDown(self):
+        self._env.__exit__(None, None, None)
 
     def test_may_continue(self):
         import correction_entry as ce
@@ -974,7 +987,7 @@ class Batch560SahenTail(unittest.TestCase):
     def test_noun_then_sahen(self):
         import keyslip_window as K
         self.assertEqual(K.propose('列追加する'), [])
-        with _Env(CN_KEYSLIP_UNSURE_SAHEN_TAIL='0'):
+        with _Env(CN_KEYSLIP_UNSURE_SAHEN_TAIL='0', CN_KEYSLIP_UNSURE_AFFIX='0'):
             self.assertTrue(K.propose('列追加する'))
 
 
@@ -1185,8 +1198,11 @@ class Batch587(unittest.TestCase):
         import odd_reason_fill as F
         line = '入力欄を見る'
         r = {'corrected': line, 'odd_spans': [(0, 3)], 'odd_reasons': [(0, 3, '「入力」と「欄」は続けて置けない')]}
-        self.assertTrue(F.fill(line, r)['odd_spans'])
-        with _Env(CN_ODD_REASON_NOUN_PAIR='1'):
+        # 2026-11-20: 名詞＋端の漢字1字の複合語は B1（CN_ODD_REASON_AFFIX_COMPOUND）でも外れる
+        self.assertFalse(F.fill(line, r)['odd_spans'])
+        with _Env(CN_ODD_REASON_AFFIX_COMPOUND='0'):
+            self.assertTrue(F.fill(line, r)['odd_spans'])
+        with _Env(CN_ODD_REASON_NOUN_PAIR='1', CN_ODD_REASON_AFFIX_COMPOUND='0'):
             self.assertFalse(F.fill(line, r)['odd_spans'])
 
     def test_noun_renyo(self):
@@ -1492,7 +1508,7 @@ class Batch613(unittest.TestCase):
         import morphology
         toks = list(morphology.tokenize('項目を追加いただけますか'))
         self.assertEqual(B._head_drop_spots(toks), [])
-        with mock.patch.dict('os.environ', {'CN_HEAD_DROP_SAHEN_HONOR': '0'}):
+        with mock.patch.dict('os.environ', {'CN_HEAD_DROP_SAHEN_HONOR': '0', 'CN_HEAD_DROP_COMMON': '0'}):
             self.assertTrue(B._head_drop_spots(toks))
 
 

@@ -128,6 +128,16 @@ def _bad_de(p, t):
     return p.surface.endswith('い') and base.endswith('く') and base not in ('行く', 'いく')
 
 
+def _renyo_ok(p):
+    """て／で の前の動詞が連用の形（見て・読んで）か。未然形（こ＋て）などは て＋補助の動詞の形ではなく、かなの並びを
+    解析が切っただけ（おくゆくこてい の こ｜て｜い: 2026-11-21 うに 隣接キータブ）。形の分からない語は今まで通り。
+    CN_TE_AUX_RENYO=0 で前のまま"""
+    if os.environ.get('CN_TE_AUX_RENYO') == '0':
+        return True
+    f = getattr(p, 'infl_form', None) or ''
+    return not f or f.startswith('連用')
+
+
 def _te_aux_spots(line):
     """元の行の 動詞＋て／で（接続助詞）＋補助の動詞（くる・いる・しまう…）の て／で の位置"""
     try:
@@ -140,7 +150,7 @@ def _te_aux_spots(line):
         t, p, n = toks[k], toks[k - 1], toks[k + 1]
         if (t.surface in ('て', 'で') and t.pos == '助詞' and p.pos == '動詞' and p.end == t.start
                 and n.pos in ('動詞', '形容詞') and n.start == t.end and (n.base_form or '') in _AUX
-                and not _bad_de(p, t)):
+                and not _bad_de(p, t) and _renyo_ok(p)):
             out.append((t.start, t.end))
     return out
 

@@ -1,5 +1,5 @@
 <h1>CorrectNote 説明書</h1>
-<p class="muted">バージョン 1.19.0</p>
+<p class="muted">バージョン 1.20.0</p>
 <p class="store-badge"><a href="https://apps.microsoft.com/detail/9NJZGX71LHTZ?referrer=appbadge&amp;mode=direct"><img src="https://get.microsoft.com/images/ja%20dark.svg" width="200" alt="Microsoft Store から入手"></a> <a href="https://github.com/highbridge742/CorrectNote/releases/latest/download/CorrectNote.exe"><img src="assets/readme_manual/manual-091.svg" width="200" alt="GitHub から最新版を直接ダウンロード"></a></p>
 
 
@@ -36,6 +36,7 @@
 <div class="toc-columns">
 <ol class="toc-column">
 <li><a href="#screen">画面の見かた</a></li>
+<li><a href="#predict">予測候補 ― 続きの文字を出す</a></li>
 <li><a href="#choose">再変換 ― 候補から選び直す</a><ul><li><a href="#guide-reinput">再入力変換 ― 確定した語の読みを直して変換する</a></li></ul></li>
 <li><a href="#quick">簡易入力ウィンドウ</a><ul><li><a href="#guide-quick">簡易入力ウィンドウで下書きし、Escで閉じて元の欄へ自動で貼り付ける</a></li></ul></li>
 <li><a href="#quick-selected-text">選択した文字を簡易入力へ取り込む</a></li>
@@ -48,7 +49,7 @@
 <li><a href="#dragscroll">余白のドラッグでスクロール</a><ul><li><a href="#guide-right-scroll">右クリックしたままドラッグしてスクロールする</a></li></ul></li>
 <li><a href="#overview">縮小表示 ― 右ダブルクリック</a><ul><li><a href="#guide-overview">右ボタンを2回押し、2回目を押したまま動かす</a></li></ul></li>
 </ol>
-<ol class="toc-column" start="13">
+<ol class="toc-column" start="14">
 <li><a href="#edit">編集の基本機能</a><ul><li><a href="#guide-autosave">保存せずに閉じても次回続きを開く</a></li></ul></li>
 <li><a href="#wheel-tabs">ホイールでタブを往復する</a><ul><li><a href="#guide-tabs">ホイールで別のタブへ切り替える</a></li></ul></li>
 <li><a href="#search-replace">検索と置換</a><ul><li><a href="#guide-search-return">Ctrl＋Fで検索し、検索前の位置へ戻る</a></li></ul></li>
@@ -113,6 +114,26 @@
 
 </section>
 
+<a name="predict"></a>
+<section>
+<hr class="section-rule">
+<h2>予測候補 ― 続きの文字を出す</h2>
+<p>
+カーソルの右に文字がない時、後ろに続く予測候補を出します。<BR>
+クリックで挿入するか、<span class="kbd">F5</span>キーを押すと候補を選べるようになります。
+</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-095.gif"><img src="assets/readme_manual/manual-095.gif" width="1064" height="607" alt="「明日の会議で」の後ろに予測の候補が出て、F5で同じ場所のまま選べるようにし、↓で「は」を選んでEnterで入れると、続けて次の予測が出る様子。"></a></figure>
+<p>
+行頭では「・ ※ ◆ ■」のように見出し向けの候補を、文末では「？ ！ … ⇒」や閉じる括弧などの候補を出します。<BR>
+行頭と文末の候補は、オプションで任意の文字を登録できます。
+</p>
+<figure class="guide-shot"><a href="assets/readme_manual/manual-096.gif"><img src="assets/readme_manual/manual-096.gif" width="1064" height="607" alt="空いた行の行頭で予測の候補が出て、F5で同じ場所のまま選べるようにし、↓で「※」を選んでEnterで入れる様子。"></a></figure>
+<p>
+再度<span class="kbd">F5</span>キーを押すと選択範囲が左に遡り、再変換を開始します。
+</p>
+<p class="guide-back"><a href="#picture-index">目次に戻る</a></p>
+</section>
+
 <a name="choose"></a>
 <section>
 <hr class="section-rule">
@@ -135,6 +156,13 @@
 <h3><span class="dot"></span>範囲選択で選ぶ</h3>
 <p>
 <b>範囲をドラッグで選んでから</b>右クリックすると、選んだ範囲で候補を探します。
+</p>
+
+<h3><span class="dot"></span>オンマウスで選ぶ</h3>
+<p>
+単語の上にマウスを少し止めると、その単語の候補の一覧が出ます。<BR>
+<span class="kbd">↑</span><span class="kbd">↓</span> キーかクリックで選びます。単語ひとつに絞れない所や、URL の上では出ません。<BR>
+編集メニューの「オンマウスで候補を出す」（初期値オン）で切り替えられます。
 </p>
 
 <h3><span class="dot"></span>候補の一覧から再入力変換へ</h3>
@@ -484,6 +512,8 @@
 <h3>行番号のダブルクリックで登録し、ボタン／Alt＋上下で移動</h3>
 <figure class="guide-shot"><a href="assets/readme_manual/manual-050.gif"><img src="assets/readme_manual/manual-050.gif" width="900" height="372" alt="ブックマークを付けて次・前の目印へ移動する様子"></a><figcaption>次・前のブックマークへ移ります。</figcaption></figure>
 <p class="guide-back"><a href="#picture-index">目次に戻る</a></p></article>
+<h3><span class="dot"></span>ブックマークで目次を作る</h3>
+<p>ブックマークを付けた行は、本文の上の目次に自動で並びます。クリックするとその行へ移ります。</p>
 </section>
 
 <a name="keyboard-layout"></a>

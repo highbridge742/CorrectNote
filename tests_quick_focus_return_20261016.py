@@ -223,7 +223,7 @@ class CloseStatusTests(unittest.TestCase):
                                  cwd=dest, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding='utf8',
                                  timeout=150)
             line = next((l for l in run.stdout.splitlines() if l.startswith('RESULT ')), None)
-            self.assertIsNotNone(line, run.stdout[-3000:])
+            self.assertIsNotNone(line, 'rc=%r %s' % (run.returncode, run.stdout[-3000:]))   # rc=3221226525 は窓の手続きの中の落ち
             return json.loads(line[7:])
 
     def test_could_not_go_back_says_so_and_keeps_the_text_in_the_memo(self):

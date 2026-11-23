@@ -49,6 +49,11 @@ def _num(name, default):
         return default
 
 
+def _symbol_only(surface):
+    import unicodedata
+    return bool(surface) and all(unicodedata.category(c)[0] in 'PSZ' for c in surface)
+
+
 def still_odd(text):
     """直した後の文 → 紫にする窓（始め, 終わり）・'fix'（直した所に付ける）・None。"""
     from morphology import tokenize, path_cost
@@ -69,10 +74,21 @@ def still_odd(text):
             return None
     best, where = 0.0, None
     mixed = mixed_loan_spans(text)
+    tail = os.environ.get('CN_FIXED_STILL_ODD_WORD_TAIL') != '0'
     for i in range(len(toks)):
-        a, b = toks[i].start, toks[min(len(toks), i + SPAN) - 1].end
-        if any(t.pos == '記号' for t in toks[i:i + SPAN]):
+        j = min(len(toks), i + SPAN)
+        if any(t.pos == '記号' for t in toks[i:j]):
             continue
+        if tail:
+            # 半角の括弧などを解析が名詞と読んだ字（記号だけの語）を含む窓は見ない。窓の終わりが語の途中（する の し・
+            # される の さ）なら、後ろの助動詞・接尾・非自立の語まで含めて測る（語の途中で切ると費用が高く出る。
+            # 2026-11-22 誤判定タブの正しい文: 「…ていたとします」の た｜と｜し）。CN_FIXED_STILL_ODD_WORD_TAIL=0 で前のまま
+            if any(_symbol_only(t.surface) for t in toks[i:j]):
+                continue
+            while j < len(toks) and (toks[j].pos == '助動詞'
+                                     or str(toks[j].pos_sub or '').startswith(('接尾', '非自立'))):
+                j += 1
+        a, b = toks[i].start, toks[j - 1].end
         if any(x < b and a < y for x, y in mixed):
             continue        # 片仮名とひらがなを混ぜて書いた外来語（シャつ）を含む窓は、費用が書き方のせいで高い
         if _STRETCH.search(text[a:b]) and os.environ.get('CN_FIXED_STILL_ODD_STRETCH') != '0':
@@ -345,6 +361,38 @@ def _kanji_respell_only(det):
                and all('一' <= c <= '鿿' or c in '々〆ヶ' for c in d[0]) for d in det)
 
 
+def _eats_particle(line, text, det):
+    """直しがどれも紫の所の読み直しで、読みの在る2字以上の名詞のすぐ後ろの格助詞を巻き込んで替え、直した後その名詞の
+    後ろに助詞が無くなったか。直した後もまだ不自然なら、読み直しは名詞と助詞のつながりを壊しただけなので、戻して
+    紫だけにする（2026-11-23 補正担当、うに 誤判定タブ: 名詞＋を＋っ の打ち違いが「名詞＋別のかな」に書き換わり、
+    紫も残っていた）。CN_FSO_EATS_PARTICLE=0 で前のまま"""
+    if os.environ.get('CN_FSO_EATS_PARTICLE') == '0' or not det or not all(d[2] in RESPELL for d in det):
+        return False
+    try:
+        from morphology import tokenize
+        tk = list(tokenize(line))
+        nt = list(tokenize(text))
+    except Exception:
+        return False
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, line, text, autojunk=False).get_opcodes():
+        if tag == 'equal':
+            continue
+        for k, t in enumerate(tk):
+            if (k == 0 or t.pos != '助詞' or not str(t.pos_sub or '').startswith('格助詞')
+                    or not (i1 <= t.start and t.end <= i2)):
+                continue
+            p = tk[k - 1]
+            if p.pos != '名詞' or not getattr(p, 'has_reading', True) or len(p.surface) < 2 or p.end != t.start:
+                continue
+            q = [u for u in nt if u.start == p.end]
+            if q and q[0].pos != '助詞':
+                return True
+    return False
+
+
+_IM = [None]
+
+
 def _guess_only_back(line, result, span):
     """直しがどれも推し量りだけの直し（常用外の字を1打違いの身近な語に: 作った例 誤変換の佑 → 多角）で、直した後も
     その辺りが不自然なら、直しは戻して元の行に紫だけ（誤った直しより紫・2026-11-14 未解決タブ）。
@@ -354,11 +402,18 @@ def _guess_only_back(line, result, span):
     det = [d for d in result.get('details') or () if isinstance(d, (list, tuple)) and len(d) >= 3]
     if not det:
         return None
-    if not all(d[2] in GUESS_ONLY for d in det) and not _kanji_respell_only(det):
+    if (not all(d[2] in GUESS_ONLY for d in det) and not _kanji_respell_only(det)
+            and not _eats_particle(line, result.get('corrected') or line, det)):
         return None
     ops = [o for o in difflib.SequenceMatcher(None, line, result.get('corrected') or line, autojunk=False).get_opcodes()
            if o[0] != 'equal']
     if not ops or not all(span[0] <= o[2] and o[1] <= span[1] for o in ops):      # 重なるか隣り合う
+        return None
+    # ローマ字入力の読み直しは打鍵の戻しで決めた形。紫が直した所と重ならず隣に在るだけなら、不自然なのは隣の別の語で、
+    # 直しは戻さない（2026-11-19 うに: ローマ字の 黄阿木の補油国書 が 会議の に直らなくなった）。CN_FSO_RESPELL_BACK_ROMAJI_TOUCH=0 で前のまま
+    if (_IM[0] == 'romaji' and not all(d[2] in GUESS_ONLY for d in det)
+            and os.environ.get('CN_FSO_RESPELL_BACK_ROMAJI_TOUCH') != '0'
+            and not any(o[1] < span[1] and span[0] < max(o[2], o[1] + 1) for o in ops)):
         return None
     out = dict(result)
     marks = [(o[1], max(o[2], o[1] + 1)) for o in ops]
@@ -375,10 +430,53 @@ def correct_line(line, *args, **kwargs):
     result = _orig['correct_line'](line, *args, **kwargs)
     if not _on() or not isinstance(line, str) or not isinstance(result, dict):
         return result
+    _IM[0] = kwargs.get('input_method', args[3] if len(args) > 3 else 'kana')
     try:
-        return _mark(line, result)
+        out = _mark(line, result)
     except Exception:
         return result
+    finally:
+        _IM[0] = None
+    try:
+        return _romaji_respell_mark(line, result, out, args, kwargs)
+    except Exception:
+        return out
+
+
+import contextvars as _cv
+_RESPELL_MARK = _cv.ContextVar('cn_fso_respell_mark', default=False)
+
+
+def _romaji_respell_mark(line, before, out, args, kwargs):
+    """ローマ字入力で、この段が直した所の外に足した紫（会議の｜補油国書: 2つ目の打ち違い）を、紫の所の読み直し
+    （odd_respell のローマ字の打鍵の戻し: hoyukokusho → houkokusho）でもう1度見る。この段は読み直しの後にあるので、
+    この紫は読み直しを通っていなかった（2026-11-19 うに: ローマ字で 会議の報告書 が直らない）。紫の残らない形が
+    はっきり1つの時だけ採る。直した所に重なる紫は見ない。CN_FSO_ROMAJI_RESPELL=0 で前のまま"""
+    im = kwargs.get('input_method', args[3] if len(args) > 3 else 'kana')
+    if (im != 'romaji' or os.environ.get('CN_FSO_ROMAJI_RESPELL') == '0' or _RESPELL_MARK.get()
+            or out is before or not out.get('odd_spans') or before.get('odd_spans')):
+        return out
+    text = out.get('corrected') or line
+    if text == line:
+        return out
+    ops = [o for o in difflib.SequenceMatcher(None, line, text, autojunk=False).get_opcodes() if o[0] != 'equal']
+    if any(o[1] < sp[1] and sp[0] < max(o[2], o[1] + 1) for sp in out['odd_spans'] for o in ops):
+        return out
+    import correction_entry as ce
+    store = args[0] if args else kwargs.get('store')
+    decisions = kwargs.get('decisions', args[2] if len(args) > 2 else None)
+    context_vec = kwargs.get('context_vec', args[4] if len(args) > 4 else None)
+    dict_index = kwargs.get('dict_index', args[5] if len(args) > 5 else None)
+    tok = _RESPELL_MARK.set(True)
+    try:
+        def run(t):
+            return ce.correct_line(t, *args, **kwargs)
+        got = ce._odd_respell(line, out, run, store, dict_index, context_vec, decisions, im)
+    finally:
+        _RESPELL_MARK.reset(tok)
+    if not isinstance(got, dict) or got is out or (got.get('corrected') or line) == text or got.get('odd_spans'):
+        return out
+    return got
 
 
 def install():

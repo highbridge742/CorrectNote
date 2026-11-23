@@ -60,7 +60,7 @@ def child():
         with patch.object(app, 'GlobalHotkeys', return_value=Mock()), \
                 patch.object(app.CorrectNoteApp, '_learn_now', lambda *v: None), \
                 patch.object(app.CorrectNoteApp, '_first_run_setup', lambda *v: None):
-            a = app.CorrectNoteApp(root); root.geometry('1120x660+-6000+-6000'); root.deiconify(); complete()
+            a = app.CorrectNoteApp(root); __import__('offscreen_window').hold(root, '1120x660'); complete()   # 画面の外（どの画面の置き方でも）
             a._make_dropdown = lambda items, x, y, **k: shown.append(list(items))
             for gutter in (a.editor_gutter, a.result_gutter):
                 assert gutter.bind('<ButtonPress-3>') and gutter.bind('<ButtonRelease-3>')

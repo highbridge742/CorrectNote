@@ -92,6 +92,10 @@ def _intrusion_drop(line, got, i2, j1, j2):
     for k in range(len(rl)):
         if rl[:k] + rl[k + 1:] != rg:
             continue
+        if k == 0 and _natural_on():
+            # 抜くのが行の頭の字そのもの（も｜水戸 → みと）なら、行の頭の字を捨てるだけで、打ち違いを戻して語にした跡ではない
+            # （2026-11-21 Fable5.2 の意見: 新しい語は行の頭の字を含むこと）。CN_HEAD_ALONE_NATURAL=0 で前のまま
+            continue
         for c, end in ((rl[k - 1:k], -1), (rl[k + 1:k + 2], 0)):
             try:
                 if c and 0 < K.intrusion_key_distance(K.keystrokes(rl[k])[0], K.keystrokes(c)[end]) <= 1.0:
@@ -200,12 +204,32 @@ def keep_head(line, result, previous_line=_UNKNOWN):
     # 紫は元の行の位置。戻した所（元の行の i1..i2）に掛かる紫だけ外す
     odd = [x for x in result.get('odd_spans') or () if not (x[0] < max(i2, i1 + 1) and i1 < x[1])]
     out['odd_spans'] = odd
-    if fresh and os.environ.get('CN_HEAD_KEEP_PURPLE') != '0':
+    if fresh and os.environ.get('CN_HEAD_KEEP_PURPLE') != '0' and not _rest_reads(line, got):
         sp = (i1, max(i2, i1 + 1))
         out['odd_spans'] = sorted(set(tuple(x[:2]) for x in odd) | {sp})
         out['odd_reasons'] = [r for r in result.get('odd_reasons') or ()
                               if not (r[0] < sp[1] and sp[0] < r[1])] + [(sp[0], sp[1], REASON)]
     return out
+
+
+def _natural_on():
+    # 上の行を見ない形（CN_PREV_LINE_OFF・2026-11-21）の時だけ。CN_HEAD_ALONE_NATURAL=0 で前のまま
+    return os.environ.get('CN_HEAD_ALONE_NATURAL') != '0' and os.environ.get('CN_PREV_LINE_OFF') != '0'
+
+
+def _rest_reads(line, got):
+    """行の頭の助詞を外した残り（後ろから抱きついた）が、直した行（の候補）より解析の費用で高くない（ふつうに読める）か。
+    読めるなら、行の頭の1字は前から続く文の助詞として置いたもので、元に戻すだけにして紫を付けない（2026-11-21 うに:
+    行の頭の助詞もその行だけで直す。ただし 助詞＋身近な語 がふつうに読める行は崩さない）。CN_HEAD_ALONE_NATURAL=0 で前のまま"""
+    if not _natural_on():
+        return False
+    try:
+        import morphology
+        rest = morphology.path_cost(line[1:])
+        new = morphology.path_cost(got)
+    except Exception:
+        return False
+    return bool(rest) and bool(new) and rest <= new
 
 
 def _previous_line(line, a, k):

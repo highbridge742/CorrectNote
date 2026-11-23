@@ -50,8 +50,16 @@ def child():
             return 'sync'
         a._warp_pointer = warp
         ed.yview('12.0'); pump(0.3)
+        # 作った押し下げにも本当の時刻を付ける（2026-11-22）。時刻が 0 のままだと、Tk は2回目からの押し下げを全部
+        # 二度押し（<Double-Button-3>）と見て、前の離しが 0.7 秒（RIGHT_AFTER_SCROLL_S）より前なら俯瞰に入っていた
+        # （速い俯瞰・overview_fast は離すと元の行へ戻すので、「ふつうのドラッグ」の段が動かずに落ちた。本物の押し下げでは
+        # 起きない）。押し下げの間は二度押しの間（0.5 秒）より長くあける
+        clock = [int(time.monotonic() * 1000)]
+        def press_ms():
+            clock[0] = max(clock[0] + 1000, int(time.monotonic() * 1000))
+            return clock[0]
         out = {}
-        ed.event_generate('<ButtonPress-3>', x=300, y=300)
+        ed.event_generate('<ButtonPress-3>', time=press_ms(), x=300, y=300)
         pump(0.05)
         tops = []
         # move the hand down (toward row 1) in 40 px steps, then one step of -900 px (the cursor put back), then on
@@ -65,7 +73,7 @@ def child():
         out['tops'] = tops
         # ordinary drags still scroll both ways
         ed.yview('100.0'); pump(0.3)
-        ed.event_generate('<ButtonPress-3>', x=300, y=300); pump(0.05)
+        ed.event_generate('<ButtonPress-3>', time=press_ms(), x=300, y=300); pump(0.05)
         pointer[0] = 300
         for step in [-40] * 6 + [40] * 3:
             pointer[0] += step
@@ -79,7 +87,7 @@ def child():
         ed.yview('380.0'); pump(0.3)
         for k in range(30):
             pointer[0] = 150; pointer_x[0] = 300
-            ed.event_generate('<ButtonPress-3>', x=300, y=150); pump(0.03)
+            ed.event_generate('<ButtonPress-3>', time=press_ms(), x=300, y=150); pump(0.03)
             for j in range(10):
                 if j == 3:
                     pointer_x[0] = -40; pointer[0] -= 500        # into the next screen, pulled up to its bottom

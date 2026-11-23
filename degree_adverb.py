@@ -61,6 +61,11 @@ def _quantity_like(tok, feeling=True):
     """時・場所・量の名詞（程度の副詞が普通にかかる: ちょっと前・かなり昔・少し水）。feeling=False なら気持ちの名詞は数えない。"""
     if tok.pos_sub in ('副詞可能', '数', '接尾', '代名詞', '固有名詞', '非自立'):
         return True
+    # 数字で始まる語（解析が数＋助数詞を1語にした ５０人）は量（せいぜい５０人だ・2026-11-20 補正担当の例文の正しい文）。
+    # CN_DEGREE_DIGIT_HEAD=0 で前のまま
+    import os
+    if (tok.surface[:1].isdigit() or '０' <= tok.surface[:1] <= '９') and os.environ.get('CN_DEGREE_DIGIT_HEAD') != '0':
+        return True
     try:
         import semantic_class
         codes = semantic_class.codes(tok.surface) or ()

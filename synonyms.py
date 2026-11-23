@@ -492,9 +492,32 @@ def _fit_verb(word, original, readings):
             or again[0].infl_type != original.infl_type):
         return word, True
     known = set(load_table().readings(paired) or ()) | {_whole_reading(paired)}
+    if paired == original.base_form and not _same_stem_reading(word, own, readings, tail):
+        # 漢字の語幹がたまたま同じだけの別の動詞（食う〔く・う〕と 食べる〔た・べる〕）: 自他の対ではない。型が違うので
+        # 後ろへ回して出す（2026-11-21・tests_synonyms_20261026 の「食べた → 食った」が 11-03 から出なくなっていた）。
+        # CN_SYNONYM_PAIR_READING=0 で前の形
+        return word, True
     if paired == original.base_form or known & set(readings):
         return None, False
     return paired, False
+
+
+def _same_stem_reading(word, own, readings, tail):
+    """word（送り仮名 own）の語幹の読みが、元の語（読み readings・送り仮名 tail）の語幹の読みと同じか
+    （離す〔はな・す〕と 離れる〔はな・れる〕は同じ＝自他の対）。分からなければ同じと見る（前の形）。"""
+    import os
+    if os.environ.get('CN_SYNONYM_PAIR_READING') == '0':
+        return True
+    whole = _whole_reading(word)
+    own_r = _hiragana(own)
+    tail_r = _hiragana(tail)
+    if not whole or not whole.endswith(own_r):
+        return True
+    root = whole[:len(whole) - len(own_r)]
+    roots = {r[:len(r) - len(tail_r)] for r in readings if r and r.endswith(tail_r)}
+    if not root or not roots:
+        return True
+    return root in roots
 
 
 def _synonyms(text, per_sense, total):

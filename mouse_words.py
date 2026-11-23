@@ -130,6 +130,25 @@ def _set(w, row1, a, row2, z, insert_at_end=True):
 
 def _double(app, event):
     w = event.widget
+    # 選んだ範囲の中（端の数 px を除く）での二度目の押しは、選び直さずにドラッグで移す側へ渡す（2026-11-20 うにさん
+    # 「長押しで単語を選択して、クリックを離してまたクリックし、ドラッグしたが単語を移動できなかった」: 長押しの離しの
+    # すぐ後の押しは二度押しになり、ここが語を選び直して、移す側（drag_move・この束縛より後ろ）へ届かなかった）。
+    # CN_DRAG_AFTER_DOUBLE=0 で前の形
+    drag = getattr(w, '_cn_drag_move', None)
+    if drag is not None and getattr(event, 'x', None) is not None:
+        import os
+        try:
+            import drag_move
+            # 指の二度押し（ダブルタップ）は移す側へ渡さない（drag_move が指の押しを受けないので、渡すと語も選ばれない）
+            if (os.environ.get('CN_DRAG_AFTER_DOUBLE') != '0' and drag_move.drag_on()
+                    and not drag._by_touch()):
+                ranges = w.tag_ranges('sel')
+                if ranges:
+                    idx = str(w.index('@%d,%d' % (event.x, event.y)))
+                    if drag._inside_core(idx, str(ranges[0]), str(ranges[-1]), event.x, event.y):
+                        return drag.press(event)
+        except (tk.TclError, Exception):
+            pass
     try:
         row, a, z = _word_range(w, '@%d,%d' % (event.x, event.y))
         if a == z:

@@ -23,6 +23,7 @@ LOOSE_PAIR = 10  # 元の名詞が例文に無く、候補の組がこれだけ�
 LOOSE_WF_MARGIN = 100
 CUT_FIX = 100   # その名詞が1つだけで例文にこれだけ出るなら直す
 CUT_NOUN = 20    # 述語の無い行（名詞＋助詞で終わる）で紫にするのは、1打違いの名詞が例文にこれだけ出るとき
+_DEMONSTRATIVE = frozenset(('この', 'その', 'あの', 'どの'))
 _FORMAL = {'ん', 'の', 'よう', 'こと', 'もの', 'ところ', 'わけ', 'はず', 'ため', 'とき', 'そう'}
 
 
@@ -181,6 +182,10 @@ def _pred_marks(toks, pairs):
         base = _base(t)
         if not _kanji_word(base) or _count(pairs, p.surface, n.surface, None, base):
             continue
+        # 名詞が代名詞（彼・それ・ここ）なら、どの述語とも組める語なので、例文に組が無いことは選び違いの証にならない
+        # （2026-11-20 例文 2000(e): 一晩彼を泊める → 止める）。CN_PAIR_PRED_PRONOUN=0 で前のまま
+        if str(getattr(n, 'pos_sub', '') or '').startswith('代名詞') and os.environ.get('CN_PAIR_PRED_PRONOUN') != '0':
+            continue
         head = _split_okuri(base)[0]
         if not t.surface.startswith(head):
             continue
@@ -263,6 +268,14 @@ def propose(text, input_method='kana'):
                      and os.environ.get('CN_PAIR_SURU_ONLY') != '0')
         if suru_only and not _rare_general(t.surface):
             continue
+        # この・その・あの・どの＋名詞 の組は、どの名詞にも付くので、名詞の使われやすさを数えるだけで選び分けの証に
+        # ならない（する だけの組と同じ）。ほかの組があればそちらだけで比べ、それだけなら元の名詞が稀なときだけ見る
+        # （2026-11-20 正しい文の見直し: その士気をくじく → その式を）。CN_PAIR_DEMONSTRATIVE=0 で前のまま
+        if ctx and os.environ.get('CN_PAIR_DEMONSTRATIVE') != '0':
+            narrow = [c for c in ctx if not (c[0] == '連体' and c[1] in _DEMONSTRATIVE)]
+            if not narrow and not cut and not _rare_general(t.surface):
+                continue
+            ctx = narrow or ctx
         here = nouns.get(t.surface, 0)
         best = []
         same = _alternatives(t.surface, _hira(t.reading))

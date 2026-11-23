@@ -32,7 +32,11 @@ def main():
         a._open_quick_capture();root.update()
         assert a._quick_text.get('1.0','end-1c')==expected
         assert a.editor_source_text()==original
-        a._open_quick_capture('minus');root.update();assert a._quick_win.state()=='iconic'
+        # 2026-10-15 うにさんの指定から、呼び直しで最小化するのは簡易入力の窓が前面の時だけ（前面でなければ前に出す）。
+        # 見えない机（run_on_desktop）では窓は前面にならないので、ここは「前面にある」時の呼び直しとして見る（2026-11-23）
+        with patch.object(app.CorrectNoteApp,'_quick_window_is_active',staticmethod(lambda win:True)):
+            a._open_quick_capture('minus');root.update()
+        assert a._quick_win.state()=='iconic'
         a.editor.focus_force();a.editor.tag_remove('sel','1.0','end');a.editor.tag_add('sel','2.0','2.1');root.update()
         addition=a.editor.get('sel.first','sel.last');a._quick_text.mark_set('insert','end-1c')
         a._open_quick_capture('minus');root.update()
