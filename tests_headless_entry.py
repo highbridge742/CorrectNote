@@ -40,8 +40,10 @@ runtime.store=SimpleNamespace(_tokenize_fn=lambda text:[])
 runtime.decisions=runtime.context_vec=runtime.index=runtime.choices=None
 runtime.tokenize=lambda text:[]
 def correct(line,*args,**kwargs):
-    assert kwargs['nearby_words']==('nearby',)
-    assert kwargs['recent_words']==('recent',)
+    # 2026-11-21 から補正は1行の中だけで決まる（上下の行の語・直前の語は渡さない。CN_NEARBY_WORDS_OFF=0／CN_RECENT_WORDS_OFF=0 で前の形）
+    import os
+    assert kwargs['nearby_words']==(('nearby',) if os.environ.get('CN_NEARBY_WORDS_OFF')=='0' else ())
+    assert kwargs['recent_words']==(('recent',) if os.environ.get('CN_RECENT_WORDS_OFF')=='0' else ())
     return dict(original=line,corrected=line,changed=False,odd_spans=[])
 with patch.object(corrector,'correct_line',side_effect=correct),patch('ime_colloquial.source_tokenizer',side_effect=lambda text,fn:fn),patch.object(units,'build_line_units',return_value=('sample',[])),patch.object(units,'build_suspect_units',return_value=('sample',[])):
     result=runtime.execute(dict(kind='line',line='sample',context={},input_method='kana',nearby=('nearby',),recent=('recent',)))

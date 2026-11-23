@@ -243,6 +243,21 @@ _END_WORDS = ('です', 'ます', 'ました', 'でした', 'ません', 'ませ
               'でしょう', 'ましょう', 'よう', 'う', 'ね', 'よ', 'な', 'か', 'わ', 'ぞ', 'さ')
 
 
+# 形態素で見るのは、カーソルの前の終わりの部分だけ（2026-11-24 CN_PREDICT_TOKEN_TAIL・公開版の検査で、長い行を貼った後の行末の
+# 予測が行の全部（数万字）を形態素に掛け、本体が 18 秒止まった。見たいのは最後の語だけ）。終わりの TOKEN_TAIL 字のうち、
+# 最後の区切り（句読点・括弧・空白）の後から。区切りが無ければその TOKEN_TAIL 字。CN_PREDICT_TOKEN_TAIL=0 で前の形（行の全部）
+TOKEN_TAIL = 64
+_TAIL_BREAKS = '。、，,．.！？!?…「」『』（）()[]【】〈〉《》　 	'
+
+
+def token_tail(text):
+    if os.environ.get('CN_PREDICT_TOKEN_TAIL') == '0' or len(text or '') <= TOKEN_TAIL:
+        return text
+    window = text[-TOKEN_TAIL:]
+    cut = max(window.rfind(ch, 0, len(window) - 1) for ch in _TAIL_BREAKS)
+    return window[cut + 1:] if cut >= 0 else window
+
+
 def ends_like_sentence(before):
     """前が述語の終わり（終止形・です/ます/た・終助詞）らしいか。形態素で見る。"""
     text = (before or '').rstrip()
@@ -250,7 +265,7 @@ def ends_like_sentence(before):
         return False
     try:
         from morphology import tokenize
-        tokens = [t for t in tokenize(text) if (t.surface or '').strip()]
+        tokens = [t for t in tokenize(token_tail(text)) if (t.surface or '').strip()]
     except Exception:
         tokens = []
     if not tokens:
@@ -573,7 +588,7 @@ def ime_predictions(before, query=None):
     asked = False
     try:
         from morphology import tokenize
-        tokens = [t for t in tokenize(before) if (t.surface or '').strip()]
+        tokens = [t for t in tokenize(token_tail(before)) if (t.surface or '').strip()]
     except Exception:
         tokens = []
     if tokens:
@@ -648,6 +663,20 @@ def label(text):
     return _LABELS.get(text, text)
 
 
+# 近くの行の名詞を数える時、長い行は頭の ROW_NOUNS_MAX 字だけを形態素に掛ける（2026-11-24 CN_PREDICT_ROW_NOUNS_CAP・公開版の
+# 検査で、3万字の行を貼った後、行末の候補の下ごしらえ（auto_candidates.warm_nouns）がその行の全部を形態素に掛け、本体が
+# 14〜20 秒止まった）。頭の中の最後の区切りまで（語を途中で切らない）。CN_PREDICT_ROW_NOUNS_CAP=0 で前の形（行の全部）
+ROW_NOUNS_MAX = 400
+
+
+def row_nouns_head(line):
+    if os.environ.get('CN_PREDICT_ROW_NOUNS_CAP') == '0' or len(line or '') <= ROW_NOUNS_MAX:
+        return line
+    head = line[:ROW_NOUNS_MAX]
+    cut = max(head.rfind(ch) for ch in _TAIL_BREAKS)
+    return head[:cut + 1] if cut > 0 else head
+
+
 def _row_nouns(line):
     got = _NOUN_MEMO.get(line)
     if got is not None:
@@ -655,7 +684,7 @@ def _row_nouns(line):
     out = []
     try:
         from morphology import tokenize
-        for t in tokenize(line):
+        for t in tokenize(row_nouns_head(line)):
             s = (t.surface or '').strip()
             if t.pos == '名詞' and len(s) >= 2 and not s.isdigit() and any(ch.isalpha() for ch in s):
                 out.append(s)

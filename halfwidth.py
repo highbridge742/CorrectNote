@@ -685,8 +685,7 @@ def correct_halfwidth(text, store, find_readings, max_dist=1.6, judge=None,
     # content words are not seed phrases. Require the unchanged full field
     # and the common gate before admitting such a new restoration.
     if native_context_accept is not None and _complete_restored_reading(kana, store):
-        fixed=kana_to_kanji_where_possible(kana, store, judge=judge)
-        accepted=native_context_accept(fixed)
+        accepted=_native_accept(kana, store, judge, native_context_accept)
         if accepted is not None:return accepted
 
     # --- 訂正を伴う場合 ---
@@ -993,8 +992,7 @@ def correct_romaji(text, store, find_readings, max_dist=1.6, min_len=4,
     # Newly recognized native phrases need their original field, including
     # any ASCII syntax. Existing seed-based restoration keeps its old path.
     if native_context_accept is not None and _complete_restored_reading(kana, store):
-        fixed=kana_to_kanji_where_possible(kana, store, judge=judge)
-        accepted=native_context_accept(fixed)
+        accepted=_native_accept(kana, store, judge, native_context_accept)
         if accepted is not None:return accepted
 
     # 訂正を伴う場合は、英単語が偶然かなの語に化けないよう厳しくする
@@ -1285,9 +1283,33 @@ def _common_dictionary_word(sub):
     return _common_dictionary_face(sub) is not None
 
 
+import threading as _threading
+_NO_DICT_FACE = _threading.local()
+
+
+def _native_accept(kana, store, judge, accept):
+    """戻したかなを漢字にした形を、元の行の中で確かめる（native_context_accept）。辞書の表記（_common_dictionary_face）で
+    漢字にした形が通らなければ、辞書の表記を使わない前の形でも確かめる（2026-11-24 補正担当、v1.20.0 の検査:
+    ローマ字の 前文。shoruiが届きます。 が、辞書の表記の形では IME の確かめに通らず、前は 書類 に戻っていた行が戻らなく
+    なった）。前の形は CN_HALFWIDTH_DICT_WORDS=0 と同じ答えなので、前に直った行は直る。CN_HALFWIDTH_NATIVE_OLD_FACE=0 で前のまま"""
+    fixed = kana_to_kanji_where_possible(kana, store, judge=judge)
+    accepted = accept(fixed)
+    if accepted is not None or os.environ.get('CN_HALFWIDTH_NATIVE_OLD_FACE') == '0':
+        return accepted
+    _NO_DICT_FACE.on = True
+    try:
+        old = kana_to_kanji_where_possible(kana, store, judge=judge)
+    finally:
+        _NO_DICT_FACE.on = False
+    if old == fixed:
+        return None
+    return accept(old)
+
+
 def _common_dictionary_face(sub):
     """_common_dictionary_word の表記（いちばん身近なもの）。無ければ None"""
-    if len(sub) < 3 or os.environ.get('CN_HALFWIDTH_DICT_WORDS') == '0':
+    if (len(sub) < 3 or os.environ.get('CN_HALFWIDTH_DICT_WORDS') == '0'
+            or getattr(_NO_DICT_FACE, 'on', False)):
         return None
     try:
         import ime_reconvert

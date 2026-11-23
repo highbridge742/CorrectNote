@@ -148,7 +148,9 @@ class GuidesFollowRowHeights(unittest.TestCase):
     def test_switch_back(self):
         got = run_child(self, {'CN_GUIDES_VIEW_SYNC': '0'})
         t = got['taller']
-        self.assertTrue(t[0] != t[1] or t[2] != t[3], got)   # 前の形: どちらかが前の高さに残る（罫線は残った）
+        stale, right_after = got['below'][:2]
+        # 前の形: どれかが前の高さに残る（行の高さの変化は、別の描き直しが先に追いつく時もあるので、途中に残った罫線でも見る）
+        self.assertTrue(t[0] != t[1] or t[2] != t[3] or right_after is not None, got)
 
 
 if __name__ == '__main__':
