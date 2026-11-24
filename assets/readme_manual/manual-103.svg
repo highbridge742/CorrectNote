@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="340" viewBox="0 0 960 340">
+<rect width="960" height="340" rx="14" fill="#f5f7f8"/>
+<text x="34" y="42" font-family="Segoe UI, Yu Gothic UI, sans-serif" font-size="20" font-weight="700" fill="#25323a">Size multiplier by part of speech | defaults</text>
+<text x="36" y="82" font-family="Segoe UI, Yu Gothic UI, sans-serif" font-size="14" fill="#596b74">The base size of the text and correction panes is multiplied by these values and rounded up.</text>
+<g font-family="Segoe UI, Yu Gothic UI, sans-serif" fill="#25323a">
+<rect x="34" y="104" width="892" height="54" rx="8" fill="#e7f1f4"/><text x="54" y="138" font-size="17">Nouns, verbs, adjectives, adverbs, auxiliary verbs</text><text x="860" y="138" text-anchor="end" font-size="19" font-weight="700" fill="#176b82">1.1×</text>
+<rect x="34" y="170" width="892" height="54" rx="8" fill="#fff" stroke="#cbd5dc"/><text x="54" y="204" font-size="17">Numerals</text><text x="860" y="204" text-anchor="end" font-size="19" font-weight="700" fill="#176b82">1.2×</text>
+<rect x="34" y="236" width="892" height="54" rx="8" fill="#fff" stroke="#cbd5dc"/><text x="54" y="270" font-size="17">Suru-nouns and other parts of speech</text><text x="860" y="270" text-anchor="end" font-size="19" font-weight="700" fill="#596b74">1.0×</text>
+</g></svg>

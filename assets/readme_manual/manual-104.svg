@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="420" viewBox="0 0 1000 420">
+<rect width="1000" height="420" rx="14" fill="#f5f7f8"/>
+<text x="30" y="38" font-family="Segoe UI, Yu Gothic UI, sans-serif" font-size="20" font-weight="700" fill="#25323a">Text color by part of speech | defaults</text>
+<rect x="28" y="58" width="460" height="310" rx="10" fill="#252932"/>
+<rect x="512" y="58" width="460" height="310" rx="10" fill="#ffffff" stroke="#cbd5dc" stroke-width="2"/>
+<text x="50" y="91" font-family="Segoe UI, Yu Gothic UI, sans-serif" font-size="17" font-weight="700" fill="#ffffff">Dark mode</text>
+<text x="534" y="91" font-family="Segoe UI, Yu Gothic UI, sans-serif" font-size="17" font-weight="700" fill="#25323a">Light mode</text><g font-family="Segoe UI, Yu Gothic UI, sans-serif">
+<text x="52" y="148" font-size="15" fill="#ffffff">Nouns</text><text x="150" y="148" font-size="15" fill="#d2f9d8">Sample</text><text x="216" y="148" font-size="13" fill="#ffffff">Green (very light)</text>
+<text x="536" y="148" font-size="15" fill="#25323a">Nouns</text><text x="634" y="148" font-size="15" fill="#0f7665">Sample</text><text x="700" y="148" font-size="13" fill="#25323a">Teal (dark)</text>
+</g><g font-family="Segoe UI, Yu Gothic UI, sans-serif">
+<text x="52" y="196" font-size="15" fill="#ffffff">Numerals</text><text x="150" y="196" font-size="15" fill="#adf5b9">Sample</text><text x="216" y="196" font-size="13" fill="#ffffff">Green (extra light)</text>
+<text x="536" y="196" font-size="15" fill="#25323a">Numerals</text><text x="634" y="196" font-size="15" fill="#14a32c">Sample</text><text x="700" y="196" font-size="13" fill="#25323a">Green (fairly dark)</text>
+</g><g font-family="Segoe UI, Yu Gothic UI, sans-serif">
+<text x="52" y="244" font-size="15" fill="#ffffff">Latin letters</text><text x="150" y="244" font-size="15" fill="#bdbdbd">Sample</text><text x="216" y="244" font-size="13" fill="#ffffff">Gray (light)</text>
+<text x="536" y="244" font-size="15" fill="#25323a">Latin letters</text><text x="634" y="244" font-size="15" fill="#525252">Sample</text><text x="700" y="244" font-size="13" fill="#25323a">Gray (fairly dark)</text>
+</g><g font-family="Segoe UI, Yu Gothic UI, sans-serif">
+<text x="52" y="292" font-size="15" fill="#ffffff">Symbols</text><text x="150" y="292" font-size="15" fill="#bdbdbd">Sample</text><text x="216" y="292" font-size="13" fill="#ffffff">Gray (light)</text>
+<text x="536" y="292" font-size="15" fill="#25323a">Symbols</text><text x="634" y="292" font-size="15" fill="#525252">Sample</text><text x="700" y="292" font-size="13" fill="#25323a">Gray (fairly dark)</text>
+</g><text x="32" y="397" font-family="Segoe UI, Yu Gothic UI, sans-serif" font-size="14" fill="#596b74">Other parts of speech, such as suru-nouns, keep the pane's text color.</text></svg>

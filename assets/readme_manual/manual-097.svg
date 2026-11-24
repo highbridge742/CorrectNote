@@ -1,0 +1,9 @@
+<svg width="161" height="44" viewBox="0 0 161 44" fill="none" xmlns="http://www.w3.org/2000/svg">
+<rect x="1" y="1" width="159" height="42" rx="4" fill="#202020"/>
+<rect x="0.5" y="0.5" width="160" height="43" rx="4.5" stroke="black" stroke-opacity="0.1"/>
+<g stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+<path d="M21 11.5V25.5"/><path d="M15 20L21 26L27 20"/><path d="M12.5 30.5H29.5"/>
+</g>
+<text x="40" y="18" fill="#ffffff" font-family="Segoe UI, sans-serif" font-size="9.5">Download directly from</text>
+<text x="40" y="35" fill="#ffffff" font-family="Segoe UI, sans-serif" font-size="16" font-weight="600">GitHub</text>
+</svg>
